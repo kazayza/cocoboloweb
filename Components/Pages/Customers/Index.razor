@@ -1,0 +1,1338 @@
+@page "/customers"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using System.Security.Claims
+
+@inject PartyService PartyService
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject AuthenticationStateProvider AuthProvider
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4" Style="color: var(--gold);">جاري تحميل البيانات...</MudText>
+    </div>
+}
+else
+{
+    <div class="customers-page" dir="rtl">
+
+        <!-- Header -->
+        <div class="page-header">
+            <div class="header-content">
+                <div class="header-info">
+                    <h1>
+                        <MudIcon Icon="@Icons.Material.Filled.People" Class="header-icon" />
+                        إدارة العملاء
+                    </h1>
+                    <p>إدارة بيانات العملاء والموردين</p>
+                </div>
+                <div class="header-actions">
+                    <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+    @if (_canAdd)
+{
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.PersonAdd"
+               OnClick="GoToAdd"
+               Size="Size.Large"
+               Class="add-btn">
+        إضافة عميل جديد
+    </MudButton>
+}
+    <MudButton Variant="Variant.Outlined"
+               StartIcon="@Icons.Material.Filled.FileDownload"
+               OnClick="ExportToExcel"
+               Size="Size.Large"
+               Disabled="@_isExporting"
+               Class="export-btn">
+        @if (_isExporting)
+        {
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+        }
+        تصدير Excel
+    </MudButton>
+</div>
+                </div>
+            </div>
+
+            <!-- Stats Cards -->
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-icon total">
+                        <MudIcon Icon="@Icons.Material.Filled.People" />
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value">@_stats.TotalCount</span>
+                        <span class="stat-label">إجمالي</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon active">
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" />
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value">@_stats.ActiveCount</span>
+                        <span class="stat-label">نشط</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon leads">
+                        <MudIcon Icon="@Icons.Material.Filled.PersonSearch" />
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value">@_stats.LeadsCount</span>
+                        <span class="stat-label">عملاء محتملون</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon clients">
+                        <MudIcon Icon="@Icons.Material.Filled.Verified" />
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value">@_stats.ClientsCount</span>
+                        <span class="stat-label">عملاء فعليون</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon month">
+                        <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" />
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-value">@_stats.ThisMonthCount</span>
+                        <span class="stat-label">هذا الشهر</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <MudPaper Class="filters-container" Elevation="0">
+            <div class="filters-row">
+                <!-- بحث -->
+                <div class="search-field">
+                    <MudTextField T="string"
+              Value="_filter.SearchText"
+              ValueChanged="@(async (string v) => { _filter.SearchText = v; await OnSearchChanged(v); })"
+              Placeholder="بحث بالاسم أو الهاتف أو البريد..."
+              Variant="Variant.Outlined"
+              Margin="Margin.Dense"
+              Adornment="Adornment.Start"
+              AdornmentIcon="@Icons.Material.Filled.Search"
+              Immediate="true"
+              DebounceInterval="400"
+              Clearable="true" />
+                </div>
+
+                <!-- نوع الطرف -->
+                <MudSelect T="int?"
+           Value="_filter.PartyType"
+           ValueChanged="@(async (int? v) => { _filter.PartyType = v; await OnFilterChanged(); })"
+           Variant="Variant.Outlined"
+           Margin="Margin.Dense"
+           Placeholder="النوع"
+           Clearable="true"
+           Class="filter-select">
+                    @foreach (var type in _partyTypes)
+                    {
+                        <MudSelectItem T="int?" Value="@((int?)type.PartyTypeId)">
+                            @type.PartyTypeName
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+
+                <!-- مرحلة العميل -->
+                <!-- مرحلة العميل -->
+<MudSelect T="int?"
+           Value="_filter.StageId"
+           ValueChanged="@(async (int? v) => { _filter.StageId = v; await OnFilterChanged(); })"
+           Variant="Variant.Outlined"
+           Margin="Margin.Dense"
+           Placeholder="المرحلة"
+           Clearable="true"
+           Class="filter-select">
+    @foreach (var stage in _salesStages)
+    {
+        <MudSelectItem T="int?" Value="@((int?)stage.StageId)">
+            @(stage.StageNameAr ?? stage.StageName)
+        </MudSelectItem>
+    }
+</MudSelect>
+
+                <!-- الحالة -->
+                <MudSelect T="bool?"
+           Value="_filter.IsActive"
+           ValueChanged="@(async (bool? v) => { _filter.IsActive = v; await OnFilterChanged(); })"
+           Variant="Variant.Outlined"
+           Margin="Margin.Dense"
+           Placeholder="الحالة"
+           Clearable="true"
+           Class="filter-select">
+                    <MudSelectItem T="bool?" Value="@((bool?)true)">نشط</MudSelectItem>
+                    <MudSelectItem T="bool?" Value="@((bool?)false)">غير نشط</MudSelectItem>
+                </MudSelect>
+
+                <!-- هل عنده فواتير -->
+                <MudSelect T="bool?"
+           Value="_filter.HasInvoices"
+           ValueChanged="@(async (bool? v) => { _filter.HasInvoices = v; await OnFilterChanged(); })"
+           Variant="Variant.Outlined"
+           Margin="Margin.Dense"
+           Placeholder="الفواتير"
+           Clearable="true"
+           Class="filter-select">
+                    <MudSelectItem T="bool?" Value="@((bool?)true)">مرتبط بفواتير</MudSelectItem>
+                    <MudSelectItem T="bool?" Value="@((bool?)false)">بدون فواتير</MudSelectItem>
+                </MudSelect>
+
+                <!-- زرار إعادة تعيين -->
+                <MudIconButton Icon="@Icons.Material.Filled.FilterAltOff"
+                               Color="Color.Default"
+                               Variant="Variant.Outlined"
+                               OnClick="ResetFilters"
+                               Title="إعادة تعيين الفلاتر"
+                               Size="Size.Medium" />
+            </div>
+
+            <!-- Results Count -->
+            <div class="results-info">
+                <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+                    عرض @_pagedResult.Items.Count من @_pagedResult.TotalCount نتيجة
+                </MudText>
+                <div class="view-toggle">
+                    <MudIconButton Icon="@Icons.Material.Filled.GridView"
+                                   Color="@(_viewMode == ViewMode.Grid ? Color.Primary : Color.Default)"
+                                   OnClick="@(() => _viewMode = ViewMode.Grid)"
+                                   Size="Size.Small" />
+                    <MudIconButton Icon="@Icons.Material.Filled.TableRows"
+                                   Color="@(_viewMode == ViewMode.Table ? Color.Primary : Color.Default)"
+                                   OnClick="@(() => _viewMode = ViewMode.Table)"
+                                   Size="Size.Small" />
+                </div>
+            </div>
+        </MudPaper>
+
+        <!-- Content -->
+        @if (_isTableLoading)
+        {
+            <div class="table-loading">
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+            </div>
+        }
+
+        @if (_viewMode == ViewMode.Grid)
+        {
+            <!-- Grid View -->
+            @if (_pagedResult.Items.Any())
+            {
+                <div class="customers-grid">
+                    @foreach (var customer in _pagedResult.Items)
+                    {
+                        <div class="customer-card @(!customer.IsActive == true ? "inactive-card" : "")"
+     @onclick="() => { if (_canEdit) GoToEdit(customer.PartyId); }">
+
+                            <!-- Card Header -->
+                            <div class="customer-card-header">
+                                <div class="customer-avatar">
+                                    @GetInitials(customer.PartyName)
+                                </div>
+                                <div class="customer-header-info">
+                                    <h3>@customer.PartyName</h3>
+                                    @if (!string.IsNullOrEmpty(customer.JobTitle))
+                                    {
+                                        <span class="job-title">@customer.JobTitle</span>
+                                    }
+                                </div>
+                                <div class="card-badges">
+                                    <span class="stage-badge" style="background: @(customer.StageColor ?? "#94a3b8")22; color: @(customer.StageColor ?? "#94a3b8"); border: 1px solid @(customer.StageColor ?? "#94a3b8")44;">
+    @(customer.StageNameAr ?? customer.StageName ?? GetStageText(customer.CustomerStage))
+</span>
+                                </div>
+                            </div>
+
+                            <!-- Card Body -->
+                            <div class="customer-card-body">
+                                @if (!string.IsNullOrEmpty(customer.Phone))
+                                {
+                                    <div class="info-row">
+                                        <MudIcon Icon="@Icons.Material.Filled.Phone" Size="Size.Small" />
+                                        <span>@customer.Phone</span>
+                                    </div>
+                                }
+                                @if (!string.IsNullOrEmpty(customer.Email))
+                                {
+                                    <div class="info-row">
+                                        <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small" />
+                                        <span>@customer.Email</span>
+                                    </div>
+                                }
+                                @if (!string.IsNullOrEmpty(customer.City))
+                                {
+                                    <div class="info-row">
+                                        <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" />
+                                        <span>@customer.City</span>
+                                    </div>
+                                }
+                                @if (!string.IsNullOrEmpty(customer.ParentPartyName))
+                                {
+                                    <div class="info-row">
+                                        <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" />
+                                        <span>@customer.ParentPartyName</span>
+                                    </div>
+                                }
+                            </div>
+
+                            <!-- Card Footer -->
+                            <div class="customer-card-footer">
+                                <div class="footer-badges">
+                                    @if (customer.HasInvoices)
+                                    {
+                                        <span class="badge badge-invoice">
+                                            <MudIcon Icon="@Icons.Material.Filled.Receipt" Size="Size.Small" />
+                                            عنده فواتير
+                                        </span>
+                                    }
+                                    @if (customer.ContactsCount > 0)
+                                    {
+                                        <span class="badge badge-contacts">
+                                            <MudIcon Icon="@Icons.Material.Filled.Contacts" Size="Size.Small" />
+                                            @customer.ContactsCount جهة اتصال
+                                        </span>
+                                    }
+                                    @if (customer.Rating.HasValue)
+                                    {
+                                        <span class="badge badge-rating">
+                                            @for (int i = 1; i <= customer.Rating.Value; i++)
+                                            {
+                                                <MudIcon Icon="@Icons.Material.Filled.Star"
+                                                         Size="Size.Small"
+                                                         Style="color: var(--gold);" />
+                                            }
+                                        </span>
+                                    }
+                                </div>
+                                <div class="card-actions" @onclick:stopPropagation="true">
+    @if (_canEdit)
+    {
+        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                       Size="Size.Small"
+                       Color="Color.Primary"
+                       OnClick="() => GoToEdit(customer.PartyId)"
+                       Title="تعديل" />
+    }
+    @if (_canDelete)
+    {
+        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                       Size="Size.Small"
+                       Color="Color.Error"
+                       OnClick="() => ConfirmDelete(customer)"
+                       Title="حذف" />
+    }
+</div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="empty-state">
+                    <MudIcon Icon="@Icons.Material.Filled.PeopleAlt" Size="Size.Large" />
+                    <h3>لا توجد نتائج</h3>
+                    <p>جرب تغيير معايير البحث أو الفلترة</p>
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               OnClick="ResetFilters">
+                        إعادة تعيين الفلاتر
+                    </MudButton>
+                </div>
+            }
+        }
+        else
+        {
+            <!-- Table View -->
+            <MudPaper Elevation="0" Class="table-container">
+                <MudTable Items="@_pagedResult.Items"
+                          Hover="true"
+                          Striped="true"
+                          Dense="false"
+                          FixedHeader="true"
+                          Height="600px"
+                          OnRowClick="@((TableRowClickEventArgs<PartyListDto> args) => { if (_canEdit) GoToEdit(args.Item.PartyId); })"
+                          RowClass="table-row"
+                          Class="customers-table">
+                    <HeaderContent>
+                         <MudTh Style="width: 70px;">
+        <MudTableSortLabel SortBy="new Func<PartyListDto, object>(x => x.PartyId)">
+            الكود
+        </MudTableSortLabel>
+    </MudTh>
+    <MudTh>
+        <MudTableSortLabel SortBy="new Func<PartyListDto, object>(x => x.PartyName)"
+                          InitialDirection="SortDirection.Ascending">
+            العميل
+        </MudTableSortLabel>
+    </MudTh>
+                        <MudTh>النوع</MudTh>
+                        <MudTh>التواصل</MudTh>
+                        <MudTh>المدينة</MudTh>
+                        <MudTh>المرحلة</MudTh>
+                        <MudTh>التقييم</MudTh>
+                        <MudTh>الفواتير</MudTh>
+                        <MudTh>الحالة</MudTh>
+                        <MudTh>إجراءات</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+        <span class="party-code">@context.PartyId</span>
+    </MudTd>
+                        <MudTd>
+                            <div class="table-customer-info">
+                                <div class="table-avatar">
+                                    @GetInitials(context.PartyName)
+                                </div>
+                                <div>
+                                    <div class="customer-name">@context.PartyName</div>
+                                    @if (!string.IsNullOrEmpty(context.JobTitle))
+                                    {
+                                        <div class="customer-subtitle">@context.JobTitle</div>
+                                    }
+                                    @if (!string.IsNullOrEmpty(context.ParentPartyName))
+                                    {
+                                        <div class="customer-subtitle">
+                                            <MudIcon Icon="@Icons.Material.Filled.AccountTree"
+                                                     Size="Size.Small" />
+                                            @context.ParentPartyName
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        </MudTd>
+                        <MudTd>
+                            <span class="type-badge">@context.PartyTypeName</span>
+                        </MudTd>
+                        <MudTd>
+                            <div class="contact-info">
+                                @if (!string.IsNullOrEmpty(context.Phone))
+                                {
+                                    <div>
+                                        <MudIcon Icon="@Icons.Material.Filled.Phone"
+                                                 Size="Size.Small" />
+                                        @context.Phone
+                                    </div>
+                                }
+                                @if (!string.IsNullOrEmpty(context.Email))
+                                {
+                                    <div>
+                                        <MudIcon Icon="@Icons.Material.Filled.Email"
+                                                 Size="Size.Small" />
+                                        @context.Email
+                                    </div>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd>@(context.City ?? "-")</MudTd>
+                        <MudTd>
+    @{
+        var stageColor = context.StageColor ?? "#94a3b8";
+        var stageText = context.StageNameAr ?? context.StageName ?? GetStageText(context.CustomerStage);
+    }
+    <span class="stage-badge" 
+          style="background: @(stageColor)22; color: @stageColor; border: 1px solid @(stageColor)44;">
+        @stageText
+    </span>
+</MudTd>
+                        <MudTd>
+                            @if (context.Rating.HasValue)
+                            {
+                                @for (int i = 1; i <= 5; i++)
+                                {
+                                    var starIndex = i;
+                                    <MudIcon Icon="@(starIndex <= context.Rating.Value
+                                                    ? Icons.Material.Filled.Star
+                                                    : Icons.Material.Outlined.Star)"
+                                             Size="Size.Small"
+                                             Style="@(starIndex <= context.Rating.Value
+                                                     ? "color: var(--gold);"
+                                                     : "color: var(--mud-palette-divider);")" />
+                                }
+                            }
+                            else
+                            {
+                                <span style="color: var(--mud-palette-text-secondary);">-</span>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            @if (context.HasInvoices)
+                            {
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Color="Color.Success"
+                                         Icon="@Icons.Material.Filled.Receipt">
+                                    نعم
+                                </MudChip>
+                            }
+                            else
+                            {
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Color="Color.Default">
+                                    لا
+                                </MudChip>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <MudChip T="string"
+                                     Size="Size.Small"
+                                     Color="@(context.IsActive == true ? Color.Success : Color.Error)">
+                                @(context.IsActive == true ? "نشط" : "غير نشط")
+                            </MudChip>
+                        </MudTd>
+                        <MudTd>
+                            <div class="table-actions" @onclick:stopPropagation="true">
+    @if (_canEdit)
+    {
+        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                       Size="Size.Small" Color="Color.Primary"
+                       OnClick="() => GoToEdit(context.PartyId)" Title="تعديل" />
+    }
+    @if (_canDelete)
+    {
+        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                       Size="Size.Small" Color="Color.Error"
+                       OnClick="() => ConfirmDelete(context)" Title="حذف" />
+    }
+</div>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudPaper>
+        }
+
+        <!-- Pagination -->
+        @if (_pagedResult.TotalPages > 1)
+        {
+            <div class="pagination-container">
+                <MudPagination Count="@_pagedResult.TotalPages"
+                               Selected="@_filter.PageNumber"
+                               SelectedChanged="OnPageChanged"
+                               Color="Color.Primary"
+                               Variant="Variant.Filled"
+                               ShowFirstButton="true"
+                               ShowLastButton="true" />
+                <MudText Typo="Typo.body2"
+                         Style="color: var(--mud-palette-text-secondary);">
+                    صفحة @_filter.PageNumber من @_pagedResult.TotalPages
+                </MudText>
+            </div>
+        }
+
+    </div>
+}
+
+<!-- Delete Dialog -->
+<MudDialog @bind-Visible="_showDeleteDialog">
+    <TitleContent>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.Warning"
+                     Style="color: var(--mud-palette-error);" />
+            <MudText Typo="Typo.h6">تأكيد الحذف</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText>
+            هل تريد حذف العميل
+            <strong>@_selectedParty?.PartyName</strong>؟
+        </MudText>
+        <MudText Typo="Typo.body2"
+                 Style="color: var(--mud-palette-text-secondary); margin-top: 0.5rem;">
+            سيتم إلغاء تفعيله فقط ولن يتم الحذف النهائي.
+        </MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showDeleteDialog = false)"
+                   Variant="Variant.Outlined">
+            إلغاء
+        </MudButton>
+        <MudButton Color="Color.Error"
+                   Variant="Variant.Filled"
+                   OnClick="ExecuteDelete"
+                   Disabled="@_isDeleting">
+            @if (_isDeleting)
+            {
+                <MudProgressCircular Size="Size.Small"
+                                     Indeterminate="true"
+                                     Class="me-2" />
+            }
+            حذف
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    /* ============================
+       Page Layout
+       ============================ */
+    .customers-page {
+        padding: 1rem;
+        max-width: 1800px;
+        margin: 0 auto;
+        direction: rtl;
+    }
+
+    /* ============================
+       Header
+       ============================ */
+    .page-header {
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        border-radius: 20px;
+        padding: 2rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 10px 40px var(--gold-border);
+    }
+
+    .header-content {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1.5rem;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+    .header-info h1 {
+        color: white;
+        font-size: 2rem;
+        font-weight: 800;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .header-icon {
+        font-size: 2rem !important;
+    }
+
+    .header-info p {
+        color: rgba(255,255,255,0.85);
+        margin: 0.25rem 0 0 0;
+        font-size: 0.95rem;
+    }
+
+    .add-btn {
+    background: rgba(255,255,255,0.95) !important;
+    color: var(--navy-dark) !important;
+    font-weight: 700 !important;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.15) !important;
+    transition: all 0.3s ease;
+}
+
+.add-btn:hover {
+    background: white !important;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.2) !important;
+}
+
+    /* ============================
+       Stats
+       ============================ */
+    .stats-row {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .stat-card {
+        background: rgba(255,255,255,0.15);
+        border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 14px;
+        padding: 1rem 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        flex: 1;
+        min-width: 140px;
+        transition: all 0.3s ease;
+    }
+
+    .stat-card:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+    }
+
+    .stat-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+    }
+
+    .stat-icon.total    { background: rgba(255,255,255,0.2); }
+    .stat-icon.active   { background: rgba(16,185,129,0.4); }
+    .stat-icon.leads    { background: rgba(59,130,246,0.4); }
+    .stat-icon.clients  { background: rgba(139,92,246,0.4); }
+    .stat-icon.month    { background: rgba(245,158,11,0.4); }
+
+    .stat-info {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .stat-value {
+        font-size: 1.75rem;
+        font-weight: 800;
+        color: white;
+        line-height: 1;
+    }
+
+    .stat-label {
+        font-size: 0.8rem;
+        color: rgba(255,255,255,0.85);
+        margin-top: 0.25rem;
+    }
+
+    /* ============================
+       Filters
+       ============================ */
+    .filters-container {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        padding: 1.25rem;
+        margin-bottom: 1.5rem;
+        transition: background-color 0.3s ease;
+    }
+
+    .filters-row {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 0.75rem;
+    }
+
+    .search-field {
+        flex: 2;
+        min-width: 250px;
+    }
+
+    .filter-select {
+        flex: 1;
+        min-width: 150px;
+    }
+
+    .results-info {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--mud-palette-divider);
+    }
+
+    .view-toggle {
+        display: flex;
+        gap: 0.25rem;
+    }
+
+    .table-loading {
+        margin-bottom: 0.5rem;
+    }
+    .party-code {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--gold-subtle);
+    color: var(--gold-dark);
+    font-weight: 700;
+    font-size: 0.85rem;
+    padding: 0.3rem 0.6rem;
+    border-radius: 8px;
+    min-width: 40px;
+}
+
+    /* ============================
+       Grid View
+       ============================ */
+    .customers-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 1.25rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .customer-card {
+    background: var(--mud-palette-surface);
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 16px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.customer-card:hover {
+    border-color: var(--gold);
+    box-shadow: 0 8px 25px var(--gold-subtle);
+    transform: translateY(-3px);
+}
+
+    .inactive-card {
+        opacity: 0.6;
+    }
+
+    .customer-card-header {
+        padding: 1.25rem;
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+
+    .customer-avatar {
+        width: 52px;
+        height: 52px;
+        border-radius: 14px;
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        color: var(--navy-dark);
+        font-weight: 800;
+        font-size: 1.1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .customer-header-info {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .customer-header-info h3 {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--mud-palette-text-primary);
+        margin: 0 0 0.25rem 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .job-title {
+        font-size: 0.8rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .card-badges {
+        flex-shrink: 0;
+    }
+
+    .customer-card-body {
+        padding: 1rem 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .info-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: var(--mud-palette-text-secondary);
+        font-size: 0.875rem;
+    }
+
+    .info-row .mud-icon-root {
+        color: var(--gold);
+        font-size: 1rem !important;
+        flex-shrink: 0;
+    }
+
+    .customer-card-footer {
+    padding: 0.75rem 1.25rem;
+    background: var(--mud-palette-background);
+    border-top: 1px solid var(--mud-palette-divider);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    transition: background-color 0.3s ease;
+}
+
+    .footer-badges {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    /* ============================
+       Stage Badge
+       ============================ */
+    .stage-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.3rem 0.75rem;
+        border-radius: 8px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+
+    .stage-lead      { background: rgba(59,130,246,0.15); color: #3b82f6; }
+    .stage-prospect  { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .stage-qualified { background: rgba(139,92,246,0.15); color: #8b5cf6; }
+    .stage-client    { background: rgba(16,185,129,0.15); color: #10b981; }
+    .stage-lost      { background: rgba(239,68,68,0.15);  color: #ef4444; }
+    .stage-default   { background: var(--mud-palette-background); color: var(--mud-palette-text-secondary); }
+
+    /* ============================
+       Badges
+       ============================ */
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.25rem 0.6rem;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+
+    .badge-invoice  { background: rgba(16,185,129,0.1); color: #10b981; }
+    .badge-contacts { background: rgba(59,130,246,0.1); color: #3b82f6; }
+    .badge-rating   { background: transparent; }
+
+    .type-badge {
+        padding: 0.25rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        background: var(--gold-subtle);
+        color: var(--gold-dark);
+    }
+
+    /* ============================
+       Table View
+       ============================ */
+    .table-container {
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+    }
+
+    .table-row {
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+    }
+
+    .table-customer-info {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .table-avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        color: var(--navy-dark);
+        font-weight: 800;
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .customer-name {
+        font-weight: 600;
+        color: var(--mud-palette-text-primary);
+        font-size: 0.9rem;
+    }
+
+    .customer-subtitle {
+        font-size: 0.78rem;
+        color: var(--mud-palette-text-secondary);
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+
+    .contact-info {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        font-size: 0.82rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .contact-info div {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+
+    .table-actions {
+        display: flex;
+        gap: 0.25rem;
+    }
+
+    /* ============================
+       Empty State
+       ============================ */
+    .empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 5rem 2rem;
+        text-align: center;
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        margin-bottom: 1.5rem;
+    }
+
+    .empty-state .mud-icon-root {
+        font-size: 6rem;
+        color: var(--mud-palette-divider);
+        margin-bottom: 1.5rem;
+    }
+
+    .empty-state h3 {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--mud-palette-text-primary);
+        margin: 0 0 0.5rem 0;
+    }
+
+    .empty-state p {
+        color: var(--mud-palette-text-secondary);
+        margin: 0 0 1.5rem 0;
+    }
+
+    /* ============================
+       Pagination
+       ============================ */
+    .pagination-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        padding: 1rem 0;
+        flex-wrap: wrap;
+    }
+
+    .export-btn {
+    background: rgba(255,255,255,0.15) !important;
+    color: white !important;
+    border-color: rgba(255,255,255,0.4) !important;
+    font-weight: 600 !important;
+}
+
+.export-btn:hover {
+    background: rgba(255,255,255,0.25) !important;
+}
+/* ============================
+   Table Fixes
+   ============================ */
+::deep .customers-table .mud-table-head th {
+    background: var(--mud-palette-background) !important;
+    color: var(--mud-palette-text-primary) !important;
+    font-weight: 700 !important;
+    font-size: 0.85rem;
+    border-bottom: 2px solid var(--mud-palette-divider) !important;
+    transition: background-color 0.3s ease;
+}
+
+::deep .customers-table .mud-table-body td {
+    border-bottom: 1px solid var(--mud-palette-divider) !important;
+    transition: background-color 0.3s ease;
+}
+
+::deep .customers-table .mud-table-row:hover td {
+    background: var(--gold-subtle) !important;
+}
+
+    /* ============================
+       Loading
+       ============================ */
+    .loading-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 60vh;
+    }
+
+    /* ============================
+       Responsive
+       ============================ */
+    @@media (max-width: 960px) {
+        .customers-page { padding: 0.75rem; }
+        .page-header { padding: 1.25rem; }
+        .header-info h1 { font-size: 1.5rem; }
+        .stats-row { gap: 0.5rem; }
+        .stat-card { min-width: 120px; padding: 0.75rem 1rem; }
+        .stat-value { font-size: 1.4rem; }
+        .filters-row { flex-direction: column; }
+        .search-field, .filter-select { width: 100%; min-width: unset; }
+        .customers-grid { grid-template-columns: 1fr; }
+    }
+
+    @@media (max-width: 600px) {
+        .header-content { flex-direction: column; align-items: flex-start; }
+        .add-btn { width: 100%; }
+        .stat-card { flex: 1 1 calc(50% - 0.5rem); }
+    }
+</style>
+
+@code {
+
+    // ============================
+    // State
+    // ============================
+    private bool _isLoading = true;
+    private bool _isTableLoading = false;
+    private bool _showDeleteDialog = false;
+    private bool _isDeleting = false;
+
+    private PartyListDto? _selectedParty;
+    private PartyFilterDto _filter = new() { IsActive = true };
+    private PagedResult<PartyListDto> _pagedResult = new();
+    private PartyStatsDto _stats = new();
+    private List<PartyType> _partyTypes = new();
+        private List<SalesStage> _salesStages = new();
+    private ViewMode _viewMode = ViewMode.Grid;
+    private bool _isExporting = false;
+
+    private string? _currentUserName;
+    private bool _canView = false;
+private bool _canAdd = false;
+private bool _canEdit = false;
+private bool _canDelete = false;
+
+    private enum ViewMode { Grid, Table }
+
+    // ============================
+    // Lifecycle
+    // ============================
+    protected override async Task OnInitializedAsync()
+{
+    try
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+var user = auth.User;
+_currentUserName = user.Identity?.Name ?? "System";
+
+_canView = user.HasClaim("Permission", "frm_PartiesList:View");
+_canAdd = user.HasClaim("Permission", "frm_Parties:Add");
+_canEdit = user.HasClaim("Permission", "frm_Parties:Edit");
+_canDelete = user.HasClaim("Permission", "frm_PartiesList:Delete");
+
+if (!_canView)
+{
+    Navigation.NavigateTo("/");
+    return;
+}
+
+        await LoadLookups();
+        await LoadData();
+        await LoadStats();
+    }
+    finally
+    {
+        _isLoading = false;
+    }
+}
+
+    // ============================
+    // Data Loading
+    // ============================
+    private async Task LoadData()
+    {
+        _isTableLoading = true;
+        _pagedResult = await PartyService.GetPartiesAsync(_filter);
+        _isTableLoading = false;
+    }
+
+    private async Task LoadStats()
+    {
+        _stats = await PartyService.GetStatsAsync(_filter.PartyType);
+    }
+
+    private async Task LoadLookups()
+    {
+        _partyTypes = await PartyService.GetPartyTypesAsync();
+        _salesStages = await PartyService.GetSalesStagesAsync();
+    }
+
+    // ============================
+    // Filter Events
+    // ============================
+    private async Task OnSearchChanged(string value)
+    {
+        _filter.SearchText = value;
+        _filter.PageNumber = 1;
+        await LoadData();
+    }
+
+    private async Task OnFilterChanged()
+{
+    _filter.PageNumber = 1;
+    await LoadData();
+    await LoadStats();
+}
+
+    private async Task OnPageChanged(int page)
+    {
+        _filter.PageNumber = page;
+        await LoadData();
+    }
+
+    private async Task ResetFilters()
+{
+    _filter = new() { IsActive = true };
+    await LoadData();
+    await LoadStats();
+}
+
+    // ============================
+    // Navigation
+    // ============================
+    private void GoToAdd() =>
+        Navigation.NavigateTo("/customers/form");
+
+    private void GoToEdit(int partyId) =>
+        Navigation.NavigateTo($"/customers/form/{partyId}");
+
+    // ============================
+    // Delete
+    // ============================
+    private void ConfirmDelete(PartyListDto party)
+    {
+        _selectedParty = party;
+        _showDeleteDialog = true;
+    }
+
+    private async Task ExecuteDelete()
+    {
+        if (_selectedParty == null) return;
+
+        _isDeleting = true;
+        var (success, message) = await PartyService.DeletePartyAsync(
+            _selectedParty.PartyId, _currentUserName!);
+        _isDeleting = false;
+        _showDeleteDialog = false;
+
+        if (success)
+        {
+            Snackbar.Add(message, Severity.Success);
+await LoadData();
+await LoadStats();
+        }
+        else
+        {
+            Snackbar.Add(message, Severity.Error);
+        }
+    }
+    // ============================
+// Export
+// ============================
+private async Task ExportToExcel()
+{
+    try
+    {
+        _isExporting = true;
+        StateHasChanged();
+
+        var data = await PartyService.GetAllForExportAsync(_filter);
+
+        // بناء CSV
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("الاسم,النوع,الهاتف,البريد,المدينة,المرحلة,التقييم,الحالة,تاريخ الإنشاء");
+
+        foreach (var item in data)
+        {
+            sb.AppendLine($"\"{item.PartyName}\",\"{item.PartyTypeName}\",\"{item.Phone}\",\"{item.Email}\",\"{item.City}\",\"{GetStageText(item.CustomerStage)}\",\"{item.Rating}\",\"{(item.IsActive == true ? "نشط" : "غير نشط")}\",\"{item.CreatedAt:yyyy/MM/dd}\"");
+        }
+
+        var bytes = System.Text.Encoding.UTF8.GetPreamble()
+            .Concat(System.Text.Encoding.UTF8.GetBytes(sb.ToString()))
+            .ToArray();
+
+        var base64 = Convert.ToBase64String(bytes);
+        var fileName = $"Customers_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+
+        await JS.InvokeVoidAsync("eval",
+            $"var a=document.createElement('a');a.href='data:text/csv;base64,{base64}';a.download='{fileName}';a.click();");
+
+        Snackbar.Add($"تم تصدير {data.Count} سجل", Severity.Success);
+    }
+    catch (Exception ex)
+    {
+        Snackbar.Add("خطأ في التصدير", Severity.Error);
+        Console.WriteLine($"Export Error: {ex}");
+    }
+    finally
+    {
+        _isExporting = false;
+    }
+}
+
+    // ============================
+    // UI Helpers
+    // ============================
+    private string GetInitials(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return "?";
+        var words = name.Trim().Split(' ',
+            StringSplitOptions.RemoveEmptyEntries);
+        return words.Length >= 2
+            ? $"{words[0][0]}{words[1][0]}"
+            : name[0].ToString();
+    }
+
+    private string GetStageText(string? stage) => stage switch
+    {
+        CustomerStages.Lead      => "عميل محتمل",
+        CustomerStages.Prospect  => "تم التواصل",
+        CustomerStages.Qualified => "مؤهل للشراء",
+        CustomerStages.Client    => "عميل فعلي",
+        CustomerStages.Lost      => "خسرناه",
+        _ => "غير محدد"
+    };
+
+    private string GetStageIcon(string? stage) => stage switch
+    {
+        CustomerStages.Lead      => "🔵",
+        CustomerStages.Prospect  => "🟡",
+        CustomerStages.Qualified => "🟣",
+        CustomerStages.Client    => "🟢",
+        CustomerStages.Lost      => "🔴",
+        _ => "⚪"
+    };
+
+    private string GetStageCssClass(string? stage) => stage switch
+    {
+        CustomerStages.Lead      => "stage-lead",
+        CustomerStages.Prospect  => "stage-prospect",
+        CustomerStages.Qualified => "stage-qualified",
+        CustomerStages.Client    => "stage-client",
+        CustomerStages.Lost      => "stage-lost",
+        _ => "stage-default"
+    };
+}

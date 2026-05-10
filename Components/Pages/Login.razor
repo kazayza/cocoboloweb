@@ -1,0 +1,205 @@
+@page "/login"
+@layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
+@attribute [AllowAnonymous]
+
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+
+<PageTitle>تسجيل الدخول</PageTitle>
+
+<div class="login-page">
+
+    <!-- الجزء الأيسر: الهوية والبراند -->
+    <section class="brand-panel">
+        <div class="brand-box">
+
+            <img src="/logo.png"
+                 alt="COCOBOLO Logo"
+                 class="brand-logo" />
+
+            <h1 class="brand-title">
+                COCOBOLO<br />Luxury Furniture
+            </h1>
+
+            <p class="brand-description">
+                نظام إدارة متكامل مصمم لشركة COCOBOLO للأثاث الفاخر،
+                يجمع بين القوة والسهولة في الاستخدام.
+            </p>
+
+        </div>
+    </section>
+
+    <!-- الجزء الأيمن: نموذج تسجيل الدخول -->
+    <section class="form-panel">
+        <MudPaper Class="login-card" Elevation="0">
+
+            <div class="login-card-header">
+                <MudText Typo="Typo.h4" Class="login-title">
+                    تسجيل الدخول
+                </MudText>
+                <MudText Typo="Typo.body2" Class="login-subtitle">
+                    أدخل بياناتك للوصول إلى النظام
+                </MudText>
+            </div>
+
+            <EditForm Model="_model" OnValidSubmit="HandleLogin">
+                <DataAnnotationsValidator />
+
+                <div class="fields-stack">
+
+                    <MudTextField T="string"
+                                  @bind-Value="_model.Username"
+                                  For="@(() => _model.Username)"
+                                  Label="اسم المستخدم"
+                                  Placeholder="أدخل اسم المستخدم"
+                                  Variant="Variant.Outlined"
+                                  FullWidth="true"
+                                  Disabled="_isSubmitting"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Outlined.PersonOutline"
+                                  Class="login-field input-ltr" />
+
+                    <MudTextField T="string"
+                                  @bind-Value="_model.Password"
+                                  For="@(() => _model.Password)"
+                                  Label="كلمة المرور"
+                                  Placeholder="أدخل كلمة المرور"
+                                  Variant="Variant.Outlined"
+                                  FullWidth="true"
+                                  Disabled="_isSubmitting"
+                                  InputType="@(_showPassword ? InputType.Text : InputType.Password)"
+                                  Adornment="Adornment.End"
+                                  AdornmentIcon="@(_showPassword
+                                      ? Icons.Material.Filled.VisibilityOff
+                                      : Icons.Material.Filled.Visibility)"
+                                  OnAdornmentClick="TogglePassword"
+                                  Class="login-field input-ltr" />
+
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_error))
+                {
+                    <MudAlert Severity="Severity.Error"
+                              Variant="Variant.Filled"
+                              Dense="true"
+                              Class="login-alert">
+                        @_error
+                    </MudAlert>
+                }
+
+                <MudButton ButtonType="ButtonType.Submit"
+                           Variant="Variant.Filled"
+                           FullWidth="true"
+                           Disabled="_isSubmitting"
+                           Class="login-button">
+
+                    @if (_isSubmitting)
+                    {
+                        <MudProgressCircular Indeterminate="true"
+                                             Size="Size.Small"
+                                             Class="ms-2" />
+                        <span>جاري تسجيل الدخول...</span>
+                    }
+                    else
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.Login"
+                                 Class="ms-2" />
+                        <span>دخول النظام</span>
+                    }
+                </MudButton>
+
+            </EditForm>
+
+        </MudPaper>
+    </section>
+
+</div>
+
+@code {
+
+    [SupplyParameterFromQuery(Name = "ReturnUrl")]
+    public string? ReturnUrl { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private readonly LoginInputModel _model = new();
+    private bool _showPassword;
+    private bool _isSubmitting;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthenticationStateTask is null) return;
+
+        var authState = await AuthenticationStateTask;
+        if (authState.User.Identity?.IsAuthenticated == true)
+        {
+            Navigation.NavigateTo(SafeReturnUrl(ReturnUrl), forceLoad: true);
+        }
+    }
+
+    private async Task HandleLogin()
+    {
+        _error = null;
+        _isSubmitting = true;
+
+        try
+        {
+            var result = await JS.InvokeAsync<LoginResult>(
+                "cocoboloAuth.login",
+                _model.Username,
+                _model.Password);
+
+            if (result?.Ok == true)
+            {
+                Navigation.NavigateTo(SafeReturnUrl(ReturnUrl), forceLoad: true);
+                return;
+            }
+
+            _error = string.IsNullOrWhiteSpace(result?.Message)
+                ? "تعذر تسجيل الدخول. حاول مرة أخرى."
+                : result!.Message;
+        }
+        catch
+        {
+            _error = "حدث خطأ غير متوقع. حاول مرة أخرى.";
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private void TogglePassword() => _showPassword = !_showPassword;
+
+    private static string SafeReturnUrl(string? url)
+    {
+        if (!string.IsNullOrWhiteSpace(url)
+            && url.StartsWith("/")
+            && !url.StartsWith("//")
+            && !url.StartsWith("/\\"))
+            return url;
+
+        return "/";
+    }
+
+    private sealed class LoginInputModel
+    {
+        [Required(ErrorMessage = "اسم المستخدم مطلوب")]
+        public string Username { get; set; } = "";
+
+        [Required(ErrorMessage = "كلمة المرور مطلوبة")]
+        public string Password { get; set; } = "";
+    }
+
+    private sealed class LoginResult
+    {
+        public bool Ok { get; set; }
+        public string? Message { get; set; }
+    }
+}

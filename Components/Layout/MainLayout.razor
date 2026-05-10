@@ -1,0 +1,944 @@
+﻿@inherits LayoutComponentBase
+@implements IDisposable
+
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using COCOBOLOERPNEW.Components.Shared
+@using COCOBOLOERPNEW.Services
+
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject IJSRuntime JS
+
+<MudThemeProvider Theme="_theme" 
+                  @bind-IsDarkMode="_isDarkMode"
+                  @bind-IsDarkMode:after="StateHasChanged" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout Class="erp-shell" dir="rtl">
+
+    <!-- ================= TOP BAR ================= -->
+    <MudAppBar Elevation="0" Fixed="true" Class="erp-topbar">
+        <div class="tb-row">
+
+            <!-- يسار: زر القائمة + البراند -->
+            <div class="tb-start">
+                <MudIconButton Icon="@(_drawerOpen
+                                   ? Icons.Material.Rounded.MenuOpen
+                                   : Icons.Material.Rounded.Menu)"
+                               OnClick="ToggleDrawer"
+                               Color="Color.Primary"
+                               Size="Size.Large" />
+
+                <div class="brand" @onclick='() => Navigation.NavigateTo("/")'>
+                    <img src="logo.png" class="brand-logo" alt="Logo" />
+                    <div class="brand-name">COCOBOLO ERP</div>
+                </div>
+            </div>
+
+            <!-- وسط: البحث -->
+            <div class="tb-center">
+                <MudTextField T="string"
+                              @bind-Value="_searchText"
+                              Placeholder="بحث..."
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Rounded.Search"
+                              Immediate="true"
+                              Color="Color.Primary"
+                              Class="search-field" />
+            </div>
+
+            <!-- يمين: أزرار + المستخدم -->
+            <div class="tb-end">
+                <MudIconButton Icon="@(_isDarkMode
+               ? Icons.Material.Rounded.LightMode
+               : Icons.Material.Rounded.DarkMode)"
+               OnClick="ToggleDarkMode"
+               Color="Color.Primary"
+               Size="Size.Medium"
+               Title="@(_isDarkMode ? "الوضع النهاري" : "الوضع الليلي")" />
+
+                <NotificationBell />
+
+                <!-- معلومات المستخدم -->
+                <div class="user-chip" @onclick="ToggleUserMenu">
+                    <div class="user-avatar">
+                        <span>@_avatarLetter</span>
+                    </div>
+                    <div class="user-text">
+                        <span class="user-name">@_currentUserName</span>
+                        <span class="user-role">@_currentUserRole</span>
+                    </div>
+                    <MudIcon Icon="@(_userMenuOpen
+                                 ? Icons.Material.Rounded.KeyboardArrowUp
+                                 : Icons.Material.Rounded.KeyboardArrowDown)"
+                             Size="Size.Small"
+                             Class="user-arrow" />
+                </div>
+
+                <MudPopover Open="_userMenuOpen"
+                            AnchorOrigin="Origin.BottomLeft"
+                            TransformOrigin="Origin.TopLeft"
+                            Class="user-popover">
+                    <MudList T="string" Dense="true" Class="user-menu-list">
+                        <MudListItem Icon="@Icons.Material.Rounded.Lock"
+                                     OnClick='() => Navigation.NavigateTo("/change-password")'>
+                            تغيير كلمة السر
+                        </MudListItem>
+                        <MudDivider Class="my-1" />
+                        <MudListItem Icon="@Icons.Material.Rounded.Logout"
+                                     IconColor="Color.Error"
+                                     OnClick="Logout">
+                            تسجيل الخروج
+                        </MudListItem>
+                    </MudList>
+                </MudPopover>
+            </div>
+        </div>
+    </MudAppBar>
+
+    <!-- ================= BREADCRUMBS ================= -->
+    <div class="breadcrumbs-bar">
+        <MudBreadcrumbs Items="_breadcrumbs" Separator=">">
+            <ItemTemplate Context="item">
+                <MudLink Href="@item.Href">
+                    @if (!string.IsNullOrEmpty(item.Icon))
+                    {
+                        <MudIcon Icon="@item.Icon" Size="Size.Small" Style="margin-left:4px;" />
+                    }
+                    @item.Text
+                </MudLink>
+            </ItemTemplate>
+        </MudBreadcrumbs>
+    </div>
+
+    <!-- ================= SIDEBAR ================= -->
+    <MudDrawer @bind-Open="_drawerOpen"
+               Class="erp-sidebar"
+               Width="280px"
+               Elevation="0"
+               Variant="DrawerVariant.Responsive"
+               ClipMode="DrawerClipMode.Always"
+               Anchor="Anchor.Right">
+
+        <!-- بحث القوائم -->
+        <div class="sidebar-search">
+            <MudTextField T="string"
+                          @bind-Value="_sidebarSearchText"
+                          Placeholder="ابحث في القوائم..."
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Rounded.Search"
+                          Immediate="true"
+                          Clearable="true"
+                          Class="sidebar-search-field" />
+        </div>
+
+        <MudNavMenu Dense="false" Class="nav-menu">
+
+            @* ========== الرئيسية ========== *@
+            @if (HasPermission("frmDashboard", "View") && IsVisible("الرئيسية"))
+            {
+                <MudNavLink Href="/" Icon="@Icons.Material.Rounded.SpaceDashboard"
+                            Match="NavLinkMatch.All">
+                    الرئيسية
+                </MudNavLink>
+            }
+
+            @* ========== البيانات الأساسية ========== *@
+            @if (HasAnyViewPermission("frm_CompanyInfo", "frm_ProductGroups")
+                && IsGroupVisible("البيانات الأساسية","بيانات الشركة"))
+            {
+                <MudNavGroup Title="البيانات الأساسية"
+                             Icon="@Icons.Material.Rounded.Dataset"
+                             Expanded="@_isSearching">
+                    @if (HasPermission("frm_CompanyInfo", "View") && IsVisible("بيانات الشركة"))
+                    {
+                        <MudNavLink Href="/company">بيانات الشركة</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+            @* ========== المبيعات ========== *@
+            @if (HasAnyViewPermission("frm_Parties","frm_PartiesList","frm_Products","frm_SalesInvoiveNew","frm_SalesInvoiveView","frm_PartiesInvoices","frm_Payments","frm_PaymentsInvoicesNew","frm_ApproveDiscount","frmInspectionCharge","frm_SupplierInvoices","frmInvoiceDeliveryStatus")
+                && IsGroupVisible("المبيعات","كافة المنتجات","إضافة عميل","مورد","كافة العملاء","الموردين","فاتورة مبيعات","فاتورة مبيعات جديدة","فواتير العملاء","فواتير الموردين","المدفوعات","مدفوعات الفواتير","خصم","خصم على الفاتورة","رسوم المعاينة","فواتير الشراء","متابعة التسليم","تسليم"))
+            {
+                <MudNavGroup Title="المبيعات"
+                             Icon="@Icons.Material.Rounded.Storefront"
+                             Expanded="@_isSearching">
+                    @if (HasPermission("frm_ProductList", "View") && IsVisible("كافة المنتجات"))
+                    {
+                        <MudNavLink Href="/products">كافة المنتجات</MudNavLink>
+                    }
+                    @if (HasPermission("frm_PartiesList", "View") && IsVisible("كافة العملاء","الموردين","عملاء"))
+                    {
+                        <MudNavLink Href="/customers"> العملاء </MudNavLink>
+                    }
+                    @if (HasPermission("frm_SalesInvoiveNew", "View") && IsVisible("فاتورة مبيعات","فاتورة جديدة","مبيعات"))
+                    {
+                        <MudNavLink Href="/sales-invoices/new">فاتورة مبيعات جديدة</MudNavLink>
+                    }
+                    @if (HasPermission("frm_PartiesInvoices", "View") && IsVisible("فواتير العملاء","فواتير الموردين","فواتير"))
+                    {
+                        <MudNavLink Href="/customer-invoices">فواتير العملاء والموردين</MudNavLink>
+                    }
+                    @if (HasPermission("frm_Payments", "View") && IsVisible("المدفوعات","دفع"))
+                    {
+                        <MudNavLink Href="/payments">المدفوعات</MudNavLink>
+                    }
+                    @if (HasPermission("frm_PaymentsInvoicesNew", "View") && IsVisible("مدفوعات الفواتير","دفع فاتورة"))
+                    {
+                        <MudNavLink Href="/payments/invoices">مدفوعات الفواتير</MudNavLink>
+                    }
+                    @if (HasPermission("frm_ApproveDiscount", "View") && IsVisible("خصم","خصم على الفاتورة"))
+                    {
+                        <MudNavLink Href="/discounts">خصم على الفاتورة</MudNavLink>
+                    }
+                    @if (HasPermission("frmInspectionCharge", "View") && IsVisible("رسوم المعاينة","معاينة","رسوم"))
+                    {
+                        <MudNavLink Href="/inspection-charge">رسوم المعاينة</MudNavLink>
+                    }
+                    @if (HasPermission("frm_SupplierInvoices", "View") && IsVisible("فواتير الشراء","شراء","مورد"))
+                    {
+                        <MudNavLink Href="/supplier-invoices">فواتير الشراء</MudNavLink>
+                    }
+                    @if (HasPermission("frmInvoiceDeliveryStatus", "View") && IsVisible("متابعة التسليم","تسليم"))
+                    {
+                        <MudNavLink Href="/delivery-status">متابعة التسليم</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+            @* ========== المشتريات والمخزون ========== *@
+            @if (HasAnyViewPermission("frm_StockLevels","frm_Bestsellingitems")
+                && IsGroupVisible("المشتريات والمخزون","المشتريات","المخزون","رصيد المخزن","الاكثر مبيعا"))
+            {
+                <MudNavGroup Title="المشتريات والمخزون"
+                             Icon="@Icons.Material.Rounded.Inventory"
+                             Expanded="@_isSearching">
+                    @if (HasPermission("frm_StockLevels", "View") && IsVisible("رصيد المخزن","مخزن","رصيد"))
+                    {
+                        <MudNavLink Href="/stock-levels">رصيد المخزن</MudNavLink>
+                    }
+                    @if (HasPermission("frm_Bestsellingitems", "View") && IsVisible("الاكثر مبيعا","مبيعات","الاكثر"))
+                    {
+                        <MudNavLink Href="/best-selling">الأكثر مبيعًا</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+            @* ========== المصروفات ========== *@
+            @if (HasAnyViewPermission("frm_Expenses","frm_ExpensesList","frm_ExpensesGroup","frmExpenseTree")
+                && IsGroupVisible("المصروفات","إضافة مصروف","مصروف جديد","كافة المصروفات","مجموعات المصروفات","شجرة حسابات"))
+            {
+                <MudNavGroup Title="المصروفات"
+                             Icon="@Icons.Material.Rounded.MoneyOff"
+                             Expanded="@_isSearching">
+                    
+                    @if (HasPermission("frm_ExpensesList", "View") && IsVisible("كافة المصروفات","المصروفات"))
+                    {
+                        <MudNavLink Href="/expenses"> المصروفات</MudNavLink>
+                    }
+                    @if (HasPermission("frm_ExpensesGroup", "View") && IsVisible("مجموعات المصروفات","مجموعات"))
+                    {
+                        <MudNavLink Href="/expense-groups">مجموعات المصروفات</MudNavLink>
+                    }
+                    @if (HasPermission("frmExpenseTree", "View") && IsVisible("شجرة حسابات","شجرة"))
+                    {
+                        <MudNavLink Href="/expense-tree">شجرة حسابات المصروفات</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+            @* ========== الخزينة ========== *@
+            @if (HasAnyViewPermission("frm_CashBoxManual","frm_CashBoxTransaction","frm_TotalInOutNetCashBox","frm_CashFlowNew")
+                && IsGroupVisible("الخزينة","سندات قبض","سندات صرف","سندات","حركات الخزينة","إجمالي المقبوضات","التدفقات النقدية","تدفقات"))
+            {
+                <MudNavGroup Title="الخزينة"
+                             Icon="@Icons.Material.Rounded.AccountBalanceWallet"
+                             Expanded="@_isSearching">
+                    @if (HasPermission("frm_CashBoxManual", "View") && IsVisible("سندات قبض","سندات صرف","سندات"))
+                    {
+                        <MudNavLink Href="/cashbox/manual">سندات قبض وصرف</MudNavLink>
+                    }
+                    @if (HasPermission("frm_CashBoxTransaction", "View") && IsVisible("حركات الخزينة","حركات"))
+                    {
+                        <MudNavLink Href="/cashbox/transactions">حركات الخزينة</MudNavLink>
+                    }
+                    @if (HasPermission("frm_TotalInOutNetCashBox", "View") && IsVisible("إجمالي المقبوضات","المدفوعات","إجمالي"))
+                    {
+                        <MudNavLink Href="/cashbox/summary">إجمالي المقبوضات/المدفوعات</MudNavLink>
+                    }
+                    @if (HasPermission("frm_CashFlowNew", "View") && IsVisible("التدفقات النقدية","تدفقات"))
+                    {
+                        <MudNavLink Href="/cash-flow">قائمة التدفقات النقدية</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+            @* ========== الموظفين والرواتب ========== *@
+            @if (HasAnyViewPermission("frm_Employees","frm_Employeeslist","frm_Payroll","frm_PayrollPayment","frmPayrollProcessor","frmPayrollReport","frm_EmpolyeeShifts","frm_AllShifts","frm_MySchedule","frm_ImportBiometric","frm_empAttendance","frmDailyExemptions","frm_MyPermissions")
+                && IsGroupVisible("الموظفين والرواتب","الموظفين","الرواتب","إضافة موظف","كافة الموظفين","تسجيل راتب","راتب جماعي","شيفت","البصمة","استثناءات","إذن","حضور"))
+            {
+                <MudNavGroup Title="الموظفين والرواتب"
+                             Icon="@Icons.Material.Rounded.People"
+                             Expanded="@_isSearching">
+                    @if (HasPermission("frm_Employees", "View") && IsVisible("إضافة موظف","موظف جديد","موظف"))
+                    {
+                        <MudNavLink Href="/employees/new">إضافة موظف</MudNavLink>
+                    }
+                    @if (HasPermission("frm_Employeeslist", "View") && IsVisible("كافة الموظفين","الموظفين"))
+                    {
+                        <MudNavLink Href="/employees">كافة الموظفين</MudNavLink>
+                    }
+                    @if (HasPermission("frm_Payroll", "View") && IsVisible("تسجيل راتب","راتب"))
+                    {
+                        <MudNavLink Href="/payroll/new">تسجيل راتب</MudNavLink>
+                    }
+                    @if (HasPermission("frm_PayrollPayment", "View") && IsVisible("مدفوعات الرواتب","رواتب"))
+                    {
+                        <MudNavLink Href="/payroll/payments">مدفوعات الرواتب</MudNavLink>
+                    }
+                    @if (HasPermission("frmPayrollProcessor", "View") && IsVisible("راتب جماعي","جماعي"))
+                    {
+                        <MudNavLink Href="/payroll/batch">راتب جماعي</MudNavLink>
+                    }
+                    @if (HasPermission("frmPayrollReport", "View") && IsVisible("الاستعلام عن الرواتب","استعلام"))
+                    {
+                        <MudNavLink Href="/payroll/report">الاستعلام عن الرواتب</MudNavLink>
+                    }
+                    @if (HasPermission("frm_EmpolyeeShifts", "View") && IsVisible("إضافة شيفت","شيفت"))
+                    {
+                        <MudNavLink Href="/shifts/new">إضافة شيفت</MudNavLink>
+                    }
+                    @if (HasPermission("frm_AllShifts", "View") && IsVisible("متابعة الشيفتات","شيفتات"))
+                    {
+                        <MudNavLink Href="/shifts">متابعة الشيفتات</MudNavLink>
+                    }
+                    @if (HasPermission("frm_MySchedule", "View") && IsVisible("شيفتاتي","جدولي"))
+                    {
+                        <MudNavLink Href="/my-schedule">شيفتاتي</MudNavLink>
+                    }
+                    @if (HasPermission("frm_ImportBiometric", "View") && IsVisible("البصمة","بصمة"))
+                    {
+                        <MudNavLink Href="/biometric">البصمة</MudNavLink>
+                    }
+                    @if (HasPermission("frm_empAttendance", "View") && IsVisible("بصمة الموظف","حضور","بصمة"))
+                    {
+                        <MudNavLink Href="/attendance">بصمة الموظف</MudNavLink>
+                    }
+                    @if (HasPermission("frmDailyExemptions", "View") && IsVisible("استثناءات"))
+                    {
+                        <MudNavLink Href="/exemptions">استثناءات</MudNavLink>
+                    }
+                    @if (HasPermission("frm_MyPermissions", "View") && IsVisible("طلب إذن","إذن"))
+                    {
+                        <MudNavLink Href="/my-permissions">طلب إذن</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+            @* ========== CRM ========== *@
+            @if (HasAnyViewPermission("frmNewInteraction","frmDailyTasks","frmSalesPipeline","frmClientCard","frmNewQuotation","frmQuotationsList","frmInteractionsLog","frmCustomerProduct","frmManamgerSales","frmCustomerDocs","frm_Commissions")
+                && IsGroupVisible("CRM","تواصل","مهام المتابعة","مراحل البيع","بطاقة العميل","عرض سعر","عروض الاسعار","سجل التواصلات","التعاقد","متابعة المدير","مستندات العميل","العمولات"))
+            {
+                <MudNavGroup Title="CRM"
+                             Icon="@Icons.Material.Rounded.ContactPhone"
+                             Expanded="@_isSearching">
+                    @if (HasPermission("frmNewInteraction", "View") && IsVisible("تواصل جديد","تواصل"))
+                    {
+                        <MudNavLink Href="/crm/interactions/new">تواصل جديد</MudNavLink>
+                    }
+                    @if (HasPermission("frmDailyTasks", "View") && IsVisible("مهام المتابعة","مهام"))
+                    {
+                        <MudNavLink Href="/crm/tasks">مهام المتابعة</MudNavLink>
+                    }
+                    @if (HasPermission("frmSalesPipeline", "View") && IsVisible("مراحل البيع","pipeline"))
+                    {
+                        <MudNavLink Href="/crm/pipeline">مراحل البيع</MudNavLink>
+                    }
+                    @if (HasPermission("frmClientCard", "View") && IsVisible("بطاقة العميل","عميل"))
+                    {
+                        <MudNavLink Href="/crm/clients">بطاقة العميل</MudNavLink>
+                    }
+                    @if (HasPermission("frmNewQuotation", "View") && IsVisible("عرض سعر جديد","عرض سعر"))
+                    {
+                        <MudNavLink Href="/crm/quotations/new">عرض سعر جديد</MudNavLink>
+                    }
+                    @if (HasPermission("frmQuotationsList", "View") && IsVisible("عروض الاسعار","عروض"))
+                    {
+                        <MudNavLink Href="/crm/quotations">عروض الأسعار</MudNavLink>
+                    }
+                    @if (HasPermission("frmInteractionsLog", "View") && IsVisible("سجل التواصلات","تواصلات"))
+                    {
+                        <MudNavLink Href="/crm/interactions">سجل التواصلات</MudNavLink>
+                    }
+                    @if (HasPermission("frmCustomerProduct", "View") && IsVisible("التعاقد","عقد"))
+                    {
+                        <MudNavLink Href="/crm/contract">التعاقد</MudNavLink>
+                    }
+                    @if (HasPermission("frmManamgerSales", "View") && IsVisible("متابعة المدير","مدير"))
+                    {
+                        <MudNavLink Href="/crm/manager">متابعة المدير</MudNavLink>
+                    }
+                    @if (HasPermission("frmCustomerDocs", "View") && IsVisible("مستندات العميل","مستندات"))
+                    {
+                        <MudNavLink Href="/crm/documents">مستندات العميل</MudNavLink>
+                    }
+                    @if (HasPermission("frm_Commissions", "View") && IsVisible("العمولات","عمولة"))
+                    {
+                        <MudNavLink Href="/crm/commissions">العمولات</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+            @* ========== إدارة النظام ========== *@
+            @if (HasAnyViewPermission("frm_AllUsers","frm_AddUser","frm_AddPermission","frmManagePermissions","Frm_MainList_Edit","frm_NotificationsAll","frm_ChangePassword","frm_AuditViewer","frmContactSourses","frmSalesStages","frmInterestCategories","frmContactStatus","frmTaskTypes","frmLostReasons","frmAdCampain","frm_PricingMargins","frm_PriceRequests","frm_PriceHistory","frm_PricingHistory")
+                && IsGroupVisible("إدارة النظام","المستخدمين","إضافة مستخدم","الصلاحيات","ربط الصلاحيات","قوائم الشاشة","الإشعارات","اشعارات","تغيير كلمة السر","كلمة المرور","متابعة النظام","مصادر العملاء","نسب الربح","طلبات تعديل الاسعار","تاريخ الاسعار"))
+            {
+                <MudNavGroup Title="إدارة النظام"
+                             Icon="@Icons.Material.Rounded.Settings"
+                             Expanded="@_isSearching">
+                    @if (HasPermission("frm_AllUsers", "View") && IsVisible("المستخدمين","مستخدم"))
+                    {
+                        <MudNavLink Href="/admin/users">المستخدمين</MudNavLink>
+                    }
+                    @if (HasPermission("frm_AddUser", "View") && IsVisible("إضافة مستخدم","مستخدم جديد"))
+                    {
+                        <MudNavLink Href="/admin/users/new">إضافة مستخدم</MudNavLink>
+                    }
+                    @if (HasPermission("frm_AddPermission", "View") && IsVisible("الصلاحيات","صلاحية"))
+                    {
+                        <MudNavLink Href="/admin/permissions">الصلاحيات</MudNavLink>
+                    }
+                    @if (HasPermission("frmManagePermissions", "View") && IsVisible("ربط الصلاحيات"))
+                    {
+                        <MudNavLink Href="/admin/permissions/manage">ربط الصلاحيات</MudNavLink>
+                    }
+                    @if (HasPermission("Frm_MainList_Edit", "View") && IsVisible("قوائم الشاشة","قوائم"))
+                    {
+                        <MudNavLink Href="/admin/menu">قوائم الشاشة الرئيسية</MudNavLink>
+                    }
+                    @if (HasPermission("frm_NotificationsAll", "View") && IsVisible("الإشعارات","اشعارات"))
+                    {
+                        <MudNavLink Href="/notifications">الإشعارات</MudNavLink>
+                    }
+                    @if (HasPermission("frm_ChangePassword", "View") && IsVisible("تغيير كلمة السر","كلمة المرور"))
+                    {
+                        <MudNavLink Href="/change-password">تغيير كلمة السر</MudNavLink>
+                    }
+                    @if (HasPermission("frm_AuditViewer", "View") && IsVisible("متابعة النظام","audit"))
+                    {
+                        <MudNavLink Href="/admin/audit">متابعة النظام</MudNavLink>
+                    }
+                    @if (HasPermission("frmContactSourses", "View") && IsVisible("مصادر العملاء","مصادر"))
+                    {
+                        <MudNavLink Href="/admin/sources">مصادر العملاء</MudNavLink>
+                    }
+                    @if (HasPermission("frmSalesStages", "View") && IsVisible("مراحل البيع","مراحل"))
+                    {
+                        <MudNavLink Href="/admin/sales-stages">مراحل البيع</MudNavLink>
+                    }
+                    @if (HasPermission("frmInterestCategories", "View") && IsVisible("فئات الاهتمام","فئات"))
+                    {
+                        <MudNavLink Href="/admin/interests">فئات الاهتمام</MudNavLink>
+                    }
+                    @if (HasPermission("frmContactStatus", "View") && IsVisible("أنواع التواصل","تواصل"))
+                    {
+                        <MudNavLink Href="/admin/contact-types">أنواع التواصل</MudNavLink>
+                    }
+                    @if (HasPermission("frmTaskTypes", "View") && IsVisible("أنواع المهام","مهام"))
+                    {
+                        <MudNavLink Href="/admin/task-types">أنواع المهام</MudNavLink>
+                    }
+                    @if (HasPermission("frmLostReasons", "View") && IsVisible("أسباب الخسارة","خسارة"))
+                    {
+                        <MudNavLink Href="/admin/lost-reasons">أسباب الخسارة</MudNavLink>
+                    }
+                    @if (HasPermission("frmAdCampain", "View") && IsVisible("الحملات الإعلانية","حملات"))
+                    {
+                        <MudNavLink Href="/admin/campaigns">الحملات الإعلانية</MudNavLink>
+                    }
+                    @if (HasPermission("frm_PricingMargins", "View") && IsVisible("نسب الربح","هامش"))
+                    {
+                        <MudNavLink Href="/admin/pricing-margins">نسب الربح</MudNavLink>
+                    }
+                    @if (HasPermission("frm_PriceRequests", "View") && IsVisible("طلبات تعديل الاسعار","طلبات"))
+                    {
+                        <MudNavLink Href="/admin/price-requests">طلبات تعديل الأسعار</MudNavLink>
+                    }
+                    @if (HasPermission("frm_PriceHistory", "View") && IsVisible("تاريخ الاسعار","اسعار"))
+                    {
+                        <MudNavLink Href="/admin/price-history">تاريخ الأسعار</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+            @* ========== التقارير ========== *@
+            @if (HasAnyViewPermission("rpt_IncomeStatement","rpt_CompareSalesPeriods","rptExpensesReport","rpt_BalanseCustomer","rptCashboxTransactions","rpt_InteractionsLog","rpt_EmployeePerformance","rpt_SourcePerformance","rpt_LostReasons","rpt_empAttendance")
+                && IsGroupVisible("التقارير","قائمة الدخل","مقارنة المبيعات","تقرير المصروفات","كشف حساب","حركات الخزينة","تقرير المتابعات","اداء الفريق","تحليل المصادر","أسباب الخسارة","بصمة الحضور","CRM Dashboard","مؤشرات الخزينة","مؤشر المصروفات"))
+            {
+                <MudNavGroup Title="التقارير"
+                             Icon="@Icons.Material.Rounded.Assessment"
+                             Expanded="@_isSearching">
+                    @if (HasPermission("frmCRM_Dashboard", "View") && IsVisible("CRM Dashboard","CRM"))
+                    {
+                        <MudNavLink Href="/crm-dashboard" Icon="@Icons.Material.Rounded.Dashboard">CRM Dashboard</MudNavLink>
+                    }
+                    @if (HasPermission("frm_CashBoxDashboard", "View") && IsVisible("مؤشرات الخزينة","خزينة"))
+                    {
+                        <MudNavLink Href="/cashbox-dashboard" Icon="@Icons.Material.Rounded.AccountBalance">مؤشرات الخزينة</MudNavLink>
+                    }
+                    @if (HasPermission("frmExpensesDashboard", "View") && IsVisible("مؤشر المصروفات","مصروفات"))
+                    {
+                        <MudNavLink Href="/expenses-dashboard" Icon="@Icons.Material.Rounded.TrendingUp">مؤشر المصروفات</MudNavLink>
+                    }
+                    @if (HasPermission("rpt_IncomeStatement", "View") && IsVisible("قائمة الدخل","دخل"))
+                    {
+                        <MudNavLink Href="/reports/income-statement">قائمة الدخل</MudNavLink>
+                    }
+                    @if (HasPermission("rpt_CompareSalesPeriods", "View") && IsVisible("مقارنة المبيعات","مقارنة"))
+                    {
+                        <MudNavLink Href="/reports/compare-sales">مقارنة المبيعات</MudNavLink>
+                    }
+                    @if (HasPermission("rptExpensesReport", "View") && IsVisible("تقرير المصروفات","مصروفات"))
+                    {
+                        <MudNavLink Href="/reports/expenses">تقرير المصروفات</MudNavLink>
+                    }
+                    @if (HasPermission("rpt_BalanseCustomer", "View") && IsVisible("كشف حساب عميل","كشف حساب"))
+                    {
+                        <MudNavLink Href="/reports/customer-balance">كشف حساب عميل</MudNavLink>
+                    }
+                    @if (HasPermission("rptCashboxTransactions", "View") && IsVisible("حركات الخزينة","خزينة"))
+                    {
+                        <MudNavLink Href="/reports/cashbox">حركات الخزينة</MudNavLink>
+                    }
+                    @if (HasPermission("rpt_InteractionsLog", "View") && IsVisible("تقرير المتابعات","متابعات"))
+                    {
+                        <MudNavLink Href="/reports/interactions">تقرير المتابعات</MudNavLink>
+                    }
+                    @if (HasPermission("rpt_EmployeePerformance", "View") && IsVisible("اداء الفريق","أداء"))
+                    {
+                        <MudNavLink Href="/reports/employee-performance">أداء الفريق</MudNavLink>
+                    }
+                    @if (HasPermission("rpt_SourcePerformance", "View") && IsVisible("تحليل المصادر","مصادر"))
+                    {
+                        <MudNavLink Href="/reports/sources">تحليل المصادر</MudNavLink>
+                    }
+                    @if (HasPermission("rpt_LostReasons", "View") && IsVisible("أسباب الخسارة","خسارة"))
+                    {
+                        <MudNavLink Href="/reports/lost-reasons">أسباب الخسارة</MudNavLink>
+                    }
+                    @if (HasPermission("rpt_empAttendance", "View") && IsVisible("بصمة الحضور","حضور"))
+                    {
+                        <MudNavLink Href="/reports/attendance">بصمة الحضور</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+            @* ========== الشكاوى ========== *@
+            @if (HasAnyViewPermission("frm_Complaints_Main","frm_Complaint_Card")
+                && IsGroupVisible("الشكاوى","متابعة الشكاوى","شكوى جديدة","شكوى"))
+            {
+                <MudNavGroup Title="الشكاوى"
+                             Icon="@Icons.Material.Rounded.Feedback"
+                             Expanded="@_isSearching">
+                    @if (HasPermission("frm_Complaints_Main", "View") && IsVisible("متابعة الشكاوى","شكاوى"))
+                    {
+                        <MudNavLink Href="/complaints">متابعة الشكاوى</MudNavLink>
+                    }
+                    @if (HasPermission("frm_Complaint_Card", "View") && IsVisible("شكوى جديدة","شكوى"))
+                    {
+                        <MudNavLink Href="/complaints/new">شكوى جديدة</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+            @* ========== تحليلات ========== *@
+            @if (HasAnyViewPermission("frm_SlesPurchseMonthly","frmComparePeriods","frmFilterIncomeStatment","frmProductPDF")
+                && IsGroupVisible("تحليلات","المبيعات والمشتريات الشهرية","مقارنة المبيعات","قائمة الدخل"))
+            {
+                <MudNavGroup Title="تحليلات"
+                             Icon="@Icons.Material.Rounded.Analytics"
+                             Expanded="@_isSearching">
+                    @if (HasPermission("frm_SlesPurchseMonthly", "View") && IsVisible("المبيعات والمشتريات الشهرية","شهرية"))
+                    {
+                        <MudNavLink Href="/analytics/monthly-sales">المبيعات والمشتريات الشهرية</MudNavLink>
+                    }
+                    @if (HasPermission("frmComparePeriods", "View") && IsVisible("مقارنة المبيعات","مقارنة"))
+                    {
+                        <MudNavLink Href="/analytics/compare-periods">مقارنة المبيعات</MudNavLink>
+                    }
+                    @if (HasPermission("frmFilterIncomeStatment", "View") && IsVisible("قائمة الدخل","دخل"))
+                    {
+                        <MudNavLink Href="/analytics/income-statement">قائمة الدخل</MudNavLink>
+                    }
+                </MudNavGroup>
+            }
+
+        </MudNavMenu>
+
+        @if (_isSearching && !_hasResults)
+        {
+            <div class="no-results">
+                <MudIcon Icon="@Icons.Material.Rounded.SearchOff" Size="Size.Large" />
+                <MudText Typo="Typo.body2">لا توجد نتائج لـ "@_sidebarSearchText"</MudText>
+            </div>
+        }
+
+    </MudDrawer>
+
+    <!-- ================= MAIN CONTENT ================= -->
+    <MudMainContent Class="main-body">
+        <MudPaper Class="page-panel" Elevation="1">
+            @Body
+        </MudPaper>
+    </MudMainContent>
+
+</MudLayout>
+
+@code {
+    private bool _drawerOpen = true;
+    private bool _isDarkMode = false;
+    private const string DarkModeKey = "erp-dark-mode";
+    private bool _userMenuOpen;
+    private string _searchText = "";
+    private string _sidebarSearchText = "";
+    private bool _hasResults = true;
+    private bool _isSearching => !string.IsNullOrWhiteSpace(_sidebarSearchText);
+
+    private string _currentUserName = "";
+    private string _currentUserRole = "";
+    private string _avatarLetter = "";
+    private ClaimsPrincipal? _currentUser;
+    private List<BreadcrumbItem> _breadcrumbs = new();
+
+    private EventHandler<LocationChangedEventArgs>? _locationHandler;
+
+    private MudTheme _theme = new MudTheme()
+{
+    // ==================
+    // Light Mode
+    // ==================
+    PaletteLight = new PaletteLight()
+    {
+        // Brand
+        Primary           = "#D4AF37",
+        PrimaryContrastText = "#0F172A",
+        PrimaryDarken     = "#B8960C",
+        PrimaryLighten    = "#E8D080",
+
+        Secondary         = "#1E293B",
+        SecondaryContrastText = "#FFFFFF",
+
+        // Semantic
+        Success           = "#10B981",
+        SuccessContrastText = "#FFFFFF",
+        Warning           = "#F59E0B",
+        WarningContrastText = "#FFFFFF",
+        Error             = "#EF4444",
+        ErrorContrastText = "#FFFFFF",
+        Info              = "#3B82F6",
+        InfoContrastText  = "#FFFFFF",
+
+        // Backgrounds
+        Background        = "#F4F6F9",
+        BackgroundGray    = "#E8ECF2",
+        Surface           = "#FFFFFF",
+
+        // Drawer / Appbar
+        DrawerBackground  = "#FFFFFF",
+        DrawerText        = "#1E293B",
+        DrawerIcon        = "#D4AF37",
+        AppbarBackground  = "#FFFFFF",
+        AppbarText        = "#1E293B",
+
+        // Text
+        TextPrimary       = "#1E293B",
+        TextSecondary     = "#64748B",
+        TextDisabled      = "#94A3B8",
+
+        // Lines & Dividers
+        LinesDefault      = "#E2E8F0",
+        LinesInputs       = "#CBD5E1",
+        TableLines        = "#E2E8F0",
+        Divider           = "#E2E8F0",
+
+        // Action states
+        ActionDefault     = "#64748B",
+        ActionDisabled    = "#CBD5E1",
+        ActionDisabledBackground = "#F1F5F9",
+
+        // Hover
+        HoverOpacity      = 0.06,
+        RippleOpacity     = 0.1,
+        RippleOpacitySecondary = 0.1,
+
+        // Shadows
+        OverlayDark       = "rgba(15, 23, 42, 0.5)",
+        OverlayLight      = "rgba(255, 255, 255, 0.7)",
+
+        // GrayScale
+        GrayDefault       = "#94A3B8",
+        GrayLight         = "#CBD5E1",
+        GrayLighter       = "#E2E8F0",
+        GrayDark          = "#475569",
+        GrayDarker        = "#1E293B",
+
+        // Dark
+        Dark              = "#1E293B",
+        DarkContrastText  = "#FFFFFF",
+        DarkLighten       = "#334155",
+        DarkDarken        = "#0F172A",
+
+        // White & Black
+        White             = "#FFFFFF",
+        Black             = "#0F172A",
+    },
+
+    // ==================
+    // Dark Mode
+    // ==================
+    PaletteDark = new PaletteDark()
+    {
+        // Brand
+        Primary           = "#D4AF37",
+        PrimaryContrastText = "#0F172A",
+        PrimaryDarken     = "#B8960C",
+        PrimaryLighten    = "#E8D080",
+
+        Secondary         = "#E8D080",
+        SecondaryContrastText = "#0F172A",
+
+        // Semantic
+        Success           = "#10B981",
+        SuccessContrastText = "#FFFFFF",
+        Warning           = "#F59E0B",
+        WarningContrastText = "#0F172A",
+        Error             = "#EF4444",
+        ErrorContrastText = "#FFFFFF",
+        Info              = "#3B82F6",
+        InfoContrastText  = "#FFFFFF",
+
+        // Backgrounds
+        Background        = "#0F172A",
+        BackgroundGray    = "#1E293B",
+        Surface           = "#1E293B",
+
+        // Drawer / Appbar
+        DrawerBackground  = "#0F172A",
+        DrawerText        = "#E2E8F0",
+        DrawerIcon        = "#D4AF37",
+        AppbarBackground  = "#0F172A",
+        AppbarText        = "#E2E8F0",
+
+        // Text
+        TextPrimary       = "#F1F5F9",
+        TextSecondary     = "#94A3B8",
+        TextDisabled      = "#475569",
+
+        // Lines & Dividers
+        LinesDefault      = "#334155",
+        LinesInputs       = "#475569",
+        TableLines        = "#334155",
+        Divider           = "#334155",
+
+        // Action states
+        ActionDefault     = "#94A3B8",
+        ActionDisabled    = "#475569",
+        ActionDisabledBackground = "#1E293B",
+
+        // Hover
+        HoverOpacity      = 0.08,
+        RippleOpacity     = 0.1,
+        RippleOpacitySecondary = 0.1,
+
+        // Shadows
+        OverlayDark       = "rgba(0, 0, 0, 0.7)",
+        OverlayLight      = "rgba(30, 41, 59, 0.7)",
+
+        // GrayScale
+        GrayDefault       = "#64748B",
+        GrayLight         = "#475569",
+        GrayLighter       = "#334155",
+        GrayDark          = "#94A3B8",
+        GrayDarker        = "#CBD5E1",
+
+        // Dark
+        Dark              = "#0F172A",
+        DarkContrastText  = "#F1F5F9",
+        DarkLighten       = "#1E293B",
+        DarkDarken        = "#020617",
+
+        // White & Black
+        White             = "#F1F5F9",
+        Black             = "#020617",
+    },
+
+    // ==================
+    // Typography
+    // ==================
+    Typography = new Typography()
+    {
+        Default = new DefaultTypography()
+        {
+            FontFamily = new[] { "Helvetica Neue", "Helvetica", "Arial", "sans-serif" },
+            FontSize   = "0.9rem",
+            LineHeight = "1.6",
+        },
+        H1 = new H1Typography() { FontSize = "2rem",    FontWeight = "800" },
+        H2 = new H2Typography() { FontSize = "1.75rem", FontWeight = "700" },
+        H3 = new H3Typography() { FontSize = "1.5rem",  FontWeight = "700" },
+        H4 = new H4Typography() { FontSize = "1.25rem", FontWeight = "600" },
+        H5 = new H5Typography() { FontSize = "1rem",    FontWeight = "600" },
+        H6 = new H6Typography() { FontSize = "0.875rem",FontWeight = "600" },
+        Body1 = new Body1Typography() { FontSize = "0.9rem",  LineHeight = "1.6" },
+        Body2 = new Body2Typography() { FontSize = "0.8rem",  LineHeight = "1.5" },
+        Button = new ButtonTypography() { FontSize = "0.875rem", FontWeight = "600", TextTransform = "none" },
+        Caption = new CaptionTypography() { FontSize = "0.75rem" },
+    },
+
+    // ==================
+    // Shape
+    // ==================
+    LayoutProperties = new LayoutProperties()
+    {
+        DefaultBorderRadius = "10px",
+        DrawerWidthRight    = "280px",
+        DrawerWidthLeft     = "280px",
+        AppbarHeight        = "64px",
+    }
+};
+
+    protected override async Task OnInitializedAsync()
+{
+    var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        _currentUser = authState.User;
+
+        if (_currentUser.Identity?.IsAuthenticated == true)
+        {
+            _currentUserName = _currentUser.Identity.Name ?? "";
+            _currentUserRole = _currentUser.FindFirst(ClaimTypes.Role)?.Value ?? "User";
+            _avatarLetter = string.IsNullOrEmpty(_currentUserName)
+                ? "U"
+                : _currentUserName[..1].ToUpper();
+        }
+
+        UpdateBreadcrumbs();
+
+        _locationHandler = (_, _) =>
+        {
+            UpdateBreadcrumbs();
+            InvokeAsync(StateHasChanged);
+        };
+
+        Navigation.LocationChanged += _locationHandler;
+    }
+
+    public void Dispose()
+    {
+        if (_locationHandler != null)
+            Navigation.LocationChanged -= _locationHandler;
+    }
+
+    private void UpdateBreadcrumbs()
+    {
+        var path = new Uri(Navigation.Uri).AbsolutePath.ToLower();
+
+        _breadcrumbs = new List<BreadcrumbItem>
+        {
+            new BreadcrumbItem("الرئيسية", href: "/", icon: Icons.Material.Rounded.Home)
+        };
+
+        if      (path.StartsWith("/products"))       _breadcrumbs.Add(new("المنتجات",        href: null, disabled: true));
+        else if (path.StartsWith("/customers"))      _breadcrumbs.Add(new("العملاء",         href: null, disabled: true));
+        else if (path.StartsWith("/sales-invoices")) _breadcrumbs.Add(new("فواتير المبيعات", href: null, disabled: true));
+        else if (path.StartsWith("/expenses"))       _breadcrumbs.Add(new("المصروفات",       href: null, disabled: true));
+        else if (path.StartsWith("/employees"))      _breadcrumbs.Add(new("الموظفين",        href: null, disabled: true));
+        else if (path.StartsWith("/payroll"))        _breadcrumbs.Add(new("الرواتب",         href: null, disabled: true));
+        else if (path.StartsWith("/cashbox"))        _breadcrumbs.Add(new("الخزينة",         href: null, disabled: true));
+        else if (path.StartsWith("/crm"))            _breadcrumbs.Add(new("CRM",             href: null, disabled: true));
+        else if (path.StartsWith("/reports"))        _breadcrumbs.Add(new("التقارير",        href: null, disabled: true));
+        else if (path.StartsWith("/admin"))          _breadcrumbs.Add(new("إدارة النظام",    href: null, disabled: true));
+        else if (path.StartsWith("/complaints"))     _breadcrumbs.Add(new("الشكاوى",         href: null, disabled: true));
+        else if (path.StartsWith("/analytics"))      _breadcrumbs.Add(new("تحليلات",         href: null, disabled: true));
+        else if (path.StartsWith("/shifts"))         _breadcrumbs.Add(new("الشيفتات",        href: null, disabled: true));
+        else if (path.StartsWith("/payments"))       _breadcrumbs.Add(new("المدفوعات",       href: null, disabled: true));
+        else if (path.StartsWith("/notifications"))  _breadcrumbs.Add(new("الإشعارات",       href: null, disabled: true));
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+{
+    if (firstRender)
+    {
+        try
+        {
+            var saved = await JS.InvokeAsync<string>(
+                "localStorage.getItem", DarkModeKey);
+            _isDarkMode = saved == "true";
+
+            await JS.InvokeVoidAsync("eval",
+                _isDarkMode
+                ? "document.body.classList.add('dark-mode'); document.body.classList.remove('light-mode');"
+                : "document.body.classList.add('light-mode'); document.body.classList.remove('dark-mode');");
+
+            StateHasChanged();
+        }
+        catch { }
+    }
+}
+    private void ToggleDrawer()   => _drawerOpen   = !_drawerOpen;
+private async Task ToggleDarkMode()
+{
+    _isDarkMode = !_isDarkMode;
+    await JS.InvokeVoidAsync("localStorage.setItem",
+          DarkModeKey, _isDarkMode.ToString().ToLower());
+    await JS.InvokeVoidAsync("eval", 
+          _isDarkMode 
+          ? "document.body.classList.add('dark-mode'); document.body.classList.remove('light-mode');"
+          : "document.body.classList.add('light-mode'); document.body.classList.remove('dark-mode');");
+}
+    private void ToggleUserMenu() => _userMenuOpen = !_userMenuOpen;
+
+    private async Task Logout()
+    {
+        _userMenuOpen = false;
+        await JS.InvokeVoidAsync("cocoboloAuth.logout");
+        Navigation.NavigateTo("/login", forceLoad: true);
+    }
+
+    private bool HasPermission(string formName, string action)
+    {
+        if (_currentUser?.Identity?.IsAuthenticated != true) return false;
+        return _currentUser.Claims.Any(c =>
+            c.Type == "Permission" && c.Value == $"{formName}:{action}");
+    }
+
+    private bool HasAnyViewPermission(params string[] forms)
+    {
+        if (_currentUser?.Identity?.IsAuthenticated != true) return false;
+        return forms.Any(f =>
+            _currentUser.Claims.Any(c =>
+                c.Type == "Permission" && c.Value == $"{f}:View"));
+    }
+
+    private bool IsVisible(params string[] keywords)
+    {
+        if (!_isSearching) return true;
+        _hasResults = true;
+        return keywords.Any(k => k.ContainsArabic(_sidebarSearchText));
+    }
+
+    private bool IsGroupVisible(params string[] allKeywords)
+    {
+        if (!_isSearching) return true;
+        var result = allKeywords.Any(k => k.ContainsArabic(_sidebarSearchText));
+        if (!result) _hasResults = false;
+        return result;
+    }
+}

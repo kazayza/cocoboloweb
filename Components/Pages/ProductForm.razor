@@ -1,0 +1,2175 @@
+@page "/products/form"
+@page "/products/form/{Id:int}"
+
+@using COCOBOLOERPNEW.Models
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Security.Claims
+@using COCOBOLOERPNEW.Services
+
+@inject NotificationService NotificationService
+@inject IAuditService AuditService
+@inject db24804Context Db
+@inject NavigationManager Navigation
+@inject IWebHostEnvironment Env
+@inject AuthenticationStateProvider AuthProvider
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4" Style="color: var(--gold);">جاري تحميل البيانات...</MudText>
+    </div>
+}
+else
+{
+    <div class="product-form-page">
+
+        <div class="page-header">
+            <div class="header-content">
+                <button class="back-btn" @onclick="GoBack">
+                    <MudIcon Icon="@Icons.Material.Filled.ArrowBack" />
+                </button>
+                <div class="header-info">
+                    <h1>@(string.IsNullOrEmpty(_model.ProductName) ? "منتج جديد" : _model.ProductName)</h1>
+                    <div class="header-meta">
+                        <div class="meta-item">
+                            <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                            <span>@_model.CreatedBy</span>
+                        </div>
+                        <div class="meta-item">
+                            <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="Size.Small" />
+                            <span>@FormatCreatedDate()</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="status-badge @GetStatusClass(_model.PricingStatusId)">
+                    <span class="status-dot"></span>
+                    <span>@GetStatusText(_model.PricingStatusId)</span>
+                </div>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_errorMessage))
+        {
+            <MudAlert Severity="Severity.Error"
+                      Variant="Variant.Filled"
+                      ShowCloseIcon="true"
+                      CloseIconClicked="() => _errorMessage = null"
+                      Class="mb-4"
+                      Style="border-radius: 12px;">
+                @_errorMessage
+            </MudAlert>
+        }
+
+        <MudPaper Class="tabs-container" Elevation="0">
+            <MudForm @ref="_form" @bind-IsValid="_formIsValid">
+                <MudTabs Elevation="0"
+                         Rounded="true"
+                         ApplyEffectsToContainer="true"
+                         PanelClass="tab-panel"
+                         Class="custom-tabs">
+
+                    <!-- Tab 1: البيانات الأساسية -->
+                    <MudTabPanel Text="البيانات الأساسية" Icon="@Icons.Material.Filled.Info">
+                        <div class="tab-content">
+                            <div class="tab-header">
+                                <MudIcon Icon="@Icons.Material.Filled.Info" Class="tab-icon" />
+                                <div class="tab-header-text">
+                                    <h2>البيانات الأساسية للمنتج</h2>
+                                    <p>أدخل المعلومات الأساسية الخاصة بالمنتج</p>
+                                </div>
+                            </div>
+                            <MudGrid>
+                                <MudItem xs="12" md="6">
+                                    <div class="form-field">
+                                        <label>اسم المنتج <span class="required">*</span></label>
+                                        <MudTextField @bind-Value="_model.ProductName"
+                                                      Variant="Variant.Outlined"
+                                                      Placeholder="أدخل اسم المنتج"
+                                                      Required="true"
+                                                      RequiredError="اسم المنتج مطلوب"
+                                                      Adornment="Adornment.Start"
+                                                      AdornmentIcon="@Icons.Material.Filled.Label" />
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12" md="6">
+                                    <div class="form-field">
+                                        <label>مجموعة المنتج</label>
+                                        <MudSelect T="int"
+                                                   @bind-Value="_model.ProductGroupId"
+                                                   Variant="Variant.Outlined"
+                                                   Placeholder="اختر المجموعة"
+                                                   Adornment="Adornment.Start"
+                                                   AdornmentIcon="@Icons.Material.Filled.Category">
+                                            @foreach (var g in _groups)
+                                            {
+                                                <MudSelectItem Value="@g.ProductGroupId">@g.GroupName</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12" md="6">
+                                    <div class="form-field">
+                                        <label>العميل</label>
+                                        <MudAutocomplete T="Party"
+                                                         @bind-Value="_selectedCustomer"
+                                                         Variant="Variant.Outlined"
+                                                         Placeholder="ابحث عن العميل..."
+                                                         Adornment="Adornment.Start"
+                                                         AdornmentIcon="@Icons.Material.Filled.Person"
+                                                         SearchFunc="@SearchCustomers"
+                                                         ToStringFunc="@(p => p?.PartyName ?? "")"
+                                                         Clearable="true"
+                                                         MaxItems="50" />
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12" md="6">
+                                    <div class="form-field">
+                                        <label>نوع التسعير</label>
+                                        <MudSelect T="string"
+                                                   @bind-Value="_model.PricingType"
+                                                   Variant="Variant.Outlined"
+                                                   Placeholder="اختر النوع"
+                                                   HelperText="يحدد باقة التسعير المطبقة على المنتج"
+                                                   Adornment="Adornment.Start"
+                                                   AdornmentIcon="@Icons.Material.Filled.AttachMoney">
+                                            <MudSelectItem T="string" Value="@(PricingTypes.Premium)">Premium</MudSelectItem>
+                                            <MudSelectItem T="string" Value="@(PricingTypes.Elite)">Elite</MudSelectItem>
+                                        </MudSelect>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12">
+                                    <div class="form-field">
+                                        <label>الوصف</label>
+                                        <MudTextField @bind-Value="_model.ProductDescription"
+                                                      Lines="4"
+                                                      Variant="Variant.Outlined"
+                                                      Placeholder="أدخل وصف تفصيلي للمنتج..."
+                                                      Adornment="Adornment.Start"
+                                                      AdornmentIcon="@Icons.Material.Filled.Description" />
+                                    </div>
+                                </MudItem>
+                            </MudGrid>
+                        </div>
+                    </MudTabPanel>
+
+                    <!-- Tab 2: التسعير والمالية -->
+                    <MudTabPanel Text="التسعير والمالية" Icon="@Icons.Material.Filled.AttachMoney">
+                        <div class="tab-content">
+                            <div class="tab-header">
+                                <MudIcon Icon="@Icons.Material.Filled.AttachMoney" Class="tab-icon" />
+                                <div class="tab-header-text">
+                                    <h2>البيانات المالية والتسعير</h2>
+                                    <p>إدارة التكاليف وأسعار البيع للمنتج</p>
+                                </div>
+                                @if (IsAdminOrAccountManager)
+                                {
+                                    <MudButton Variant="Variant.Outlined"
+                                               StartIcon="@Icons.Material.Filled.History"
+                                               OnClick="OpenHistoryDialog"
+                                               Color="Color.Primary"
+                                               Class="history-btn">
+                                        سجل التسعير
+                                    </MudButton>
+                                }
+                            </div>
+                            <MudGrid>
+                                @if (ShowCost || ShowSale)
+                                {
+                                    <MudItem xs="12" md="6">
+                                        <div class="pricing-card premium-card">
+                                            <div class="pricing-card-header">
+                                                <MudIcon Icon="@Icons.Material.Filled.Star" />
+                                                <h3>Premium</h3>
+                                            </div>
+                                            <div class="pricing-card-body">
+                                                @if (ShowCost)
+                                                {
+                                                    <div class="form-field">
+                                                        <label>التكلفة</label>
+                                                        <MudNumericField T="decimal?"
+                                                                         @bind-Value="PremiumCost"
+                                                                         Variant="Variant.Outlined"
+                                                                         Placeholder="0.00"
+                                                                         Adornment="Adornment.Start"
+                                                                         AdornmentIcon="@Icons.Material.Filled.Money"
+                                                                         Format="N2"
+                                                                         Disabled="@(!CanEditCost)" />
+                                                    </div>
+                                                }
+                                                @if (ShowSale)
+                                                {
+                                                    <div class="form-field">
+                                                        <label>سعر البيع</label>
+                                                        <MudNumericField T="decimal?"
+                                                                         @bind-Value="_model.SuggestedSalePrice"
+                                                                         Variant="Variant.Outlined"
+                                                                         Disabled="@(!CanEditSale)"
+                                                                         Adornment="Adornment.Start"
+                                                                         AdornmentIcon="@Icons.Material.Filled.TrendingUp"
+                                                                         Format="N2"
+                                                                         HelperText="@(IsAutoCalculated(_model.SuggestedSalePrice, _model.PurchasePrice) ? "⚡ محسوب تلقائياً" : "")"
+                                                                         Class="calculated-field" />
+                                                    </div>
+                                                    @if (IsAdminOrAccountManager)
+                                                    {
+                                                        <div class="form-field">
+                                                            <label>نسبة الربح</label>
+                                                            <MudTextField T="string"
+                                                                          Value="@GetMarginText(_model.PurchasePrice, _model.SuggestedSalePrice)"
+                                                                          Variant="Variant.Outlined"
+                                                                          Disabled="true"
+                                                                          Adornment="Adornment.Start"
+                                                                          AdornmentIcon="@Icons.Material.Filled.Percent" />
+                                                        </div>
+                                                    }
+                                                }
+                                            </div>
+                                        </div>
+                                    </MudItem>
+
+                                    <MudItem xs="12" md="6">
+                                        <div class="pricing-card elite-card">
+                                            <div class="pricing-card-header">
+                                                <MudIcon Icon="@Icons.Material.Filled.WorkspacePremium" />
+                                                <h3>Elite</h3>
+                                            </div>
+                                            <div class="pricing-card-body">
+                                                @if (ShowCost)
+                                                {
+                                                    <div class="form-field">
+                                                        <label>التكلفة</label>
+                                                        <MudNumericField T="decimal?"
+                                                                         @bind-Value="EliteCost"
+                                                                         Variant="Variant.Outlined"
+                                                                         Placeholder="0.00"
+                                                                         Adornment="Adornment.Start"
+                                                                         AdornmentIcon="@Icons.Material.Filled.Money"
+                                                                         Format="N2"
+                                                                         Disabled="@(!CanEditCost)" />
+                                                    </div>
+                                                }
+                                                @if (ShowSale)
+                                                {
+                                                    <div class="form-field">
+                                                        <label>سعر البيع</label>
+                                                        <MudNumericField T="decimal?"
+                                                                         @bind-Value="_model.SuggestedSalePriceElite"
+                                                                         Variant="Variant.Outlined"
+                                                                         Disabled="@(!CanEditSale)"
+                                                                         Adornment="Adornment.Start"
+                                                                         AdornmentIcon="@Icons.Material.Filled.TrendingUp"
+                                                                         Format="N2"
+                                                                         HelperText="@(IsAutoCalculated(_model.SuggestedSalePriceElite, _model.PurchasePriceElite) ? "⚡ محسوب تلقائياً" : "")"
+                                                                         Class="calculated-field" />
+                                                    </div>
+                                                    @if (IsAdminOrAccountManager)
+                                                    {
+                                                        <div class="form-field">
+                                                            <label>نسبة الربح</label>
+                                                            <MudTextField T="string"
+                                                                          Value="@GetMarginText(_model.PurchasePriceElite, _model.SuggestedSalePriceElite)"
+                                                                          Variant="Variant.Outlined"
+                                                                          Disabled="true"
+                                                                          Adornment="Adornment.Start"
+                                                                          AdornmentIcon="@Icons.Material.Filled.Percent" />
+                                                        </div>
+                                                    }
+                                                }
+                                            </div>
+                                        </div>
+                                    </MudItem>
+                                }
+
+                                @if (IsFactoryOrAdmin)
+                                {
+                                    <MudItem xs="12" md="6">
+                                        <div class="info-card">
+                                            <MudIcon Icon="@Icons.Material.Filled.Schedule" Class="info-icon" />
+                                            <div class="form-field" style="flex: 1; margin: 0;">
+                                                <label>مدة التصنيع (يوم)</label>
+                                                <MudNumericField T="int?"
+                                                                 @bind-Value="_model.Period"
+                                                                 Variant="Variant.Outlined"
+                                                                 Placeholder="0"
+                                                                 HelperText="عدد أيام التصنيع المتوقعة"
+                                                                 Adornment="Adornment.Start"
+                                                                 AdornmentIcon="@Icons.Material.Filled.Timer" />
+                                            </div>
+                                        </div>
+                                    </MudItem>
+                                }
+                            </MudGrid>
+                        </div>
+                    </MudTabPanel>
+
+                    <!-- Tab 3: المكونات -->
+                    <MudTabPanel Text="المكونات" Icon="@Icons.Material.Filled.Category">
+                        <div class="tab-content">
+                            <div class="tab-header">
+                                <MudIcon Icon="@Icons.Material.Filled.Category" Class="tab-icon" />
+                                <div class="tab-header-text">
+                                    <h2>مكونات المنتج</h2>
+                                    <p>إضافة وإدارة المكونات المستخدمة في تصنيع المنتج</p>
+                                </div>
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Success"
+                                           StartIcon="@Icons.Material.Filled.Add"
+                                           OnClick="AddComponent"
+                                           Size="Size.Medium">
+                                    إضافة مكون
+                                </MudButton>
+                            </div>
+
+                            @if (_model.ProductComponents.Any())
+                            {
+                                <div class="components-list">
+                                    @foreach (var (component, index) in _model.ProductComponents.Select((c, i) => (c, i)))
+                                    {
+                                        <div class="component-card">
+                                            <div class="component-number">@(index + 1)</div>
+                                            <div class="component-fields">
+                                                <div class="form-field">
+                                                    <label>اسم المكون</label>
+                                                    <MudTextField @bind-Value="component.ComponentName"
+                                                                  Variant="Variant.Outlined"
+                                                                  Placeholder="أدخل اسم المكون"
+                                                                  Adornment="Adornment.Start"
+                                                                  AdornmentIcon="@Icons.Material.Filled.Inventory" />
+                                                </div>
+                                                <div class="form-field quantity-field">
+                                                    <label>الكمية</label>
+                                                    <MudNumericField T="int"
+                                                                     @bind-Value="component.Quantity"
+                                                                     Variant="Variant.Outlined"
+                                                                     Placeholder="0"
+                                                                     Adornment="Adornment.Start"
+                                                                     AdornmentIcon="@Icons.Material.Filled.Numbers" />
+                                                </div>
+                                            </div>
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                           Color="Color.Error"
+                                                           Size="Size.Large"
+                                                           Class="delete-component-btn"
+                                                           OnClick="@(() => RemoveComponent(component))" />
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="empty-state">
+                                    <MudIcon Icon="@Icons.Material.Filled.Inventory" Size="Size.Large" />
+                                    <h3>لا توجد مكونات مضافة</h3>
+                                    <p>ابدأ بإضافة المكونات المستخدمة في تصنيع هذا المنتج</p>
+                                    <MudButton Variant="Variant.Filled"
+                                               Color="Color.Primary"
+                                               StartIcon="@Icons.Material.Filled.Add"
+                                               OnClick="AddComponent"
+                                               Size="Size.Large">
+                                        إضافة أول مكون
+                                    </MudButton>
+                                </div>
+                            }
+                        </div>
+                    </MudTabPanel>
+
+                    <!-- Tab 4: الوسائط -->
+                    <MudTabPanel Text="الوسائط" Icon="@Icons.Material.Filled.Image">
+                        <div class="tab-content">
+                            <div class="tab-header">
+                                <MudIcon Icon="@Icons.Material.Filled.Image" Class="tab-icon" />
+                                <div class="tab-header-text">
+                                    <h2>الصور والملفات</h2>
+                                    <p>إدارة صور المنتج والملفات المرفقة</p>
+                                </div>
+                            </div>
+
+                            <div class="media-section">
+                                <div class="media-section-header">
+                                    <MudIcon Icon="@Icons.Material.Filled.PhotoLibrary" />
+                                    <h3>صور المنتج</h3>
+                                    <MudText Typo="Typo.caption" Class="ms-auto" Style="color: var(--mud-palette-text-secondary);">
+                                        الحد الأقصى: 5 ميجا لكل صورة
+                                    </MudText>
+                                </div>
+                                <label class="upload-btn">
+                                    <MudIcon Icon="@Icons.Material.Filled.CloudUpload" />
+                                    <span>رفع صورة جديدة</span>
+                                    <InputFile OnChange="UploadImage" accept="image/*" class="file-input" />
+                                </label>
+                                @if (_model.ProductImages.Any())
+                                {
+                                    <div class="images-grid">
+                                        @foreach (var (img, index) in _model.ProductImages.Select((i, idx) => (i, idx)))
+                                        {
+                                            <div class="image-card">
+                                                <img src="@img.ImagePath" alt="صورة المنتج @(index + 1)" />
+                                                <div class="image-overlay">
+                                                    <span>صورة @(index + 1)</span>
+                                                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                                   Size="Size.Small"
+                                                                   Color="Color.Error"
+                                                                   OnClick="@(() => RemoveImage(img))"
+                                                                   Style="position: absolute; top: 4px; left: 4px; background: rgba(255,255,255,0.9); border-radius: 50%;" />
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="empty-state small">
+                                        <MudIcon Icon="@Icons.Material.Filled.AddPhotoAlternate" Size="Size.Large" />
+                                        <p>لم يتم رفع أي صور بعد</p>
+                                    </div>
+                                }
+                            </div>
+
+                            <MudDivider Class="my-6" />
+
+                            <div class="media-section">
+                                <div class="media-section-header">
+                                    <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" />
+                                    <h3>ملف PDF</h3>
+                                    <MudText Typo="Typo.caption" Class="ms-auto" Style="color: var(--mud-palette-text-secondary);">
+                                        الحد الأقصى: 10 ميجا
+                                    </MudText>
+                                </div>
+                                <label class="upload-btn pdf-btn">
+                                    <MudIcon Icon="@Icons.Material.Filled.UploadFile" />
+                                    <span>رفع ملف PDF</span>
+                                    <InputFile OnChange="UploadPdf" accept=".pdf" class="file-input" />
+                                </label>
+                                @if (!string.IsNullOrEmpty(_model.PdfPath))
+                                {
+                                    <div class="pdf-viewer">
+                                        <div class="pdf-header">
+                                            <MudIcon Icon="@Icons.Material.Filled.Description" />
+                                            <span>معاينة المستند</span>
+                                        </div>
+                                        <iframe src="@_model.PdfPath"></iframe>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="empty-state small">
+                                        <MudIcon Icon="@Icons.Material.Filled.InsertDriveFile" Size="Size.Large" />
+                                        <p>لم يتم رفع ملف PDF بعد</p>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </MudTabPanel>
+
+                    <!-- Tab 5: الإجراءات -->
+                    @if (_model.ProductId != 0)
+                    {
+                        <MudTabPanel Text="الإجراءات" Icon="@Icons.Material.Filled.PlayArrow">
+                            <div class="tab-content">
+                                <div class="tab-header">
+                                    <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Class="tab-icon" />
+                                    <div class="tab-header-text">
+                                        <h2>إجراءات العمل</h2>
+                                        <p>تنفيذ العمليات والإجراءات الخاصة بالمنتج</p>
+                                    </div>
+                                </div>
+
+                                <div class="workflow-progress">
+                                    @foreach (var status in _statuses.OrderBy(s => s.PricingStatusId))
+                                    {
+                                        var isActive = status.PricingStatusId == _model.PricingStatusId;
+                                        var isPassed = status.PricingStatusId < _model.PricingStatusId;
+                                        var isCompleted = isActive || isPassed;
+                                        <div class="progress-step @(isActive ? "active" : isPassed ? "passed" : "")">
+                                            <div class="step-dot">
+                                                @if (isCompleted)
+                                                {
+                                                    <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" />
+                                                }
+                                            </div>
+                                            <span class="step-label">@status.StatusName</span>
+                                        </div>
+                                    }
+                                </div>
+
+                                <div class="workflow-container">
+                                    @{
+                                        var availableTransitions = _transitions
+                                            .Where(t => t.FromStatusId == _model.PricingStatusId
+                                                     && t.AllowedRole.Equals(_currentRole, StringComparison.OrdinalIgnoreCase))
+                                            .ToList();
+                                    }
+                                    @foreach (var trans in availableTransitions)
+                                    {
+                                        var toStatus = _statuses.FirstOrDefault(s => s.PricingStatusId == trans.ToStatusId);
+                                        var targetStatusId = trans.ToStatusId;
+                                        var isPositive = IsPositiveTransition(targetStatusId);
+                                        <div class="workflow-card @(isPositive ? "success-card" : "warning-card")">
+                                            <MudIcon Icon="@(isPositive ? Icons.Material.Filled.Check : Icons.Material.Filled.Edit)"
+                                                     Class="workflow-icon" />
+                                            <div class="workflow-content">
+                                                <h3>@toStatus?.StatusName</h3>
+                                                <p>@toStatus?.Description</p>
+                                                <MudButton Variant="Variant.Filled"
+                                                           Color="@(isPositive ? Color.Success : Color.Warning)"
+                                                           StartIcon="@(isPositive ? Icons.Material.Filled.Check : Icons.Material.Filled.Edit)"
+                                                           OnClick="@(() => ChangeStatus(targetStatusId))"
+                                                           Size="Size.Large"
+                                                           FullWidth="true">
+                                                    @toStatus?.StatusName
+                                                </MudButton>
+                                            </div>
+                                        </div>
+                                    }
+                                    @if (!availableTransitions.Any())
+                                    {
+                                        <div class="empty-state">
+                                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Large" />
+                                            <h3>لا توجد إجراءات متاحة لك حالياً</h3>
+                                            <p>حالة المنتج: @GetStatusText(_model.PricingStatusId)</p>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        </MudTabPanel>
+                    }
+
+                    <!-- ✅ Tab 6: سجل الأحداث (المراجعة / Audit Trail) -->
+                    @if (_model.ProductId != 0)
+                    {
+                        <MudTabPanel Text="سجل الأحداث" Icon="@Icons.Material.Filled.History">
+                            <div class="tab-content">
+                                <div class="tab-header">
+                                    <MudIcon Icon="@Icons.Material.Filled.History" Class="tab-icon" />
+                                    <div class="tab-header-text">
+                                        <h2>سجل مراجعة المنتج</h2>
+                                        <p>تتبع جميع التعديلات والإجراءات التي تمت على هذا المنتج</p>
+                                    </div>
+                                </div>
+
+                                @if (_auditLogs.Any())
+                                {
+                                    <div class="audit-timeline">
+                                        @foreach (var log in _auditLogs)
+                                        {
+                                            <div class="audit-item">
+                                                <div class="audit-dot @GetAuditDotClass(log.ActionType)"></div>
+                                                <div class="audit-content">
+                                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                                        <span class="audit-action">@GetAuditActionText(log.ActionType)</span>
+                                                        <span class="audit-date">@(log.ActionDate?.ToString("yyyy/MM/dd HH:mm") ?? "-")</span>
+                                                    </div>
+                                                    <div class="audit-user">
+                                                        <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                                                        <span>@(log.AccessUserName ?? log.LoginName ?? "النظام")</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="empty-state">
+                                        <MudIcon Icon="@Icons.Material.Filled.HistoryToggleOff" Size="Size.Large" />
+                                        <h3>لا يوجد سجل أحداث</h3>
+                                        <p>لم يتم تسجيل أي إجراءات على هذا المنتج بعد</p>
+                                    </div>
+                                }
+                            </div>
+                        </MudTabPanel>
+                    }
+
+                </MudTabs>
+            </MudForm>
+        </MudPaper>
+
+        <div class="form-actions-sticky">
+            <div class="form-actions">
+                <MudButton Variant="Variant.Outlined"
+                           OnClick="HandleCancel"
+                           Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.Close"
+                           Class="cancel-btn">
+                    إلغاء
+                </MudButton>
+                @if (!IsNewProductByFactory)
+                {
+                    @if (IsNewOrDraft)
+                    {
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Secondary"
+                                   StartIcon="@Icons.Material.Filled.Save"
+                                   OnClick="() => SaveProduct(true)"
+                                   Size="Size.Large"
+                                   Disabled="@_isSaving"
+                                   Class="cancel-btn">
+                            @if (_isSaving)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                            }
+                            حفظ مسودة
+                        </MudButton>
+                    }
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@(IsNewOrDraft ? Icons.Material.Filled.Send : Icons.Material.Filled.Check)"
+                               OnClick="() => SaveProduct(false)"
+                               Size="Size.Large"
+                               Disabled="@_isSaving"
+                               Class="save-btn">
+                        @if (_isSaving)
+                        {
+                            <MudProgressCircular Size="Size.Small" Color="Color.Surface" Indeterminate="true" Class="me-2" />
+                        }
+                        @(IsNewOrDraft ? "حفظ وارسال للتسعير" : "حفظ التعديلات")
+                    </MudButton>
+                }
+            </div>
+        </div>
+
+    </div>
+}
+
+<!-- Price History Dialog -->
+<MudDialog @bind-Visible="_showHistoryDialog" Options="@_historyDialogOptions">
+    <TitleContent>
+        <div class="dialog-title">
+            <MudIcon Icon="@Icons.Material.Filled.History" Class="me-2" />
+            <div>
+                <MudText Typo="Typo.h6">سجل تغييرات التسعير</MudText>
+                <MudText Typo="Typo.caption">كود: @_model.ProductId | @_model.ProductName</MudText>
+            </div>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        @if (_priceHistories.Any())
+        {
+            <div class="history-timeline">
+                @foreach (var history in _priceHistories)
+                {
+                    <div class="timeline-item">
+                        <div class="timeline-dot"></div>
+                        <div class="timeline-content">
+                            <div class="timeline-row">
+                                <span class="price-type-badge">@FormatPriceType(history.PriceType)</span>
+                                <div class="changed-by">
+                                    <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                                    <span>@history.ChangedBy</span>
+                                </div>
+                            </div>
+                            <div class="price-change">
+                                <span class="old-price">@history.OldPrice</span>
+                                <MudIcon Icon="@Icons.Material.Filled.ArrowLeft" Size="Size.Small" />
+                                <span class="new-price">@history.NewPrice</span>
+                            </div>
+                            <div class="timeline-date">
+                                <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" />
+                                <span>@FormatDate(history.ChangedAt)</span>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="empty-state small">
+                <MudIcon Icon="@Icons.Material.Filled.HistoryToggleOff" Size="Size.Large" />
+                <p>لا يوجد سجل تسعير لهذا المنتج بعد</p>
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="@(() => _showHistoryDialog = false)">
+            إغلاق
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- Unsaved Changes Dialog -->
+<MudDialog @bind-Visible="_showUnsavedDialog">
+    <TitleContent>
+        <div class="dialog-title warning">
+            <MudIcon Icon="@Icons.Material.Filled.Warning" Class="me-2" />
+            <MudText Typo="Typo.h6">تغييرات غير محفوظة</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText>لديك تغييرات لم يتم حفظها. هل تريد المغادرة بدون حفظ؟</MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showUnsavedDialog = false)" Variant="Variant.Outlined">
+            البقاء في الصفحة
+        </MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="ConfirmLeave">
+            مغادرة بدون حفظ
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+
+    /* ============================
+       Page Layout
+       ============================ */
+    .product-form-page {
+        padding: 2rem;
+        max-width: 1600px;
+        margin: 0 auto;
+        direction: rtl;
+        padding-bottom: 120px;
+    }
+
+    .loading-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 60vh;
+    }
+
+    /* ============================
+       Header
+       ============================ */
+    .page-header {
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        border-radius: 20px;
+        padding: 2rem;
+        margin-bottom: 2rem;
+        box-shadow: 0 10px 40px var(--gold-border);
+    }
+
+    .header-content {
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
+        flex-wrap: wrap;
+    }
+
+    .back-btn {
+        width: 48px;
+        height: 48px;
+        background: rgba(255, 255, 255, 0.2);
+        border: none;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .back-btn:hover {
+        background: rgba(255, 255, 255, 0.3);
+        transform: translateX(5px);
+    }
+
+    .header-info { flex: 1; }
+
+    .header-info h1 {
+        color: white;
+        font-size: 2rem;
+        font-weight: 800;
+        margin: 0 0 0.5rem 0;
+    }
+
+    .header-meta {
+        display: flex;
+        gap: 1.5rem;
+        flex-wrap: wrap;
+    }
+
+    .meta-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 0.9rem;
+    }
+
+    /* ============================
+       Status Badge
+       ============================ */
+    .status-badge {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1.5rem;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.95rem;
+        background: rgba(255, 255, 255, 0.2);
+        color: white;
+    }
+
+    .status-badge.status-pending {
+        background: rgba(251, 191, 36, 0.3);
+        border: 2px solid rgba(251, 191, 36, 0.6);
+    }
+
+    .status-badge.status-processing {
+        background: rgba(59, 130, 246, 0.3);
+        border: 2px solid rgba(59, 130, 246, 0.6);
+    }
+
+    .status-badge.status-completed {
+        background: rgba(16, 185, 129, 0.3);
+        border: 2px solid rgba(16, 185, 129, 0.6);
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+        animation: pulse 2s infinite;
+    }
+
+    @@keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+
+    /* ============================
+       Tabs
+       ============================ */
+    .tabs-container {
+        border-radius: 20px;
+        overflow: hidden;
+        margin-bottom: 2rem;
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        transition: background-color 0.3s ease, border-color 0.3s ease;
+    }
+
+    .custom-tabs {
+        background: var(--mud-palette-background);
+        transition: background-color 0.3s ease;
+    }
+
+    .custom-tabs .mud-tabs-toolbar {
+        padding: 1rem 1.5rem;
+    }
+
+    .custom-tabs .mud-tab {
+        font-weight: 600;
+        font-size: 1rem;
+        padding: 1rem 2rem;
+        transition: all 0.3s ease;
+        color: var(--mud-palette-text-secondary) !important;
+    }
+
+    .custom-tabs .mud-tab:hover {
+        background: var(--gold-subtle) !important;
+        color: var(--gold) !important;
+    }
+
+    .custom-tabs .mud-tab.mud-tab-active {
+        background: var(--mud-palette-surface) !important;
+        color: var(--gold) !important;
+        border-radius: 12px 12px 0 0;
+        font-weight: 700 !important;
+    }
+
+    ::deep .custom-tabs .mud-tab-slider {
+        display: none !important;
+    }
+
+    .tab-panel { padding: 0 !important; }
+
+    /* ============================
+       Tab Content
+       ============================ */
+    .tab-content {
+        padding: 2rem;
+        min-height: 400px;
+    }
+
+    .tab-header {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 2rem;
+        padding-bottom: 1.5rem;
+        border-bottom: 2px solid var(--mud-palette-divider);
+        flex-wrap: wrap;
+        transition: border-color 0.3s ease;
+    }
+
+    .tab-icon {
+        font-size: 2.5rem !important;
+        color: var(--gold);
+    }
+
+    .tab-header-text {
+        flex: 1;
+        min-width: 200px;
+    }
+
+    .tab-header-text h2 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: var(--mud-palette-text-primary);
+        margin: 0;
+        transition: color 0.3s ease;
+    }
+
+    .tab-header-text p {
+        color: var(--mud-palette-text-secondary);
+        margin: 0.25rem 0 0 0;
+        font-size: 0.95rem;
+        transition: color 0.3s ease;
+    }
+
+    /* ============================
+       Form Fields
+       ============================ */
+    .form-field { margin-bottom: 1.5rem; }
+
+    .form-field label {
+        display: block;
+        color: var(--mud-palette-text-primary);
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+        font-size: 0.95rem;
+    }
+
+    .required { color: var(--mud-palette-error); }
+
+    /* ============================
+       Pricing Cards
+       ============================ */
+    .pricing-card {
+        background: var(--mud-palette-surface);
+        border-radius: 16px;
+        padding: 1.5rem;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        border: 2px solid;
+        height: 100%;
+        transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .premium-card { border-color: var(--gold); }
+    .elite-card   { border-color: var(--gold-dark); }
+
+    .pricing-card-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 2px solid var(--mud-palette-divider);
+    }
+
+    .pricing-card-header .mud-icon-root { font-size: 1.75rem; }
+    .premium-card .pricing-card-header .mud-icon-root { color: var(--gold); }
+    .elite-card   .pricing-card-header .mud-icon-root { color: var(--gold-dark); }
+
+    .pricing-card-header h3 {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--mud-palette-text-primary);
+        margin: 0;
+    }
+
+    .calculated-field {
+        background: var(--mud-palette-background) !important;
+        transition: background-color 0.3s ease;
+    }
+
+    .info-card {
+        background: var(--mud-palette-surface);
+        border-radius: 16px;
+        padding: 1.5rem;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        border: 2px solid var(--gold-border);
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        transition: background-color 0.3s ease, border-color 0.3s ease;
+    }
+
+    .info-icon {
+        font-size: 2.5rem !important;
+        color: var(--gold);
+    }
+
+    /* ============================
+       Components
+       ============================ */
+    .components-list {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .component-card {
+        background: var(--mud-palette-surface);
+        border: 2px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        padding: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
+        transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .component-card:hover {
+        border-color: var(--gold);
+        box-shadow: 0 4px 15px var(--gold-subtle);
+    }
+
+    .component-number {
+        width: 48px;
+        height: 48px;
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        color: var(--navy-dark);
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+        font-weight: 700;
+        flex-shrink: 0;
+    }
+
+    .component-fields {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 1rem;
+    }
+
+    .component-fields .form-field { margin: 0; }
+
+    /* ============================
+       Empty States
+       ============================ */
+    .empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 4rem 2rem;
+        text-align: center;
+    }
+
+    .empty-state.small { padding: 2rem; }
+
+    .empty-state .mud-icon-root {
+        font-size: 5rem;
+        color: var(--mud-palette-divider);
+        margin-bottom: 1.5rem;
+    }
+
+    .empty-state.small .mud-icon-root { font-size: 3rem; }
+
+    .empty-state h3 {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--mud-palette-text-primary);
+        margin: 0 0 0.5rem 0;
+    }
+
+    .empty-state p {
+        color: var(--mud-palette-text-secondary);
+        font-size: 1rem;
+        margin: 0 0 1.5rem 0;
+    }
+
+    /* ============================
+       Media
+       ============================ */
+    .media-section { margin-bottom: 2rem; }
+
+    .media-section-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .media-section-header .mud-icon-root {
+        color: var(--gold);
+        font-size: 1.5rem;
+    }
+
+    .media-section-header h3 {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--mud-palette-text-primary);
+        margin: 0;
+    }
+
+    .upload-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 1rem 2rem;
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        color: var(--navy-dark);
+        border-radius: 12px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px var(--gold-border);
+        margin-bottom: 1.5rem;
+    }
+
+    .upload-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px var(--gold-subtle-hover);
+    }
+
+    .pdf-btn {
+        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+        color: white;
+    }
+
+    .pdf-btn:hover {
+        box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+    }
+
+    .file-input { display: none; }
+
+    .images-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 1.5rem;
+    }
+
+    .image-card {
+        position: relative;
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        aspect-ratio: 1;
+        border: 2px solid var(--mud-palette-divider);
+        transition: all 0.3s ease;
+    }
+
+    .image-card:hover {
+        border-color: var(--gold);
+        box-shadow: 0 6px 20px var(--gold-subtle);
+    }
+
+    .image-card img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transition: transform 0.3s ease;
+    }
+
+    .image-card:hover img { transform: scale(1.1); }
+
+    .image-overlay {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(to top, rgba(0,0,0,0.7), transparent);
+        color: white;
+        padding: 0.75rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }
+
+    .image-card:hover .image-overlay { opacity: 1; }
+
+    .pdf-viewer {
+        border: 2px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    }
+
+    .pdf-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 1rem 1.5rem;
+        background: var(--mud-palette-background);
+        border-bottom: 2px solid var(--mud-palette-divider);
+        font-weight: 600;
+        color: var(--mud-palette-text-primary);
+        transition: background-color 0.3s ease;
+    }
+
+    .pdf-viewer iframe {
+        width: 100%;
+        height: 600px;
+        border: none;
+    }
+
+    /* ============================
+       Workflow
+       ============================ */
+    .workflow-progress {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0;
+        margin-bottom: 2.5rem;
+        padding: 1.5rem;
+        background: var(--mud-palette-background);
+        border-radius: 16px;
+        overflow-x: auto;
+        border: 1px solid var(--mud-palette-divider);
+        transition: background-color 0.3s ease, border-color 0.3s ease;
+    }
+
+    .progress-step {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+        position: relative;
+        min-width: 100px;
+        flex: 1;
+    }
+
+    .progress-step:not(:last-child)::after {
+        content: '';
+        position: absolute;
+        top: 12px;
+        left: -50%;
+        width: 100%;
+        height: 3px;
+        background: var(--mud-palette-divider);
+        z-index: 0;
+    }
+
+    .progress-step.passed:not(:last-child)::after {
+        background: var(--mud-palette-success);
+    }
+
+    .step-dot {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: var(--mud-palette-divider);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1;
+        transition: all 0.3s ease;
+        color: transparent;
+    }
+
+    .progress-step.active .step-dot {
+        background: var(--gold);
+        box-shadow: 0 0 0 6px var(--gold-subtle);
+        animation: pulse 2s infinite;
+        color: var(--navy-dark);
+    }
+
+    .progress-step.passed .step-dot {
+        background: var(--mud-palette-success);
+        color: white;
+    }
+
+    .step-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--mud-palette-text-secondary);
+        text-align: center;
+        white-space: nowrap;
+    }
+
+    .progress-step.active .step-label {
+        color: var(--gold);
+        font-weight: 700;
+    }
+
+    .progress-step.passed .step-label {
+        color: var(--mud-palette-success);
+    }
+
+    .workflow-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+        gap: 2rem;
+    }
+
+    .workflow-card {
+        background: var(--mud-palette-surface);
+        border-radius: 20px;
+        padding: 2rem;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        border: 3px solid;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+    }
+
+    .success-card { border-color: var(--mud-palette-success); }
+    .warning-card { border-color: var(--mud-palette-warning); }
+
+    .workflow-icon { font-size: 4rem !important; margin-bottom: 1.5rem; }
+    .success-card .workflow-icon { color: var(--mud-palette-success); }
+    .warning-card .workflow-icon { color: var(--mud-palette-warning); }
+
+    .workflow-content { width: 100%; }
+
+    .workflow-content h3 {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--mud-palette-text-primary);
+        margin: 0 0 0.75rem 0;
+    }
+
+    .workflow-content p {
+        color: var(--mud-palette-text-secondary);
+        margin: 0 0 1.5rem 0;
+    }
+
+    /* ============================
+       Sticky Actions
+       ============================ */
+    .form-actions-sticky {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: var(--mud-palette-surface);
+        border-top: 2px solid var(--mud-palette-divider);
+        box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
+        z-index: 100;
+        padding: 1rem 2rem;
+        transition: background-color 0.3s ease, border-color 0.3s ease;
+    }
+
+    .form-actions {
+        display: flex;
+        gap: 1rem;
+        justify-content: flex-end;
+        max-width: 1600px;
+        margin: 0 auto;
+    }
+
+    .cancel-btn,
+    .save-btn {
+        padding: 0.875rem 2.5rem !important;
+        font-weight: 600 !important;
+    }
+
+    .save-btn {
+        box-shadow: 0 4px 20px var(--gold-border) !important;
+    }
+
+    /* ============================
+       History Dialog
+       ============================ */
+    .dialog-title {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .dialog-title.warning .mud-icon-root { color: var(--mud-palette-warning); }
+
+    .history-timeline {
+        position: relative;
+        padding-right: 2rem;
+    }
+
+    .history-timeline::before {
+        content: '';
+        position: absolute;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: linear-gradient(to bottom, var(--gold), var(--gold-dark));
+    }
+
+    .timeline-item {
+        position: relative;
+        margin-bottom: 2rem;
+        padding-right: 2rem;
+    }
+
+    .timeline-dot {
+        position: absolute;
+        right: -0.5rem;
+        top: 0.5rem;
+        width: 12px;
+        height: 12px;
+        background: var(--mud-palette-surface);
+        border: 3px solid var(--gold);
+        border-radius: 50%;
+        box-shadow: 0 0 0 4px var(--gold-subtle);
+        transition: background-color 0.3s ease;
+    }
+
+    .timeline-content {
+        background: var(--mud-palette-surface);
+        border: 2px solid var(--mud-palette-divider);
+        border-radius: 12px;
+        padding: 1.5rem;
+    }
+
+    .timeline-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.75rem;
+    }
+
+    .price-type-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        color: var(--navy-dark);
+        padding: 0.4rem 1rem;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+
+    .price-change {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        font-size: 1.1rem;
+    }
+
+    .old-price {
+        color: var(--mud-palette-error);
+        text-decoration: line-through;
+        font-weight: 600;
+    }
+
+    .new-price {
+        color: var(--mud-palette-success);
+        font-weight: 700;
+        font-size: 1.25rem;
+    }
+
+    .changed-by {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: var(--mud-palette-text-secondary);
+        font-size: 0.9rem;
+    }
+
+    .timeline-date {
+        margin-top: 0.5rem;
+        text-align: left;
+        opacity: 0.7;
+        font-size: 0.8rem;
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+    }
+
+    /* ============================
+       Audit Trail (المراجعة)
+       ============================ */
+    .audit-timeline { position: relative; padding-right: 1.5rem; max-height: 500px; overflow-y: auto; }
+    .audit-timeline::before { content: ''; position: absolute; right: 0.35rem; top: 0; bottom: 0; width: 2px; background: var(--mud-palette-divider); }
+    .audit-item { position: relative; margin-bottom: 1rem; }
+    .audit-dot { position: absolute; right: -0.35rem; top: 0.4rem; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--mud-palette-surface); box-shadow: 0 0 0 2px var(--mud-palette-divider); }
+    .dot-success { background: var(--mud-palette-success); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.4); }
+    .dot-info { background: var(--mud-palette-primary); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4); }
+    .dot-error { background: var(--mud-palette-error); box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.4); }
+    .dot-default { background: var(--mud-palette-text-secondary); }
+    .audit-content { background: var(--mud-palette-background); border: 1px solid var(--mud-palette-divider); border-radius: 8px; padding: 0.75rem 1rem; }
+    .audit-action { font-weight: 700; font-size: 0.9rem; color: var(--mud-palette-text-primary); }
+    .audit-date { font-size: 0.8rem; color: var(--mud-palette-text-secondary); }
+    .audit-user { display: flex; align-items: center; gap: 0.3rem; margin-top: 0.3rem; font-size: 0.8rem; color: var(--mud-palette-text-secondary); }
+
+    /* ============================
+       Responsive
+       ============================ */
+    @@media (max-width: 960px) {
+        .product-form-page { padding: 1rem; padding-bottom: 100px; }
+        .page-header { padding: 1.5rem; }
+        .header-info h1 { font-size: 1.5rem; }
+        .tab-content { padding: 1.5rem; }
+        .tab-header { flex-direction: column; align-items: flex-start; }
+        .component-fields { grid-template-columns: 1fr; }
+        .form-actions { flex-direction: column-reverse; }
+        .cancel-btn, .save-btn { width: 100%; }
+        .images-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+        .workflow-container { grid-template-columns: 1fr; }
+        .workflow-progress { gap: 0.25rem; }
+        .progress-step { min-width: 60px; }
+        .step-label { font-size: 0.6rem; }
+        .header-meta { gap: 0.75rem; }
+        .meta-item { font-size: 0.8rem; }
+        .status-badge { padding: 0.5rem 1rem; font-size: 0.85rem; }
+    }
+
+</style>
+
+@code {
+
+    // ============================
+    // Constants
+    // ============================
+    private static class Roles
+    {
+        public const string Admin          = "Admin";
+        public const string AccountManager = "AccountManager";
+        public const string Factory        = "factory";
+        public const string Sales          = "Sales";
+        public const string SalesManager   = "SalesManager";
+    }
+
+    private static class StatusIds
+    {
+        public const int Draft                    = 1;
+        public const int WaitingForPricing        = 2;
+        public const int Priced                   = 3;
+        public const int PriceChangeRequested     = 4;
+        public const int PriceApproved            = 5;
+        public const int PriceRejected            = 6;
+        public const int SalePriceChangeRequested = 7;
+        public const int CostChangeRequested      = 8;
+    }
+
+    private static class PricingTypes
+    {
+        public const string Premium = "Premium";
+        public const string Elite   = "Elite";
+    }
+
+    private static class HistoryTypes
+    {
+        public const string PremiumCost   = "Premium_Cost";
+        public const string PremiumSale   = "Premium_Sale";
+        public const string EliteCost     = "Elite_Cost";
+        public const string EliteSale     = "Elite_Sale";
+        public const string RequestChange = "RequestChange";
+    }
+
+    private static readonly long MaxImageSize = 5  * 1024 * 1024;
+    private static readonly long MaxPdfSize   = 10 * 1024 * 1024;
+
+    // ============================
+    // Parameters
+    // ============================
+    [Parameter] public int? Id { get; set; }
+
+    // ============================
+    // State
+    // ============================
+    private Product                        _model            = new();
+    private List<ProductGroup>             _groups           = new();
+    private List<Party>                    _customers        = new();
+    private Party?                         _selectedCustomer;
+    private List<PriceHistory>             _priceHistories   = new();
+    private PricingMargin?                 _activeMargin;
+    private List<ProductPricingStatus>     _statuses         = new();
+    private List<ProductPricingTransition> _transitions      = new();
+    private List<AuditLog>                 _auditLogs        = new(); // ✅ للمراجعة
+
+    private string? _currentRole;
+    private string? _currentUserName;
+    private string? _errorMessage;
+
+    private bool _isLoading        = true;
+    private bool _isSaving         = false;
+    private bool _isDirty          = false;
+    private bool _formIsValid      = false;
+    private bool _showHistoryDialog = false;
+    private bool _showUnsavedDialog = false;
+
+    private MudForm? _form;
+
+    private readonly DialogOptions _historyDialogOptions = new()
+    {
+        MaxWidth        = MaxWidth.Medium,
+        FullWidth       = true,
+        CloseOnEscapeKey = true,
+        CloseButton     = true
+    };
+
+    // ============================
+    // Computed Properties (Roles)
+    // ============================
+    private bool IsAdmin                => _currentRole == Roles.Admin;
+    private bool IsFactory              => _currentRole == Roles.Factory;
+    private bool IsAdminOrAccountManager => _currentRole == Roles.Admin || _currentRole == Roles.AccountManager;
+    private bool IsFactoryOrAdmin       => _currentRole == Roles.Factory || _currentRole == Roles.Admin;
+
+    private bool ShowCost    => IsAdminOrAccountManager || IsFactory;
+    private bool CanEditCost => IsAdminOrAccountManager || IsFactory;
+    private bool ShowSale    => IsAdminOrAccountManager || _currentRole == Roles.Sales || _currentRole == Roles.SalesManager;
+    private bool CanEditSale => IsAdminOrAccountManager;
+
+    private bool IsNewProduct        => _model.ProductId == 0;
+    private bool IsNewOrDraft        => IsNewProduct || _model.PricingStatusId == StatusIds.Draft;
+    private bool IsNewProductByFactory => IsNewProduct && IsFactory;
+
+    // ============================
+    // Computed Properties (Pricing)
+    // ============================
+    private decimal? PremiumCost
+    {
+        get => _model.PurchasePrice;
+        set { _model.PurchasePrice = value; _isDirty = true; RecalculateSalePrices(); }
+    }
+
+    private decimal? EliteCost
+    {
+        get => _model.PurchasePriceElite;
+        set { _model.PurchasePriceElite = value; _isDirty = true; RecalculateSalePrices(); }
+    }
+
+    // ============================
+    // Lifecycle
+    // ============================
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _isLoading = true;
+            await LoadUserContext();
+            await LoadLookups();
+            if (Id.HasValue) await LoadProduct(Id.Value);
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = "خطأ في تحميل البيانات. يرجى المحاولة مرة أخرى.";
+            Console.WriteLine($"[ProductForm] Init Error: {ex}");
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    // ============================
+    // Data Loading
+    // ============================
+    private async Task LoadUserContext()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        _currentRole     = auth.User.FindFirst(ClaimTypes.Role)?.Value;
+        _currentUserName = auth.User.Identity?.Name ?? "System";
+    }
+
+    private async Task LoadLookups()
+    {
+        _groups       = await Db.ProductGroups.ToListAsync();
+        _customers    = await Db.Parties.ToListAsync();
+        _activeMargin = await Db.PricingMargins.FirstOrDefaultAsync(m => m.IsActive);
+        _statuses     = await Db.ProductPricingStatuses.ToListAsync();
+        _transitions  = await Db.ProductPricingTransitions.ToListAsync();
+    }
+
+    private async Task LoadProduct(int productId)
+    {
+        _model = await Db.Products
+            .Include(p => p.ProductComponents)
+            .Include(p => p.ProductImages)
+            .FirstOrDefaultAsync(p => p.ProductId == productId)
+            ?? new Product();
+
+        _selectedCustomer = _customers.FirstOrDefault(c => c.PartyId == _model.Customer);
+
+        _priceHistories = await Db.PriceHistories
+            .Where(ph => ph.ProductId == productId)
+            .OrderByDescending(ph => ph.ChangedAt)
+            .ToListAsync();
+
+        // ✅ تحميل سجل المراجعة (Audit Trail)
+        _auditLogs = await Db.AuditLogs
+            .Where(a => a.TableName == "Products" && a.PrimaryKeyValue == productId.ToString())
+            .OrderByDescending(a => a.ActionDate)
+            .ToListAsync();
+    }
+
+    // ============================
+    // Pricing Logic
+    // ============================
+    private void RecalculateSalePrices()
+    {
+        if (_activeMargin == null) return;
+
+        if (_model.PurchasePrice.HasValue)
+        {
+            var raw = _model.PurchasePrice.Value * (1 + _activeMargin.PremiumMargin / 100);
+            _model.SuggestedSalePrice = Math.Ceiling(raw / 100m) * 100m;
+        }
+
+        if (_model.PurchasePriceElite.HasValue)
+        {
+            var raw = _model.PurchasePriceElite.Value * (1 + _activeMargin.EliteMargin / 100);
+            _model.SuggestedSalePriceElite = Math.Ceiling(raw / 100m) * 100m;
+        }
+    }
+
+    private string GetMarginText(decimal? cost, decimal? salePrice)
+    {
+        if (cost.HasValue && cost.Value > 0 && salePrice.HasValue)
+            return $"{((salePrice.Value - cost.Value) / cost.Value * 100):F2} %";
+        return "0 %";
+    }
+
+    private bool IsAutoCalculated(decimal? salePrice, decimal? cost) =>
+        salePrice.HasValue && cost.HasValue && cost.Value > 0;
+
+    // ============================
+    // Search
+    // ============================
+    private Task<IEnumerable<Party>> SearchCustomers(string value, CancellationToken ct)
+    {
+        var result = string.IsNullOrWhiteSpace(value)
+            ? _customers
+            : _customers.Where(c => c.PartyName.ContainsArabic(value));
+        return Task.FromResult(result);
+    }
+
+    // ============================
+    // UI Helpers
+    // ============================
+    private string GetStatusText(int? statusId)
+    {
+        if (statusId is null or 0) return "جديد";
+        return _statuses.FirstOrDefault(s => s.PricingStatusId == statusId)?.StatusName ?? "غير محدد";
+    }
+
+    private string GetStatusClass(int? statusId) => statusId switch
+    {
+        StatusIds.Draft or StatusIds.PriceRejected => "status-pending",
+        StatusIds.WaitingForPricing or StatusIds.PriceChangeRequested
+            or StatusIds.SalePriceChangeRequested or StatusIds.CostChangeRequested => "status-processing",
+        StatusIds.Priced or StatusIds.PriceApproved => "status-completed",
+        _ => ""
+    };
+
+    private bool IsPositiveTransition(int targetStatusId) =>
+        targetStatusId is StatusIds.Priced or StatusIds.PriceApproved;
+
+    private string FormatCreatedDate() =>
+        _model.CreatedAt != default ? $"{_model.CreatedAt:yyyy/MM/dd}" : "جديد";
+
+    private string FormatDate(DateTime dt) =>
+        dt != default ? dt.ToString("yyyy/MM/dd HH:mm") : "-";
+
+    private string FormatPriceType(string? type) => type switch
+    {
+        HistoryTypes.PremiumCost   => "تكلفة Premium",
+        HistoryTypes.PremiumSale   => "بيع Premium",
+        HistoryTypes.EliteCost     => "تكلفة Elite",
+        HistoryTypes.EliteSale     => "بيع Elite",
+        HistoryTypes.RequestChange => "طلب تعديل",
+        _ => type ?? "غير محدد"
+    };
+
+    // ✅ Audit Trail Helpers
+    private string GetAuditActionText(string? actionType) => actionType?.ToUpper() switch
+    {
+        "INSERT" => "إنشاء المنتج",
+        "UPDATE" => "تعديل المنتج",
+        "DELETE" => "حذف المنتج",
+        _ => actionType ?? "إجراء"
+    };
+
+    private string GetAuditDotClass(string? actionType) => actionType?.ToUpper() switch
+    {
+        "INSERT" => "dot-success",
+        "UPDATE" => "dot-info",
+        "DELETE" => "dot-error",
+        _ => "dot-default"
+    };
+
+    // ============================
+    // Navigation & Dialogs
+    // ============================
+    private void GoBack() => Navigation.NavigateTo("/products");
+
+    private void HandleCancel()
+    {
+        if (_isDirty) _showUnsavedDialog = true;
+        else GoBack();
+    }
+
+    private void ConfirmLeave()
+    {
+        _showUnsavedDialog = false;
+        GoBack();
+    }
+
+    private async Task OpenHistoryDialog()
+    {
+        try
+        {
+            if (!IsNewProduct)
+            {
+                _priceHistories = await Db.PriceHistories
+                    .Where(ph => ph.ProductId == _model.ProductId)
+                    .OrderByDescending(ph => ph.ChangedAt)
+                    .ToListAsync();
+            }
+            _showHistoryDialog = true;
+        }
+        catch (Exception ex)
+        {
+            ShowError("خطأ في فتح سجل التسعير");
+            Console.WriteLine($"[ProductForm] History Error: {ex}");
+        }
+    }
+
+    // ============================
+    // Components Management
+    // ============================
+    private void AddComponent()
+    {
+        _model.ProductComponents.Add(new ProductComponent { ComponentName = "", Quantity = 1 });
+        _isDirty = true;
+    }
+
+    private void RemoveComponent(ProductComponent comp)
+    {
+        _model.ProductComponents.Remove(comp);
+        _isDirty = true;
+    }
+
+    // ============================
+    // Image Management
+    // ============================
+    private void RemoveImage(ProductImage img)
+    {
+        _model.ProductImages.Remove(img);
+        _isDirty = true;
+        Snackbar.Add("تم حذف الصورة", Severity.Info);
+    }
+
+    // ============================
+    // Save Product
+    // ============================
+    private async Task SaveProduct(bool isDraft = false)
+    {
+        _errorMessage = null;
+        _isSaving     = true;
+
+        try
+        {
+            if (!ValidateProduct()) return;
+
+            _model.Customer = _selectedCustomer?.PartyId;
+
+            var ctx = new SaveContext
+            {
+                IsNew        = IsNewProduct,
+                IsDraft      = isDraft,
+                CustomerName = _selectedCustomer?.PartyName ?? "غير محدد"
+            };
+
+            if (ctx.IsNew) PrepareNewProduct(isDraft);
+            else           await PrepareExistingProduct(ctx);
+
+            await Db.SaveChangesAsync();
+
+            // ✅ تسجيل المراجعة (Audit Log) بالبيانات القديمة والجديدة
+            await AuditService.LogAsync(
+                "Products",
+                ctx.IsNew ? "INSERT" : "UPDATE",
+                _model.ProductId.ToString(),
+                ctx.OldProduct,  // البيانات القديمة (null لو منتج جديد)
+                _model,          // البيانات الجديدة
+                _currentUserName ?? "System"
+            );
+
+            if (!isDraft) await SendNotifications(ctx);
+
+            _isDirty = false;
+            Snackbar.Add(isDraft ? "تم حفظ المسودة بنجاح" : "تم الحفظ بنجاح", Severity.Success);
+            GoBack();
+        }
+        catch (Exception ex)
+        {
+            ShowError("خطأ أثناء الحفظ. يرجى المحاولة مرة أخرى.");
+            Console.WriteLine($"[ProductForm] Save Error: {ex}");
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private bool ValidateProduct()
+    {
+        if (string.IsNullOrWhiteSpace(_model.ProductName))
+        {
+            _errorMessage = "اسم المنتج مطلوب!";
+            return false;
+        }
+        if (IsNewProductByFactory)
+        {
+            _errorMessage = "ليس لديك صلاحية إضافة منتج جديد";
+            return false;
+        }
+        return true;
+    }
+
+    private void PrepareNewProduct(bool isDraft)
+    {
+        _model.CreatedAt       = DateTime.Now;
+        _model.CreatedBy       = _currentUserName;
+        _model.PricingStatusId = isDraft ? StatusIds.Draft : StatusIds.WaitingForPricing;
+        Db.Products.Add(_model);
+    }
+
+    private async Task PrepareExistingProduct(SaveContext ctx)
+    {
+        var old = await Db.Products.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.ProductId == _model.ProductId);
+
+        if (old != null)
+        {
+            TrackPriceChanges(old, ctx);
+            ctx.OldProduct = old; // ✅ حفظ البيانات القديمة للمراجعة
+        }
+
+        if (!ctx.IsDraft && _model.PricingStatusId == StatusIds.Draft)
+        {
+            _model.PricingStatusId = StatusIds.WaitingForPricing;
+            ctx.SentForPricing     = true;
+        }
+
+        if (IsFactory) ApplyFactoryAutoPricing(ctx);
+
+        Db.Products.Update(_model);
+    }
+
+    private void TrackPriceChanges(Product old, SaveContext ctx)
+    {
+        void Track(string type, decimal? oldVal, decimal? newVal, bool isSale = false)
+        {
+            if (oldVal == newVal) return;
+            Db.PriceHistories.Add(new PriceHistory
+            {
+                ProductId   = _model.ProductId,
+                PriceType   = type,
+                OldPrice    = oldVal ?? 0m,
+                NewPrice    = newVal ?? 0m,
+                ChangedBy   = _currentUserName,
+                ChangedAt   = DateTime.Now
+            });
+            if (isSale) ctx.SalePriceChanged = true;
+        }
+
+        Track(HistoryTypes.PremiumCost, old.PurchasePrice,           _model.PurchasePrice);
+        Track(HistoryTypes.PremiumSale, old.SuggestedSalePrice,      _model.SuggestedSalePrice,      true);
+        Track(HistoryTypes.EliteCost,   old.PurchasePriceElite,      _model.PurchasePriceElite);
+        Track(HistoryTypes.EliteSale,   old.SuggestedSalePriceElite, _model.SuggestedSalePriceElite, true);
+    }
+
+    private void ApplyFactoryAutoPricing(SaveContext ctx)
+    {
+        bool hasPremium = _model.PurchasePrice.HasValue && _model.PurchasePrice.Value > 0;
+        bool hasElite   = _model.PurchasePriceElite.HasValue && _model.PurchasePriceElite.Value > 0;
+
+        if ((hasPremium || hasElite) && _model.PricingStatusId != StatusIds.Priced)
+        {
+            _model.PricingStatusId = StatusIds.Priced;
+            ctx.FactoryPriced      = true;
+        }
+    }
+
+    // ============================
+    // Notifications
+    // ============================
+    private async Task SendNotifications(SaveContext ctx)
+    {
+        string productInfo  = _model.ProductName;
+        string customerInfo = ctx.CustomerName;
+
+        if (ctx.IsNew || ctx.SentForPricing)
+            await NotifyRole(Roles.Factory,
+                "منتج جديد يحتاج تسعير",
+                $"تم اضافة منتج جديد: {productInfo} للعميل: {customerInfo} برجاء تسعير المنتج طبقا للباقة Premium وكذلك Elite");
+
+        if (ctx.FactoryPriced)
+        {
+            string pricingInfo = BuildPricingInfoText();
+            foreach (var role in new[] { Roles.Sales, Roles.Admin, Roles.AccountManager, Roles.SalesManager })
+                await NotifyRole(role, "تم تسعير منتج",
+                    $"تم إدخال سعر بيع جديد للمنتج: {productInfo} للعميل: {customerInfo} {pricingInfo}");
+        }
+
+        if (ctx.SalePriceChanged && IsAdminOrAccountManager)
+            foreach (var role in new[] { Roles.Sales, Roles.SalesManager })
+                await NotifyRole(role, "تعديل سعر بيع",
+                    $"تم تعديل سعر بيع للمنتج: {productInfo} للعميل: {customerInfo}");
+    }
+
+    private async Task NotifyRole(string role, string title, string message)
+    {
+        await NotificationService.NotifyRoleAsync(
+            title, message, role, _currentUserName,
+            "products/form", "Products", _model.ProductId);
+    }
+
+    private string BuildPricingInfoText()
+    {
+        bool hasPremium = _model.PurchasePrice.HasValue && _model.PurchasePrice.Value > 0;
+        bool hasElite   = _model.PurchasePriceElite.HasValue && _model.PurchasePriceElite.Value > 0;
+
+        return (hasPremium, hasElite) switch
+        {
+            (true, true)  => "طبقا للباقة Premium وكذلك Elite",
+            (true, false) => "طبقا للباقة Premium",
+            (false, true) => "طبقا للباقة Elite",
+            _             => ""
+        };
+    }
+
+    // ============================
+    // Change Status
+    // ============================
+    private async Task ChangeStatus(int newStatusId)
+    {
+        try
+        {
+            if (newStatusId == StatusIds.Priced) TrackStatusPricing();
+            else                                  TrackStatusChange(newStatusId);
+
+                        // ✅ جلب البيانات قبل التعديل
+            var oldForAudit = await Db.Products.AsNoTracking()
+                .FirstOrDefaultAsync(p => p.ProductId == _model.ProductId);
+
+            _model.PricingStatusId = newStatusId;
+            Db.Products.Update(_model);
+            await Db.SaveChangesAsync();
+
+            // ✅ تسجيل تغيير الحالة في المراجعة
+            await AuditService.LogAsync(
+                "Products",
+                "UPDATE",
+                _model.ProductId.ToString(),
+                oldForAudit,
+                _model,
+                _currentUserName ?? "System"
+            );
+
+            Snackbar.Add("تم تغيير الحالة بنجاح", Severity.Success);
+            GoBack();
+        }
+        catch (Exception ex)
+        {
+            ShowError("خطأ في تغيير الحالة");
+            Console.WriteLine($"[ProductForm] Status Error: {ex}");
+        }
+    }
+
+    private void TrackStatusPricing()
+    {
+        if (_model.PurchasePrice.HasValue)
+            Db.PriceHistories.Add(new PriceHistory
+            {
+                ProductId = _model.ProductId, PriceType = PricingTypes.Premium,
+                OldPrice  = 0m, NewPrice = _model.SuggestedSalePrice ?? 0m,
+                ChangedBy = _currentUserName, ChangedAt = DateTime.Now
+            });
+
+        if (_model.PurchasePriceElite.HasValue)
+            Db.PriceHistories.Add(new PriceHistory
+            {
+                ProductId = _model.ProductId, PriceType = PricingTypes.Elite,
+                OldPrice  = 0m, NewPrice = _model.SuggestedSalePriceElite ?? 0m,
+                ChangedBy = _currentUserName, ChangedAt = DateTime.Now
+            });
+    }
+
+    private void TrackStatusChange(int newStatusId)
+    {
+        Db.PriceHistories.Add(new PriceHistory
+        {
+            ProductId = _model.ProductId,
+            PriceType = $"Status: {GetStatusText(_model.PricingStatusId)} -> {GetStatusText(newStatusId)}",
+            OldPrice  = _model.SuggestedSalePrice ?? 0m,
+            NewPrice  = _model.SuggestedSalePrice ?? 0m,
+            ChangedBy = _currentUserName,
+            ChangedAt = DateTime.Now
+        });
+    }
+
+    // ============================
+    // File Uploads
+    // ============================
+    private async Task UploadImage(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var path = await SaveFile(e.File, "images", MaxImageSize);
+            _model.ProductImages.Add(new ProductImage { ImagePath = path, CreatedAt = DateTime.Now });
+            _isDirty = true;
+            Snackbar.Add("تم رفع الصورة بنجاح", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            ShowError("خطأ في رفع الصورة. تأكد أن حجمها لا يتجاوز 5 ميجا.");
+            Console.WriteLine($"[ProductForm] Upload Image Error: {ex}");
+        }
+    }
+
+    private async Task UploadPdf(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            _model.PdfPath = await SaveFile(e.File, "pdf", MaxPdfSize);
+            _isDirty = true;
+            Snackbar.Add("تم رفع ملف PDF بنجاح", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            ShowError("خطأ في رفع الملف. تأكد أن حجمه لا يتجاوز 10 ميجا.");
+            Console.WriteLine($"[ProductForm] Upload PDF Error: {ex}");
+        }
+    }
+
+    private async Task<string> SaveFile(IBrowserFile file, string subfolder, long maxSize)
+    {
+        var folder = Path.Combine(Env.WebRootPath, "uploads", subfolder);
+        if (!Directory.Exists(folder)) Directory.CreateDirectory(folder);
+
+        var fileName = $"{Guid.NewGuid()}{Path.GetExtension(file.Name)}";
+        var fullPath = Path.Combine(folder, fileName);
+
+        using var stream = new FileStream(fullPath, FileMode.Create);
+        await file.OpenReadStream(maxAllowedSize: maxSize).CopyToAsync(stream);
+
+        return $"/uploads/{subfolder}/{fileName}";
+    }
+
+    // ============================
+    // Error Handling
+    // ============================
+    private void ShowError(string message)
+    {
+        _errorMessage = message;
+        StateHasChanged();
+    }
+        
+    
+
+    // ============================
+    // Helper Classes
+    // ============================
+        private class SaveContext
+    {
+        public bool   IsNew           { get; set; }
+        public bool   IsDraft         { get; set; }
+        public string CustomerName    { get; set; } = "";
+        public bool   FactoryPriced   { get; set; }
+        public bool   SalePriceChanged { get; set; }
+        public bool   SentForPricing  { get; set; }
+        public Product? OldProduct { get; set; } // ✅ عشان نمسك بيانات المنتج القديمة
+    }
+}

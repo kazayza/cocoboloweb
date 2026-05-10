@@ -1,0 +1,975 @@
+@page "/admin/users"
+@using Microsoft.AspNetCore.Authorization
+@attribute [Authorize]
+
+@using Microsoft.EntityFrameworkCore
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@inject db24804Context Db
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthStateProvider
+
+<div class="users-admin-page">
+
+    <!-- Header Section -->
+    <div class="page-header">
+        <div class="header-content">
+            <div class="header-left">
+                <div class="page-icon">
+                    <MudIcon Icon="@Icons.Material.Filled.SupervisedUserCircle" />
+                </div>
+                <div class="header-text">
+                    <h1>إدارة المستخدمين</h1>
+                    <p class="subtitle">عرض وإدارة جميع المستخدمين وصلاحياتهم في النظام</p>
+                </div>
+            </div>
+            @if (HasPermission("frm_AddUser", "Add"))
+            {
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Rounded.Add"
+                           Class="add-btn"
+                           OnClick="AddNewUser">
+                    إضافة مستخدم جديد
+                </MudButton>
+            }
+        </div>
+    </div>
+
+    <!-- Controls Bar -->
+    <div class="controls-bar">
+        <div class="search-section">
+            <MudTextField @bind-Value="_searchText"
+                          Placeholder="ابحث بالاسم أو اسم المستخدم أو البريد الإلكتروني..."
+                          Variant="Variant.Outlined"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Rounded.Search"
+                          Immediate="true"
+                          OnKeyUp="OnSearchChanged"
+                          Class="search-field" />
+        </div>
+
+        <div class="filters-section">
+            <div class="filter-group">
+                <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="Size.Small" Class="filter-icon" />
+                <span class="filter-label">الحالة:</span>
+                <MudButtonGroup OverrideStyles="false" Class="filter-buttons">
+                    <MudButton Variant="@(_filterActive == null ? Variant.Filled : Variant.Outlined)"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               OnClick="() => OnFilterChanged(null)">
+                        الكل
+                    </MudButton>
+                    <MudButton Variant="@(_filterActive == 1 ? Variant.Filled : Variant.Outlined)"
+                               Color="Color.Success"
+                               Size="Size.Small"
+                               OnClick="() => OnFilterChanged(1)">
+                        نشط
+                    </MudButton>
+                    <MudButton Variant="@(_filterActive == 0 ? Variant.Filled : Variant.Outlined)"
+                               Color="Color.Error"
+                               Size="Size.Small"
+                               OnClick="() => OnFilterChanged(0)">
+                        غير نشط
+                    </MudButton>
+                </MudButtonGroup>
+            </div>
+
+            @if (HasActiveFilters)
+            {
+                <MudButton OnClick="ClearFilters"
+                           Variant="Variant.Text"
+                           StartIcon="@Icons.Material.Rounded.Clear"
+                           Size="Size.Small"
+                           Class="clear-btn">
+                    مسح الفلاتر
+                </MudButton>
+            }
+        </div>
+
+        <div class="stats-chip">
+            <MudIcon Icon="@Icons.Material.Filled.Group" Size="Size.Small" />
+            <span class="stat-label">عدد المستخدمين</span>
+            <span class="stat-value">@_filteredUsers.Count</span>
+        </div>
+    </div>
+
+    <!-- Users Table -->
+    <div class="table-container">
+        @if (_isLoading)
+        {
+            <div class="loading-state">
+                <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+                <p>جاري تحميل البيانات...</p>
+            </div>
+        }
+        else if (!_filteredUsers.Any())
+        {
+            <div class="empty-state">
+                <MudIcon Icon="@Icons.Material.Filled.PersonOff" Size="Size.Large" />
+                <h3>لا توجد نتائج</h3>
+                <p>@(HasActiveFilters ? "لم يتم العثور على مستخدمين مطابقين للبحث" : "لا يوجد مستخدمين في النظام")</p>
+            </div>
+        }
+        else
+        {
+            <MudTable Items="_filteredUsers"
+                      Hover="true"
+                      Breakpoint="Breakpoint.Sm"
+                      RowsPerPage="20"
+                      Elevation="0"
+                      Class="users-table">
+
+                <HeaderContent>
+                    <MudTh Class="table-header">
+                        <div class="header-cell">
+                            <MudIcon Icon="@Icons.Material.Filled.Tag" Size="Size.Small" />
+                            <span>الكود</span>
+                        </div>
+                    </MudTh>
+                    <MudTh Class="table-header">
+                        <div class="header-cell">
+                            <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Size="Size.Small" />
+                            <span>اسم المستخدم</span>
+                        </div>
+                    </MudTh>
+                    <MudTh Class="table-header">
+                        <div class="header-cell">
+                            <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                            <span>الاسم الكامل</span>
+                        </div>
+                    </MudTh>
+                    <MudTh Class="table-header">
+                        <div class="header-cell">
+                            <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small" />
+                            <span>البريد الإلكتروني</span>
+                        </div>
+                    </MudTh>
+                    <MudTh Class="table-header">
+                        <div class="header-cell">
+                            <MudIcon Icon="@Icons.Material.Filled.Shield" Size="Size.Small" />
+                            <span>الدور</span>
+                        </div>
+                    </MudTh>
+                    <MudTh Class="table-header">
+                        <div class="header-cell">
+                            <MudIcon Icon="@Icons.Material.Filled.ToggleOn" Size="Size.Small" />
+                            <span>الحالة</span>
+                        </div>
+                    </MudTh>
+                    <MudTh Class="table-header">
+                        <div class="header-cell">
+                            <MudIcon Icon="@Icons.Material.Filled.AccessTime" Size="Size.Small" />
+                            <span>آخر دخول</span>
+                        </div>
+                    </MudTh>
+                    <MudTh Class="table-header actions-header">
+                        <span>الإجراءات</span>
+                    </MudTh>
+                </HeaderContent>
+
+                <RowTemplate>
+                    <MudTd DataLabel="الكود">
+                        <span class="user-id">@context.UserId</span>
+                    </MudTd>
+                    <MudTd DataLabel="اسم المستخدم">
+                        <div class="username-cell">
+                            <MudIcon Icon="@Icons.Material.Filled.AlternateEmail" Size="Size.Small" Class="username-icon" />
+                            <strong>@context.Username</strong>
+                        </div>
+                    </MudTd>
+                    <MudTd DataLabel="الاسم الكامل">
+                        <span class="full-name">@context.FullName</span>
+                    </MudTd>
+                    <MudTd DataLabel="البريد الإلكتروني">
+                        <span class="email-text">@(context.Email ?? "-")</span>
+                    </MudTd>
+                    <MudTd DataLabel="الدور">
+                        <span class="role-badge">
+                            <MudIcon Icon="@Icons.Material.Filled.Shield" Size="Size.Small" />
+                            @context.Role
+                        </span>
+                    </MudTd>
+                    <MudTd DataLabel="الحالة">
+                        @if (context.IsActive == true)
+                        {
+                            <div class="status-badge active">
+                                <span class="status-dot"></span>
+                                <span>نشط</span>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="status-badge inactive">
+                                <span class="status-dot"></span>
+                                <span>غير نشط</span>
+                            </div>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="آخر دخول">
+                        <div class="last-login">
+                            @if (context.LastLogin.HasValue)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" />
+                                <span>@context.LastLogin.Value.ToString("yyyy/MM/dd HH:mm")</span>
+                            }
+                            else
+                            {
+                                <span class="no-data">-</span>
+                            }
+                        </div>
+                    </MudTd>
+                    <MudTd DataLabel="الإجراءات">
+                        <div class="action-buttons">
+                            @if (HasPermission("frm_AddUser", "Edit"))
+                            {
+                                <MudTooltip Text="تعديل">
+                                    <MudIconButton Icon="@Icons.Material.Rounded.Edit"
+                                                   Color="Color.Warning"
+                                                   Size="Size.Small"
+                                                   Class="action-btn edit-btn"
+                                                   OnClick="() => EditUser(context)" />
+                                </MudTooltip>
+                            }
+                            @if (HasPermission("frm_AllUsers", "Delete"))
+                            {
+                                <MudTooltip Text="حذف">
+                                    <MudIconButton Icon="@Icons.Material.Rounded.Delete"
+                                                   Color="Color.Error"
+                                                   Size="Size.Small"
+                                                   Class="action-btn delete-btn"
+                                                   OnClick="() => OpenDeleteDialog(context)" />
+                                </MudTooltip>
+                            }
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+
+                <NoRecordsContent>
+                    <div class="no-records">
+                        <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="Size.Large" />
+                        <p>لا يوجد مستخدمين مطابقين</p>
+                    </div>
+                </NoRecordsContent>
+
+            </MudTable>
+        }
+    </div>
+
+</div>
+
+<!-- Delete Confirmation Dialog -->
+@if (_deleteDialogOpen)
+{
+    <MudOverlay Visible="true" Class="delete-overlay">
+        <div class="delete-dialog">
+            <div class="dialog-icon">
+                <MudIcon Icon="@Icons.Material.Rounded.Warning" />
+            </div>
+            <h2>تأكيد الحذف</h2>
+            <p>هل أنت متأكد من حذف المستخدم؟</p>
+            <div class="user-info">
+                <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                <strong>@_userToDelete?.FullName</strong>
+            </div>
+            <p class="warning-text">لا يمكن التراجع عن هذا الإجراء</p>
+            <div class="dialog-actions">
+                <MudButton OnClick="CancelDelete" 
+                           Variant="Variant.Outlined" 
+                           Color="Color.Default"
+                           Class="cancel-btn">
+                    إلغاء
+                </MudButton>
+                <MudButton OnClick="ConfirmDelete" 
+                           Variant="Variant.Filled" 
+                           Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.Delete"
+                           Class="confirm-btn">
+                    نعم، احذف
+                </MudButton>
+            </div>
+        </div>
+    </MudOverlay>
+}
+
+<style>
+    .users-admin-page {
+        padding: 2rem;
+        max-width: 1600px;
+        margin: 0 auto;
+    }
+
+    /* Header */
+    .page-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 20px;
+        padding: 2rem;
+        margin-bottom: 2rem;
+        box-shadow: 0 10px 40px rgba(102, 126, 234, 0.3);
+    }
+
+    .header-content {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+    }
+
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
+    }
+
+    .page-icon {
+        width: 64px;
+        height: 64px;
+        background: rgba(255, 255, 255, 0.2);
+        backdrop-filter: blur(10px);
+        border-radius: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+    }
+
+    .page-icon .mud-icon-root {
+        font-size: 2rem;
+    }
+
+    .header-text h1 {
+        color: white;
+        font-size: 2rem;
+        font-weight: 800;
+        margin: 0 0 0.5rem 0;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    }
+
+    .header-text .subtitle {
+        color: rgba(255, 255, 255, 0.9);
+        margin: 0;
+        font-size: 1rem;
+    }
+
+    .add-btn {
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important;
+        font-weight: 600 !important;
+    }
+
+    /* Controls Bar */
+    .controls-bar {
+        background: white;
+        border-radius: 16px;
+        padding: 1.5rem;
+        margin-bottom: 2rem;
+        box-shadow: 0 2px 20px rgba(0, 0, 0, 0.05);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1.5rem;
+        flex-wrap: wrap;
+    }
+
+    .search-section {
+        flex: 1;
+        min-width: 300px;
+    }
+
+    .search-field {
+        width: 100%;
+    }
+
+    .filters-section {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .filter-group {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .filter-icon {
+        color: #667eea;
+    }
+
+    .filter-label {
+        font-weight: 600;
+        color: #4a5568;
+        font-size: 0.9rem;
+    }
+
+    .filter-buttons .mud-button-root {
+        font-weight: 600;
+    }
+
+    .clear-btn {
+        color: #ef4444 !important;
+    }
+
+    .stats-chip {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 0.75rem 1.5rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+    }
+
+    .stats-chip .mud-icon-root {
+        font-size: 1.25rem;
+    }
+
+    .stat-label {
+        font-size: 0.9rem;
+        font-weight: 500;
+    }
+
+    .stat-value {
+        font-size: 1.25rem;
+        font-weight: 700;
+        background: rgba(255, 255, 255, 0.2);
+        padding: 0.25rem 0.75rem;
+        border-radius: 8px;
+    }
+
+    /* Table Container */
+    .table-container {
+        background: white;
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 2px 20px rgba(0, 0, 0, 0.05);
+    }
+
+    .users-table {
+        background: transparent !important;
+    }
+
+    .users-table .mud-table-head {
+        background: linear-gradient(135deg, #f8f9fc 0%, #eef1f7 100%);
+    }
+
+    .table-header {
+        font-weight: 700 !important;
+        color: #1a202c !important;
+        padding: 1.25rem 1rem !important;
+    }
+
+    .header-cell {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .header-cell .mud-icon-root {
+        color: #667eea;
+        font-size: 1.1rem;
+    }
+
+    .actions-header {
+        text-align: center !important;
+    }
+
+    .users-table .mud-table-row {
+        transition: all 0.3s ease;
+    }
+
+    .users-table .mud-table-row:hover {
+        background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%) !important;
+    }
+
+    .users-table .mud-table-cell {
+        padding: 1rem !important;
+        vertical-align: middle !important;
+    }
+
+    /* Table Cells */
+    .user-id {
+        display: inline-block;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 0.4rem 1rem;
+        border-radius: 8px;
+        font-weight: 600;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
+    }
+
+    .username-cell {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .username-icon {
+        color: #667eea;
+    }
+
+    .username-cell strong {
+        color: #1a202c;
+        font-size: 1rem;
+    }
+
+    .full-name {
+        color: #2d3748;
+        font-weight: 500;
+    }
+
+    .email-text {
+        color: #718096;
+        font-size: 0.9rem;
+    }
+
+    .role-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        color: white;
+        padding: 0.4rem 1rem;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+
+    .role-badge .mud-icon-root {
+        font-size: 1rem;
+    }
+
+    .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        border-radius: 10px;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+
+    .status-badge.active {
+        background: rgba(16, 185, 129, 0.15);
+        color: #10b981;
+    }
+
+    .status-badge.inactive {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+        animation: pulse 2s infinite;
+    }
+
+    @@keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+
+    .last-login {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: #718096;
+        font-size: 0.9rem;
+    }
+
+    .last-login .mud-icon-root {
+        color: #667eea;
+        font-size: 1rem;
+    }
+
+    .no-data {
+        color: #cbd5e0;
+        font-style: italic;
+    }
+
+    /* Action Buttons */
+    .action-buttons {
+        display: flex;
+        gap: 0.5rem;
+        justify-content: center;
+    }
+
+    .action-btn {
+        transition: all 0.3s ease !important;
+    }
+
+    .edit-btn:hover {
+        transform: scale(1.15) !important;
+        box-shadow: 0 4px 15px rgba(245, 158, 11, 0.4) !important;
+    }
+
+    .delete-btn:hover {
+        transform: scale(1.15) !important;
+        box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4) !important;
+    }
+
+    /* Loading State */
+    .loading-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 4rem 2rem;
+        gap: 1.5rem;
+    }
+
+    .loading-state p {
+        color: #718096;
+        font-size: 1.1rem;
+        margin: 0;
+    }
+
+    /* Empty State */
+    .empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 4rem 2rem;
+        text-align: center;
+    }
+
+    .empty-state .mud-icon-root {
+        font-size: 5rem;
+        color: #e2e8f0;
+        margin-bottom: 1.5rem;
+    }
+
+    .empty-state h3 {
+        color: #2d3748;
+        font-size: 1.5rem;
+        font-weight: 700;
+        margin: 0 0 0.5rem 0;
+    }
+
+    .empty-state p {
+        color: #718096;
+        font-size: 1.1rem;
+        margin: 0;
+    }
+
+    .no-records {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 3rem 2rem;
+        text-align: center;
+    }
+
+    .no-records .mud-icon-root {
+        font-size: 4rem;
+        color: #e2e8f0;
+        margin-bottom: 1rem;
+    }
+
+    .no-records p {
+        color: #718096;
+        font-size: 1rem;
+        margin: 0;
+    }
+
+    /* Delete Dialog */
+    .delete-overlay {
+        backdrop-filter: blur(8px);
+    }
+
+    .delete-dialog {
+        background: white;
+        border-radius: 24px;
+        padding: 2.5rem;
+        max-width: 450px;
+        margin: 20vh auto;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        text-align: center;
+        border: 2px solid rgba(239, 68, 68, 0.2);
+    }
+
+    .dialog-icon {
+        width: 80px;
+        height: 80px;
+        background: rgba(239, 68, 68, 0.1);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 1.5rem;
+    }
+
+    .dialog-icon .mud-icon-root {
+        font-size: 3rem;
+        color: #ef4444;
+    }
+
+    .delete-dialog h2 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: #1a202c;
+        margin: 0 0 1rem 0;
+    }
+
+    .delete-dialog > p {
+        color: #718096;
+        font-size: 1rem;
+        margin: 0 0 1.5rem 0;
+    }
+
+    .user-info {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        background: linear-gradient(135deg, #f8f9fc 0%, #eef1f7 100%);
+        padding: 1rem 1.5rem;
+        border-radius: 12px;
+        margin-bottom: 1rem;
+    }
+
+    .user-info .mud-icon-root {
+        color: #667eea;
+    }
+
+    .user-info strong {
+        color: #1a202c;
+        font-size: 1.1rem;
+    }
+
+    .warning-text {
+        color: #ef4444;
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin: 0 0 2rem 0;
+    }
+
+    .dialog-actions {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+    }
+
+    .cancel-btn,
+    .confirm-btn {
+        padding: 0.875rem 2rem !important;
+        font-weight: 600 !important;
+    }
+
+    .confirm-btn {
+        box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3) !important;
+    }
+
+    /* Responsive */
+    @@media (max-width: 960px) {
+        .users-admin-page {
+            padding: 1rem;
+        }
+
+        .page-header {
+            padding: 1.5rem;
+        }
+
+        .header-content {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .page-icon {
+            width: 48px;
+            height: 48px;
+        }
+
+        .page-icon .mud-icon-root {
+            font-size: 1.5rem;
+        }
+
+        .header-text h1 {
+            font-size: 1.5rem;
+        }
+
+        .add-btn {
+            width: 100%;
+        }
+
+        .controls-bar {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .search-section {
+            width: 100%;
+            min-width: 100%;
+        }
+
+        .filters-section {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .stats-chip {
+            justify-content: center;
+        }
+
+        .delete-dialog {
+            margin: 10vh 1rem;
+            padding: 2rem;
+        }
+
+        .dialog-actions {
+            flex-direction: column-reverse;
+        }
+
+        .cancel-btn,
+        .confirm-btn {
+            width: 100%;
+        }
+    }
+</style>
+
+@code {
+    private List<COCOBOLOERPNEW.Models.User> _allUsers = new();
+    private List<COCOBOLOERPNEW.Models.User> _filteredUsers = new();
+    private string _searchText = "";
+    private int? _filterActive = null;
+    private ClaimsPrincipal? _currentUser;
+    private bool _isLoading = true;
+
+    private bool _deleteDialogOpen = false;
+    private COCOBOLOERPNEW.Models.User? _userToDelete;
+
+    private bool HasActiveFilters => !string.IsNullOrWhiteSpace(_searchText) || _filterActive.HasValue;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _currentUser = authState.User;
+        await LoadUsers();
+    }
+
+    private async Task LoadUsers()
+    {
+        _isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            _allUsers = await Db.Users.OrderByDescending(u => u.CreatedAt).ToListAsync();
+            ApplyFilters();
+        }
+        catch
+        {
+            _allUsers = new();
+            _filteredUsers = new();
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async void OnSearchChanged(KeyboardEventArgs e)
+    {
+        ApplyFilters();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async void OnFilterChanged(int? value)
+    {
+        _filterActive = value;
+        ApplyFilters();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplyFilters()
+    {
+        var query = _allUsers.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var search = _searchText.Trim();
+            query = query.Where(u =>
+                (u.FullName != null && u.FullName.ContainsArabic(search)) ||
+                (u.Username != null && u.Username.ContainsArabic(search)) ||
+                (u.Email != null && u.Email.ContainsArabic(search))
+            );
+        }
+
+        if (_filterActive.HasValue)
+        {
+            bool isActive = _filterActive.Value == 1;
+            query = query.Where(u => u.IsActive == isActive);
+        }
+
+        _filteredUsers = query.ToList();
+        StateHasChanged();
+    }
+
+    private void ClearFilters()
+    {
+        _searchText = "";
+        _filterActive = null;
+        ApplyFilters();
+    }
+
+    private void AddNewUser() => Navigation.NavigateTo("/admin/users/new");
+    
+    private void EditUser(COCOBOLOERPNEW.Models.User user) 
+        => Navigation.NavigateTo($"/admin/users/{user.UserId}");
+
+    private void OpenDeleteDialog(COCOBOLOERPNEW.Models.User user)
+    {
+        _userToDelete = user;
+        _deleteDialogOpen = true;
+        StateHasChanged();
+    }
+
+    private async Task ConfirmDelete()
+    {
+        if (_userToDelete != null)
+        {
+            try
+            {
+                Db.Users.Remove(_userToDelete);
+                await Db.SaveChangesAsync();
+                _allUsers.Remove(_userToDelete);
+                ApplyFilters();
+            }
+            catch
+            {
+                // Handle error
+            }
+        }
+        
+        _deleteDialogOpen = false;
+        _userToDelete = null;
+        StateHasChanged();
+    }
+
+    private void CancelDelete()
+    {
+        _deleteDialogOpen = false;
+        _userToDelete = null;
+        StateHasChanged();
+    }
+
+    private bool HasPermission(string formName, string action)
+    {
+        if (_currentUser == null || !_currentUser.Identity!.IsAuthenticated)
+            return false;
+
+        return _currentUser.Claims.Any(c =>
+            c.Type == "Permission" &&
+            c.Value == $"{formName}:{action}");
+    }
+}

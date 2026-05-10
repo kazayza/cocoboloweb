@@ -1,0 +1,190 @@
+@using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Models
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IServiceScopeFactory ScopeFactory
+@inject NotificationService NotificationService
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<div style="position: relative;">
+    <MudBadge Content="@_unreadCount" Color="Color.Error" Overlap="true" Invisible="@(_unreadCount == 0)">
+        <MudIconButton Icon="@Icons.Material.Filled.Notifications" 
+                       Color="Color.Primary" 
+                       OnClick="TogglePopover" />
+    </MudBadge>
+
+    <MudPopover Open="@_isOpen" AnchorOrigin="Origin.BottomCenter" TransformOrigin="Origin.TopCenter">
+        <div style="width: 350px; max-height: 400px; overflow-y: auto;">
+            <div style="padding: 0.75rem; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+                <strong>الإشعارات</strong>
+                @if (_unreadCount > 0)
+                {
+                    <MudButton Size="Size.Small" Color="Color.Primary" Variant="Variant.Text" OnClick="MarkAllAsRead">تعليم الكل كمقروء</MudButton>
+                }
+            </div>
+            
+            @if (_notifications.Any())
+            {
+                @foreach (var notif in _notifications)
+                {
+                    <div class="notification-item @(!notif.IsRead ? "unread" : "")" @onclick="() => HandleClick(notif)">
+                        <div style="display: flex; gap: 0.75rem; align-items: flex-start;">
+                            <MudIcon Icon="@(notif.IsRead ? Icons.Material.Filled.NotificationsNone : Icons.Material.Filled.NotificationsActive)" 
+                                     Color="@(notif.IsRead ? Color.Default : Color.Primary)" Size="Size.Small" />
+                            <div style="flex: 1;">
+                                <div style="font-weight: @(notif.IsRead ? "400" : "700"); font-size: 0.9rem;">@notif.Title</div>
+                                <div style="font-size: 0.8rem; color: #718096;">@notif.Message</div>
+                                <div style="font-size: 0.75rem; color: #a0aec0; margin-top: 0.25rem;">@GetTimeAgo(notif.CreatedAt)</div>
+                            </div>
+                        </div>
+                    </div>
+                }
+            }
+            else
+            {
+                <div style="padding: 2rem; text-align: center; color: #a0aec0;">
+                    <MudIcon Icon="@Icons.Material.Filled.NotificationsOff" Size="Size.Large" />
+                    <p>لا توجد إشعارات</p>
+                </div>
+            }
+        </div>
+    </MudPopover>
+</div>
+
+<style>
+    .notification-item { padding: 0.75rem; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.2s; }
+    .notification-item:hover { background: #f7fafc; }
+    .notification-item.unread { background: #ebf8ff; }
+</style>
+
+@code {
+    private List<Notification> _notifications = new();
+    private int _unreadCount = 0;
+    private int _lastNotifiedCount = 0;
+    private bool _isOpen = false;
+    private bool _firstRender = true;
+    private string? _currentUserName;
+    private string? _currentUserRole;
+    private Timer? _timer;
+
+            protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        _currentUserName = auth.User.Identity?.Name;
+        _currentUserRole = auth.User.FindFirst(ClaimTypes.Role)?.Value;
+
+        if (!string.IsNullOrEmpty(_currentUserName))
+        {
+            await LoadNotifications();
+            _lastNotifiedCount = _unreadCount;
+
+            _timer = new Timer(async _ =>
+            {
+                await InvokeAsync(async () =>
+                {
+                    try
+                    {
+                        await LoadNotifications();
+
+                        if (_unreadCount > _lastNotifiedCount)
+                        {
+                            await JS.InvokeVoidAsync("playNotificationSound");
+                        }
+
+                        _lastNotifiedCount = _unreadCount;
+                    }
+                    catch
+                    {
+                    }
+                });
+            }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+        }
+    }
+        protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _firstRender && !string.IsNullOrEmpty(_currentUserName))
+        {
+            _firstRender = false;
+
+            // ✅ بعد ما الصفحة اتحملت والـ JS جاهز، شغّل الصوت لو فيه إشعارات
+            if (_unreadCount > 0)
+            {
+                try
+                {
+                    await JS.InvokeVoidAsync("playNotificationSound");
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
+
+    private async Task LoadNotifications()
+    {
+        try
+        {
+            using var scope = ScopeFactory.CreateScope();
+            var notificationService = scope.ServiceProvider.GetRequiredService<NotificationService>();
+            
+            _notifications = await notificationService.GetLatestAsync(_currentUserName!, _currentUserRole, 10);
+            _unreadCount = await notificationService.GetUnreadCountAsync(_currentUserName!, _currentUserRole);
+        }
+        catch
+        {
+        }
+    }
+
+    private void TogglePopover()
+    {
+        _isOpen = !_isOpen;
+    }
+
+    private async Task HandleClick(Notification notif)
+    {
+        if (!notif.IsRead)
+        {
+            using var scope = ScopeFactory.CreateScope();
+            var notificationService = scope.ServiceProvider.GetRequiredService<NotificationService>();
+            await notificationService.MarkAsReadAsync(notif.NotificationId);
+            await LoadNotifications();
+            _lastNotifiedCount = _unreadCount;
+        }
+
+        _isOpen = false;
+
+        if (!string.IsNullOrWhiteSpace(notif.FormName) && notif.RelatedId.HasValue)
+        {
+            Navigation.NavigateTo($"/{notif.FormName}/{notif.RelatedId.Value}");
+        }
+    }
+
+    private async Task MarkAllAsRead()
+    {
+        using var scope = ScopeFactory.CreateScope();
+        var notificationService = scope.ServiceProvider.GetRequiredService<NotificationService>();
+
+        foreach (var n in _notifications.Where(n => !n.IsRead))
+        {
+            await notificationService.MarkAsReadAsync(n.NotificationId);
+        }
+        await LoadNotifications();
+        _lastNotifiedCount = _unreadCount;
+    }
+
+    private string GetTimeAgo(DateTime dateTime)
+    {
+        var diff = DateTime.Now - dateTime;
+        if (diff.TotalMinutes < 1) return "الآن";
+        if (diff.TotalMinutes < 60) return $"منذ {(int)diff.TotalMinutes} دقيقة";
+        if (diff.TotalHours < 24) return $"منذ {(int)diff.TotalHours} ساعة";
+        return $"منذ {(int)diff.TotalDays} يوم";
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
+}
