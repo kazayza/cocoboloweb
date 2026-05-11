@@ -1,0 +1,1133 @@
+@page "/sales/invoices/new"
+@page "/sales/invoices/{Id:int}/edit"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+
+@inject IInvoiceService InvoiceService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject AuthenticationStateProvider AuthProvider
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4" Style="color: var(--gold);">جاري التحميل...</MudText>
+    </div>
+}
+else
+{
+    <div class="invoice-form-page" dir="rtl">
+
+        <!-- Header -->
+        <div class="form-header">
+            <div class="header-left">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowForward"
+                               Color="Color.Inherit"
+                               OnClick="GoBack"
+                               Size="Size.Large" />
+                <div>
+                                        <h1>
+                        <MudIcon Icon="@Icons.Material.Filled.ReceiptLong" />
+                        @if (IsEdit && _form.TransactionType == TransactionTypes.Purchase)
+                        {
+                            <span>فاتورة مشتريات</span>
+                        }
+                        else if (IsEdit)
+                        {
+                            <span>فاتورة مبيعات</span>
+                        }
+                        else
+                        {
+                            <span>فاتورة مبيعات جديدة</span>
+                        }
+                    </h1>
+                    <p>
+                        @if (IsEdit && _form.TransactionType == TransactionTypes.Purchase)
+                        {
+                            <span>@_form.ReferenceNumber</span>
+                        }
+                        else if (IsEdit)
+                        {
+                            <span>@_form.ReferenceNumber</span>
+                        }
+                        else
+                        {
+                            <span>إنشاء فاتورة جديدة وفاتورة شراء مرآة تلقائياً</span>
+                        }
+                    </p>
+                </div>
+            </div>
+            <div class="header-right">
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Inherit"
+                           OnClick="GoBack"
+                           StartIcon="@Icons.Material.Filled.Close">
+                    إلغاء
+                </MudButton>
+                @if (!IsEdit)
+                {
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Save"
+                               OnClick="SaveInvoice"
+                               Disabled="@_isSaving"
+                               Class="save-btn">
+                        @if (_isSaving)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                        }
+                        حفظ الفاتورة
+                    </MudButton>
+                }
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <!-- Main Column -->
+            <div class="main-col">
+
+                <!-- 1) Invoice Info -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Description" />
+                        <h3>بيانات الفاتورة</h3>
+                    </div>
+                    @if (IsEdit && _form.TransactionType == TransactionTypes.Purchase)
+                    {
+                        <MudAlert Severity="Severity.Info" Class="mb-3" Icon="@Icons.Material.Filled.Link">
+                            <strong>المورد:</strong> المصنع
+                            <span style="margin: 0 0.5rem;">|</span>
+                            <strong>العميل (من فاتورة البيع):</strong> @(_form.EmpName ?? "-")
+                        </MudAlert>
+                    }
+                    <div class="grid-2">
+                        <MudTextField @bind-Value="_form.ReferenceNumber"
+                                      Label="رقم الفاتورة"
+                                      Variant="Variant.Outlined"
+                                      ReadOnly="@IsEdit"
+                                      HelperText="اتركه فاضي للتوليد التلقائي" />
+
+                        <MudDatePicker Date="_form.TransactionDate"
+                                       DateChanged="@(d => _form.TransactionDate = d ?? DateTime.Now)"
+                                       Label="تاريخ الفاتورة"
+                                       Variant="Variant.Outlined"
+                                       ReadOnly="@IsEdit" />
+
+                        <MudSelect T="int?" @bind-Value="_form.WarehouseId"
+                                   Label="المخزن *"
+                                   Variant="Variant.Outlined"
+                                   Disabled="@IsEdit">
+                            @foreach (var w in _warehouses)
+                            {
+                                <MudSelectItem T="int?" Value="@((int?)w.WarehouseId)">@w.WarehouseName</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudDatePicker Date="_form.DueDate"
+                                       DateChanged="@(d => _form.DueDate = d)"
+                                       Label="تاريخ الاستحقاق"
+                                       Variant="Variant.Outlined"
+                                       Clearable="true" />
+                    </div>
+                </MudPaper>
+
+                <!-- 2) Customer Selection -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Person" />
+                        <h3>العميل</h3>
+                    </div>
+
+                    <MudAutocomplete T="PartyLookupDto"
+                                     Label="ابحث عن العميل بالاسم أو الهاتف *"
+                                     Value="_selectedParty"
+                                     ValueChanged="OnPartySelected"
+                                     SearchFunc="SearchParties"
+                                     ToStringFunc="@(p => p == null ? "" : p.PartyName)"
+                                     Variant="Variant.Outlined"
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.Search"
+                                     Clearable="true"
+                                     ResetValueOnEmptyText="true"
+                                     CoerceText="true"
+                                     Disabled="@IsEdit"
+                                     MinCharacters="1">
+                        <ItemTemplate Context="party">
+                            <div style="display:flex; flex-direction:column; gap:0.25rem;">
+                                <strong>@party.PartyName</strong>
+                                <span style="font-size:0.78rem; color:var(--mud-palette-text-secondary);">
+                                    @if (!string.IsNullOrEmpty(party.Phone))
+                                    {
+                                        <span>📞 @party.Phone</span>
+                                    }
+                                    @if (!string.IsNullOrEmpty(party.City))
+                                    {
+                                        <span> • @party.City</span>
+                                    }
+                                    @if (party.AdvanceBalance > 0)
+                                    {
+                                        <span style="color:var(--mud-palette-success); font-weight:700;">
+                                            • 💰 رصيد دفعات مقدمة: @($"{party.AdvanceBalance:N2}") ج
+                                        </span>
+                                    }
+                                </span>
+                            </div>
+                        </ItemTemplate>
+                    </MudAutocomplete>
+
+                    @if (_advances.Any() && !IsEdit)
+                    {
+                        <MudAlert Severity="Severity.Info"
+                                  Class="mt-3"
+                                  Icon="@Icons.Material.Filled.Savings">
+                            <MudText Typo="Typo.body2">
+                                <strong>هذا العميل لديه دفعات مقدمة سابقة بإجمالي
+                                    @FormatMoney(_advances.Sum(a => a.ChargeAmount)) ج</strong>
+                                — اختر التي تود خصمها من هذه الفاتورة:
+                            </MudText>
+
+                            <div class="advances-list mt-2">
+                                @foreach (var adv in _advances)
+                                {
+                                    <div class="advance-row">
+                                        <MudCheckBox T="bool"
+                                                     Value="@_form.SelectedAdvanceChargeIds.Contains(adv.ChargeId)"
+                                                     ValueChanged="@(v => ToggleAdvance(adv.ChargeId, v))"
+                                                     Color="Color.Success"
+                                                     Dense="true">
+                                            <strong>@FormatMoney(adv.ChargeAmount) ج</strong>
+                                            — @adv.ChargeDescription
+                                            <span class="advance-date">
+                                                (@adv.CreatedAt?.ToString("yyyy/MM/dd"))
+                                            </span>
+                                        </MudCheckBox>
+                                    </div>
+                                }
+                            </div>
+                        </MudAlert>
+                    }
+                </MudPaper>
+
+                <!-- 3) Items -->
+                                <!-- 3) Items -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <MudIcon Icon="@Icons.Material.Filled.Inventory2" />
+                            <h3>الأصناف (@_form.Items.Count)</h3>
+                        </div>
+                    </div>
+
+                    @if (!IsEdit && _form.PartyId.HasValue && !_availableProducts.Any())
+                    {
+                        <div class="empty-items">
+                            <MudIcon Icon="@Icons.Material.Filled.Inventory" Size="Size.Large" />
+                            <p>لا توجد منتجات متاحة لهذا العميل</p>
+                        </div>
+                    }
+                    else if (!IsEdit && !_form.PartyId.HasValue)
+                    {
+                        <div class="empty-items">
+                            <MudIcon Icon="@Icons.Material.Filled.PersonSearch" Size="Size.Large" />
+                            <p>اختر العميل أولاً لعرض المنتجات المتاحة</p>
+                        </div>
+                    }
+
+                    <!-- شبكة المنتجات المتاحة -->
+                    @if (!IsEdit && _availableProducts.Any())
+                    {
+                        <div class="products-grid">
+                            @foreach (var prod in _availableProducts)
+                            {
+                                var isAdded = _form.Items.Any(i => i.ProductId == prod.ProductId);
+                                <div class="product-card @(isAdded ? "product-added" : "")">
+                                    <div class="product-card-img">
+                                        @if (!string.IsNullOrEmpty(prod.ImagePath))
+                                        {
+                                            <img src="@GetImageUrl(prod.ImagePath)" alt="@prod.ProductName" />
+                                        }
+                                        else
+                                        {
+                                            <div class="img-placeholder-sm">📦</div>
+                                        }
+                                    </div>
+                                    <div class="product-card-info">
+                                        <strong class="product-card-name">@prod.ProductName</strong>
+                                        @if (!string.IsNullOrEmpty(prod.ProductDescription))
+                                        {
+                                            <span class="product-card-desc">@prod.ProductDescription</span>
+                                        }
+                                                                                <div class="product-card-pricing">
+                                            @if (prod.PricingType == PricingTiers.Elite)
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Dense="true">Elite</MudChip>
+                                                <span class="product-card-price">@($"{(prod.SuggestedSalePriceElite ?? prod.SuggestedSalePrice ?? 0):N2}") ج</span>
+                                            }
+                                            else
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Dense="true">Premium</MudChip>
+                                                <span class="product-card-price">@($"{(prod.SuggestedSalePrice ?? 0):N2}") ج</span>
+                                            }
+                                        </div>
+                                    </div>
+                                    <div class="product-card-action">
+                                        @if (isAdded)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                                                     Icon="@Icons.Material.Filled.Check">تمت الإضافة</MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                                       Size="Size.Small" FullWidth="true"
+                                                       StartIcon="@Icons.Material.Filled.Add"
+                                                       OnClick="@(() => AddProductToInvoice(prod))">
+                                                إضافة
+                                            </MudButton>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <!-- جدول الأصناف المضافة -->
+                    @if (_form.Items.Any())
+                    {
+                        <div class="items-table mt-4">
+                            <div class="items-header">
+                                <div class="col-product">الصنف</div>
+                                <div class="col-tier">الباقة</div>
+                                <div class="col-qty">الكمية</div>
+                                <div class="col-price">السعر</div>
+                                <div class="col-total">الإجمالي</div>
+                                <div class="col-action"></div>
+                            </div>
+
+                            @for (int i = 0; i < _form.Items.Count; i++)
+                            {
+                                var item = _form.Items[i];
+                                var index = i;
+                                <div class="item-row">
+                                    <div class="col-product">
+                                        <strong>@item.ProductName</strong>
+                                        @if (!string.IsNullOrEmpty(item.ProductDescription))
+                                        {
+                                            <div class="item-name-display">@item.ProductDescription</div>
+                                        }
+                                    </div>
+                                    <div class="col-tier">
+                                        <MudChip T="string" Size="Size.Small"
+                                                 Color="@(item.PricingTier == PricingTiers.Elite ? Color.Warning : Color.Info)">
+                                            @PricingTiers.All.GetValueOrDefault(item.PricingTier, item.PricingTier)
+                                        </MudChip>
+                                    </div>
+                                    <div class="col-qty">
+                                        <MudNumericField Value="item.Quantity"
+                                                         ValueChanged="@((decimal v) => { item.Quantity = v; RecalculateTotals(); })"
+                                                         T="decimal"
+                                                         Variant="Variant.Outlined"
+                                                         Margin="Margin.Dense"
+                                                         Min="0.01m"
+                                                         Step="1m"
+                                                         Disabled="@IsEdit" />
+                                    </div>
+                                    <div class="col-price">
+                                        <MudNumericField Value="item.UnitPrice"
+                                                         ValueChanged="@((decimal v) => { item.UnitPrice = v; RecalculateTotals(); })"
+                                                         T="decimal"
+                                                         Variant="Variant.Outlined"
+                                                         Margin="Margin.Dense"
+                                                         Min="0m"
+                                                         Step="1m"
+                                                         Disabled="@IsEdit" />
+                                    </div>
+                                    <div class="col-total"><strong>@FormatMoney(item.TotalAmount) ج</strong></div>
+                                    <div class="col-action">
+                                        @if (!IsEdit)
+                                        {
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                           Color="Color.Error"
+                                                           Size="Size.Small"
+                                                           OnClick="@(() => RemoveItem(index))" />
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </MudPaper>
+
+                <!-- 4) Charges -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header" style="justify-content: space-between;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <MudIcon Icon="@Icons.Material.Filled.LocalShipping" />
+                            <h3>رسوم إضافية (@_form.Charges.Count)</h3>
+                        </div>
+                        @if (!IsEdit)
+                        {
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.Add"
+                                       OnClick="AddCharge"
+                                       Size="Size.Small">
+                                إضافة رسم
+                            </MudButton>
+                        }
+                    </div>
+
+                    @if (_form.Charges.Any())
+                    {
+                        @for (int i = 0; i < _form.Charges.Count; i++)
+                        {
+                            var ch = _form.Charges[i];
+                            var index = i;
+                            <div class="charge-row">
+                                <MudTextField @bind-Value="ch.ChargeDescription"
+                                              Placeholder="مثل: شحن، تركيب..."
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Disabled="@IsEdit" />
+                                <MudNumericField Value="ch.ChargeAmount"
+                                                 ValueChanged="@((decimal v) => { ch.ChargeAmount = v; RecalculateTotals(); })"
+                                                 T="decimal"
+                                                 Label="المبلغ"
+                                                 Variant="Variant.Outlined"
+                                                 Margin="Margin.Dense"
+                                                 Min="0m"
+                                                 Disabled="@IsEdit" />
+                                @if (!IsEdit)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                   Color="Color.Error"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => RemoveCharge(index))" />
+                                }
+                            </div>
+                        }
+                    }
+                </MudPaper>
+
+                <!-- 5) Notes -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Notes" />
+                        <h3>ملاحظات</h3>
+                    </div>
+                    <MudTextField @bind-Value="_form.Notes"
+                                  Placeholder="ملاحظات على الفاتورة..."
+                                  Variant="Variant.Outlined"
+                                  Lines="3" />
+                </MudPaper>
+            </div>
+
+            <!-- Sidebar -->
+            <div class="sidebar-col">
+                <MudPaper Class="summary-card" Elevation="0">
+                    <h3>ملخص الفاتورة</h3>
+
+                    <div class="summary-row">
+                        <span>إجمالي الأصناف:</span>
+                        <strong>@FormatMoney(_form.TotalAmount) ج</strong>
+                    </div>
+
+                    <div class="summary-row">
+                        <span>خصم %:</span>
+                        <MudNumericField Value="_form.DiscountPercentage"
+                                         ValueChanged="@((decimal? v) => { _form.DiscountPercentage = v; RecalculateTotals(); })"
+                                         T="decimal?"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Min="0m" Max="100m" Step="1m"
+                                         Style="max-width:100px;"
+                                         Disabled="@IsEdit" />
+                    </div>
+
+                    <div class="summary-row">
+                        <span>قيمة الخصم:</span>
+                        <strong style="color:var(--mud-palette-error);">
+                            -@FormatMoney(_form.DiscountAmount ?? 0) ج
+                        </strong>
+                    </div>
+
+                    <div class="summary-row">
+                        <span>الصافي:</span>
+                        <strong>@FormatMoney(_form.NetTotalAmount ?? 0) ج</strong>
+                    </div>
+
+                    <div class="summary-row">
+                        <span>رسوم إضافية:</span>
+                        <strong>+@FormatMoney(_form.TotalChargesAmount) ج</strong>
+                    </div>
+
+                    <div class="summary-divider"></div>
+
+                    <div class="summary-row total-row">
+                        <span>الإجمالي النهائي:</span>
+                        <strong>@FormatMoney(_form.GrandTotal) ج</strong>
+                    </div>
+
+                    <div class="summary-divider"></div>
+
+                    @{
+                        var advanceTotal = _advances
+                            .Where(a => _form.SelectedAdvanceChargeIds.Contains(a.ChargeId))
+                            .Sum(a => a.ChargeAmount);
+                    }
+
+                    @if (advanceTotal > 0)
+                    {
+                        <div class="summary-row paid-row">
+                            <span>دفعات مقدمة مطبقة:</span>
+                            <strong style="color:var(--mud-palette-success);">
+                                @FormatMoney(advanceTotal) ج
+                            </strong>
+                        </div>
+                    }
+
+                    @if (!IsEdit)
+                    {
+                        <div class="payment-section">
+                            <h4>دفعة فورية</h4>
+                            <MudNumericField @bind-Value="_form.PaidAmount"
+                                             Label="المبلغ المدفوع"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Min="0m"
+                                             Max="@(_form.GrandTotal - advanceTotal)"
+                                             Class="mb-2" />
+
+                            @if (_form.PaidAmount > 0)
+                            {
+                                <MudSelect T="string" @bind-Value="_form.PaymentMethod"
+                                           Label="طريقة الدفع"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Class="mb-2">
+                                    @foreach (var pm in PaymentMethods.All)
+                                    {
+                                        <MudSelectItem T="string" Value="@pm.Key">@pm.Value</MudSelectItem>
+                                    }
+                                </MudSelect>
+
+                                <MudSelect T="int?" @bind-Value="_form.CashBoxId"
+                                           Label="الخزينة"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense">
+                                    @foreach (var cb in _cashBoxes)
+                                    {
+                                        <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="summary-row paid-row">
+                            <span>المدفوع:</span>
+                            <strong style="color:var(--mud-palette-success);">
+                                @FormatMoney(_form.PaidAmount) ج
+                            </strong>
+                        </div>
+                    }
+
+                    <div class="summary-divider"></div>
+                    @{
+                        var totalPaid = advanceTotal + (IsEdit ? 0 : _form.PaidAmount);
+                        var remaining = _form.GrandTotal - totalPaid;
+                        if (IsEdit) remaining = _form.GrandTotal - _form.PaidAmount;
+                    }
+                    <div class="summary-row remaining-row">
+                        <span>المتبقي:</span>
+                        <strong style="color: @(remaining > 0 ? "var(--mud-palette-error)" : "var(--mud-palette-success)");">
+                            @FormatMoney(remaining) ج
+                        </strong>
+                    </div>
+
+                    @if (!IsEdit)
+                    {
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   FullWidth="true"
+                                   Size="Size.Large"
+                                   StartIcon="@Icons.Material.Filled.Save"
+                                   OnClick="SaveInvoice"
+                                   Disabled="@_isSaving"
+                                   Class="save-btn-full mt-3">
+                            @if (_isSaving)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                            }
+                            حفظ الفاتورة
+                        </MudButton>
+
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2" Icon="@Icons.Material.Filled.Info">
+                            <small>سيتم إنشاء فاتورة شراء مرآة تلقائياً</small>
+                        </MudAlert>
+                    }
+                </MudPaper>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .invoice-form-page {
+        padding: 1rem;
+        max-width: 1800px;
+        margin: 0 auto;
+        direction: rtl;
+    }
+
+    .form-header {
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        border-radius: 16px;
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 1rem;
+        color: white;
+    }
+
+    .header-left { display: flex; align-items: center; gap: 1rem; }
+    .header-left h1 {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .header-left p {
+        margin: 0.25rem 0 0 0;
+        font-size: 0.85rem;
+        color: rgba(255,255,255,0.85);
+    }
+    .header-right { display: flex; gap: 0.5rem; }
+
+    .save-btn {
+        background: rgba(255,255,255,0.95) !important;
+        color: var(--navy-dark) !important;
+        font-weight: 700 !important;
+    }
+
+    .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 350px;
+        gap: 1.5rem;
+    }
+
+    .main-col, .sidebar-col {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .form-section {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px;
+        padding: 1.25rem;
+    }
+
+    .section-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+    .section-header h3 {
+        margin: 0;
+        font-size: 1.05rem;
+        font-weight: 700;
+    }
+
+    .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+    }
+
+    .advances-list { display: flex; flex-direction: column; gap: 0.25rem; }
+    .advance-row {
+        background: rgba(16,185,129,0.08);
+        border-radius: 8px;
+        padding: 0.25rem 0.5rem;
+    }
+    .advance-date { font-size: 0.78rem; color: var(--mud-palette-text-secondary); }
+
+    .empty-items {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+        padding: 2rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .items-table { display: flex; flex-direction: column; gap: 0.5rem; }
+    .items-header {
+        display: grid;
+        grid-template-columns: 2.5fr 1fr 0.8fr 1fr 1fr 50px;
+        gap: 0.5rem;
+        padding: 0.5rem;
+        background: var(--mud-palette-background);
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 0.85rem;
+    }
+    .item-row {
+        display: grid;
+        grid-template-columns: 2.5fr 1fr 0.8fr 1fr 1fr 50px;
+        gap: 0.5rem;
+        align-items: center;
+    }
+    .col-total { font-weight: 600; }
+    .item-name-display {
+        font-size: 0.78rem;
+        color: var(--mud-palette-text-secondary);
+        margin-top: 0.25rem;
+        padding-right: 0.5rem;
+    }
+
+    .charge-row {
+        display: grid;
+        grid-template-columns: 2fr 1fr 50px;
+        gap: 0.5rem;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+
+    .summary-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px;
+        padding: 1.25rem;
+        position: sticky;
+        top: 1rem;
+    }
+    .summary-card h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1.1rem;
+        font-weight: 800;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid var(--gold);
+    }
+    .summary-card h4 {
+        margin: 1rem 0 0.5rem 0;
+        font-size: 0.95rem;
+        font-weight: 700;
+    }
+
+    .summary-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.4rem 0;
+        font-size: 0.9rem;
+    }
+    .summary-divider {
+        height: 1px;
+        background: var(--mud-palette-divider);
+        margin: 0.5rem 0;
+    }
+    .total-row {
+        font-size: 1.05rem;
+        background: var(--gold-subtle);
+        padding: 0.6rem 0.75rem;
+        border-radius: 8px;
+    }
+    .paid-row strong { color: var(--mud-palette-success); }
+    .remaining-row { font-size: 1rem; font-weight: 700; }
+
+    .payment-section {
+        background: var(--mud-palette-background);
+        border-radius: 8px;
+        padding: 0.75rem;
+        margin-top: 0.5rem;
+    }
+
+    .save-btn-full {
+        background: linear-gradient(135deg, var(--gold), var(--gold-dark)) !important;
+        color: var(--navy-dark) !important;
+        font-weight: 700 !important;
+    }
+
+    .loading-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 60vh;
+    }
+        .products-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 0.75rem;
+        max-height: 400px;
+        overflow-y: auto;
+        padding: 0.25rem;
+    }
+
+    .product-card {
+        background: var(--mud-palette-background);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 10px;
+        padding: 0.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        transition: all 0.2s ease;
+    }
+    .product-card:hover {
+        border-color: var(--gold);
+        box-shadow: 0 2px 8px rgba(212,175,55,0.15);
+    }
+    .product-card.product-added {
+        opacity: 0.5;
+        border-color: var(--mud-palette-success);
+    }
+
+    .product-card-img img {
+        width: 100%;
+        height: 100px;
+        object-fit: cover;
+        border-radius: 6px;
+    }
+    .img-placeholder-sm {
+        width: 100%;
+        height: 100px;
+        background: var(--mud-palette-surface);
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 2.5rem;
+    }
+
+    .product-card-info {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+    .product-card-name {
+        font-size: 0.85rem;
+        color: var(--mud-palette-text-primary);
+    }
+    .product-card-desc {
+        font-size: 0.7rem;
+        color: var(--mud-palette-text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .product-card-pricing {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .product-card-price {
+        font-weight: 700;
+        font-size: 0.85rem;
+        color: var(--gold-dark);
+    }
+
+    .product-card-action {
+        margin-top: auto;
+    }
+
+    .mt-4 { margin-top: 1rem; }
+
+    @@media (max-width: 1100px) {
+        .form-grid { grid-template-columns: 1fr; }
+        .summary-card { position: static; }
+    }
+
+    @@media (max-width: 700px) {
+        .grid-2 { grid-template-columns: 1fr; }
+        .items-header, .item-row {
+            grid-template-columns: 1fr;
+        }
+        .charge-row { grid-template-columns: 1fr; }
+    }
+</style>
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    private bool IsEdit => Id.HasValue && Id.Value > 0;
+
+    private bool _isLoading = true;
+    private bool _isSaving = false;
+
+    private InvoiceFormDto _form = new();
+    private PartyLookupDto? _selectedParty;
+    private List<CustomerAdvanceDto> _advances = new();
+
+    private List<Models.Warehouse> _warehouses = new();
+    private List<Models.CashBox> _cashBoxes = new();
+
+    // تم الاستغناء عنه - المنتجات بتتضاف من الشبكة مباشرة
+    private List<ProductLookupDto> _availableProducts = new();
+
+    private string? _currentUserName;
+    private bool _canAdd, _canEdit;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            _currentUserName = user.Identity?.Name ?? "System";
+
+            _canAdd = user.HasClaim("Permission", "frm_SalesInvoiveNew:Add") || user.IsInRole("Admin");
+            _canEdit = user.HasClaim("Permission", "frm_SalesInvoiveNew:Edit") || user.IsInRole("Admin");
+
+            if (!IsEdit && !_canAdd) { Navigation.NavigateTo("/sales"); return; }
+
+            _warehouses = await InvoiceService.GetWarehousesAsync();
+            _cashBoxes = await InvoiceService.GetCashBoxesAsync();
+
+            if (IsEdit)
+            {
+                var loaded = await InvoiceService.GetInvoiceForEditAsync(Id!.Value);
+                if (loaded == null)
+                {
+                    Snackbar.Add("الفاتورة غير موجودة", Severity.Error);
+                    Navigation.NavigateTo("/sales");
+                    return;
+                }
+                _form = loaded;
+                if (_form.PartyId.HasValue)
+                {
+                    _selectedParty = new PartyLookupDto
+                    {
+                        PartyId = _form.PartyId.Value,
+                        PartyName = _form.PartyName ?? ""
+                    };
+                }
+            }
+            else
+            {
+                if (_warehouses.Any())
+                    _form.WarehouseId = _warehouses.First().WarehouseId;
+                _form.ReferenceNumber = await InvoiceService.GenerateNextInvoiceNumberAsync(TransactionTypes.Sale);
+            }
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    // ============================
+    // Party
+    // ============================
+    private async Task<IEnumerable<PartyLookupDto>> SearchParties(string value, CancellationToken token)
+    {
+        return await InvoiceService.SearchPartiesAsync(value);
+    }
+
+           private async Task OnPartySelected(PartyLookupDto? party)
+    {
+        _selectedParty = party;
+        _form.PartyId = party?.PartyId;
+        _form.PartyName = party?.PartyName;
+        _form.SelectedAdvanceChargeIds.Clear();
+        _form.Items.Clear();
+        _availableProducts.Clear();
+
+        if (party != null)
+        {
+            _advances = await InvoiceService.GetCustomerAdvancesAsync(party.PartyId, unappliedOnly: true);
+            _availableProducts = await InvoiceService.SearchProductsForPartyAsync(party.PartyId, null);
+        }
+        else
+        {
+            _advances = new();
+            _availableProducts = new();
+        }
+        StateHasChanged();
+    }
+            private void AddProductToInvoice(ProductLookupDto prod)
+    {
+        if (_form.Items.Any(i => i.ProductId == prod.ProductId)) return;
+
+        string tier;
+        decimal price;
+
+        if (prod.PricingType == PricingTiers.Elite)
+        {
+            tier = PricingTiers.Elite;
+            price = prod.SuggestedSalePriceElite ?? prod.SuggestedSalePrice ?? 0;
+        }
+        else
+        {
+            tier = PricingTiers.Premium;
+            price = prod.SuggestedSalePrice ?? 0;
+        }
+
+        var item = new InvoiceItemDto
+        {
+            ProductId = prod.ProductId,
+            ProductName = prod.ProductName,
+            ProductDescription = prod.ProductDescription,
+            ProductImagePath = prod.ImagePath,
+            Quantity = 1,
+            UnitPrice = price,
+            PricingTier = tier,
+            AvailableStock = prod.AvailableStock,
+            SalePricePremium = prod.SuggestedSalePrice,
+            SalePriceElite = prod.SuggestedSalePriceElite,
+            PurchasePricePremium = prod.PurchasePrice,
+            PurchasePriceElite = prod.PurchasePriceElite,
+            Period = prod.Period
+        };
+
+        _form.Items.Add(item);
+        RecalculateTotals();
+        CalculateDueDate();
+    }
+
+    private string GetImageUrl(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return "";
+        if (path.StartsWith("http") || path.StartsWith("/")) return path;
+        return "/" + path;
+    }
+
+    private void ToggleAdvance(int chargeId, bool selected)
+    {
+        if (selected)
+        {
+            if (!_form.SelectedAdvanceChargeIds.Contains(chargeId))
+                _form.SelectedAdvanceChargeIds.Add(chargeId);
+        }
+        else
+        {
+            _form.SelectedAdvanceChargeIds.Remove(chargeId);
+        }
+        StateHasChanged();
+    }
+
+    // ============================
+    // Items
+    // ============================
+    
+
+    
+
+        
+        private void CalculateDueDate()
+    {
+        var maxPeriod = _form.Items
+            .Where(i => i.ProductId > 0 && i.Period.HasValue)
+            .Select(i => i.Period.Value)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        if (maxPeriod > 0)
+        {
+            _form.DueDate = _form.TransactionDate.AddDays(maxPeriod);
+        }
+        StateHasChanged();
+    }
+
+    
+
+   
+
+        private void RemoveItem(int index)
+    {
+        _form.Items.RemoveAt(index);
+        RecalculateTotals();
+        CalculateDueDate();
+    }
+
+    // ============================
+    // Charges
+    // ============================
+    private void AddCharge()
+    {
+        _form.Charges.Add(new InvoiceChargeDto());
+        StateHasChanged();
+    }
+
+    private void RemoveCharge(int index)
+    {
+        _form.Charges.RemoveAt(index);
+        RecalculateTotals();
+    }
+
+    // ============================
+    // Calculations
+    // ============================
+    private void RecalculateTotals()
+    {
+        _form.TotalAmount = Math.Round(_form.Items.Sum(i => i.TotalAmount), 2);
+
+        if (_form.DiscountPercentage.HasValue && _form.DiscountPercentage.Value > 0)
+            _form.DiscountAmount = Math.Round(_form.TotalAmount * (_form.DiscountPercentage.Value / 100m), 2);
+        else
+            _form.DiscountAmount = 0;
+
+        _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
+        _form.TotalChargesAmount = Math.Round(_form.Charges.Sum(c => c.ChargeAmount), 2);
+        _form.GrandTotal = (_form.NetTotalAmount ?? 0) + _form.TotalChargesAmount;
+
+        StateHasChanged();
+    }
+
+    // ============================
+    // Save
+    // ============================
+    private async Task SaveInvoice()
+    {
+        if (IsEdit) return;
+
+        RecalculateTotals();
+
+        var advanceTotal = _advances
+            .Where(a => _form.SelectedAdvanceChargeIds.Contains(a.ChargeId))
+            .Sum(a => a.ChargeAmount);
+
+        if (_form.PaidAmount + advanceTotal > _form.GrandTotal)
+        {
+            Snackbar.Add("إجمالي المدفوع أكبر من إجمالي الفاتورة", Severity.Warning);
+            return;
+        }
+
+        _isSaving = true;
+        try
+        {
+            var (ok, msg, id, _) = await InvoiceService.CreateInvoiceAsync(_form, _currentUserName!);
+            if (ok)
+            {
+                Snackbar.Add(msg, Severity.Success);
+                Navigation.NavigateTo($"/sales/invoices/{id}");
+            }
+            else
+            {
+                Snackbar.Add(msg, Severity.Error);
+            }
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/sales");
+
+    private string FormatMoney(decimal value) => $"{value:N2}";
+}

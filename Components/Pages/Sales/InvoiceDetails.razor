@@ -1,0 +1,750 @@
+@page "/sales/invoices/{Id:int}"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+
+@inject IInvoiceService InvoiceService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+@inject IAuditService AuditService
+@inject NotificationService NotifyService
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4" Style="color: var(--gold);">جاري تحميل الفاتورة...</MudText>
+    </div>
+}
+else if (_details == null)
+{
+    <MudAlert Severity="Severity.Error">الفاتورة غير موجودة</MudAlert>
+}
+else
+{
+    var inv = _details.Invoice;
+    <div class="invoice-details-page" dir="rtl">
+
+        <div class="form-header">
+            <div class="header-left">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowForward"
+                               Color="Color.Inherit"
+                               OnClick="GoBack" />
+                <div>
+                    <h1>
+                        <MudIcon Icon="@Icons.Material.Filled.ReceiptLong" />
+                        فاتورة @inv.ReferenceNumber
+                    </h1>
+                    <p>
+                        <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(inv.InvoiceStatus)">
+                            @GetStatusText(inv.InvoiceStatus)
+                        </MudChip>
+                        @if (!string.IsNullOrEmpty(inv.EmpName))
+                        {
+                            <span> • الموظف: @inv.EmpName</span>
+                        }
+                    </p>
+                </div>
+            </div>
+            <div class="header-right">
+                <MudButton Variant="Variant.Outlined" Color="Color.Inherit" OnClick="GoBack"
+                           StartIcon="@Icons.Material.Filled.ArrowBack">
+                    رجوع
+                </MudButton>
+                <!-- ⭐ زرار الطباعة الجديد - يفتح صفحة طباعة منفصلة -->
+                <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="OpenPrintPage"
+                           StartIcon="@Icons.Material.Filled.Print"
+                           Class="print-btn">
+                    طباعة
+                </MudButton>
+                                @if (inv.InvoiceStatus != InvoiceStatuses.Cancelled)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                               StartIcon="@Icons.Material.Filled.EditNote"
+                               OnClick="OpenEditRequestDialog">
+                        طلب تعديل
+                    </MudButton>
+                }
+                @if (_canEdit && inv.InvoiceStatus != InvoiceStatuses.Cancelled
+                    && inv.GrandTotal > inv.PaidAmount)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Success"
+                               StartIcon="@Icons.Material.Filled.Payment"
+                               OnClick="OpenAddPaymentDialog">
+                        إضافة دفعة
+                    </MudButton>
+                }
+            </div>
+        </div>
+
+        <div class="details-grid">
+            <div class="main-col">
+                <MudPaper Class="info-section" Elevation="0">
+                    <h3>بيانات الفاتورة</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <span>رقم الفاتورة</span>
+                            <strong>@inv.ReferenceNumber</strong>
+                        </div>
+                        <div class="info-item">
+                            <span>التاريخ</span>
+                            <strong>@inv.TransactionDate.ToString("yyyy/MM/dd")</strong>
+                        </div>
+                        <div class="info-item">
+                            <span>العميل</span>
+                            <strong>@inv.PartyName</strong>
+                        </div>
+                        <div class="info-item">
+                            <span>الموظف</span>
+                            <strong>@(inv.EmpName ?? "-")</strong>
+                        </div>
+                                                <div class="info-item">
+                            <span>تاريخ الاستحقاق</span>
+                            <strong>
+                                @(inv.DueDate?.ToString("yyyy/MM/dd") ?? "-")
+                                @if (inv.DueDate.HasValue && inv.Items.Any(i => i.Period.HasValue && i.Period > 0))
+                                {
+                                    var maxPeriod = inv.Items
+                                        .Where(i => i.Period.HasValue)
+                                        .Max(i => i.Period.Value);
+                                    <span style="font-size:0.7rem; color:var(--mud-palette-text-secondary); display:block;">
+                                        (أكبر فترة: @maxPeriod يوم)
+                                    </span>
+                                }
+                            </strong>
+                        </div>
+                        <div class="info-item">
+                            <span>طريقة الدفع</span>
+                            <strong>@(GetPaymentMethodText(inv.PaymentMethod))</strong>
+                        </div>
+                        <div class="info-item">
+                            <span>التسليم</span>
+                            <strong>@(inv.IsDelivered == true ? "تم التسليم" : "قيد التسليم")</strong>
+                        </div>
+                        @if (!string.IsNullOrEmpty(inv.MirrorPurchaseReferenceNumber))
+                        {
+                            <div class="info-item">
+                                <span>فاتورة الشراء المرآة</span>
+                                <strong>@inv.MirrorPurchaseReferenceNumber</strong>
+                            </div>
+                        }
+                    </div>
+                </MudPaper>
+
+                <MudPaper Class="info-section" Elevation="0">
+                    <h3>الأصناف (@inv.Items.Count)</h3>
+                    <MudTable Items="inv.Items" Dense="true" Hover="true" Class="items-table">
+                        <HeaderContent>
+                            <MudTh>الصورة</MudTh>
+                            <MudTh>الصنف</MudTh>
+                            <MudTh>الباقة</MudTh>
+                            <MudTh>الكمية</MudTh>
+                            <MudTh>السعر</MudTh>
+                            <MudTh>الإجمالي</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                @if (!string.IsNullOrEmpty(context.ProductImagePath))
+                                {
+                                    <img src="@GetImageUrl(context.ProductImagePath)"
+                                         alt="@context.ProductName" class="thumb" />
+                                }
+                                else
+                                {
+                                    <div class="thumb-placeholder">📦</div>
+                                }
+                            </MudTd>
+                            <MudTd>
+                                <strong>@context.ProductName</strong>
+                                @if (!string.IsNullOrEmpty(context.ProductDescription))
+                                {
+                                    <div style="font-size:0.78rem; color:var(--mud-palette-text-secondary);">
+                                        @context.ProductDescription
+                                    </div>
+                                }
+                            </MudTd>
+                            <MudTd>
+                                <MudChip T="string" Size="Size.Small"
+                                         Color="@(context.PricingTier == PricingTiers.Elite ? Color.Warning : Color.Info)">
+                                    @PricingTiers.All.GetValueOrDefault(context.PricingTier, context.PricingTier)
+                                </MudChip>
+                            </MudTd>
+                                                        <MudTd>
+                                @context.Quantity
+                                @if (context.Period.HasValue && context.Period > 0)
+                                {
+                                    <div style="font-size:0.7rem; color:var(--mud-palette-text-secondary);">
+                                        (@context.Period يوم)
+                                    </div>
+                                }
+                            </MudTd>
+                            <MudTd>@FormatMoney(context.UnitPrice) ج</MudTd>
+                            <MudTd><strong>@FormatMoney(context.TotalAmount) ج</strong></MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                </MudPaper>
+
+                @if (inv.Charges.Any())
+                {
+                    <MudPaper Class="info-section" Elevation="0">
+                        <h3>الرسوم الإضافية</h3>
+                        <MudTable Items="inv.Charges" Dense="true" Hover="true">
+                            <HeaderContent>
+                                <MudTh>الوصف</MudTh>
+                                <MudTh>المبلغ</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>@context.ChargeDescription</MudTd>
+                                <MudTd><strong>@FormatMoney(context.ChargeAmount) ج</strong></MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    </MudPaper>
+                }
+
+                <MudPaper Class="info-section" Elevation="0">
+                    <h3>سجل المدفوعات (@_details.Payments.Count)</h3>
+                    @if (!_details.Payments.Any())
+                    {
+                        <MudText Typo="Typo.body2" Class="text-muted">لا توجد مدفوعات بعد</MudText>
+                    }
+                    else
+                    {
+                        <MudTable Items="_details.Payments" Dense="true" Hover="true">
+                            <HeaderContent>
+                                <MudTh>التاريخ</MudTh>
+                                <MudTh>المبلغ</MudTh>
+                                <MudTh>النسبة</MudTh>
+                                <MudTh>الطريقة</MudTh>
+                                <MudTh>الخزينة</MudTh>
+                                <MudTh>ملاحظات</MudTh>
+                                <MudTh>المستخدم</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>@context.PaymentDate.ToString("yyyy/MM/dd HH:mm")</MudTd>
+                                <MudTd><strong style="color:var(--mud-palette-success);">@FormatMoney(context.Amount) ج</strong></MudTd>
+                                <MudTd>
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary">
+                                        @context.Percentage%
+                                    </MudChip>
+                                </MudTd>
+                                <MudTd>@GetPaymentMethodText(context.PaymentMethod)</MudTd>
+                                <MudTd>@(context.CashBoxName ?? "-")</MudTd>
+                                <MudTd>@(context.Notes ?? "-")</MudTd>
+                                <MudTd>@(context.CreatedBy ?? "-")</MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+                </MudPaper>
+
+                @if (!string.IsNullOrEmpty(inv.Notes))
+                {
+                    <MudPaper Class="info-section" Elevation="0">
+                        <h3>ملاحظات</h3>
+                        <MudText>@inv.Notes</MudText>
+                    </MudPaper>
+                }
+            </div>
+
+            <div class="sidebar-col">
+                <MudPaper Class="summary-card" Elevation="0">
+                    <h3>الملخص المالي</h3>
+                    <div class="summary-row">
+                        <span>إجمالي الأصناف:</span>
+                        <strong>@FormatMoney(inv.TotalAmount) ج</strong>
+                    </div>
+                    @if ((inv.DiscountAmount ?? 0) > 0)
+                    {
+                        <div class="summary-row">
+                            <span>الخصم:</span>
+                            <strong style="color:var(--mud-palette-error);">
+                                -@FormatMoney(inv.DiscountAmount ?? 0) ج
+                            </strong>
+                        </div>
+                    }
+                    <div class="summary-row">
+                        <span>الصافي:</span>
+                        <strong>@FormatMoney(inv.NetTotalAmount ?? 0) ج</strong>
+                    </div>
+                    @if (inv.TotalChargesAmount > 0)
+                    {
+                        <div class="summary-row">
+                            <span>رسوم إضافية:</span>
+                            <strong>+@FormatMoney(inv.TotalChargesAmount) ج</strong>
+                        </div>
+                    }
+
+                    <div class="summary-divider"></div>
+
+                    <div class="summary-row total-row">
+                        <span>الإجمالي:</span>
+                        <strong>@FormatMoney(inv.GrandTotal) ج</strong>
+                    </div>
+
+                    <div class="summary-row paid-row">
+                        <span>المدفوع:</span>
+                        <strong style="color:var(--mud-palette-success);">
+                            @FormatMoney(inv.PaidAmount) ج
+                        </strong>
+                    </div>
+
+                    <div class="summary-row">
+                        <span>نسبة السداد:</span>
+                        <strong>@(inv.GrandTotal == 0 ? "0" : Math.Round((inv.PaidAmount / inv.GrandTotal) * 100, 1).ToString())%</strong>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="progress-bar">
+                        <div class="progress-fill"
+                             style="width: @(inv.GrandTotal == 0 ? "0" : Math.Min(100, (double)(inv.PaidAmount / inv.GrandTotal) * 100).ToString("F0"))%;"></div>
+                    </div>
+
+                    <div class="summary-divider"></div>
+
+                    <div class="summary-row remaining-row">
+                        <span>المتبقي:</span>
+                        <strong style="color: @((inv.GrandTotal - inv.PaidAmount) > 0 ? "var(--mud-palette-error)" : "var(--mud-palette-success)");">
+                            @FormatMoney(inv.GrandTotal - inv.PaidAmount) ج
+                        </strong>
+                    </div>
+                </MudPaper>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Payment Dialog -->
+<MudDialog @bind-Visible="_showPaymentDialog">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.Payment" Color="Color.Success" />
+            <MudText Typo="Typo.h6">إضافة دفعة</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        @{
+            var remaining = (_details?.Invoice.GrandTotal ?? 0) - (_details?.Invoice.PaidAmount ?? 0);
+            var grand = _details?.Invoice.GrandTotal ?? 0;
+        }
+        <MudText Class="mb-2">
+            المتبقي:
+            <strong style="color:var(--mud-palette-error);">
+                @FormatMoney(remaining) ج
+            </strong>
+        </MudText>
+
+        <!-- ⭐ أزرار الدفع السريع -->
+        @if (grand > 0)
+        {
+            <div class="quick-pay-row mb-3">
+                <span style="font-size:0.85rem; font-weight:600;">دفع سريع:</span>
+                @foreach (var pct in SystemConstants.QuickPayPercentages)
+                {
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                               OnClick="@(() => SetPaymentByPct(pct))">
+                        @pct%
+                    </MudButton>
+                }
+                <MudButton Variant="Variant.Filled" Size="Size.Small" Color="Color.Success"
+                           OnClick="@(() => _paymentAmount = remaining)">
+                    كامل
+                </MudButton>
+            </div>
+        }
+
+        <MudNumericField @bind-Value="_paymentAmount"
+                         Label="المبلغ"
+                         Variant="Variant.Outlined"
+                         Min="0.01m"
+                         Max="@remaining"
+                         Class="mb-2" />
+
+        @if (grand > 0 && _paymentAmount > 0)
+        {
+            var pct = Math.Round((_paymentAmount / grand) * 100, 1);
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                هذه الدفعة تساوي <strong>@pct%</strong> من إجمالي الفاتورة
+            </MudAlert>
+        }
+
+        <MudSelect T="string" @bind-Value="_paymentMethod"
+                   Label="طريقة الدفع"
+                   Variant="Variant.Outlined" Class="mb-3">
+            @foreach (var pm in PaymentMethods.All)
+            {
+                <MudSelectItem T="string" Value="@pm.Key">@pm.Value</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSelect T="int?" @bind-Value="_paymentCashBoxId"
+                   Label="الخزينة"
+                   Variant="Variant.Outlined" Class="mb-3">
+            @foreach (var cb in _cashBoxes)
+            {
+                <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName</MudSelectItem>
+            }
+        </MudSelect>
+        <MudTextField @bind-Value="_paymentNotes" Label="ملاحظات"
+                      Variant="Variant.Outlined" Lines="2" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showPaymentDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled"
+                   OnClick="ExecuteAddPayment" Disabled="@_isSavingPayment">
+            @if (_isSavingPayment)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            تسجيل
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+<!-- Edit Request Dialog -->
+<MudDialog @bind-Visible="_showEditRequestDialog">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.EditNote" Color="Color.Warning" />
+            <MudText Typo="Typo.h6">طلب تعديل فاتورة</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText>
+             فاتورة: <strong>@(_details?.Invoice?.ReferenceNumber)</strong>
+        </MudText>
+        <MudText Typo="Typo.body2" Class="mt-2 mb-3" Style="color:var(--mud-palette-text-secondary);">
+            سيتم إرسال طلب التعديل لمدير الحسابات والإدارة
+        </MudText>
+        <MudTextField @bind-Value="_editRequestReason"
+                      Label="سبب التعديل *"
+                      Variant="Variant.Outlined"
+                      Lines="3"
+                      Placeholder="اكتب سبب طلب التعديل..." />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showEditRequestDialog = false)" Variant="Variant.Outlined">
+            إلغاء
+        </MudButton>
+        <MudButton Color="Color.Warning" Variant="Variant.Filled"
+                   OnClick="ExecuteEditRequest" Disabled="@_isSendingEditRequest">
+            @if (_isSendingEditRequest)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            إرسال الطلب
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .invoice-details-page {
+        padding: 1rem;
+        max-width: 1800px;
+        margin: 0 auto;
+        direction: rtl;
+    }
+
+    .form-header {
+        background: linear-gradient(135deg, var(--gold), var(--gold-dark));
+        border-radius: 16px;
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 1rem;
+        color: white;
+    }
+    .header-left { display:flex; align-items:center; gap:1rem; }
+    .header-left h1 { margin:0; font-size:1.4rem; font-weight:800; display:flex; align-items:center; gap:0.5rem; }
+    .header-left p { margin:0; font-size:0.85rem; }
+    .header-right { display:flex; gap:0.5rem; flex-wrap:wrap; }
+
+    .print-btn { font-weight: 700 !important; }
+
+    .details-grid {
+        display: grid;
+        grid-template-columns: 1fr 350px;
+        gap: 1.5rem;
+    }
+
+    .main-col, .sidebar-col { display:flex; flex-direction:column; gap:1rem; }
+
+    .info-section {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px;
+        padding: 1.25rem;
+    }
+    .info-section h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1.05rem;
+        font-weight: 700;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid var(--gold-subtle);
+    }
+    .info-grid {
+        display:grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 0.75rem;
+    }
+    .info-item {
+        display:flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        padding: 0.5rem;
+        background: var(--mud-palette-background);
+        border-radius: 8px;
+    }
+    .info-item span {
+        font-size: 0.78rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .thumb {
+        width: 50px;
+        height: 50px;
+        border-radius: 6px;
+        object-fit: cover;
+        border: 1px solid var(--mud-palette-divider);
+    }
+    .thumb-placeholder {
+        width: 50px;
+        height: 50px;
+        background: var(--mud-palette-background);
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+    }
+
+    .summary-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px;
+        padding: 1.25rem;
+        position: sticky;
+        top: 1rem;
+    }
+    .summary-card h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1.1rem;
+        font-weight: 800;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid var(--gold);
+    }
+    .summary-row {
+        display:flex; justify-content:space-between;
+        padding: 0.4rem 0;
+        font-size: 0.9rem;
+    }
+    .summary-divider { height:1px; background: var(--mud-palette-divider); margin:0.5rem 0; }
+    .total-row {
+        font-size: 1.05rem;
+        background: var(--gold-subtle);
+        padding: 0.6rem 0.75rem;
+        border-radius: 8px;
+    }
+    .text-muted { color: var(--mud-palette-text-secondary); }
+
+    .progress-bar {
+        width: 100%;
+        height: 8px;
+        background: var(--mud-palette-background);
+        border-radius: 4px;
+        overflow: hidden;
+        margin: 0.5rem 0;
+    }
+    .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, var(--mud-palette-success), var(--gold));
+        transition: width 0.3s ease;
+    }
+
+    .quick-pay-row {
+        display: flex;
+        gap: 0.25rem;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 0.5rem;
+        background: rgba(16,185,129,0.08);
+        border-radius: 6px;
+    }
+
+    .loading-container {
+        display:flex; flex-direction:column; align-items:center; justify-content:center;
+        min-height: 60vh;
+    }
+
+    @@media (max-width: 1100px) {
+        .details-grid { grid-template-columns: 1fr; }
+        .summary-card { position: static; }
+    }
+</style>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private bool _isLoading = true;
+    private InvoiceDetailsDto? _details;
+
+    private bool _canEdit;
+    private string? _currentUserName;
+
+    private List<Models.CashBox> _cashBoxes = new();
+
+    private bool _showPaymentDialog;
+    private bool _isSavingPayment;
+    private decimal _paymentAmount;
+    private string _paymentMethod = PaymentMethods.Cash;
+    private int? _paymentCashBoxId;
+    private string? _paymentNotes;
+    private bool _showEditRequestDialog;
+    private bool _isSendingEditRequest;
+    private string? _editRequestReason;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            _currentUserName = user.Identity?.Name ?? "System";
+            _canEdit = user.HasClaim("Permission", "frm_SalesInvoiveNew:Edit") || user.IsInRole("Admin");
+
+            _cashBoxes = await InvoiceService.GetCashBoxesAsync();
+            await LoadInvoice();
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task LoadInvoice()
+    {
+        _details = await InvoiceService.GetInvoiceDetailsAsync(Id);
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/sales");
+
+    // ⭐ يفتح صفحة الطباعة المنفصلة
+    private void OpenPrintPage()
+    {
+        Navigation.NavigateTo($"/sales/invoices/{Id}/print");
+    }
+
+    private void OpenAddPaymentDialog()
+    {
+        if (_details == null) return;
+        var remaining = _details.Invoice.GrandTotal - _details.Invoice.PaidAmount;
+        _paymentAmount = remaining;
+        _paymentMethod = PaymentMethods.Cash;
+        _paymentCashBoxId = _cashBoxes.FirstOrDefault()?.CashBoxId;
+        _paymentNotes = null;
+        _showPaymentDialog = true;
+    }
+
+    private void SetPaymentByPct(int pct)
+    {
+        if (_details == null) return;
+        var grand = _details.Invoice.GrandTotal;
+        var remaining = grand - _details.Invoice.PaidAmount;
+        var amount = Math.Round(grand * (pct / 100m), 2);
+        if (amount > remaining) amount = remaining;
+        _paymentAmount = amount;
+    }
+
+    private async Task ExecuteAddPayment()
+    {
+        if (_details == null) return;
+        if (_paymentAmount <= 0) { Snackbar.Add("أدخل مبلغاً صحيحاً", Severity.Warning); return; }
+
+        _isSavingPayment = true;
+        var (ok, msg) = await InvoiceService.AddPaymentAsync(
+            Id, _paymentAmount, _paymentMethod, _paymentCashBoxId,
+            _paymentNotes, _currentUserName!);
+        _isSavingPayment = false;
+        _showPaymentDialog = false;
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadInvoice();
+    }
+        private void OpenEditRequestDialog()
+    {
+        _editRequestReason = "";
+        _showEditRequestDialog = true;
+    }
+
+    private async Task ExecuteEditRequest()
+    {
+        if (_details == null) return;
+        if (string.IsNullOrWhiteSpace(_editRequestReason))
+        {
+            Snackbar.Add("يرجى إدخال سبب التعديل", Severity.Warning);
+            return;
+        }
+
+        _isSendingEditRequest = true;
+
+        try
+        {
+                        await AuditService.LogAsync("Transactions", "EditRequest",
+                Id.ToString(),
+                (string?)null,
+                (string?)$"فاتورة: {_details.Invoice.ReferenceNumber} - السبب: {_editRequestReason} - بواسطة: {_currentUserName}",
+                _currentUserName!);
+
+            var title = "📝 طلب تعديل فاتورة";
+            var message = $"طلب تعديل الفاتورة {_details.Invoice.ReferenceNumber} " +
+                          $"بواسطة {_currentUserName} - السبب: {_editRequestReason}";
+
+            await NotifyService.NotifyRoleAsync(title, message, SystemRoles.AccountManager,
+                _currentUserName!, "sales/invoices", "Transactions", Id);
+            await NotifyService.NotifyRoleAsync(title, message, SystemRoles.Admin,
+                _currentUserName!, "sales/invoices", "Transactions", Id);
+
+            _showEditRequestDialog = false;
+            Snackbar.Add("تم إرسال طلب التعديل بنجاح", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSendingEditRequest = false;
+        }
+    }
+
+    private string FormatMoney(decimal v) => $"{v:N2}";
+
+    private string GetStatusText(string? status) => status switch
+    {
+        InvoiceStatuses.Open => "مفتوحة",
+        InvoiceStatuses.PartiallyPaid => "مدفوعة جزئياً",
+        InvoiceStatuses.Paid => "مدفوعة",
+        InvoiceStatuses.Cancelled => "ملغية",
+        _ => status ?? "-"
+    };
+
+    private Color GetStatusColor(string? status) => status switch
+    {
+        InvoiceStatuses.Paid => Color.Success,
+        InvoiceStatuses.PartiallyPaid => Color.Warning,
+        InvoiceStatuses.Cancelled => Color.Error,
+        _ => Color.Info
+    };
+
+    private string GetPaymentMethodText(string? method) =>
+        PaymentMethods.All.TryGetValue(method ?? "", out var ar) ? ar : (method ?? "-");
+
+    private string GetImageUrl(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return "";
+        if (path.StartsWith("http") || path.StartsWith("/")) return path;
+        return "/" + path;
+    }
+}

@@ -1,0 +1,394 @@
+@page "/customers/{PartyId:int}/advances"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+
+@inject IInvoiceService InvoiceService
+@inject PartyService PartyService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else
+{
+    <div class="advances-page" dir="rtl">
+
+        <div class="page-header">
+            <div class="header-content">
+                <div class="header-info">
+                    <h1>
+                        <MudIcon Icon="@Icons.Material.Filled.Savings" Class="header-icon" />
+                        الدفعات المقدمة
+                    </h1>
+                    <p>العميل: <strong>@_partyName</strong></p>
+                </div>
+                <div class="header-actions">
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Inherit"
+                               StartIcon="@Icons.Material.Filled.ArrowForward"
+                               OnClick="GoBack">
+                        رجوع
+                    </MudButton>
+                    @if (_canAdd)
+                    {
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Add"
+                                   OnClick="OpenAddDialog"
+                                   Class="add-btn">
+                            تسجيل دفعة مقدمة
+                        </MudButton>
+                    }
+                </div>
+            </div>
+
+            <div class="balance-row">
+                <div class="balance-card">
+                    <div class="balance-icon available">
+                        <MudIcon Icon="@Icons.Material.Filled.AccountBalance" />
+                    </div>
+                    <div class="balance-info">
+                        <span class="balance-label">رصيد متاح للخصم</span>
+                        <span class="balance-value">@FormatMoney(_availableBalance) ج</span>
+                    </div>
+                </div>
+                <div class="balance-card">
+                    <div class="balance-icon applied">
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" />
+                    </div>
+                    <div class="balance-info">
+                        <span class="balance-label">إجمالي مطبّق على فواتير</span>
+                        <span class="balance-value">@FormatMoney(_appliedTotal) ج</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <MudPaper Class="table-container" Elevation="0">
+            <div class="filter-row">
+                <MudSwitch T="bool" @bind-Value="_showAll"
+                           Label="عرض الكل (يشمل المطبّقة)"
+                           Color="Color.Primary"
+                           CheckedChanged="OnFilterChanged" />
+            </div>
+
+            @if (!_advances.Any())
+            {
+                <div class="empty-state">
+                    <MudIcon Icon="@Icons.Material.Filled.Savings" Size="Size.Large" />
+                    <h3>لا توجد دفعات مقدمة</h3>
+                    <p>لم يتم تسجيل أي دفعة مقدمة لهذا العميل بعد</p>
+                </div>
+            }
+            else
+            {
+                <MudTable Items="@_advances" Hover="true" Striped="true" Dense="false"
+                          Class="advances-table">
+                    <HeaderContent>
+                        <MudTh>الوصف</MudTh>
+                        <MudTh>المبلغ</MudTh>
+                        <MudTh>التاريخ</MudTh>
+                        <MudTh>الحالة</MudTh>
+                        <MudTh>الفاتورة المطبّقة</MudTh>
+                        <MudTh>تم الإنشاء بواسطة</MudTh>
+                        <MudTh>إجراءات</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            <strong>@context.ChargeDescription</strong>
+                            @if (!string.IsNullOrEmpty(context.Notes))
+                            {
+                                <div style="font-size:0.78rem; color:var(--mud-palette-text-secondary);">
+                                    @context.Notes
+                                </div>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <strong style="color:var(--mud-palette-success);">
+                                @FormatMoney(context.ChargeAmount) ج
+                            </strong>
+                        </MudTd>
+                        <MudTd>@context.CreatedAt?.ToString("yyyy/MM/dd")</MudTd>
+                        <MudTd>
+                            @if (context.IsApplied)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info">مطبّقة</MudChip>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success">متاحة</MudChip>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            @if (context.IsApplied && context.AppliedToTransactionId.HasValue)
+                            {
+                                <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                                           OnClick="@(() => Navigation.NavigateTo($"/sales/invoices/{context.AppliedToTransactionId}"))">
+                                    @(context.AppliedToReferenceNumber ?? $"#{context.AppliedToTransactionId}")
+                                </MudButton>
+                            }
+                            else
+                            {
+                                <span>-</span>
+                            }
+                        </MudTd>
+                        <MudTd>@context.CreatedBy</MudTd>
+                        <MudTd>
+                            @if (_canDelete && !context.IsApplied)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                               Color="Color.Error"
+                                               Size="Size.Small"
+                                               OnClick="() => ConfirmDelete(context)"
+                                               Title="حذف" />
+                            }
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudPaper>
+    </div>
+}
+
+<!-- Add Dialog -->
+<MudDialog @bind-Visible="_showAddDialog">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.Savings" Color="Color.Success" />
+            <MudText Typo="Typo.h6">تسجيل دفعة مقدمة</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudSelect T="string" @bind-Value="_newDescription"
+                   Label="نوع الدفعة *" Variant="Variant.Outlined" Class="mb-3">
+            <MudSelectItem T="string" Value="@AdvanceChargeTypes.Inspection">رسوم معاينة</MudSelectItem>
+            <MudSelectItem T="string" Value="@AdvanceChargeTypes.Deposit">عربون</MudSelectItem>
+            <MudSelectItem T="string" Value="@AdvanceChargeTypes.Other">دفعة مقدمة</MudSelectItem>
+        </MudSelect>
+
+        <MudNumericField @bind-Value="_newAmount" Label="المبلغ *"
+                         Variant="Variant.Outlined" Min="0.01m" Class="mb-3" />
+
+        <MudTextField @bind-Value="_newNotes" Label="ملاحظات"
+                      Variant="Variant.Outlined" Lines="2" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showAddDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled"
+                   OnClick="ExecuteAdd" Disabled="@_isSaving">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            تسجيل
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- Delete Dialog -->
+<MudDialog @bind-Visible="_showDeleteDialog">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" />
+            <MudText Typo="Typo.h6">تأكيد الحذف</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText>هل تريد حذف هذه الدفعة المقدمة؟</MudText>
+        @if (_toDelete != null)
+        {
+            <MudText Typo="Typo.body2" Class="mt-2">
+                <strong>@_toDelete.ChargeDescription</strong> - @FormatMoney(_toDelete.ChargeAmount) ج
+            </MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showDeleteDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled"
+                   OnClick="ExecuteDelete" Disabled="@_isDeleting">
+            حذف
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .advances-page {
+        padding: 1rem;
+        max-width: 1400px;
+        margin: 0 auto;
+        direction: rtl;
+    }
+    .page-header {
+        background: linear-gradient(135deg, var(--gold), var(--gold-dark));
+        border-radius: 20px;
+        padding: 2rem;
+        margin-bottom: 1.5rem;
+        color: white;
+    }
+    .header-content {
+        display:flex; align-items:center; justify-content:space-between;
+        margin-bottom: 1.5rem;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+    .header-info h1 {
+        margin:0; font-size: 1.8rem; font-weight: 800;
+        display:flex; align-items:center; gap:0.5rem;
+    }
+    .header-info p { margin:0.25rem 0 0 0; }
+    .header-actions { display:flex; gap:0.5rem; }
+    .add-btn {
+        background: rgba(255,255,255,0.95) !important;
+        color: var(--navy-dark) !important;
+        font-weight: 700 !important;
+    }
+
+    .balance-row { display:flex; gap:1rem; flex-wrap:wrap; }
+    .balance-card {
+        background: rgba(255,255,255,0.15);
+        border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 14px;
+        padding: 1rem 1.5rem;
+        display:flex; align-items:center; gap:1rem;
+        flex: 1; min-width: 220px;
+    }
+    .balance-icon {
+        width: 48px; height:48px;
+        border-radius:12px;
+        display:flex; align-items:center; justify-content:center;
+        color:white;
+    }
+    .balance-icon.available { background: rgba(16,185,129,0.4); }
+    .balance-icon.applied { background: rgba(59,130,246,0.4); }
+    .balance-info { display:flex; flex-direction:column; }
+    .balance-label { font-size: 0.85rem; color: rgba(255,255,255,0.85); }
+    .balance-value { font-size: 1.5rem; font-weight: 800; }
+
+    .table-container {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        padding: 1rem;
+    }
+    .filter-row { padding: 0.5rem; }
+
+    .empty-state {
+        display:flex; flex-direction:column; align-items:center;
+        padding: 3rem;
+        color: var(--mud-palette-text-secondary);
+    }
+    .empty-state .mud-icon-root { font-size: 5rem; opacity: 0.3; }
+
+    .loading-container {
+        display:flex; align-items:center; justify-content:center;
+        min-height: 60vh;
+    }
+</style>
+
+@code {
+    [Parameter] public int PartyId { get; set; }
+
+    private bool _isLoading = true;
+    private string? _partyName;
+    private List<CustomerAdvanceDto> _advances = new();
+    private decimal _availableBalance;
+    private decimal _appliedTotal;
+    private bool _showAll;
+
+    // dialog
+    private bool _showAddDialog;
+    private bool _isSaving;
+    private string _newDescription = AdvanceChargeTypes.Inspection;
+    private decimal _newAmount;
+    private string? _newNotes;
+
+    private bool _showDeleteDialog;
+    private bool _isDeleting;
+    private CustomerAdvanceDto? _toDelete;
+
+    private string? _currentUserName;
+    private bool _canAdd, _canDelete;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            _currentUserName = user.Identity?.Name ?? "System";
+            _canAdd = user.HasClaim("Permission", "frmInvoices:Add") || user.IsInRole("Admin");
+            _canDelete = user.HasClaim("Permission", "frmInvoices:Delete") || user.IsInRole("Admin");
+
+            // اسم العميل
+            var party = await PartyService.GetPartyForEditAsync(PartyId);
+            _partyName = party?.PartyName ?? $"#{PartyId}";
+
+            await LoadAdvances();
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task LoadAdvances()
+    {
+        _advances = await InvoiceService.GetCustomerAdvancesAsync(PartyId, unappliedOnly: !_showAll);
+        _availableBalance = await InvoiceService.GetCustomerAdvanceBalanceAsync(PartyId);
+        var allAdvances = await InvoiceService.GetCustomerAdvancesAsync(PartyId, unappliedOnly: false);
+        _appliedTotal = allAdvances.Where(a => a.IsApplied).Sum(a => a.ChargeAmount);
+    }
+
+    private async Task OnFilterChanged(bool _) => await LoadAdvances();
+
+    private void OpenAddDialog()
+    {
+        _newDescription = AdvanceChargeTypes.Inspection;
+        _newAmount = 0;
+        _newNotes = null;
+        _showAddDialog = true;
+    }
+
+    private async Task ExecuteAdd()
+    {
+        if (_newAmount <= 0) { Snackbar.Add("أدخل مبلغاً صحيحاً", Severity.Warning); return; }
+
+        _isSaving = true;
+        var (ok, msg, _) = await InvoiceService.AddCustomerAdvanceAsync(
+            PartyId, _newAmount, _newDescription, _newNotes, _currentUserName!);
+        _isSaving = false;
+        _showAddDialog = false;
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadAdvances();
+    }
+
+    private void ConfirmDelete(CustomerAdvanceDto adv)
+    {
+        _toDelete = adv;
+        _showDeleteDialog = true;
+    }
+
+    private async Task ExecuteDelete()
+    {
+        if (_toDelete == null) return;
+        _isDeleting = true;
+        var (ok, msg) = await InvoiceService.DeleteCustomerAdvanceAsync(
+            _toDelete.ChargeId, _currentUserName!);
+        _isDeleting = false;
+        _showDeleteDialog = false;
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadAdvances();
+    }
+
+    private void GoBack() => Navigation.NavigateTo($"/customers/form/{PartyId}");
+
+    private string FormatMoney(decimal v) => $"{v:N2}";
+}

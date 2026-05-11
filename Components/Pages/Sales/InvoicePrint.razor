@@ -1,0 +1,705 @@
+@page "/sales/invoices/{Id:int}/print"
+@layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+
+@inject IInvoiceService InvoiceService
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+@if (_isLoading)
+{
+    <div style="display:flex; justify-content:center; padding:3rem;">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else if (_data == null)
+{
+    <div style="padding:2rem; text-align:center;">
+        <h2>الفاتورة غير موجودة</h2>
+    </div>
+}
+else
+{
+    var inv = _data.Invoice;
+
+    <div class="print-actions no-print">
+        <button class="btn-action btn-print" @onclick="PrintNow">
+            🖨️ طباعة
+        </button>
+        <button class="btn-action btn-back" @onclick="GoBack">
+            ← رجوع
+        </button>
+    </div>
+        
+
+     <div class="print-page" dir="rtl">
+        <img src="/images/company-bg.png" class="bg-image" />
+        <div class="content-layer">
+
+        <!-- Company Header -->
+        <div class="company-header">
+            <div class="company-info">
+                <h1>@(_data.CompanyName ?? "COCOBOLO")</h1>
+                @if (!string.IsNullOrEmpty(_data.CompanyAddress))
+                {
+                    <div class="info-line">📍 @_data.CompanyAddress</div>
+                }
+                @if (!string.IsNullOrEmpty(_data.CompanyPhone))
+                {
+                    <div class="info-line">📞 @_data.CompanyPhone</div>
+                }
+                @if (!string.IsNullOrEmpty(_data.CompanyTaxNumber))
+                {
+                    <div class="info-line">رقم تسجيل ضريبي: @_data.CompanyTaxNumber</div>
+                }
+            </div>
+                        <div class="invoice-title">
+                <div class="title-label">
+                    @(inv.TransactionType == TransactionTypes.Purchase ? "فاتورة مشتريات" : "فاتورة مبيعات")
+                </div>
+                <div class="title-number">@inv.ReferenceNumber</div>
+                <div class="title-date">@inv.TransactionDate.ToString("yyyy/MM/dd")</div>
+            </div>
+        </div>
+
+        <!-- Customer & Employee Info -->
+        <div class="party-grid">
+                        <div class="party-box">
+                @if (inv.TransactionType == TransactionTypes.Purchase)
+                {
+                    <h3>المورد / العميل</h3>
+                    <div class="party-line"><strong>المورد:</strong> المصنع</div>
+                    <div class="party-line" style="margin-top:0.5rem; padding-top:0.5rem; border-top:1px dashed #d4af3744;">
+                        <strong>العميل (من فاتورة البيع):</strong> @(inv.EmpName ?? "-")
+                    </div>
+                }
+                else
+                {
+                    <h3>العميل</h3>
+                    <div class="party-line"><strong>الاسم:</strong> @inv.PartyName</div>
+                    @if (!string.IsNullOrEmpty(_data.CustomerPhone))
+                    {
+                        <div class="party-line"><strong>الهاتف:</strong> @_data.CustomerPhone</div>
+                    }
+                    @if (!string.IsNullOrEmpty(_data.CustomerEmail))
+                    {
+                        <div class="party-line"><strong>البريد:</strong> @_data.CustomerEmail</div>
+                    }
+                    @if (!string.IsNullOrEmpty(_data.CustomerAddress))
+                    {
+                        <div class="party-line"><strong>العنوان:</strong> @_data.CustomerAddress</div>
+                    }
+                    @if (!string.IsNullOrEmpty(_data.CustomerCity))
+                    {
+                        <div class="party-line"><strong>المدينة:</strong> @_data.CustomerCity</div>
+                    }
+                }
+            </div>
+
+            <div class="party-box">
+                <h3>تفاصيل الفاتورة</h3>
+                <div class="party-line"><strong>الرقم:</strong> @inv.ReferenceNumber</div>
+                <div class="party-line"><strong>التاريخ:</strong> @inv.TransactionDate.ToString("yyyy/MM/dd")</div>
+                @if (inv.DueDate.HasValue)
+                {
+                    <div class="party-line"><strong>الاستحقاق:</strong> @inv.DueDate.Value.ToString("yyyy/MM/dd")</div>
+                }
+                @if (!string.IsNullOrEmpty(inv.EmpName))
+                {
+                    <div class="party-line"><strong>الموظف:</strong> @inv.EmpName</div>
+                }
+                <div class="party-line"><strong>الحالة:</strong>
+                    <span class="status-badge status-@(inv.InvoiceStatus?.ToLower())">
+                        @GetStatusText(inv.InvoiceStatus)
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Items Table -->
+        <table class="items-table">
+            <thead>
+                <tr>
+                    <th style="width:60px;">#</th>
+                    <th style="width:90px;">الصورة</th>
+                    <th>الصنف</th>
+                    <th style="width:80px;">الباقة</th>
+                    <th style="width:80px;">الكمية</th>
+                    <th style="width:110px;">السعر</th>
+                    <th style="width:130px;">الإجمالي</th>
+                </tr>
+            </thead>
+            <tbody>
+                @{ int rowNum = 1; }
+                @foreach (var item in inv.Items)
+                {
+                    <tr>
+                        <td class="text-center">@(rowNum++)</td>
+                        <td class="text-center">
+                            @if (!string.IsNullOrEmpty(item.ProductImagePath))
+                            {
+                                <img src="@GetImageUrl(item.ProductImagePath)"
+                                     alt="@item.ProductName"
+                                     class="product-img" />
+                            }
+                            else
+                            {
+                                <div class="img-placeholder">📦</div>
+                            }
+                        </td>
+                        <td>
+                            <strong>@item.ProductName</strong>
+                            @if (!string.IsNullOrEmpty(item.ProductDescription))
+                            {
+                                <div class="item-desc">@item.ProductDescription</div>
+                            }
+                        </td>
+                        <td class="text-center">
+                            <span class="tier-badge tier-@(item.PricingTier.ToLower())">
+                                @(PricingTiers.All.GetValueOrDefault(item.PricingTier, item.PricingTier))
+                            </span>
+                        </td>
+                        <td class="text-center">@item.Quantity</td>
+                        <td class="text-end">@FormatMoney(item.UnitPrice)</td>
+                        <td class="text-end"><strong>@FormatMoney(item.TotalAmount)</strong></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <!-- Charges -->
+        @if (inv.Charges.Any())
+        {
+            <div class="section-title">رسوم إضافية</div>
+            <table class="charges-table">
+                <thead>
+                    <tr>
+                        <th>الوصف</th>
+                        <th style="width:130px;">المبلغ</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var ch in inv.Charges)
+                    {
+                        <tr>
+                            <td>@ch.ChargeDescription</td>
+                            <td class="text-end">@FormatMoney(ch.ChargeAmount)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <!-- Summary -->
+        <div class="summary-section">
+            <div class="summary-left">
+                @if (!string.IsNullOrEmpty(inv.Notes))
+                {
+                    <div class="notes-box">
+                        <strong>ملاحظات:</strong>
+                        <p>@inv.Notes</p>
+                    </div>
+                }
+            </div>
+            <div class="summary-right">
+                <table class="summary-table">
+                    <tr>
+                        <td>إجمالي الأصناف:</td>
+                        <td>@FormatMoney(inv.TotalAmount) ج</td>
+                    </tr>
+                    @if ((inv.DiscountAmount ?? 0) > 0)
+                    {
+                        <tr>
+                            <td>خصم (@(inv.DiscountPercentage ?? 0)%):</td>
+                            <td class="text-error">-@FormatMoney(inv.DiscountAmount ?? 0) ج</td>
+                        </tr>
+                    }
+                    <tr>
+                        <td>الصافي:</td>
+                        <td>@FormatMoney(inv.NetTotalAmount ?? 0) ج</td>
+                    </tr>
+                    @if (inv.TotalChargesAmount > 0)
+                    {
+                        <tr>
+                            <td>رسوم إضافية:</td>
+                            <td>+@FormatMoney(inv.TotalChargesAmount) ج</td>
+                        </tr>
+                    }
+                    <tr class="total-row">
+                        <td><strong>الإجمالي النهائي:</strong></td>
+                        <td><strong>@FormatMoney(inv.GrandTotal) ج</strong></td>
+                    </tr>
+                    <tr class="paid-row">
+                        <td>المدفوع:</td>
+                        <td>
+                            @FormatMoney(inv.PaidAmount) ج
+                            (@(inv.GrandTotal == 0 ? "0" : Math.Round((inv.PaidAmount / inv.GrandTotal) * 100, 1).ToString())%)
+                        </td>
+                    </tr>
+                    <tr class="remaining-row">
+                        <td><strong>المتبقي:</strong></td>
+                        <td><strong>@FormatMoney(inv.GrandTotal - inv.PaidAmount) ج</strong></td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- Payments History -->
+        @if (_data.Payments.Any())
+        {
+            <div class="section-title">سجل المدفوعات</div>
+            <table class="payments-table">
+                <thead>
+                    <tr>
+                        <th>التاريخ</th>
+                        <th>المبلغ</th>
+                        <th>النسبة</th>
+                        <th>الطريقة</th>
+                        <th>ملاحظات</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in _data.Payments)
+                    {
+                        <tr>
+                            <td>@p.PaymentDate.ToString("yyyy/MM/dd")</td>
+                            <td>@FormatMoney(p.Amount) ج</td>
+                            <td>@p.Percentage%</td>
+                            <td>@GetPaymentMethodText(p.PaymentMethod)</td>
+                            <td>@(p.Notes ?? "-")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <!-- Footer / Signatures -->
+        <div class="signatures">
+            <div class="signature-box">
+                <div class="signature-line"></div>
+                <div class="signature-label">توقيع الموظف</div>
+                <div class="signature-name">@(inv.EmpName ?? "")</div>
+            </div>
+            <div class="signature-box">
+                <div class="signature-line"></div>
+                <div class="signature-label">توقيع العميل</div>
+                <div class="signature-name">@inv.PartyName</div>
+            </div>
+            <div class="signature-box">
+                <div class="signature-line"></div>
+                <div class="signature-label">المحاسب</div>
+            </div>
+        </div>
+
+                <div class="footer-note">
+            تم إنشاء هذه الفاتورة في @inv.CreatedAt.ToString("yyyy/MM/dd HH:mm") بواسطة @inv.CreatedBy
+        </div>
+        </div>
+    </div>
+}
+
+<style>
+    /* إخفاء الـ Layout الأصلي بقدر الإمكان */
+    body {
+        background: white !important;
+        margin: 0;
+        padding: 0;
+    }
+
+    .print-actions {
+        position: fixed;
+        top: 1rem;
+        left: 1rem;
+        display: flex;
+        gap: 0.5rem;
+        z-index: 9999;
+    }
+
+    .btn-action {
+        padding: 0.6rem 1.5rem;
+        border-radius: 8px;
+        border: none;
+        cursor: pointer;
+        font-weight: 700;
+        font-size: 0.9rem;
+        font-family: inherit;
+    }
+    .btn-print {
+        background: #d4af37;
+        color: white;
+    }
+    .btn-back {
+        background: #e0e0e0;
+        color: #333;
+    }
+
+    .print-page {
+        max-width: 900px;
+        margin: 1rem auto;
+        padding: 2rem;
+        background: white;
+        color: #333;
+        font-family: 'Segoe UI', 'Tajawal', Arial, sans-serif;
+        font-size: 14px;
+        line-height: 1.5;
+        box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .company-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        padding-bottom: 1.5rem;
+        border-bottom: 3px solid #d4af37;
+        margin-bottom: 1.5rem;
+    }
+
+    .company-info h1 {
+        margin: 0;
+        font-size: 1.8rem;
+        color: #1a2842;
+        font-weight: 800;
+    }
+
+    .info-line {
+        font-size: 0.85rem;
+        color: #555;
+        margin-top: 0.25rem;
+    }
+
+    .invoice-title {
+        text-align: left;
+    }
+
+    .title-label {
+        font-size: 1.4rem;
+        font-weight: 800;
+        color: #d4af37;
+    }
+
+    .title-number {
+        font-size: 1.1rem;
+        font-weight: 700;
+        margin-top: 0.25rem;
+        background: #faf6e8;
+        padding: 0.3rem 0.75rem;
+        border-radius: 6px;
+        display: inline-block;
+    }
+
+    .title-date {
+        font-size: 0.85rem;
+        color: #666;
+        margin-top: 0.25rem;
+    }
+
+    .party-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .party-box {
+        background: #faf6e8;
+        border: 1px solid #d4af3744;
+        border-radius: 8px;
+        padding: 1rem;
+    }
+
+    .party-box h3 {
+        margin: 0 0 0.5rem 0;
+        font-size: 1rem;
+        color: #1a2842;
+        padding-bottom: 0.4rem;
+        border-bottom: 1px solid #d4af3744;
+    }
+
+    .party-line {
+        font-size: 0.85rem;
+        margin: 0.25rem 0;
+    }
+
+    .status-badge {
+        display: inline-block;
+        padding: 0.2rem 0.6rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+    .status-paid { background: #d4edda; color: #155724; }
+    .status-partiallypaid { background: #fff3cd; color: #856404; }
+    .status-open { background: #d1ecf1; color: #0c5460; }
+    .status-cancelled { background: #f8d7da; color: #721c24; }
+
+    .items-table, .charges-table, .payments-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 1rem;
+        font-size: 0.85rem;
+    }
+
+    .items-table th, .items-table td,
+    .charges-table th, .charges-table td,
+    .payments-table th, .payments-table td {
+        border: 1px solid #ddd;
+        padding: 0.5rem;
+        text-align: right;
+    }
+
+    .items-table thead, .charges-table thead, .payments-table thead {
+        background: #1a2842;
+        color: white;
+    }
+
+    .items-table thead th, .charges-table thead th, .payments-table thead th {
+        font-weight: 700;
+        font-size: 0.85rem;
+    }
+
+    .items-table tbody tr:nth-child(even) { background: #f9f9f9; }
+
+    .product-img {
+        width: 70px;
+        height: 70px;
+        object-fit: cover;
+        border-radius: 4px;
+        border: 1px solid #ddd;
+    }
+
+    .img-placeholder {
+        width: 70px;
+        height: 70px;
+        background: #f0f0f0;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 2rem;
+        margin: 0 auto;
+    }
+
+    .item-desc {
+        font-size: 0.75rem;
+        color: #666;
+        margin-top: 0.25rem;
+    }
+
+    .tier-badge {
+        display: inline-block;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 700;
+    }
+    .tier-premium { background: #e3f2fd; color: #1565c0; }
+    .tier-elite { background: #fff8e1; color: #f57f17; }
+
+    .text-center { text-align: center; }
+    .text-end { text-align: left; }
+    .text-error { color: #d32f2f; }
+
+    .section-title {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #1a2842;
+        margin: 1.5rem 0 0.5rem 0;
+        padding-bottom: 0.4rem;
+        border-bottom: 2px solid #d4af37;
+    }
+
+    .summary-section {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+        margin-top: 1rem;
+    }
+
+    .notes-box {
+        background: #f9f9f9;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 0.75rem;
+        font-size: 0.85rem;
+    }
+
+    .notes-box p { margin: 0.25rem 0 0 0; }
+
+    .summary-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+    }
+
+    .summary-table td {
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid #eee;
+    }
+    .summary-table td:last-child {
+        text-align: left;
+        font-weight: 600;
+    }
+
+    .summary-table .total-row td {
+        background: #faf6e8;
+        font-size: 1.05rem;
+        border-top: 2px solid #d4af37;
+        border-bottom: 2px solid #d4af37;
+    }
+
+    .summary-table .paid-row td { color: #2e7d32; }
+    .summary-table .remaining-row td {
+        background: #fff5f5;
+        color: #c62828;
+        font-size: 1rem;
+    }
+
+    .signatures {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 2rem;
+        margin-top: 3rem;
+        padding-top: 1.5rem;
+    }
+
+    .signature-box {
+        text-align: center;
+    }
+
+    .signature-line {
+        border-top: 1px solid #333;
+        margin-bottom: 0.5rem;
+        margin-top: 2.5rem;
+    }
+
+    .signature-label {
+        font-weight: 700;
+        font-size: 0.9rem;
+    }
+
+    .signature-name {
+        font-size: 0.78rem;
+        color: #666;
+        margin-top: 0.25rem;
+    }
+
+    .footer-note {
+        text-align: center;
+        font-size: 0.75rem;
+        color: #999;
+        margin-top: 2rem;
+        padding-top: 1rem;
+        border-top: 1px dashed #ddd;
+    }
+        .bg-image {
+        display: none;
+    }
+
+    .content-layer {
+        position: relative;
+        z-index: 1;
+    }
+
+    /* ⭐⭐⭐ Print Styles ⭐⭐⭐ */
+        @@media print {
+        body { background: white !important; margin: 0; }
+        .no-print { display: none !important; }
+
+        .print-page {
+            box-shadow: none;
+            margin: 0;
+            padding: 0;
+            max-width: 100%;
+            position: relative;
+            min-height: 100vh;
+        }
+
+        .bg-image {
+            display: block !important;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            object-fit: cover;
+        }
+
+        .content-layer {
+            position: relative;
+            z-index: 1;
+            padding: 1cm;
+        }
+
+        .product-img, .img-placeholder { width: 50px; height: 50px; }
+        @@page {
+            size: A4;
+            margin: 0;
+        }
+    }
+</style>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private bool _isLoading = true;
+    private InvoicePrintDto? _data;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _data = await InvoiceService.GetInvoiceForPrintAsync(Id);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _data != null)
+        {
+            // طباعة تلقائية بعد تحميل الصفحة (اختياري - علقه لو مش عايز)
+            await Task.Delay(500);
+            // await JS.InvokeVoidAsync("window.print");
+        }
+    }
+
+    private async Task PrintNow()
+    {
+        await JS.InvokeVoidAsync("window.print");
+    }
+
+    private void GoBack()
+    {
+        Navigation.NavigateTo($"/sales/invoices/{Id}");
+    }
+
+    private string FormatMoney(decimal v) => $"{v:N2}";
+
+    private string GetStatusText(string? status) => status switch
+    {
+        InvoiceStatuses.Open => "مفتوحة",
+        InvoiceStatuses.PartiallyPaid => "مدفوعة جزئياً",
+        InvoiceStatuses.Paid => "مدفوعة",
+        InvoiceStatuses.Cancelled => "ملغية",
+        _ => status ?? "-"
+    };
+
+    private string GetPaymentMethodText(string? method) =>
+        PaymentMethods.All.TryGetValue(method ?? "", out var ar) ? ar : (method ?? "-");
+
+    private string GetImageUrl(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return "";
+        // لو الـ path كامل
+        if (path.StartsWith("http") || path.StartsWith("/")) return path;
+        return "/" + path;
+    }
+}

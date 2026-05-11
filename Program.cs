@@ -70,6 +70,7 @@ builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.AddScoped<NotificationService>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<PartyService>();
+builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 
 var app = builder.Build();
 
