@@ -949,6 +949,7 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.CreatedBy).HasMaxLength(50);
             entity.Property(e => e.PaymentDate).HasColumnType("datetime");
             entity.Property(e => e.PaymentMethod).HasMaxLength(50);
+            entity.Property(e => e.PaymentBracket).HasMaxLength(20);
             entity.Property(e => e.TransactionId).HasColumnName("TransactionID");
 
             entity.HasOne(d => d.Transaction).WithMany(p => p.Payments)

@@ -19,6 +19,12 @@ public partial class Payment
 
     public string? Notes { get; set; }
 
+    /// <summary>
+    /// نسبة الدفعة: "70%" أو "20%" أو "10%" أو "Full" أو "Partial"
+    /// بتحدد مرحلة الدفع اللي الدفعة دي تابعة ليها
+    /// </summary>
+    public string? PaymentBracket { get; set; }
+
     public string? CreatedBy { get; set; }
 
     public DateTime? CreatedAt { get; set; }

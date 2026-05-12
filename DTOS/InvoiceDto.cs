@@ -57,7 +57,7 @@ public class InvoiceFormDto
 
     public decimal PaidAmount { get; set; }
     public decimal AppliedAdvanceAmount { get; set; }
-    public string? PaymentMethod { get; set; } = "Cash";
+    public string? PaymentMethod { get; set; } = "InstaPay";
     public int? CashBoxId { get; set; }
 
     public string? Notes { get; set; }
@@ -270,16 +270,18 @@ public static class PaymentMethods
 {
     public const string Cash = "Cash";
     public const string Bank = "Bank";
-    public const string Credit = "Credit";
+    public const string Visa = "Visa";
     public const string InstaPay = "InstaPay";
+    public const string Credit = "Credit";
     public const string Other = "Other";
 
     public static readonly Dictionary<string, string> All = new()
     {
-        { Cash, "نقدي" },
-        { Bank, "تحويل بنكي" },
-        { Credit, "آجل" },
+        { Cash, "نقدى" },
+        { Bank, "تحويل بنكى" },
+        { Visa, "فيزا" },
         { InstaPay, "InstaPay" },
+        { Credit, "آجل" },
         { Other, "أخرى" }
     };
 }

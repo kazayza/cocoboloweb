@@ -1,0 +1,409 @@
+@page "/payments/{Id:int}/receipt"
+@layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+
+@inject IPaymentService PaymentService
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+@if (_isLoading)
+{
+    <div style="padding:3rem; text-align:center;">جاري التحميل...</div>
+}
+else if (_data == null)
+{
+    <div style="padding:2rem; text-align:center;"><h2>السند غير موجود</h2></div>
+}
+else
+{
+    var p = _data.Payment;
+    var isReceive = p.TransactionType == TransactionTypes.Sale;
+
+    <div class="print-actions no-print">
+        <button class="btn-action btn-print" @onclick="PrintNow">🖨️ طباعة</button>
+        <button class="btn-action btn-back" @onclick="GoBack">← رجوع</button>
+    </div>
+
+    <div class="receipt-page" dir="rtl">
+
+        <!-- Watermark -->
+        <div class="watermark @(isReceive ? "wm-receive" : "wm-pay")">
+            @(isReceive ? "RECEIVED" : "PAID")
+        </div>
+
+        <!-- Header -->
+        <div class="company-header">
+            <div class="company-info">
+                <h1>@(_data.CompanyName ?? "COCOBOLO")</h1>
+                @if (!string.IsNullOrEmpty(_data.CompanyAddress))
+                {
+                    <div class="info-line">📍 @_data.CompanyAddress</div>
+                }
+                @if (!string.IsNullOrEmpty(_data.CompanyPhone))
+                {
+                    <div class="info-line">📞 @_data.CompanyPhone</div>
+                }
+                @if (!string.IsNullOrEmpty(_data.CompanyTaxNumber))
+                {
+                    <div class="info-line">رقم تسجيل ضريبي: @_data.CompanyTaxNumber</div>
+                }
+            </div>
+            <div class="receipt-title @(isReceive ? "title-receive" : "title-pay")">
+                <div class="title-label">@_data.ReceiptTypeAr</div>
+                <div class="title-number">@p.ReceiptNumber</div>
+                <div class="title-date">@p.PaymentDate.ToString("yyyy/MM/dd HH:mm")</div>
+            </div>
+        </div>
+
+        <!-- Main Receipt Box -->
+        <div class="receipt-body">
+            <!-- Party Info -->
+            <div class="party-section">
+                <div class="party-label">
+                    @if (isReceive)
+                    {
+                        <span>استلمنا من السيد / السادة</span>
+                    }
+                    else
+                    {
+                        <span>صرفنا للسيد / السادة</span>
+                    }
+                </div>
+                <div class="party-name">@p.PartyName</div>
+                <div class="party-details">
+                    @if (!string.IsNullOrEmpty(p.PartyPhone))
+                    {
+                        <span>📞 @p.PartyPhone</span>
+                    }
+                    @if (!string.IsNullOrEmpty(_data.CustomerCity))
+                    {
+                        <span>📍 @_data.CustomerCity</span>
+                    }
+                    @if (!string.IsNullOrEmpty(_data.CustomerEmail))
+                    {
+                        <span>✉️ @_data.CustomerEmail</span>
+                    }
+                </div>
+            </div>
+
+            <!-- Amount Box -->
+            <div class="amount-box">
+                <div class="amount-row">
+                    <span class="amount-label">المبلغ:</span>
+                    <span class="amount-value">@FormatMoney(p.Amount) جنيه</span>
+                </div>
+                <div class="amount-words">
+                    <strong>قيمة كتابة:</strong> @_data.AmountInWords
+                </div>
+            </div>
+
+            <!-- Description -->
+            <div class="description-box">
+                <div class="desc-row">
+                    <span class="desc-label">وذلك مقابل:</span>
+                    <span class="desc-value">
+                        @(isReceive ? "تسديد" : "دفع")
+                        دفعة على فاتورة رقم
+                        <strong>@(p.InvoiceReferenceNumber ?? $"#{p.TransactionId}")</strong>
+                        @if (p.Percentage > 0)
+                        {
+                            <span> بنسبة <strong>@p.Percentage%</strong> من إجمالي الفاتورة</span>
+                        }
+                    </span>
+                </div>
+
+                @if (!string.IsNullOrEmpty(p.Notes))
+                {
+                    <div class="desc-row">
+                        <span class="desc-label">ملاحظات:</span>
+                        <span class="desc-value">@p.Notes</span>
+                    </div>
+                }
+            </div>
+
+            <!-- Invoice Summary Box -->
+            <div class="summary-box">
+                <h4>📊 ملخص حساب الفاتورة</h4>
+                <table class="summary-table">
+                    <tr>
+                        <td>إجمالي الفاتورة:</td>
+                        <td>@FormatMoney(p.InvoiceGrandTotal) ج</td>
+                    </tr>
+                    <tr>
+                        <td>إجمالي المسدد (شامل هذه الدفعة):</td>
+                        <td class="paid-amount">@FormatMoney(p.InvoicePaidAmount) ج</td>
+                    </tr>
+                    <tr class="remaining-row">
+                        <td>المتبقي:</td>
+                        <td>@FormatMoney(p.InvoiceGrandTotal - p.InvoicePaidAmount) ج</td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- Payment Method -->
+            <div class="method-box">
+                <div class="method-row">
+                    <strong>طريقة الدفع:</strong>
+                    <span class="method-badge">
+                        @PaymentMethods.All.GetValueOrDefault(p.PaymentMethod ?? "Cash", p.PaymentMethod ?? "نقدي")
+                    </span>
+                </div>
+                @if (!string.IsNullOrEmpty(p.CashBoxName))
+                {
+                    <div class="method-row">
+                        <strong>الخزينة:</strong>
+                        <span>@p.CashBoxName</span>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Signatures -->
+        <div class="signatures">
+            <div class="signature-box">
+                <div class="signature-line"></div>
+                <div class="signature-label">المحاسب</div>
+            </div>
+            <div class="signature-box">
+                <div class="signature-line"></div>
+                <div class="signature-label">@(isReceive ? "العميل / المستفيد" : "المورد / المستلم")</div>
+                <div class="signature-name">@p.PartyName</div>
+            </div>
+            <div class="signature-box">
+                <div class="signature-line"></div>
+                <div class="signature-label">المدير المالي</div>
+            </div>
+        </div>
+
+        <div class="footer-note">
+            تم إصدار هذا السند بواسطة @(p.CreatedBy ?? "النظام") في @p.PaymentDate.ToString("yyyy/MM/dd HH:mm")
+            • سند رقم: @p.ReceiptNumber
+        </div>
+    </div>
+}
+
+<style>
+    body { background: #f5f5f5 !important; margin: 0; padding: 0; }
+
+    .print-actions {
+        position: fixed; top: 1rem; left: 1rem;
+        display: flex; gap: 0.5rem; z-index: 9999;
+    }
+    .btn-action {
+        padding: 0.6rem 1.5rem; border-radius: 8px;
+        border: none; cursor: pointer; font-weight: 700;
+        font-size: 0.9rem; font-family: 'Tajawal', Arial, sans-serif;
+    }
+    .btn-print { background: #d4af37; color: white; }
+    .btn-back { background: #e0e0e0; color: #333; }
+
+    .receipt-page {
+        max-width: 800px; margin: 1rem auto; padding: 2rem;
+        background: white; color: #333;
+        font-family: 'Tajawal', 'Cairo', 'Segoe UI', Arial, sans-serif;
+        font-size: 14px; line-height: 1.7;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        position: relative; overflow: hidden;
+        min-height: 600px;
+    }
+
+    /* Watermark */
+    .watermark {
+        position: absolute; top: 50%; right: 50%;
+        transform: translate(50%, -50%) rotate(-30deg);
+        font-size: 9rem; font-weight: 900;
+        pointer-events: none; z-index: 0;
+        white-space: nowrap; letter-spacing: 0.1em;
+    }
+    .wm-receive { color: rgba(16, 185, 129, 0.06); }
+    .wm-pay { color: rgba(239, 68, 68, 0.06); }
+
+    /* Header */
+    .company-header {
+        display: flex; justify-content: space-between; align-items: flex-start;
+        padding-bottom: 1.5rem; border-bottom: 3px solid #d4af37;
+        margin-bottom: 1.5rem; position: relative; z-index: 1;
+    }
+    .company-info h1 {
+        margin: 0; font-size: 1.8rem; color: #1a2842; font-weight: 800;
+    }
+    .info-line { font-size: 0.85rem; color: #555; margin-top: 0.25rem; }
+
+    .receipt-title { text-align: left; }
+    .title-label {
+        font-size: 1.4rem; font-weight: 800;
+        padding: 0.4rem 1rem; border-radius: 8px;
+        display: inline-block;
+    }
+    .title-receive .title-label {
+        background: linear-gradient(135deg, #10b981, #059669); color: white;
+    }
+    .title-pay .title-label {
+        background: linear-gradient(135deg, #ef4444, #dc2626); color: white;
+    }
+    .title-number {
+        font-size: 1.1rem; font-weight: 700; margin-top: 0.5rem;
+        background: #faf6e8; padding: 0.3rem 0.85rem;
+        border-radius: 6px; display: inline-block;
+    }
+    .title-date {
+        font-size: 0.85rem; color: #666; margin-top: 0.5rem;
+    }
+
+    /* Body */
+    .receipt-body {
+        position: relative; z-index: 1;
+        display: flex; flex-direction: column; gap: 1rem;
+    }
+
+    /* Party Section */
+    .party-section {
+        background: #faf6e8; border: 1px solid #d4af3744;
+        border-radius: 10px; padding: 1rem;
+    }
+    .party-label {
+        font-size: 0.9rem; color: #555;
+        margin-bottom: 0.4rem; font-weight: 600;
+    }
+    .party-name {
+        font-size: 1.4rem; font-weight: 800; color: #1a2842;
+        margin-bottom: 0.4rem;
+    }
+    .party-details {
+        display: flex; gap: 1rem; flex-wrap: wrap;
+        font-size: 0.85rem; color: #666;
+    }
+
+    /* Amount Box */
+    .amount-box {
+        background: linear-gradient(135deg, rgba(212, 175, 55, 0.15), rgba(212, 175, 55, 0.05));
+        border: 2px solid #d4af37;
+        border-radius: 12px; padding: 1.25rem;
+    }
+    .amount-row {
+        display: flex; justify-content: space-between; align-items: center;
+        padding-bottom: 0.75rem; margin-bottom: 0.75rem;
+        border-bottom: 1px dashed #d4af3766;
+    }
+    .amount-label { font-size: 1.1rem; color: #1a2842; font-weight: 700; }
+    .amount-value {
+        font-size: 2rem; font-weight: 900;
+        color: #b8941f;
+    }
+    .amount-words {
+        font-size: 0.95rem; line-height: 1.8;
+        background: white; padding: 0.75rem; border-radius: 8px;
+        color: #333;
+    }
+
+    /* Description Box */
+    .description-box {
+        background: #f8f9fa; border: 1px solid #ddd;
+        border-radius: 10px; padding: 1rem;
+    }
+    .desc-row {
+        display: flex; gap: 0.75rem;
+        padding: 0.4rem 0;
+        font-size: 0.95rem;
+    }
+    .desc-label { color: #666; font-weight: 700; min-width: 100px; }
+    .desc-value { flex: 1; }
+
+    /* Summary Box */
+    .summary-box {
+        background: rgba(33, 150, 243, 0.05);
+        border: 1px solid rgba(33, 150, 243, 0.2);
+        border-radius: 10px; padding: 1rem;
+    }
+    .summary-box h4 {
+        margin: 0 0 0.5rem 0; font-size: 1rem;
+        color: #1a2842; padding-bottom: 0.4rem;
+        border-bottom: 1px solid rgba(33, 150, 243, 0.2);
+    }
+    .summary-table {
+        width: 100%; border-collapse: collapse; font-size: 0.9rem;
+    }
+    .summary-table td {
+        padding: 0.4rem 0; border-bottom: 1px solid #eee;
+    }
+    .summary-table td:last-child {
+        text-align: left; font-weight: 700;
+    }
+    .summary-table .paid-amount { color: #10b981; }
+    .summary-table .remaining-row td {
+        background: #fff5f5; padding: 0.5rem 0.75rem;
+        border-bottom: none; border-radius: 6px;
+        margin-top: 0.4rem; font-size: 1rem;
+    }
+    .summary-table .remaining-row td:last-child {
+        color: #dc2626; font-size: 1.1rem;
+    }
+
+    /* Method Box */
+    .method-box {
+        background: white; border: 1px solid #ddd;
+        border-radius: 10px; padding: 0.75rem 1rem;
+        display: flex; justify-content: space-around; flex-wrap: wrap;
+        gap: 1rem;
+    }
+    .method-row {
+        display: flex; align-items: center; gap: 0.5rem;
+        font-size: 0.9rem;
+    }
+    .method-badge {
+        background: #d4af37; color: white;
+        padding: 0.25rem 0.75rem; border-radius: 6px;
+        font-weight: 700; font-size: 0.85rem;
+    }
+
+    /* Signatures */
+    .signatures {
+        display: grid; grid-template-columns: 1fr 1fr 1fr;
+        gap: 1.5rem; margin-top: 2.5rem; padding-top: 1.5rem;
+        position: relative; z-index: 1;
+    }
+    .signature-box { text-align: center; }
+    .signature-line {
+        border-top: 1px solid #333;
+        margin-bottom: 0.5rem; margin-top: 2.5rem;
+    }
+    .signature-label { font-weight: 700; font-size: 0.9rem; }
+    .signature-name { font-size: 0.78rem; color: #666; margin-top: 0.25rem; }
+
+    .footer-note {
+        text-align: center; font-size: 0.75rem; color: #999;
+        margin-top: 2rem; padding-top: 1rem;
+        border-top: 1px dashed #ddd;
+        position: relative; z-index: 1;
+    }
+
+    @@media print {
+        body { background: white !important; margin: 0; }
+        .no-print { display: none !important; }
+        .receipt-page {
+            box-shadow: none; margin: 0; padding: 1cm; max-width: 100%;
+            min-height: auto;
+        }
+        @@page { size: A4; margin: 0; }
+    }
+</style>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private bool _isLoading = true;
+    private PaymentReceiptDto? _data;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _data = await PaymentService.GetPaymentForReceiptAsync(Id);
+        _isLoading = false;
+    }
+
+    private async Task PrintNow() => await JS.InvokeVoidAsync("window.print");
+    private void GoBack() => Navigation.NavigateTo("/payments");
+
+    private string FormatMoney(decimal v) => $"{v:N2}";
+}

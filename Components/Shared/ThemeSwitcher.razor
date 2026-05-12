@@ -1,65 +1,58 @@
 @inject IJSRuntime JS
 
-<MudMenu Icon="@Icons.Material.Filled.Palette" 
-         Color="Color.Inherit" 
+<MudMenu Icon="@Icons.Material.Filled.Palette"
+         Color="Color.Inherit"
          Title="تغيير الثيم"
-         AnchorOrigin="Origin.BottomRight"
-         TransformOrigin="Origin.TopRight">
+         AnchorOrigin="Origin.BottomLeft"
+         TransformOrigin="Origin.TopLeft">
+
     <MudText Typo="Typo.subtitle2" Class="px-3 py-2" Style="font-weight: 700;">
         🎨 اختر الثيم
     </MudText>
     <MudDivider />
-    
+
     @foreach (var theme in _themes)
     {
         <MudMenuItem OnClick="@(() => ApplyTheme(theme.Class))">
-            <div style="display:flex; align-items:center; gap:0.75rem;">
-                <div class="theme-color-preview" 
+            <div style="display:flex; align-items:center; gap:0.75rem; min-width: 200px;">
+                <div class="theme-color-preview"
                      style="background: linear-gradient(135deg, @theme.Color1, @theme.Color2);"></div>
-                <span>@theme.Name</span>
+                <span style="flex:1;">@theme.Name</span>
                 @if (_currentTheme == theme.Class)
                 {
-                    <MudIcon Icon="@Icons.Material.Filled.Check" 
-                             Color="Color.Success" 
+                    <MudIcon Icon="@Icons.Material.Filled.Check"
+                             Color="Color.Success"
                              Size="Size.Small" />
                 }
             </div>
         </MudMenuItem>
     }
-    
-    <MudDivider />
-    <MudMenuItem OnClick="ToggleDarkMode">
-        <div style="display:flex; align-items:center; gap:0.75rem;">
-            <MudIcon Icon="@(_isDark ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)" />
-            <span>@(_isDark ? "الوضع الفاتح" : "الوضع الداكن")</span>
-        </div>
-    </MudMenuItem>
 </MudMenu>
 
 <style>
     .theme-color-preview {
-        width: 24px;
-        height: 24px;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
         border: 2px solid white;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        flex-shrink: 0;
     }
 </style>
 
 @code {
     private string _currentTheme = "default";
-    private bool _isDark = false;
 
     private record ThemeOption(string Name, string Class, string Color1, string Color2);
 
     private List<ThemeOption> _themes = new()
     {
-        new("ذهبي كلاسيك", "default", "#d4af37", "#b8941f"),
-        new("أزرق احترافي", "theme-blue", "#2563eb", "#1d4ed8"),
-        new("أخضر فاخر", "theme-green", "#059669", "#047857"),
-        new("أحمر نخبة", "theme-red", "#dc2626", "#b91c1c"),
-        new("بنفسجي ملكي", "theme-purple", "#7c3aed", "#6d28d9"),
-        new("تركواز عصري", "theme-teal", "#0d9488", "#0f766e")
+        new("ذهبي كلاسيك",   "default",       "#d4af37", "#b8941f"),
+        new("أزرق احترافي",  "theme-blue",    "#2563eb", "#1d4ed8"),
+        new("أخضر فاخر",     "theme-green",   "#059669", "#047857"),
+        new("أحمر نخبة",      "theme-red",     "#dc2626", "#b91c1c"),
+        new("بنفسجي ملكي",   "theme-purple",  "#7c3aed", "#6d28d9"),
+        new("تركواز عصري",   "theme-teal",    "#0d9488", "#0f766e")
     };
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -68,12 +61,14 @@
         {
             try
             {
-                _currentTheme = await JS.InvokeAsync<string>("localStorage.getItem", "app-theme") ?? "default";
-                _isDark = (await JS.InvokeAsync<string>("localStorage.getItem", "app-darkmode")) == "true";
-                
+                _currentTheme = await JS.InvokeAsync<string>(
+                    "localStorage.getItem", "app-theme") ?? "default";
+
                 if (_currentTheme != "default")
                 {
-                    await JS.InvokeVoidAsync("document.body.classList.add", _currentTheme);
+                    // طبق الثيم باستخدام eval (أكثر موثوقية)
+                    await JS.InvokeVoidAsync("eval",
+                        $"document.body.classList.add('{_currentTheme}');");
                 }
                 StateHasChanged();
             }
@@ -85,31 +80,26 @@
     {
         try
         {
-            // امسح الثيمات القديمة
-            foreach (var t in _themes)
-            {
-                if (t.Class != "default")
-                    await JS.InvokeVoidAsync("document.body.classList.remove", t.Class);
-            }
+            // امسح كل الثيمات القديمة
+            var clearScript = "document.body.classList.remove('theme-blue', 'theme-green', 'theme-red', 'theme-purple', 'theme-teal');";
+            await JS.InvokeVoidAsync("eval", clearScript);
 
-            // طبق الجديد
+            // طبّق الجديد
             if (themeClass != "default")
             {
-                await JS.InvokeVoidAsync("document.body.classList.add", themeClass);
+                await JS.InvokeVoidAsync("eval",
+                    $"document.body.classList.add('{themeClass}');");
             }
 
+            // احفظ
             await JS.InvokeVoidAsync("localStorage.setItem", "app-theme", themeClass);
+
             _currentTheme = themeClass;
             StateHasChanged();
         }
-        catch { }
-    }
-
-    private async Task ToggleDarkMode()
-    {
-        _isDark = !_isDark;
-        await JS.InvokeVoidAsync("localStorage.setItem", "app-darkmode", _isDark.ToString().ToLower());
-        // ⚠️ تطبيق Dark Mode الفعلي محتاج تعديل MudThemeProvider
-        // ده هيتفعل لو الـ MainLayout بيستخدم متغير _isDark
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ThemeSwitcher] Error: {ex.Message}");
+        }
     }
 }
