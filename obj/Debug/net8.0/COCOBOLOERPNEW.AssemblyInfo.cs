@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("COCOBOLOERPNEW")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+70a98a351ed5da1ca2f3e08a35b6ffec1247fd2e")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e91225a12edc9da1da8224782cdbacd8c00552e5")]
 [assembly: System.Reflection.AssemblyProductAttribute("COCOBOLOERPNEW")]
 [assembly: System.Reflection.AssemblyTitleAttribute("COCOBOLOERPNEW")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
