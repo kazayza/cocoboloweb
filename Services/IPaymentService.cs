@@ -8,6 +8,9 @@ public interface IPaymentService
     Task<PagedResult<PaymentListDto>> GetPaymentsAsync(PaymentFilterDto filter);
     Task<PaymentListDto?> GetPaymentByIdAsync(int paymentId);
     Task<PaymentReceiptDto?> GetPaymentForReceiptAsync(int paymentId);
+    Task<List<PaymentHistoryDto>> GetPaymentHistoryAsync(int transactionId);
+    Task<PartyBalanceDto> GetPartyBalanceAsync(int partyId, string transactionType);
+    Task<IEnumerable<PartyLookupDto>> SearchPartiesAsync(string search);
     Task<PaymentStatsDto> GetStatsAsync(string transactionType, DateTime? from = null, DateTime? to = null);
 
     // Analysis

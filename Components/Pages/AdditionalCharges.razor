@@ -1,0 +1,957 @@
+@page "/additional-charges"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+@inject IAdditionalChargeService ChargeService
+@inject IPaymentService PaymentService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthState
+@inject NotificationService Notify
+
+<!-- ⭐ Header -->
+<div class="charges-header">
+    <div class="header-info">
+        <div class="header-icon">
+            <MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" Size="Size.Large" />
+        </div>
+        <div>
+            <h1>الرسوم الإضافية</h1>
+            <p>إدارة وتتبع رسوم المعاينة، الشحن، التركيب وغيرها</p>
+        </div>
+    </div>
+    <div class="header-actions">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Add"
+                   OnClick="OpenCreateDialog"
+                   Class="btn-add">
+            إضافة رسوم جديدة
+        </MudButton>
+    </div>
+</div>
+
+<!-- ⭐ Stats -->
+@if (_stats != null)
+{
+    <div class="stats-grid">
+        <div class="stat-card stat-total">
+            <div class="stat-icon">💰</div>
+            <div class="stat-data">
+                <div class="stat-value">@FormatMoney(_stats.TotalAmount)</div>
+                <div class="stat-label">إجمالي الرسوم</div>
+            </div>
+        </div>
+        <div class="stat-card stat-collected">
+            <div class="stat-icon">✅</div>
+            <div class="stat-data">
+                <div class="stat-value">@FormatMoney(_stats.PaidAmount + _stats.AppliedAmount)</div>
+                <div class="stat-label">إجمالي محصل</div>
+            </div>
+        </div>
+        <div class="stat-card stat-paid">
+            <div class="stat-icon">💵</div>
+            <div class="stat-data">
+                <div class="stat-value">@FormatMoney(_stats.PaidAmount)</div>
+                <div class="stat-label">مدفوعة (غير مطبقة)</div>
+            </div>
+        </div>
+        <div class="stat-card stat-applied">
+            <div class="stat-icon">🔗</div>
+            <div class="stat-data">
+                <div class="stat-value">@FormatMoney(_stats.AppliedAmount)</div>
+                <div class="stat-label">مطبقة على فواتير</div>
+            </div>
+        </div>
+        <div class="stat-card stat-nonrefund">
+            <div class="stat-icon">🚫</div>
+            <div class="stat-data">
+                <div class="stat-value">@FormatMoney(_stats.NonRefundableAmount)</div>
+                <div class="stat-label">غير مستردة</div>
+            </div>
+        </div>
+        <div class="stat-card stat-count">
+            <div class="stat-icon">📊</div>
+            <div class="stat-data">
+                <div class="stat-value">@_stats.TotalCount</div>
+                <div class="stat-label">عدد الرسوم</div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ⭐ Filters -->
+<MudPaper Class="filter-bar" Elevation="0">
+    <div class="filter-grid">
+        <MudTextField T="string" @bind-Value="_filter.SearchText"
+              Placeholder="بحث باسم العميل، الهاتف، الوصف..."
+              Variant="Variant.Outlined"
+              Adornment="Adornment.End"
+              AdornmentIcon="@Icons.Material.Filled.Search"
+              OnAdornmentClick="OnFilterChanged"
+              Style="min-width:250px;" />
+        <MudSelect T="string" Value="@_filter.ChargeType"
+           ValueChanged="@((string? v) => { _filter.ChargeType = v; _ = OnFilterChanged(); })"
+           Label="نوع الرسوم" Variant="Variant.Outlined" Clearable="true"
+           Style="min-width:150px;">
+            @foreach (var ct in ChargeTypes.All)
+            {
+                <MudSelectItem T="string" Value="@ct.Key">@ct.Value</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSelect T="string" Value="@_filter.Status"
+           ValueChanged="@((string? v) => { _filter.Status = v; _ = OnFilterChanged(); })"
+           Label="الحالة" Variant="Variant.Outlined" Clearable="true"
+           Style="min-width:130px;">
+            @foreach (var st in ChargeStatuses.All)
+            {
+                <MudSelectItem T="string" Value="@st.Key">@st.Value</MudSelectItem>
+            }
+        </MudSelect>
+        <MudDatePicker T="DateTime?" @bind-Value="_dateFrom"
+                       Label="من تاريخ" Variant="Variant.Outlined"
+                       DateChanged="@((DateTime? d) => { _dateFrom = d; _ = OnFilterChanged(); })" />
+        <MudDatePicker T="DateTime?" @bind-Value="_dateTo"
+                       Label="إلى تاريخ" Variant="Variant.Outlined"
+                       DateChanged="@((DateTime? d) => { _dateTo = d; _ = OnFilterChanged(); })" />
+        <MudIconButton Icon="@Icons.Material.Filled.FilterAltOff"
+                       Color="Color.Inherit" Variant="Variant.Outlined"
+                       OnClick="ResetFilters" Title="إعادة تعيين" />
+    </div>
+</MudPaper>
+
+<!-- ⭐ Table -->
+<MudPaper Class="table-container" Elevation="0">
+    <MudTable T="AdditionalChargeListDto"
+              Items="@(_result?.Items ?? new())"
+              Loading="@_isLoading"
+              Hover="true"
+              Striped="true">
+        <HeaderContent>
+            <MudTh>العميل</MudTh>
+            <MudTh>نوع الرسوم</MudTh>
+            <MudTh>الوصف</MudTh>
+            <MudTh>المبلغ</MudTh>
+            <MudTh>الحالة</MudTh>
+            <MudTh>الفاتورة</MudTh>
+            <MudTh>التاريخ</MudTh>
+            <MudTh style="text-align:center;">إجراءات</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>
+                <div class="customer-cell">
+                    <div class="customer-avatar">@(context.PartyName?.Substring(0, Math.Min(2, context.PartyName?.Length ?? 0)))</div>
+                    <div>
+                        <div class="customer-name">@context.PartyName</div>
+                        @if (!string.IsNullOrEmpty(context.PartyPhone))
+                        {
+                            <div class="customer-phone">📞 @context.PartyPhone</div>
+                        }
+                    </div>
+                </div>
+            </MudTd>
+            <MudTd>
+                <div class="charge-type-cell">
+                    <span class="type-icon">@GetChargeTypeIcon(context.ChargeType)</span>
+                    <span class="type-badge type-@(context.ChargeType?.ToLower())">
+                        @context.ChargeTypeName
+                    </span>
+                </div>
+            </MudTd>
+            <MudTd>
+                <span class="desc-text">@(context.ChargeDescription ?? "-")</span>
+            </MudTd>
+            <MudTd>
+                <div class="amount-cell">
+                    <span class="amount-value">@FormatMoney(context.ChargeAmount)</span>
+                    <span class="amount-currency">ج</span>
+                </div>
+            </MudTd>
+            <MudTd>
+                <span class="status-pill status-@(context.Status?.ToLower())">
+                    @context.StatusName
+                </span>
+            </MudTd>
+            <MudTd>
+                @if (context.AppliedToTransactionRef != null)
+                {
+                    <span class="invoice-ref ref-applied">@context.AppliedToTransactionRef</span>
+                }
+                else if (context.TransactionRef != null)
+                {
+                    <span class="invoice-ref ref-linked">@context.TransactionRef</span>
+                }
+                else
+                {
+                    <span style="color:var(--mud-palette-text-disabled);">—</span>
+                }
+            </MudTd>
+            <MudTd>
+                <div class="date-cell">
+                    <span>@(context.CreatedAt?.ToString("yyyy/MM/dd") ?? "-")</span>
+                    <span class="date-time">@(context.CreatedAt?.ToString("HH:mm") ?? "")</span>
+                </div>
+            </MudTd>
+            <MudTd>
+                <div class="actions-cell">
+                    @if (context.Status == ChargeStatuses.Paid)
+                    {
+                        <MudTooltip Text="تطبيق على فاتورة" Placement="Placement.Top">
+                            <MudIconButton Icon="@Icons.Material.Filled.Link" Size="Size.Small"
+                                           Color="Color.Success"
+                                           OnClick="@(() => OpenApplyDialog(context))" />
+                        </MudTooltip>
+                    }
+                    @if (context.Status != ChargeStatuses.NonRefundable && context.Status != ChargeStatuses.Applied)
+                    {
+                        <MudTooltip Text="غير مستردة" Placement="Placement.Top">
+                            <MudIconButton Icon="@Icons.Material.Filled.Block" Size="Size.Small"
+                                           Color="Color.Warning"
+                                           OnClick="@(() => OpenNonRefundDialog(context))" />
+                        </MudTooltip>
+                    }
+                    <MudTooltip Text="تعديل" Placement="Placement.Top">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                       OnClick="@(() => OpenEditDialog(context))"
+                                       Disabled="@(context.Status == ChargeStatuses.Applied || context.Status == ChargeStatuses.NonRefundable)" />
+                    </MudTooltip>
+                    <MudTooltip Text="حذف" Placement="Placement.Top">
+                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Size="Size.Small"
+                                       Color="Color.Error"
+                                       OnClick="@(() => ConfirmDelete(context))"
+                                       Disabled="@(context.Status == ChargeStatuses.Applied || context.Status == ChargeStatuses.NonRefundable)" />
+                    </MudTooltip>
+                </div>
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <div class="empty-state">
+                <div class="empty-icon">💰</div>
+                <h3>لا توجد رسوم مسجلة</h3>
+                <p>قم بإضافة رسوم جديدة مثل رسوم معاينة أو شحن أو تركيب</p>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="OpenCreateDialog">
+                    إضافة رسوم
+                </MudButton>
+            </div>
+        </NoRecordsContent>
+    </MudTable>
+</MudPaper>
+
+<!-- ⭐ Pagination -->
+@if (_result != null && _result.TotalCount > _filter.PageSize)
+{
+    <div class="pagination-bar">
+        <MudPagination Count="@((int)Math.Ceiling((double)_result.TotalCount / _filter.PageSize))"
+                       Selected="@_filter.PageNumber"
+                       SelectedChanged="OnPageChanged" />
+    </div>
+}
+
+<!-- ⭐ Dialog: Create/Edit -->
+<MudDialog @bind-Visible="_showFormDialog" MaxWidth="MaxWidth.Small" FullWidth="true">
+    <TitleContent>
+        <div class="dialog-title">
+            <MudIcon Icon="@(_isEditing ? Icons.Material.Filled.Edit : Icons.Material.Filled.AddCircle)"
+                     Color="Color.Primary" />
+            <span>@(_isEditing ? "تعديل الرسوم" : "إضافة رسوم جديدة")</span>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="dialog-form">
+            <MudAutocomplete T="PartyLookupDto"
+                             Label="العميل *"
+                             Value="_selectedParty"
+                             ValueChanged="OnPartySelected"
+                             SearchFunc="SearchParties"
+                             ToStringFunc="@(p => p == null ? "" : $"{p.PartyName} - {p.Phone}")"
+                             Variant="Variant.Outlined"
+                             Disabled="@_isEditing"
+                             Adornment="Adornment.Start"
+                             AdornmentIcon="@Icons.Material.Filled.Person"
+                             ResetValueOnEmptyText="true" />
+            <MudSelect T="string" @bind-Value="_formData.ChargeType"
+                       Label="نوع الرسوم *" Variant="Variant.Outlined">
+                @foreach (var ct in ChargeTypes.All)
+                {
+                    <MudSelectItem T="string" Value="@ct.Key">
+                        @GetChargeTypeIcon(ct.Key) @ct.Value
+                    </MudSelectItem>
+                }
+            </MudSelect>
+            <MudTextField T="string" @bind-Value="_formData.ChargeDescription"
+                          Label="وصف الرسوم" Variant="Variant.Outlined" />
+            <MudNumericField T="decimal" @bind-Value="_formData.ChargeAmount"
+                             Label="المبلغ * (جنيه)" Variant="Variant.Outlined"
+                             Min="0.01m" Step="100m"
+                             Adornment="Adornment.End" AdornmentText="ج" />
+            <MudTextField T="string" @bind-Value="_formData.Notes"
+                          Label="ملاحظات" Variant="Variant.Outlined" Lines="2" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showFormDialog = false)" Variant="Variant.Text">إلغاء</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   OnClick="SaveCharge" Disabled="@_isSaving">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            حفظ
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- ⭐ Dialog: Apply to Invoice -->
+<MudDialog @bind-Visible="_showApplyDialog" MaxWidth="MaxWidth.Small" FullWidth="true">
+    <TitleContent>
+        <div class="dialog-title">
+            <MudIcon Icon="@Icons.Material.Filled.Link" Color="Color.Success" />
+            <span>تطبيق الرسوم على فاتورة</span>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="dialog-form">
+            <div class="apply-info">
+                <div class="apply-row">
+                    <span>العميل:</span>
+                    <strong>@_selectedCharge?.PartyName</strong>
+                </div>
+                <div class="apply-row">
+                    <span>المبلغ:</span>
+                    <strong style="color:var(--gold);">@FormatMoney(_selectedCharge?.ChargeAmount ?? 0) ج</strong>
+                </div>
+            </div>
+
+            @if (_selectedCharge?.ChargeType == ChargeTypes.Inspection)
+            {
+                <MudAlert Severity="Severity.Info" Class="mt-2">
+                    ✅ رسوم معاينة → ستُضاف للمبلغ المدفوع (تخصم من المتبقي)
+                </MudAlert>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Warning" Class="mt-2">
+                    ➕ رسوم @(ChargeTypes.All.GetValueOrDefault(_selectedCharge?.ChargeType ?? "", "أخرى")) → ستُضاف للإجمالي
+                </MudAlert>
+            }
+
+            <MudAutocomplete T="InvoiceLookupDto"
+                             Label="اختر الفاتورة *"
+                             Value="_selectedInvoice"
+                             ValueChanged="OnInvoiceSelected"
+                             SearchFunc="SearchInvoices"
+                             ToStringFunc="@(i => i == null ? "" : $"{i.ReferenceNumber} - {i.PartyName}")"
+                             Variant="Variant.Outlined"
+                             Adornment="Adornment.Start"
+                             AdornmentIcon="@Icons.Material.Filled.Receipt"
+                             Class="mt-3" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showApplyDialog = false)" Variant="Variant.Text">إلغاء</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled"
+                   OnClick="ApplyToInvoice" Disabled="@_isSaving"
+                   StartIcon="@Icons.Material.Filled.Check">
+            تطبيق
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- ⭐ Dialog: Non Refundable -->
+<MudDialog @bind-Visible="_showNonRefundDialog" MaxWidth="MaxWidth.Small" FullWidth="true">
+    <TitleContent>
+        <div class="dialog-title">
+            <MudIcon Icon="@Icons.Material.Filled.Block" Color="Color.Warning" />
+            <span>تحديد كغير مستردة</span>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="dialog-form">
+            <MudAlert Severity="Severity.Warning">
+                تحديد رسوم @FormatMoney(_selectedCharge?.ChargeAmount ?? 0) ج
+                لعميل @(_selectedCharge?.PartyName ?? "-") كغير مستردة
+            </MudAlert>
+            <MudTextField T="string" @bind-Value="_nonRefundReason"
+                          Label="سبب عدم الاسترداد" Variant="Variant.Outlined" Lines="3"
+                          Class="mt-3" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showNonRefundDialog = false)" Variant="Variant.Text">إلغاء</MudButton>
+        <MudButton Color="Color.Warning" Variant="Variant.Filled"
+                   OnClick="MarkNonRefundable" Disabled="@_isSaving"
+                   StartIcon="@Icons.Material.Filled.Block">
+            تأكيد
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- ⭐ Dialog: Delete -->
+<MudDialog @bind-Visible="_showDeleteDialog" MaxWidth="MaxWidth.XSmall">
+    <TitleContent>
+        <div class="dialog-title">
+            <MudIcon Icon="@Icons.Material.Filled.DeleteForever" Color="Color.Error" />
+            <span>تأكيد الحذف</span>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Error">
+            هل أنت متأكد من حذف رسوم @FormatMoney(_selectedCharge?.ChargeAmount ?? 0) ج
+            لعميل @(_selectedCharge?.PartyName ?? "-")؟
+            <br />سيتم إلغاء حركة الخزينة المرتبطة.
+        </MudAlert>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showDeleteDialog = false)" Variant="Variant.Text">إلغاء</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled"
+                   OnClick="DeleteCharge" Disabled="@_isSaving"
+                   StartIcon="@Icons.Material.Filled.Delete">
+            حذف
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    /* === Header === */
+    .charges-header {
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        border-radius: 16px;
+        padding: 1.5rem 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 1rem;
+        color: white;
+        margin-bottom: 1.5rem;
+    }
+    .header-info {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+    .header-icon {
+        width: 50px; height: 50px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .header-info h1 {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 800;
+    }
+    .header-info p {
+        margin: 0.25rem 0 0 0;
+        font-size: 0.85rem;
+        opacity: 0.9;
+    }
+    .btn-add {
+        background: white !important;
+        color: var(--navy-dark) !important;
+        font-weight: 700 !important;
+    }
+
+    /* === Stats === */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+    }
+    .stat-card {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 1rem;
+        border-radius: 12px;
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        transition: all 0.3s;
+    }
+    .stat-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    .stat-icon {
+        font-size: 1.5rem;
+    }
+    .stat-value {
+        font-size: 1.15rem;
+        font-weight: 900;
+        color: var(--mud-palette-text-primary);
+    }
+    .stat-label {
+        font-size: 0.72rem;
+        color: var(--mud-palette-text-secondary);
+    }
+    .stat-total { border-right: 3px solid var(--gold); }
+    .stat-total .stat-value { color: var(--gold); }
+    .stat-collected { border-right: 3px solid #10b981; }
+    .stat-collected .stat-value { color: #10b981; }
+    .stat-paid { border-right: 3px solid #3b82f6; }
+    .stat-paid .stat-value { color: #3b82f6; }
+    .stat-applied { border-right: 3px solid #8b5cf6; }
+    .stat-applied .stat-value { color: #8b5cf6; }
+    .stat-nonrefund { border-right: 3px solid #ef4444; }
+    .stat-nonrefund .stat-value { color: #ef4444; }
+    .stat-count { border-right: 3px solid var(--mud-palette-text-secondary); }
+
+    /* === Filters === */
+    .filter-bar {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1rem;
+    }
+    .filter-grid {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    /* === Table === */
+    .table-container {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px;
+        overflow: hidden;
+    }
+
+    .customer-cell {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .customer-avatar {
+        width: 36px; height: 36px;
+        background: linear-gradient(135deg, var(--gold), var(--gold-dark));
+        color: white;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+        font-size: 0.8rem;
+    }
+    .customer-name {
+        font-weight: 700;
+        font-size: 0.88rem;
+    }
+    .customer-phone {
+        font-size: 0.75rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .charge-type-cell {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .type-icon {
+        font-size: 1.1rem;
+    }
+    .type-badge {
+        display: inline-block;
+        padding: 0.2rem 0.6rem;
+        border-radius: 6px;
+        font-size: 0.78rem;
+        font-weight: 700;
+    }
+    .type-inspection { background: #e3f2fd; color: #1565c0; }
+    .type-shipping { background: #fff8e1; color: #f57f17; }
+    .type-installation { background: #e8f5e9; color: #2e7d32; }
+    .type-other { background: #f3e5f5; color: #7b1fa2; }
+
+    .desc-text {
+        font-size: 0.85rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .amount-cell {
+        display: flex;
+        align-items: baseline;
+        gap: 0.3rem;
+    }
+    .amount-value {
+        font-size: 0.92rem;
+        font-weight: 800;
+        color: var(--gold-dark);
+    }
+    .amount-currency {
+        font-size: 0.75rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .status-pill {
+        display: inline-block;
+        padding: 0.25rem 0.7rem;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+    .status-paid { background: #d4edda; color: #155724; }
+    .status-applied { background: #d1ecf1; color: #0c5460; }
+    .status-nonrefundable { background: #f8d7da; color: #721c24; }
+
+    .invoice-ref {
+        display: inline-block;
+        padding: 0.3rem 0.7rem;
+        border-radius: 8px;
+        font-size: 0.88rem;
+        font-weight: 800;
+    }
+    .ref-applied {
+        background: #d4edda;
+        color: #155724;
+    }
+    .ref-linked {
+        background: #e3f2fd;
+        color: #1565c0;
+    }
+
+    .date-cell {
+        display: flex;
+        flex-direction: column;
+        font-size: 0.85rem;
+    }
+    .date-time {
+        font-size: 0.72rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .actions-cell {
+        display: flex;
+        justify-content: center;
+        gap: 0.15rem;
+    }
+
+    /* === Empty State === */
+    .empty-state {
+        text-align: center;
+        padding: 3rem 1rem;
+    }
+    .empty-icon {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+    }
+    .empty-state h3 {
+        color: var(--mud-palette-text-primary);
+        margin: 0 0 0.5rem 0;
+    }
+    .empty-state p {
+        color: var(--mud-palette-text-secondary);
+        font-size: 0.9rem;
+        margin: 0 0 1.5rem 0;
+    }
+
+    /* === Pagination === */
+    .pagination-bar {
+        display: flex;
+        justify-content: center;
+        margin-top: 1rem;
+    }
+
+    /* === Dialogs === */
+    .dialog-title {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 700;
+        font-size: 1.1rem;
+    }
+    .dialog-form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        padding-top: 0.5rem;
+    }
+    .apply-info {
+        background: var(--mud-palette-background);
+        border-radius: 10px;
+        padding: 0.75rem;
+    }
+    .apply-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.3rem 0;
+        font-size: 0.9rem;
+    }
+    .apply-row span {
+        color: var(--mud-palette-text-secondary);
+    }
+
+    /* === Responsive === */
+    @@media (max-width: 1200px) {
+        .stats-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    @@media (max-width: 768px) {
+        .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        .charges-header { flex-direction: column; text-align: center; }
+        .header-info { flex-direction: column; }
+        .filter-grid { flex-direction: column; }
+        .filter-grid > * { min-width: 100% !important; }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _isSaving = false;
+    private AdditionalChargeFilterDto _filter = new();
+    private AdditionalChargeStatsDto? _stats;
+    private PagedResult<AdditionalChargeListDto>? _result;
+    private DateTime? _dateFrom;
+    private DateTime? _dateTo;
+
+    // Dialogs
+    private bool _showFormDialog = false;
+    private bool _showApplyDialog = false;
+    private bool _showNonRefundDialog = false;
+    private bool _showDeleteDialog = false;
+    private bool _isEditing = false;
+
+    // Form
+    private AdditionalChargeFormDto _formData = new();
+    private AdditionalChargeListDto? _selectedCharge;
+    private PartyLookupDto? _selectedParty;
+    private InvoiceLookupDto? _selectedInvoice;
+    private string _nonRefundReason = "";
+    private string _currentUserName = "System";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _currentUserName = auth.User.Identity?.Name ?? "System";
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+        _filter.DateFrom = _dateFrom;
+        _filter.DateTo = _dateTo;
+        _result = await ChargeService.GetChargesAsync(_filter);
+        _stats = await ChargeService.GetStatsAsync();
+        _isLoading = false;
+        StateHasChanged();
+    }
+
+    private async Task OnFilterChanged()
+    {
+        _filter.PageNumber = 1;
+        await LoadData();
+    }
+
+    private async Task OnPageChanged(int page)
+    {
+        _filter.PageNumber = page;
+        await LoadData();
+    }
+
+    private async Task ResetFilters()
+    {
+        _filter = new() { PageNumber = 1 };
+        _dateFrom = null;
+        _dateTo = null;
+        await LoadData();
+    }
+
+    // === Helpers ===
+    private string GetChargeTypeIcon(string? type) => type switch
+    {
+        ChargeTypes.Inspection => "🔍",
+        ChargeTypes.Shipping => "🚚",
+        ChargeTypes.Installation => "🔧",
+        _ => "📦"
+    };
+
+    private string GetChargeTypeName(string? type) =>
+        ChargeTypes.All.TryGetValue(type ?? "", out var name) ? name : "رسوم";
+
+    private string FormatMoney(decimal v) => $"{v:N2}";
+
+    // === Notifications ===
+    private async Task SendNotification(string msg)
+    {
+        try
+        {
+            await Notify.NotifyRoleAsync("💰 رسوم إضافية", msg, SystemRoles.Admin,
+                _currentUserName, "additional-charges", "AdditionalCharges", 0);
+            await Notify.NotifyRoleAsync("💰 رسوم إضافية", msg, SystemRoles.AccountManager,
+                _currentUserName, "additional-charges", "AdditionalCharges", 0);
+            await Notify.NotifyRoleAsync("💰 رسوم إضافية", msg, SystemRoles.Account,
+                _currentUserName, "additional-charges", "AdditionalCharges", 0);
+        }
+        catch { }
+    }
+
+    // === Create/Edit ===
+    private void OpenCreateDialog()
+    {
+        _isEditing = false;
+        _formData = new() { Status = ChargeStatuses.Paid };
+        _selectedParty = null;
+        _showFormDialog = true;
+    }
+
+    private async Task OpenEditDialog(AdditionalChargeListDto charge)
+    {
+        _isEditing = true;
+        var data = await ChargeService.GetChargeForEditAsync(charge.ChargeId);
+        if (data != null)
+        {
+            _formData = data;
+            _selectedParty = new PartyLookupDto
+            {
+                PartyId = charge.PartyId ?? 0,
+                PartyName = charge.PartyName ?? "",
+                Phone = charge.PartyPhone
+            };
+            _showFormDialog = true;
+        }
+    }
+
+    private async Task SaveCharge()
+    {
+        if (_formData.ChargeAmount <= 0)
+        {
+            Snackbar.Add("المبلغ مطلوب", Severity.Warning);
+            return;
+        }
+        if (_selectedParty == null && !_isEditing)
+        {
+            Snackbar.Add("يرجى اختيار العميل", Severity.Warning);
+            return;
+        }
+
+        _isSaving = true;
+        _formData.PartyId = _selectedParty?.PartyId;
+
+        var (ok, msg) = _isEditing
+            ? await ChargeService.UpdateChargeAsync(_formData.ChargeId, _formData, _currentUserName)
+            : await ChargeService.CreateChargeAsync(_formData, _currentUserName);
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+        if (ok)
+        {
+            var actionWord = _isEditing ? "تعديل" : "إضافة";
+            await SendNotification($"{actionWord} رسوم {_formData.ChargeAmount:N2} ج - {GetChargeTypeName(_formData.ChargeType)} - {_selectedParty?.PartyName ?? ""} بواسطة {_currentUserName}");
+        }
+
+        _isSaving = false;
+        _showFormDialog = false;
+        await LoadData();
+    }
+
+    // === Party Search ===
+    private void OnPartySelected(PartyLookupDto? party)
+    {
+        _selectedParty = party;
+        _formData.PartyId = party?.PartyId;
+    }
+
+    private async Task<IEnumerable<PartyLookupDto>> SearchParties(string search, CancellationToken token)
+    {
+        return await PaymentService.SearchPartiesAsync(search);
+    }
+
+    // === Apply to Invoice ===
+    private void OpenApplyDialog(AdditionalChargeListDto charge)
+    {
+        _selectedCharge = charge;
+        _selectedInvoice = null;
+        _showApplyDialog = true;
+    }
+
+    private void OnInvoiceSelected(InvoiceLookupDto? inv)
+    {
+        _selectedInvoice = inv;
+    }
+
+    private async Task<IEnumerable<InvoiceLookupDto>> SearchInvoices(string search, CancellationToken token)
+    {
+        if (_selectedCharge?.PartyId == null) return Enumerable.Empty<InvoiceLookupDto>();
+        return await PaymentService.SearchInvoicesAsync(TransactionTypes.Sale, search, true, 10);
+    }
+
+    private async Task ApplyToInvoice()
+    {
+        if (_selectedInvoice == null || _selectedCharge == null)
+        {
+            Snackbar.Add("يرجى اختيار الفاتورة", Severity.Warning);
+            return;
+        }
+
+        _isSaving = true;
+        var (ok, msg) = await ChargeService.ApplyToInvoiceAsync(
+            _selectedCharge.ChargeId, _selectedInvoice.TransactionId, _currentUserName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+        if (ok)
+        {
+            await SendNotification($"تطبيق رسوم {FormatMoney(_selectedCharge.ChargeAmount)} ج على فاتورة {_selectedInvoice.ReferenceNumber} - {_selectedCharge.PartyName} بواسطة {_currentUserName}");
+        }
+
+        _isSaving = false;
+        _showApplyDialog = false;
+        await LoadData();
+    }
+
+    // === Non Refundable ===
+    private void OpenNonRefundDialog(AdditionalChargeListDto charge)
+    {
+        _selectedCharge = charge;
+        _nonRefundReason = "";
+        _showNonRefundDialog = true;
+    }
+
+    private async Task MarkNonRefundable()
+    {
+        if (_selectedCharge == null) return;
+
+        _isSaving = true;
+        var (ok, msg) = await ChargeService.MarkAsNonRefundableAsync(
+            _selectedCharge.ChargeId, _nonRefundReason, _currentUserName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+        if (ok)
+        {
+            await SendNotification($"تحديد رسوم {FormatMoney(_selectedCharge.ChargeAmount)} ج كغير مستردة - {_selectedCharge.PartyName} بواسطة {_currentUserName}");
+        }
+
+        _isSaving = false;
+        _showNonRefundDialog = false;
+        await LoadData();
+    }
+
+    // === Delete ===
+    private void ConfirmDelete(AdditionalChargeListDto charge)
+    {
+        _selectedCharge = charge;
+        _showDeleteDialog = true;
+    }
+
+    private async Task DeleteCharge()
+    {
+        if (_selectedCharge == null) return;
+
+        _isSaving = true;
+        var (ok, msg) = await ChargeService.DeleteChargeAsync(_selectedCharge.ChargeId, _currentUserName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+        if (ok)
+        {
+            await SendNotification($"حذف رسوم {FormatMoney(_selectedCharge.ChargeAmount)} ج - {_selectedCharge.PartyName} بواسطة {_currentUserName}");
+        }
+
+        _isSaving = false;
+        _showDeleteDialog = false;
+        await LoadData();
+    }
+}

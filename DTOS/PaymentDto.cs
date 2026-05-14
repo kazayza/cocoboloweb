@@ -102,6 +102,7 @@ public class PaymentMethodSummaryDto
 public class PaymentFormDto
 {
     public int? TransactionId { get; set; }
+    public DateTime PaymentDate { get; set; } = DateTime.Now;
     public string? InvoiceReferenceNumber { get; set; }
     public string TransactionType { get; set; } = TransactionTypes.Sale;
 
@@ -122,7 +123,10 @@ public class PaymentFormDto
 
     // Validation
     public bool IsValid { get; set; }
+    public string? LastModifiedBy { get; set; }
+    public DateTime? LastModifiedAt { get; set; }
 }
+
 
 // ============================
 // تحليل النسب لفاتورة (المرجع للمستخدم)
@@ -230,4 +234,15 @@ public class InvoiceLookupDto
     public decimal Remaining => GrandTotal - PaidAmount;
     public string TransactionType { get; set; } = "";
     public string? Status { get; set; }
+    public string? EmpName { get; set; }
+}
+public class PartyBalanceDto
+{
+    public int TotalInvoices { get; set; }
+    public decimal GrandTotal { get; set; }
+    public decimal PaidAmount { get; set; }
+    public decimal Remaining { get; set; }
+    public int PaidInvoices { get; set; }
+    public int PartialInvoices { get; set; }
+    public int OpenInvoices { get; set; }
 }

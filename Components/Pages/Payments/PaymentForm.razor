@@ -109,7 +109,7 @@ else
                                          Value="_selectedInvoice"
                                          ValueChanged="OnInvoiceSelected"
                                          SearchFunc="SearchInvoices"
-                                         ToStringFunc="@(i => i == null ? "" : $"{i.ReferenceNumber} - {i.PartyName}")"
+                                         ToStringFunc="@(i => i == null ? "" : _form.TransactionType == TransactionTypes.Purchase && !string.IsNullOrEmpty(i.EmpName) ? $"{i.ReferenceNumber} - {i.PartyName} - {i.EmpName}" : $"{i.ReferenceNumber} - {i.PartyName}")"
                                          Variant="Variant.Outlined"
                                          Adornment="Adornment.Start"
                                          AdornmentIcon="@Icons.Material.Filled.Search"
@@ -125,12 +125,17 @@ else
                                             متبقي: @inv.Remaining.ToString("N2") ج
                                         </span>
                                     </div>
-                                    <span style="font-size:0.85rem;">@inv.PartyName
-                                        @if (!string.IsNullOrEmpty(inv.PartyPhone))
-                                        {
-                                            <span> • 📞 @inv.PartyPhone</span>
-                                        }
-                                    </span>
+                                    <span style="font-size:0.85rem;">
+    @inv.PartyName
+    @if (_form.TransactionType == TransactionTypes.Purchase && !string.IsNullOrEmpty(inv.EmpName))
+    {
+        <span style="color:#3b82f6; font-weight:600;"> → @inv.EmpName</span>
+    }
+    @if (!string.IsNullOrEmpty(inv.PartyPhone))
+    {
+        <span> • 📞 @inv.PartyPhone</span>
+    }
+</span>
                                     <span style="font-size:0.78rem; color:var(--mud-palette-text-secondary);">
                                         إجمالي: @inv.GrandTotal.ToString("N2") ج |
                                         مدفوع: @inv.PaidAmount.ToString("N2") ج |
@@ -148,7 +153,7 @@ else
                     <MudPaper Class="form-section tiers-section" Elevation="0">
                         <div class="section-header">
                             <MudIcon Icon="@Icons.Material.Filled.PieChart" />
-                            <h3>📊 جدول الدفعات المرجعي (70% - 20% - 10%)</h3>
+                            <h3>جدول الدفعات المرجعي (70% - 20% - 10%)</h3>
                         </div>
 
                         <div class="tiers-grid">
@@ -198,6 +203,39 @@ else
                         </div>
                     </MudPaper>
                 }
+                <!-- ⭐ سجل المدفوعات السابقة -->
+<!-- ⭐ سجل المدفوعات السابقة -->
+@if (_paymentHistory.Any())
+{
+    <MudPaper Class="form-section" Elevation="0">
+        <div class="section-header">
+            <MudIcon Icon="@Icons.Material.Filled.History" />
+            <h3>سجل المدفوعات السابقة (@_paymentHistory.Count)</h3>
+        </div>
+        <div class="history-list">
+            @foreach (var hist in _paymentHistory)
+            {
+                <div class="history-row">
+                    <div class="history-main">
+                        <span class="history-amount">@FormatMoney(hist.Amount) ج</span>
+                        <span class="history-pct">(@hist.Percentage%)</span>
+                        <span class="history-method">
+                            @PaymentMethods.All.GetValueOrDefault(hist.PaymentMethod ?? "Cash", hist.PaymentMethod ?? "-")
+                        </span>
+                        @if (!string.IsNullOrEmpty(hist.CashBoxName))
+                        {
+                            <span class="history-cashbox">🏦 @hist.CashBoxName</span>
+                        }
+                    </div>
+                    <div class="history-meta">
+                        <span>@hist.PaymentDate.ToString("yyyy/MM/dd HH:mm")</span>
+                        <span>بواسطة: @(hist.CreatedBy ?? "-")</span>
+                    </div>
+                </div>
+            }
+        </div>
+    </MudPaper>
+}
 
                 <!-- 4) إدخال الدفعة -->
                 @if (_selectedInvoice != null || _isEditMode)
@@ -223,9 +261,29 @@ else
                                 💯 المتبقي كامل (@FormatMoney(_form.InvoiceRemaining) ج)
                             </button>
                         </div>
+                        <!-- ⭐ تحذير دفعة مكررة -->
+                        @if (_hasDuplicateWarning)
+                        {
+                            <MudAlert Severity="Severity.Warning" Class="mt-2 mb-2">
+                                @_duplicateWarningMsg
+                            </MudAlert>
+                        }
+                        
 
                         <div class="grid-2 mt-3">
-                            <MudNumericField @bind-Value="_form.Amount"
+    <MudDatePicker Date="@_form.PaymentDate"
+                   DateChanged="OnPaymentDateChanged"
+                   Label="تاريخ الدفعة *"
+                   Variant="Variant.Outlined"
+                   Max="@DateTime.Now" />
+
+    <MudTimePicker Time="@_form.PaymentDate.TimeOfDay"
+                   TimeChanged="OnPaymentTimeChanged"
+                   Label="وقت الدفعة"
+                   Variant="Variant.Outlined" />
+</div>
+<div class="grid-2 mt-3">
+    <MudNumericField @bind-Value="_form.Amount"
                                              @bind-Value:after="OnAmountChanged"
                                              Label="مبلغ الدفعة *"
                                              Variant="Variant.Outlined"
@@ -264,7 +322,7 @@ else
                             <div class="payment-analysis">
                                 <div class="analysis-header">
                                     <MudIcon Icon="@Icons.Material.Filled.Analytics" />
-                                    <strong>📊 تحليل الدفعة:</strong>
+                                    <strong>تحليل الدفعة:</strong>
                                 </div>
 
                                 <div class="analysis-pct">
@@ -301,7 +359,52 @@ else
                 {
                     <MudPaper Class="summary-card" Elevation="0">
                         <h3>@(_isEditMode ? "بيانات الدفعة" : "ملخص الفاتورة")</h3>
-
+                        @if (_isEditMode && _form.LastModifiedAt.HasValue)
+{
+    <div class="last-modified-info">
+        <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Small" />
+        <span>آخر تعديل: @_form.LastModifiedAt.Value.ToString("yyyy/MM/dd HH:mm") بواسطة @_form.LastModifiedBy</span>
+    </div>
+}
+                         <!-- ⭐ رصيد العميل الإجمالي -->
+    @if (_partyBalance != null)
+    {
+        <div class="party-balance">
+            <div class="balance-title">رصيد العميل الإجمالي</div>
+            <div class="balance-grid">
+                <div class="balance-item">
+                    <span class="balance-value">@_partyBalance.TotalInvoices</span>
+                    <span class="balance-label">فاتورة</span>
+                </div>
+                <div class="balance-item">
+                    <span class="balance-value">@FormatMoney(_partyBalance.GrandTotal)</span>
+                    <span class="balance-label">الإجمالي</span>
+                </div>
+                <div class="balance-item">
+                    <span class="balance-value paid-color">@FormatMoney(_partyBalance.PaidAmount)</span>
+                    <span class="balance-label">المدفوع</span>
+                </div>
+                <div class="balance-item">
+                    <span class="balance-value remain-color">@FormatMoney(_partyBalance.Remaining)</span>
+                    <span class="balance-label">المتبقي</span>
+                </div>
+            </div>
+            <div class="balance-statuses">
+                @if (_partyBalance.PaidInvoices > 0)
+                {
+                    <span class="balance-badge badge-paid">✅ @_partyBalance.PaidInvoices مدفوعة</span>
+                }
+                @if (_partyBalance.PartialInvoices > 0)
+                {
+                    <span class="balance-badge badge-partial">⏳ @_partyBalance.PartialInvoices جزئية</span>
+                }
+                @if (_partyBalance.OpenInvoices > 0)
+                {
+                    <span class="balance-badge badge-open">📭 @_partyBalance.OpenInvoices مفتوحة</span>
+                }
+            </div>
+        </div>
+    }
                         <div class="summary-info">
                             <div class="info-item">
                                 <span>الفاتورة:</span>
@@ -392,6 +495,81 @@ else
         </div>
     </div>
 }
+<!-- ⭐ Confirm Save Dialog -->
+<MudDialog @bind-Visible="_showConfirmDialog">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+            <MudText Typo="Typo.h6">@(_isEditMode ? "تأكيد تعديل الدفعة" : "تأكيد تسجيل الدفعة")</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="confirm-details">
+            <div class="confirm-row">
+                <span>الفاتورة:</span>
+                <strong>@_form.InvoiceReferenceNumber</strong>
+            </div>
+            <div class="confirm-row">
+                <span>العميل:</span>
+                <strong>@_form.PartyName</strong>
+            </div>
+            @if (!string.IsNullOrEmpty(_form.PartyPhone))
+            {
+                <div class="confirm-row">
+                    <span>الهاتف:</span>
+                    <strong>@_form.PartyPhone</strong>
+                </div>
+            }
+            <div class="confirm-divider"></div>
+            <div class="confirm-row">
+                <span>المبلغ:</span>
+                <strong style="color: var(--gold); font-size: 1.1rem;">@FormatMoney(_form.Amount) ج</strong>
+            </div>
+            <div class="confirm-row">
+                <span>طريقة الدفع:</span>
+                <strong>@PaymentMethods.All.GetValueOrDefault(_form.PaymentMethod, _form.PaymentMethod)</strong>
+            </div>
+            <div class="confirm-row">
+                <span>الخزينة:</span>
+                <strong>@(_cashBoxes.FirstOrDefault(c => c.CashBoxId == _form.CashBoxId)?.CashBoxName ?? "-")</strong>
+            </div>
+            <div class="confirm-row">
+                <span>التاريخ:</span>
+                <strong>@_form.PaymentDate.ToString("yyyy/MM/dd HH:mm")</strong>
+            </div>
+            <div class="confirm-divider"></div>
+            <div class="confirm-row">
+                <span>إجمالي الفاتورة:</span>
+                <strong>@FormatMoney(_form.InvoiceGrandTotal) ج</strong>
+            </div>
+            <div class="confirm-row">
+                <span>المدفوع سابقاً:</span>
+                <strong class="paid-color">@FormatMoney(_form.InvoicePaidBefore) ج</strong>
+            </div>
+            <div class="confirm-row">
+                <span>المتبقي بعد الدفعة:</span>
+                <strong class="@((_form.InvoiceRemaining - _form.Amount) == 0 ? "paid-color" : "remain-color")">
+                    @FormatMoney(_form.InvoiceRemaining - _form.Amount) ج
+                </strong>
+            </div>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showConfirmDialog = false)" Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.Close">
+            إلغاء
+        </MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled"
+                   OnClick="ConfirmSave" Disabled="@_isSaving"
+                   StartIcon="@Icons.Material.Filled.Check">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            @(_isEditMode ? "تأكيد التعديل" : "تأكيد الحفظ")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
 
 <style>
     .payment-form-page { padding: 1rem; max-width: 1800px; margin: 0 auto; direction: rtl; }
@@ -649,6 +827,108 @@ else
     .placeholder-card p { color: var(--mud-palette-text-secondary); margin: 0; font-size: 0.85rem; }
 
     .loading-container { display:flex; align-items:center; justify-content:center; min-height: 60vh; }
+    /* Payment History */
+.history-list {
+    display: flex; flex-direction: column; gap: 0.5rem;
+}
+.history-row {
+    background: var(--mud-palette-background);
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 10px; padding: 0.65rem 0.85rem;
+}
+.history-main {
+    display: flex; align-items: center; gap: 0.5rem;
+    margin-bottom: 0.25rem;
+}
+.history-amount {
+    font-size: 0.95rem; font-weight: 800;
+    color: var(--mud-palette-success);
+}
+.history-pct {
+    font-size: 0.82rem; font-weight: 600;
+    color: var(--mud-palette-text-secondary);
+}
+.history-method {
+    background: rgba(212,175,55,0.1); color: var(--gold-dark);
+    padding: 0.15rem 0.5rem; border-radius: 6px;
+    font-size: 0.78rem; font-weight: 600;
+}
+.history-meta {
+    display: flex; gap: 1rem;
+    font-size: 0.78rem; color: var(--mud-palette-text-secondary);
+}
+.history-cashbox {
+    font-size: 0.78rem; color: var(--mud-palette-text-secondary);
+    font-weight: 600;
+}
+/* Party Balance */
+.party-balance {
+    background: linear-gradient(135deg, rgba(212,175,55,0.06), rgba(212,175,55,0.02));
+    border: 1px solid var(--gold-border);
+    border-radius: 12px; padding: 0.85rem;
+    margin-bottom: 1rem;
+}
+.balance-title {
+    font-size: 0.85rem; font-weight: 700;
+    color: var(--mud-palette-text-secondary);
+    margin-bottom: 0.65rem;
+}
+.balance-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 0.5rem; margin-bottom: 0.65rem;
+}
+.balance-item {
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center;
+}
+.balance-value {
+    font-size: 0.92rem; font-weight: 800;
+    color: var(--mud-palette-text-primary);
+}
+.balance-label {
+    font-size: 0.7rem; color: var(--mud-palette-text-secondary);
+}
+.balance-statuses {
+    display: flex; gap: 0.4rem; flex-wrap: wrap;
+    justify-content: center;
+}
+.balance-badge {
+    padding: 0.2rem 0.5rem; border-radius: 6px;
+    font-size: 0.72rem; font-weight: 700;
+}
+.badge-paid { background: rgba(16,185,129,0.1); color: #10b981; }
+.badge-partial { background: rgba(245,158,11,0.1); color: #f59e0b; }
+.badge-open { background: rgba(59,130,246,0.1); color: #3b82f6; }
+/* Colors */
+.paid-color { color: var(--mud-palette-success) !important; }
+.remain-color { color: var(--mud-palette-error) !important; }
+
+/* Confirm Dialog */
+.confirm-details {
+    display: flex; flex-direction: column; gap: 0.4rem;
+}
+.confirm-row {
+    display: flex; justify-content: space-between;
+    align-items: center; padding: 0.35rem 0;
+    font-size: 0.9rem;
+}
+.confirm-row span {
+    color: var(--mud-palette-text-secondary);
+}
+.confirm-row strong {
+    color: var(--mud-palette-text-primary);
+}
+.confirm-divider {
+    height: 1px; background: var(--mud-palette-divider);
+    margin: 0.35rem 0;
+}
+.last-modified-info {
+    display: flex; align-items: center; gap: 0.4rem;
+    font-size: 0.78rem; color: var(--mud-palette-text-secondary);
+    margin-bottom: 0.75rem; padding: 0.4rem 0.6rem;
+    background: rgba(245,158,11,0.06); border-radius: 6px;
+}
+.last-modified-info .mud-icon-root { color: #f59e0b; }
 
     @@media (max-width: 1100px) {
         .form-grid { grid-template-columns: 1fr; }
@@ -659,6 +939,7 @@ else
         .tiers-grid { grid-template-columns: 1fr; }
         .type-toggle-form { grid-template-columns: 1fr; }
     }
+    
 </style>
 
 @code {
@@ -676,6 +957,11 @@ else
     private bool _isEditMode = false;
     private int? _editPaymentId;
     private string _editReceiptNumber = "";
+    private List<PaymentHistoryDto> _paymentHistory = new();
+    private PartyBalanceDto? _partyBalance;
+    private bool _showConfirmDialog = false;
+    private bool _hasDuplicateWarning = false;
+    private string _duplicateWarningMsg = "";
 
     private PaymentFormDto _form = new();
     private InvoiceLookupDto? _selectedInvoice;
@@ -739,6 +1025,8 @@ else
     PaidAmount = _form.InvoicePaidBefore
 };
                 await LoadAnalysis();
+                _paymentHistory = await PaymentService.GetPaymentHistoryAsync(_form.TransactionId ?? 0);
+                await LoadPartyBalance();
             }
             else
             {
@@ -763,6 +1051,38 @@ else
 
         _isLoading = false;
     }
+    private async Task LoadPartyBalance()
+{
+    if (_form.PartyId.HasValue)
+    {
+        _partyBalance = await PaymentService.GetPartyBalanceAsync(
+            _form.PartyId.Value, _form.TransactionType);
+    }
+    else
+    {
+        _partyBalance = null;
+    }
+}
+
+    private void CheckDuplicatePayment()
+{
+    _hasDuplicateWarning = false;
+    _duplicateWarningMsg = "";
+
+    if (_form.Amount <= 0 || !_form.TransactionId.HasValue) return;
+
+    // نفس المبلغ + نفس الفاتورة + نفس اليوم
+    var sameAmountHistory = _paymentHistory.Where(p =>
+        p.Amount == _form.Amount &&
+        p.PaymentDate.Date == _form.PaymentDate.Date).ToList();
+
+    if (sameAmountHistory.Any())
+    {
+        _hasDuplicateWarning = true;
+        var dup = sameAmountHistory.First();
+        _duplicateWarningMsg = $"⚠️ تم تسجيل دفعة بنفس المبلغ ({FormatMoney(_form.Amount)} ج) على نفس الفاتورة بتاريخ {dup.PaymentDate:yyyy/MM/dd} بواسطة {dup.CreatedBy}";
+    }
+}
 
     private async Task SwitchType(string type)
     {
@@ -786,9 +1106,21 @@ else
     }
 
     private async Task<IEnumerable<InvoiceLookupDto>> SearchInvoices(string value, CancellationToken token)
+{
+    var results = await PaymentService.SearchInvoicesAsync(_form.TransactionType, value, true);
+
+    // ⭐ اختيار تلقائي لو نتيجة واحدة
+    if (results.Count == 1 && _selectedInvoice == null)
     {
-        return await PaymentService.SearchInvoicesAsync(_form.TransactionType, value, true);
+        await InvokeAsync(async () =>
+        {
+            await OnInvoiceSelected(results.First());
+            StateHasChanged();
+        });
     }
+
+    return results;
+}
 
     private async Task OnInvoiceSelected(InvoiceLookupDto? inv)
     {
@@ -812,6 +1144,8 @@ else
         _form.Amount = 0;
 
         await LoadAnalysis();
+        _paymentHistory = await PaymentService.GetPaymentHistoryAsync(inv.TransactionId);
+        await LoadPartyBalance();
     }
 
     private async Task LoadAnalysis()
@@ -823,6 +1157,7 @@ else
 
     private async Task OnAmountChanged()
     {
+        CheckDuplicatePayment();
         await LoadAnalysis();
     }
 
@@ -835,36 +1170,69 @@ else
     }
 
     private async Task SavePayment()
-    {
-        if (!CanSave) return;
+{
+    if (!CanSave) return;
+    _showConfirmDialog = true;
+}
 
-        _isSaving = true;
-        try
+private async Task ConfirmSave()
+{
+    _showConfirmDialog = false;
+    _isSaving = true;
+    try
+    {
+        if (_isEditMode && _editPaymentId.HasValue)
         {
-            if (_isEditMode && _editPaymentId.HasValue)
-            {
-                // ⭐ تعديل
-                var (ok, msg) = await PaymentService.UpdatePaymentAsync(
-                    _editPaymentId.Value, _form, _currentUserName!);
-                Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-                if (ok)
-                    Navigation.NavigateTo($"/payments/{_editPaymentId.Value}/receipt");
-            }
-            else
-            {
-                // ⭐ إضافة
-                var (ok, msg, paymentId) = await PaymentService.CreatePaymentAsync(
-                    _form, _currentUserName!);
-                Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-                if (ok && paymentId.HasValue)
-                    Navigation.NavigateTo($"/payments/{paymentId.Value}/receipt");
-            }
+            var (ok, msg) = await PaymentService.UpdatePaymentAsync(
+                _editPaymentId.Value, _form, _currentUserName!);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok)
+                Navigation.NavigateTo($"/payments/{_editPaymentId.Value}/receipt");
         }
-        finally
+        else
         {
-            _isSaving = false;
+            var (ok, msg, paymentId) = await PaymentService.CreatePaymentAsync(
+                _form, _currentUserName!);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok && paymentId.HasValue)
+                Navigation.NavigateTo($"/payments/{paymentId.Value}/receipt");
         }
     }
+    finally
+    {
+        _isSaving = false;
+    }
+}
+    private void OnPaymentDateChanged(DateTime? d)
+{
+    if (d.HasValue)
+    {
+        var time = _form.PaymentDate.TimeOfDay;
+        _form.PaymentDate = d.Value.Date + time;
+    }
+    CheckDuplicatePayment();
+}
+
+private void OnPaymentTimeChanged(TimeSpan? t)
+{
+    if (t.HasValue)
+    {
+        _form.PaymentDate = _form.PaymentDate.Date + t.Value;
+    }
+}
+private async Task TryAutoSelectInvoice(string searchText)
+{
+    if (string.IsNullOrWhiteSpace(searchText)) return;
+
+    var results = await PaymentService.SearchInvoicesAsync(
+        _form.TransactionType, searchText, true, 2);
+
+    // لو نتيجة واحدة بس → اخترها تلقائي
+    if (results.Count == 1)
+    {
+        await OnInvoiceSelected(results.First());
+    }
+}
 
     private void GoBack() => Navigation.NavigateTo("/payments");
 

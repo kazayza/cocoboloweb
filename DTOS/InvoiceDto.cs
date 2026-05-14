@@ -324,3 +324,88 @@ public static class SystemRoles
     public const string AccountManager = "AccountManager";
     public const string Account = "Account";
 }
+// === قائمة الرسوم ===
+public class AdditionalChargeListDto
+{
+    public int ChargeId { get; set; }
+    public string? ChargeType { get; set; }
+    public string? ChargeDescription { get; set; }
+    public decimal ChargeAmount { get; set; }
+    public string? Status { get; set; }
+    public string? ChargeTypeName { get; set; }
+    public string? StatusName { get; set; }
+    public int? PartyId { get; set; }
+    public string? PartyName { get; set; }
+    public string? PartyPhone { get; set; }
+    public int? TransactionId { get; set; }
+    public string? TransactionRef { get; set; }
+    public int? AppliedToTransactionId { get; set; }
+    public string? AppliedToTransactionRef { get; set; }
+    public string? Notes { get; set; }
+    public string? CreatedBy { get; set; }
+    public DateTime? CreatedAt { get; set; }
+}
+
+// === فلتر الرسوم ===
+public class AdditionalChargeFilterDto
+{
+    public string? SearchText { get; set; }
+    public string? ChargeType { get; set; }
+    public string? Status { get; set; }
+    public DateTime? DateFrom { get; set; }
+    public DateTime? DateTo { get; set; }
+    public int PageNumber { get; set; } = 1;
+    public int PageSize { get; set; } = 20;
+}
+
+// === إضافة/تعديل رسوم ===
+public class AdditionalChargeFormDto
+{
+    public int ChargeId { get; set; }
+    public int? PartyId { get; set; }
+    public string? ChargeType { get; set; }
+    public string? ChargeDescription { get; set; }
+    public decimal ChargeAmount { get; set; }
+    public string? Status { get; set; }
+    public string? Notes { get; set; }
+}
+
+// === إحصائيات الرسوم ===
+public class AdditionalChargeStatsDto
+{
+    public decimal TotalAmount { get; set; }
+    public decimal PaidAmount { get; set; }
+    public decimal AppliedAmount { get; set; }
+    public decimal NonRefundableAmount { get; set; }
+    public decimal PendingAmount { get; set; }
+    public int TotalCount { get; set; }
+}
+public static class ChargeTypes
+{
+    public const string Inspection = "Inspection";
+    public const string Shipping = "Shipping";
+    public const string Installation = "Installation";
+    public const string Other = "Other";
+
+    public static readonly Dictionary<string, string> All = new()
+    {
+        { Inspection, "رسوم معاينة" },
+        { Shipping, "رسوم شحن" },
+        { Installation, "رسوم تركيب" },
+        { Other, "رسوم أخرى" }
+    };
+}
+
+public static class ChargeStatuses
+{
+    public const string Paid = "Paid";
+    public const string Applied = "Applied";
+    public const string NonRefundable = "NonRefundable";
+
+    public static readonly Dictionary<string, string> All = new()
+    {
+        { Paid, "مدفوعة" },
+        { Applied, "مطبقة" },
+        { NonRefundable, "غير مستردة" }
+    };
+}

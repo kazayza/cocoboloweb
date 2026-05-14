@@ -28,6 +28,8 @@ public partial class Payment
     public string? CreatedBy { get; set; }
 
     public DateTime? CreatedAt { get; set; }
+    public string? LastModifiedBy { get; set; }
+    public DateTime? LastModifiedAt { get; set; }
 
     public virtual ICollection<CashboxTransaction> CashboxTransactions { get; set; } = new List<CashboxTransaction>();
 

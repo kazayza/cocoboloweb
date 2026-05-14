@@ -28,50 +28,47 @@ public class PaymentService : IPaymentService
                 select new { p, t };
 
     // استبعد فواتير المرآة لو مش مطلوبة
-    if (filter.IncludeMirrorPurchases != true && filter.TransactionType == TransactionTypes.Purchase)
-    {
-        query = query.Where(x => x.t.PartyId != SystemConstants.DefaultSupplierId
-                                 || x.t.ReferenceType == null
-                                 || !x.t.ReferenceType.StartsWith("MirrorOf:"));
-    }
+    ///if (filter.IncludeMirrorPurchases != true && filter.TransactionType == TransactionTypes.Purchase)
+    ///{
+        ///query = query.Where(x => x.t.PartyId != SystemConstants.DefaultSupplierId
+                               ///  || x.t.ReferenceType == null
+                               ///  || !x.t.ReferenceType.StartsWith("MirrorOf:"));
+   /// }
 
     // ⭐ فلتر بحث بالعربي + EmpID
     if (!string.IsNullOrWhiteSpace(filter.SearchText))
+{
+    var s = filter.SearchText.Trim();
+
+    var allParties = await _db.Parties.AsNoTracking()
+        .Select(p => new { p.PartyId, p.PartyName, p.Phone, p.Phone2 })
+        .ToListAsync();
+
+    var matchingPartyIds = allParties
+        .Where(p => (p.PartyName ?? "").Contains(s, StringComparison.OrdinalIgnoreCase)
+                 || (p.Phone ?? "").Contains(s, StringComparison.OrdinalIgnoreCase)
+                 || (p.Phone2 ?? "").Contains(s, StringComparison.OrdinalIgnoreCase))
+        .Select(p => p.PartyId)
+        .ToList();
+
+    List<int>? empPartyIds = null;
+    if (filter.TransactionType == TransactionTypes.Purchase)
     {
-        var s = filter.SearchText.Trim();
-
-        // جلب أسماء الأطراف للبحث بالعربي
-        var allParties = await _db.Parties.AsNoTracking()
-            .Select(p => new { p.PartyId, p.PartyName, p.Phone, p.Phone2 })
-            .ToListAsync();
-
-        var matchingPartyIds = allParties
-            .Where(p => (p.PartyName ?? "").ContainsArabic(s)
-                     || (p.Phone ?? "").ContainsArabic(s)
-                     || (p.Phone2 ?? "").ContainsArabic(s))
+        empPartyIds = allParties
+            .Where(p => (p.PartyName ?? "").Contains(s, StringComparison.OrdinalIgnoreCase))
             .Select(p => p.PartyId)
             .ToList();
-
-        // للمشتريات: بحث في EmpID (اسم العميل المرتبط)
-        List<int>? empPartyIds = null;
-        if (filter.TransactionType == TransactionTypes.Purchase)
-        {
-            empPartyIds = allParties
-                .Where(p => (p.PartyName ?? "").ContainsArabic(s))
-                .Select(p => p.PartyId)
-                .ToList();
-        }
-
-        // بحث برقم الفاتورة (عادي)
-        query = query.Where(x =>
-            (x.t.ReferenceNumber != null && x.t.ReferenceNumber.Contains(s)) ||
-            matchingPartyIds.Contains(x.t.PartyId) ||
-            (filter.TransactionType == TransactionTypes.Purchase
-                && x.t.EmpId != null
-                && empPartyIds != null
-                && empPartyIds.Contains(x.t.EmpId.Value))
-        );
     }
+
+    query = query.Where(x =>
+        (x.t.ReferenceNumber != null && x.t.ReferenceNumber.Contains(s)) ||
+        matchingPartyIds.Contains(x.t.PartyId) ||
+        (filter.TransactionType == TransactionTypes.Purchase
+            && x.t.EmpId != null
+            && empPartyIds != null
+            && empPartyIds.Contains(x.t.EmpId.Value))
+    );
+}
 
     // فلاتر تاريخ
     if (filter.DateFrom.HasValue)
@@ -501,24 +498,35 @@ var items = rawData.Select(x =>
         query = query.Where(t => t.GrandTotal > t.PaidAmount);
 
     if (!string.IsNullOrWhiteSpace(search))
+{
+    var s = search.Trim();
+
+    var allParties = await _db.Parties.AsNoTracking()
+        .Select(p => new { p.PartyId, p.PartyName, p.Phone, p.Phone2 })
+        .ToListAsync();
+
+    var matchingPartyIds = allParties
+        .Where(p => (p.PartyName ?? "").Contains(s, StringComparison.OrdinalIgnoreCase)
+                 || (p.Phone ?? "").Contains(s, StringComparison.OrdinalIgnoreCase)
+                 || (p.Phone2 ?? "").Contains(s, StringComparison.OrdinalIgnoreCase))
+        .Select(p => p.PartyId)
+        .ToList();
+
+    // ⭐ في المشتريات نبحث في EmpId كمان (العميل المرتبط)
+    if (transactionType == TransactionTypes.Purchase)
     {
-        var s = search.Trim();
-
-        // ⭐ بحث بالعربي
-        var allParties = await _db.Parties.AsNoTracking()
-            .Select(p => new { p.PartyId, p.PartyName, p.Phone })
-            .ToListAsync();
-
-        var matchingPartyIds = allParties
-            .Where(p => (p.PartyName ?? "").ContainsArabic(s)
-                     || (p.Phone ?? "").ContainsArabic(s))
-            .Select(p => p.PartyId)
-            .ToList();
-
+        query = query.Where(t =>
+            (t.ReferenceNumber != null && t.ReferenceNumber.Contains(s)) ||
+            matchingPartyIds.Contains(t.PartyId) ||
+            (t.EmpId != null && matchingPartyIds.Contains(t.EmpId.Value)));
+    }
+    else
+    {
         query = query.Where(t =>
             (t.ReferenceNumber != null && t.ReferenceNumber.Contains(s)) ||
             matchingPartyIds.Contains(t.PartyId));
     }
+}
 
     return await query
         .OrderByDescending(t => t.TransactionDate)
@@ -533,115 +541,212 @@ var items = rawData.Select(x =>
                 .Select(p => p.PartyName).FirstOrDefault() ?? "",
             PartyPhone = _db.Parties.Where(p => p.PartyId == t.PartyId)
                 .Select(p => p.Phone).FirstOrDefault(),
+                EmpName = t.EmpId != null
+        ? _db.Parties.Where(p => p.PartyId == t.EmpId.Value)
+              .Select(p => p.PartyName).FirstOrDefault()
+        : null,
             GrandTotal = t.GrandTotal,
             PaidAmount = t.PaidAmount,
             TransactionType = t.TransactionType,
             Status = t.InvoiceStatus
         }).ToListAsync();
 }
+public async Task<List<PaymentHistoryDto>> GetPaymentHistoryAsync(int transactionId)
+{
+    var transaction = await _db.Transactions.AsNoTracking()
+        .Where(t => t.TransactionId == transactionId)
+        .Select(t => new { t.GrandTotal })
+        .FirstOrDefaultAsync();
+
+    var grandTotal = transaction?.GrandTotal ?? 0;
+
+    return await (from p in _db.Payments.AsNoTracking()
+                  where p.TransactionId == transactionId
+                         && p.PaymentMethod != "Advance"
+                  orderby p.PaymentDate descending
+                  select new PaymentHistoryDto
+                  {
+                      PaymentId = p.PaymentId,
+                      Amount = p.Amount,
+                      PaymentDate = p.PaymentDate,
+                      PaymentMethod = p.PaymentMethod ?? "Cash",
+                      CashBoxName = (from ct in _db.CashboxTransactions
+                                     join cb in _db.CashBoxes on ct.CashBoxId equals cb.CashBoxId
+                                     where ct.PaymentId == p.PaymentId
+                                     select cb.CashBoxName).FirstOrDefault(),
+                      Notes = p.Notes,
+                      CreatedBy = p.CreatedBy,
+                      Percentage = grandTotal == 0 ? 0
+                          : Math.Round((p.Amount / grandTotal) * 100, 1)
+                  }).ToListAsync();
+}
+public async Task<PartyBalanceDto> GetPartyBalanceAsync(int partyId, string transactionType)
+{
+    var invoices = await _db.Transactions.AsNoTracking()
+        .Where(t => t.PartyId == partyId
+                    && t.TransactionType == transactionType
+                    && t.InvoiceStatus != "Cancelled")
+        .ToListAsync();
+
+    return new PartyBalanceDto
+    {
+        TotalInvoices = invoices.Count,
+        GrandTotal = invoices.Sum(t => t.GrandTotal),
+        PaidAmount = invoices.Sum(t => t.PaidAmount),
+        Remaining = invoices.Sum(t => t.GrandTotal - t.PaidAmount),
+        PaidInvoices = invoices.Count(t => t.InvoiceStatus == "Paid"),
+        PartialInvoices = invoices.Count(t => t.InvoiceStatus == "PartiallyPaid"),
+        OpenInvoices = invoices.Count(t => t.InvoiceStatus == "Open" || t.InvoiceStatus == null)
+    };
+}
+public async Task<IEnumerable<PartyLookupDto>> SearchPartiesAsync(string search)
+{
+    if (string.IsNullOrWhiteSpace(search)) return Enumerable.Empty<PartyLookupDto>();
+
+    var s = search.Trim().ToLower();
+    return await _db.Parties.AsNoTracking()
+        .Where(p => (p.PartyName ?? "").ToLower().Contains(s)
+                 || (p.Phone ?? "").ToLower().Contains(s))
+        .Select(p => new PartyLookupDto
+        {
+            PartyId = p.PartyId,
+            PartyName = p.PartyName,
+            Phone = p.Phone
+        })
+        .Take(15)
+        .ToListAsync();
+}
 
     // ============================================================
     //  ⭐ إنشاء دفعة جديدة (الأهم)
     // ============================================================
     public async Task<(bool Success, string Message, int? PaymentId)> CreatePaymentAsync(
-        PaymentFormDto dto, string currentUserName)
+    PaymentFormDto dto, string currentUserName)
+{
+    if (dto.TransactionId == null || dto.TransactionId == 0)
+        return (false, "يرجى اختيار الفاتورة.", null);
+    if (dto.Amount <= 0)
+        return (false, "المبلغ يجب أن يكون أكبر من صفر.", null);
+    if (dto.CashBoxId == null || dto.CashBoxId == 0)
+        return (false, "يرجى اختيار الخزينة.", null);
+
+    var transaction = await _db.Transactions
+        .FirstOrDefaultAsync(t => t.TransactionId == dto.TransactionId.Value);
+    if (transaction == null)
+        return (false, "الفاتورة غير موجودة.", null);
+    if (transaction.InvoiceStatus == "Cancelled")
+        return (false, "لا يمكن إضافة دفعة لفاتورة ملغية.", null);
+
+    var remaining = transaction.GrandTotal - transaction.PaidAmount;
+    if (dto.Amount > remaining)
+        return (false, $"المبلغ ({dto.Amount:N2}) أكبر من المتبقي ({remaining:N2}).", null);
+
+    // ⭐ جلب بيانات للملخص التلقائي
+    var partyName = await _db.Parties.Where(p => p.PartyId == transaction.PartyId)
+        .Select(p => p.PartyName).FirstOrDefaultAsync() ?? "غير محدد";
+    var refNumber = transaction.ReferenceNumber ?? $"#{transaction.TransactionId}";
+    var methodAr = PaymentMethods.All.TryGetValue(dto.PaymentMethod ?? "Cash", out var m) ? m : dto.PaymentMethod ?? "نقدي";
+    var pct = transaction.GrandTotal == 0 ? 0 : Math.Round((dto.Amount / transaction.GrandTotal) * 100, 1);
+
+    // ⭐ معرفة من أي نسبة (Tier)
+    var tierInfo = "";
+    var analysis = await GetPaymentAnalysisAsync(transaction.TransactionId, dto.Amount);
+    if (analysis?.CurrentPaymentAnalysis?.Allocations.Any() == true)
     {
-        if (dto.TransactionId == null || dto.TransactionId == 0)
-            return (false, "يرجى اختيار الفاتورة.", null);
-        if (dto.Amount <= 0)
-            return (false, "المبلغ يجب أن يكون أكبر من صفر.", null);
-        if (dto.CashBoxId == null || dto.CashBoxId == 0)
-            return (false, "يرجى اختيار الخزينة.", null);
+        var firstAlloc = analysis.CurrentPaymentAnalysis.Allocations.First();
+        tierInfo = $" - {firstAlloc.TierName}";
+    }
 
-        var transaction = await _db.Transactions
-            .FirstOrDefaultAsync(t => t.TransactionId == dto.TransactionId.Value);
-        if (transaction == null)
-            return (false, "الفاتورة غير موجودة.", null);
-        if (transaction.InvoiceStatus == "Cancelled")
-            return (false, "لا يمكن إضافة دفعة لفاتورة ملغية.", null);
+    // ⭐ تفريق تحصيل/سداد حسب النوع
+    var isSale = transaction.TransactionType == TransactionTypes.Sale;
+    var actionWord = isSale ? "تحصيل من" : "سداد إلى";
+    var cashActionWord = isSale ? "تحصيل" : "صرف";
+    var directionWord = isSale ? "من" : "إلى";
 
-        var remaining = transaction.GrandTotal - transaction.PaidAmount;
-        if (dto.Amount > remaining)
-            return (false, $"المبلغ ({dto.Amount:N2}) أكبر من المتبقي ({remaining:N2}).", null);
+    var autoNote = $"{actionWord} {partyName} على فاتورة {refNumber}{tierInfo} - {methodAr} ({pct}%)";
+    var finalNote = string.IsNullOrWhiteSpace(dto.Notes)
+        ? autoNote
+        : $"{autoNote} | {dto.Notes}";
 
-        using var tx = await _db.Database.BeginTransactionAsync();
+    var cashBoxName = await _db.CashBoxes.Where(cb => cb.CashBoxId == dto.CashBoxId.Value)
+        .Select(cb => cb.CashBoxName).FirstOrDefaultAsync() ?? "";
+    var cashNote = $"{cashActionWord} {dto.Amount:N2} ج {directionWord} {partyName} - فاتورة {refNumber}{tierInfo} - {pct}% - {cashBoxName}";
+
+    using var tx = await _db.Database.BeginTransactionAsync();
+    try
+    {
+        var payment = new Payment
+        {
+            TransactionId = transaction.TransactionId,
+            PaymentDate = dto.PaymentDate,
+            Amount = dto.Amount,
+            PaymentMethod = dto.PaymentMethod,
+            Notes = finalNote,
+            CreatedBy = currentUserName,
+            CreatedAt = DateTime.Now
+        };
+        _db.Payments.Add(payment);
+        await _db.SaveChangesAsync();
+
+        // نوع الحركة في الخزينة (قبض للمبيعات / صرف للمشتريات)
+        var cashboxType = isSale ? "In" : "Out";
+        var refType = isSale ? "SaleInvoice" : "PurchaseInvoice";
+
+        var cashTrans = new CashboxTransaction
+        {
+            CashBoxId = dto.CashBoxId.Value,
+            PaymentId = payment.PaymentId,
+            ReferenceId = transaction.TransactionId,
+            ReferenceType = refType,
+            TransactionType = cashboxType,
+            Amount = dto.Amount,
+            TransactionDate = DateTime.Now,
+            Notes = cashNote,
+            CreatedBy = currentUserName,
+            CreatedAt = DateTime.Now
+        };
+        _db.CashboxTransactions.Add(cashTrans);
+
+        // تحديث الفاتورة
+        transaction.PaidAmount += dto.Amount;
+        if (transaction.PaidAmount >= transaction.GrandTotal && transaction.GrandTotal > 0)
+            transaction.InvoiceStatus = "Paid";
+        else if (transaction.PaidAmount > 0)
+            transaction.InvoiceStatus = "PartiallyPaid";
+
+        await _db.SaveChangesAsync();
+
+        // ⭐ نربط الدفعة بحركة الخزينة
+        payment.CashboxTransactionId = cashTrans.CashboxTransactionId;
+        await _db.SaveChangesAsync();
+        await tx.CommitAsync();
+
+        // Audit
+        await _audit.LogAsync("Payments", "Insert",
+            payment.PaymentId.ToString(), null, payment, currentUserName);
+
+        // إشعارات
         try
         {
-            var payment = new Payment
-            {
-                TransactionId = transaction.TransactionId,
-                PaymentDate = DateTime.Now,
-                Amount = dto.Amount,
-                PaymentMethod = dto.PaymentMethod,
-                Notes = dto.Notes,
-                CreatedBy = currentUserName,
-                CreatedAt = DateTime.Now
-            };
-            _db.Payments.Add(payment);
-            await _db.SaveChangesAsync();
+            var actionAr = isSale ? "تحصيل دفعة من" : "سداد دفعة إلى";
+            var msg = $"{actionAr} {partyName} بمبلغ {dto.Amount:N2} ج ({pct}%) " +
+                      $"على فاتورة {transaction.ReferenceNumber} بواسطة {currentUserName}";
 
-            // نوع الحركة في الخزينة (قبض للمبيعات / صرف للمشتريات)
-            var cashboxType = transaction.TransactionType == TransactionTypes.Sale ? "In" : "Out";
-            var refType = transaction.TransactionType == TransactionTypes.Sale
-                ? "SaleInvoice" : "PurchaseInvoice";
-
-            _db.CashboxTransactions.Add(new CashboxTransaction
-            {
-                CashBoxId = dto.CashBoxId.Value,
-                PaymentId = payment.PaymentId,
-                ReferenceId = transaction.TransactionId,
-                ReferenceType = refType,
-                TransactionType = cashboxType,
-                Amount = dto.Amount,
-                TransactionDate = DateTime.Now,
-                Notes = $"تحصيل فاتورة {transaction.ReferenceNumber}",
-                CreatedBy = currentUserName,
-                CreatedAt = DateTime.Now
-            });
-
-            // تحديث الفاتورة
-            transaction.PaidAmount += dto.Amount;
-            if (transaction.PaidAmount >= transaction.GrandTotal && transaction.GrandTotal > 0)
-                transaction.InvoiceStatus = "Paid";
-            else if (transaction.PaidAmount > 0)
-                transaction.InvoiceStatus = "PartiallyPaid";
-
-            await _db.SaveChangesAsync();
-            await tx.CommitAsync();
-
-            // Audit
-            await _audit.LogAsync("Payments", "Insert",
-                payment.PaymentId.ToString(), null, payment, currentUserName);
-
-            // إشعارات
-            try
-            {
-                var partyName = await _db.Parties.Where(p => p.PartyId == transaction.PartyId)
-                    .Select(p => p.PartyName).FirstOrDefaultAsync() ?? "غير محدد";
-                var pct = transaction.GrandTotal == 0 ? 0
-                    : Math.Round((dto.Amount / transaction.GrandTotal) * 100, 1);
-
-                var actionAr = transaction.TransactionType == TransactionTypes.Sale
-                    ? "تحصيل دفعة من" : "دفع دفعة إلى";
-
-                var msg = $"{actionAr} {partyName} بمبلغ {dto.Amount:N2} ج ({pct}%) " +
-                          $"على فاتورة {transaction.ReferenceNumber} بواسطة {currentUserName}";
-
-                await _notify.NotifyRoleAsync("💰 إشعار دفعة", msg, SystemRoles.Admin,
-                    currentUserName, "frmPayments", "Payments", payment.PaymentId);
-                await _notify.NotifyRoleAsync("💰 إشعار دفعة", msg, SystemRoles.SalesManager,
-                    currentUserName, "frmPayments", "Payments", payment.PaymentId);
-            }
-            catch { }
-
-            return (true, "تم تسجيل الدفعة بنجاح.", payment.PaymentId);
+            await _notify.NotifyRoleAsync("💰 إشعار دفعة", msg, SystemRoles.Admin,
+                currentUserName, "frmPayments", "Payments", payment.PaymentId);
+            await _notify.NotifyRoleAsync("💰 إشعار دفعة", msg, SystemRoles.SalesManager,
+                currentUserName, "frmPayments", "Payments", payment.PaymentId);
         }
-        catch (Exception ex)
-        {
-            await tx.RollbackAsync();
-            return (false, $"حدث خطأ: {ex.Message}", null);
-        }
+        catch { }
+
+        return (true, "تم تسجيل الدفعة بنجاح.", payment.PaymentId);
     }
+    catch (Exception ex)
+    {
+        await tx.RollbackAsync();
+        return (false, $"حدث خطأ: {ex.Message}", null);
+    }
+}
 
     // ============================================================
     //  إلغاء دفعة (Hard delete + رد الخزينة)
@@ -731,21 +836,24 @@ public async Task<PaymentFormDto?> GetPaymentForEditAsync(int paymentId)
     var currentRemaining = transaction.GrandTotal - transaction.PaidAmount;
 
     return new PaymentFormDto
-    {
-        TransactionId = transaction.TransactionId,
-        InvoiceReferenceNumber = transaction.ReferenceNumber,
-        TransactionType = transaction.TransactionType,
-        PartyId = transaction.PartyId,
-        PartyName = party?.PartyName ?? "",
-        PartyPhone = party?.Phone,
-        InvoiceGrandTotal = transaction.GrandTotal,
-        InvoicePaidBefore = transaction.PaidAmount - payment.Amount, // من غير الدفعة دي
-        InvoiceRemaining = currentRemaining + payment.Amount, // المتبقي لو شيلنا الدفعة دي
-        Amount = payment.Amount,
-        PaymentMethod = payment.PaymentMethod ?? "Cash",
-        CashBoxId = cashBox,
-        Notes = payment.Notes
-    };
+{
+    TransactionId = transaction.TransactionId,
+    InvoiceReferenceNumber = transaction.ReferenceNumber,
+    TransactionType = transaction.TransactionType,
+    PartyId = transaction.PartyId,
+    PartyName = party?.PartyName ?? "",
+    PartyPhone = party?.Phone,
+    InvoiceGrandTotal = transaction.GrandTotal,
+    InvoicePaidBefore = transaction.PaidAmount - payment.Amount,
+    InvoiceRemaining = currentRemaining + payment.Amount,
+    Amount = payment.Amount,
+    PaymentMethod = payment.PaymentMethod ?? "Cash",
+    CashBoxId = cashBox,
+    Notes = payment.Notes,
+    PaymentDate = payment.PaymentDate,  // ⭐ تاريخ الدفعة الأصلي
+    LastModifiedBy = payment.LastModifiedBy,
+    LastModifiedAt = payment.LastModifiedAt
+};
 }
 
 // ============================================================
@@ -773,6 +881,36 @@ public async Task<(bool Success, string Message)> UpdatePaymentAsync(
     if (dto.Amount > maxAmount)
         return (false, $"المبلغ ({dto.Amount:N2}) أكبر من المسموح ({maxAmount:N2}).");
 
+    // ⭐ جلب بيانات للملخص (قبل الـ Transaction)
+    var partyName = await _db.Parties.Where(p => p.PartyId == transaction.PartyId)
+        .Select(p => p.PartyName).FirstOrDefaultAsync() ?? "غير محدد";
+    var refNumber = transaction.ReferenceNumber ?? $"#{transaction.TransactionId}";
+    var methodAr = PaymentMethods.All.TryGetValue(dto.PaymentMethod ?? "Cash", out var m) ? m : dto.PaymentMethod ?? "نقدي";
+    var pct = transaction.GrandTotal == 0 ? 0 : Math.Round((dto.Amount / transaction.GrandTotal) * 100, 1);
+
+    var tierInfo = "";
+    var analysis = await GetPaymentAnalysisAsync(transaction.TransactionId, dto.Amount);
+    if (analysis?.CurrentPaymentAnalysis?.Allocations.Any() == true)
+    {
+        var firstAlloc = analysis.CurrentPaymentAnalysis.Allocations.First();
+        tierInfo = $" - {firstAlloc.TierName}";
+    }
+
+    var cashBoxName = await _db.CashBoxes.Where(cb => cb.CashBoxId == dto.CashBoxId.Value)
+        .Select(cb => cb.CashBoxName).FirstOrDefaultAsync() ?? "";
+
+    // ⭐ تفريق تحصيل/سداد حسب النوع
+    var isSale = transaction.TransactionType == TransactionTypes.Sale;
+    var actionWord = isSale ? "تحصيل من" : "سداد إلى";
+    var cashActionWord = isSale ? "تحصيل" : "صرف";
+
+    var autoNote = $"{actionWord} {partyName} على فاتورة {refNumber}{tierInfo} - {methodAr} ({pct}%)";
+    var finalNote = string.IsNullOrWhiteSpace(dto.Notes)
+        ? autoNote
+        : $"{autoNote} | {dto.Notes}";
+
+    var cashNote = $"{cashActionWord} {dto.Amount:N2} ج {(isSale ? "من" : "إلى")} {partyName} - فاتورة {refNumber}{tierInfo} - {pct}% - {cashBoxName}";
+
     using var tx = await _db.Database.BeginTransactionAsync();
     try
     {
@@ -782,36 +920,43 @@ public async Task<(bool Success, string Message)> UpdatePaymentAsync(
         // 1) نشيل أثر الدفعة القديمة من الفاتورة
         transaction.PaidAmount -= payment.Amount;
 
-        // 2) نحذف CashboxTransaction القديم
-        var oldCashTrans = await _db.CashboxTransactions
-            .Where(ct => ct.PaymentId == paymentId).ToListAsync();
-        _db.CashboxTransactions.RemoveRange(oldCashTrans);
+        // 2) ⭐ نبحث عن حركة الخزينة الموجودة ونعدّلها
+        var existingCashTrans = await _db.CashboxTransactions
+            .FirstOrDefaultAsync(ct => ct.PaymentId == paymentId);
+
+        if (existingCashTrans == null)
+        {
+            // fallback: نبحث بـ ReferenceId
+            var fallbackRefType = isSale ? "SaleInvoice" : "PurchaseInvoice";
+            existingCashTrans = await _db.CashboxTransactions
+                .FirstOrDefaultAsync(ct => ct.ReferenceId == transaction.TransactionId
+                                           && ct.ReferenceType == fallbackRefType);
+        }
+
+        if (existingCashTrans != null)
+        {
+            // ⭐ نعدّل الحركة الموجودة (بدل مسح وإضافة)
+            existingCashTrans.CashBoxId = dto.CashBoxId.Value;
+            existingCashTrans.Amount = dto.Amount;
+            existingCashTrans.Notes = cashNote;
+            existingCashTrans.CreatedBy = currentUserName;
+            existingCashTrans.CreatedAt = DateTime.Now;
+        }
 
         // 3) نحدّث الدفعة
         payment.Amount = dto.Amount;
         payment.PaymentMethod = dto.PaymentMethod;
-        payment.Notes = dto.Notes;
+        payment.Notes = finalNote;
+        payment.LastModifiedBy = currentUserName;
+        payment.LastModifiedAt = DateTime.Now;
 
-        // 4) نضيف CashboxTransaction جديد
-        var cashboxType = transaction.TransactionType == TransactionTypes.Sale ? "In" : "Out";
-        var refType = transaction.TransactionType == TransactionTypes.Sale
-            ? "SaleInvoice" : "PurchaseInvoice";
-
-        _db.CashboxTransactions.Add(new CashboxTransaction
+        // ⭐ نربط الدفعة بحركة الخزينة
+        if (existingCashTrans != null)
         {
-            CashBoxId = dto.CashBoxId.Value,
-            PaymentId = payment.PaymentId,
-            ReferenceId = transaction.TransactionId,
-            ReferenceType = refType,
-            TransactionType = cashboxType,
-            Amount = dto.Amount,
-            TransactionDate = DateTime.Now,
-            Notes = $"تعديل تحصيل فاتورة {transaction.ReferenceNumber}",
-            CreatedBy = currentUserName,
-            CreatedAt = DateTime.Now
-        });
+            payment.CashboxTransactionId = existingCashTrans.CashboxTransactionId;
+        }
 
-        // 5) نحدّث الفاتورة بالمبلغ الجديد
+        // 4) نحدّث الفاتورة بالمبلغ الجديد
         transaction.PaidAmount += dto.Amount;
         if (transaction.PaidAmount >= transaction.GrandTotal && transaction.GrandTotal > 0)
             transaction.InvoiceStatus = "Paid";
@@ -834,6 +979,7 @@ public async Task<(bool Success, string Message)> UpdatePaymentAsync(
         await tx.RollbackAsync();
         return (false, $"حدث خطأ: {ex.Message}");
     }
+    
 }
 
     // ============================================================
