@@ -1,0 +1,1082 @@
+@page "/reports/income-statement"
+@page "/financial/income-statement"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+
+@inject IFinancialReportsService FinancialService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+@if (_isLoading)
+{
+    <div class="loading-screen">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <p>جاري تحليل البيانات المالية...</p>
+    </div>
+}
+else if (_report != null)
+{
+    <div class="income-page" dir="rtl">
+
+        <!-- Background Decorations -->
+        <div class="bg-decorations no-print">
+            <div class="bg-orb bg-orb-1"></div>
+            <div class="bg-orb bg-orb-2"></div>
+        </div>
+
+        <!-- ⭐ HEADER -->
+        <div class="income-header">
+            <div class="header-bg">
+                <div class="header-gradient"></div>
+                <div class="header-orbs">
+                    <div class="header-orb orb-1"></div>
+                    <div class="header-orb orb-2"></div>
+                </div>
+            </div>
+            <div class="header-content">
+                <div class="header-info">
+                    <div class="header-icon-wrapper">
+                        <div class="header-icon">
+                            <MudIcon Icon="@Icons.Material.Filled.Analytics" />
+                        </div>
+                    </div>
+                    <div>
+                        <h1>قائمة الدخل + التحليل المالي</h1>
+                        <p>
+                            <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="Size.Small" Style="vertical-align:middle;" />
+                            <strong>@_report.PeriodLabel</strong>
+                        </p>
+                    </div>
+                </div>
+                <div class="header-actions no-print">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Print"
+                               OnClick="Print">
+                        طباعة
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                               StartIcon="@Icons.Material.Filled.Dashboard"
+                               OnClick="@(() => Navigation.NavigateTo("/cashbox/dashboard"))">
+                        العودة
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+
+        <!-- ⭐ FILTERS -->
+        <div class="filters-bar no-print">
+            <span class="filter-label">📅 الفترة:</span>
+            @foreach (var period in IncomePeriodTypes.All.Where(p => p.Key != "Custom"))
+            {
+                <button class="period-btn @(_filter.PeriodType == period.Key ? "active" : "")"
+                        @onclick="@(() => SetPeriod(period.Key))">
+                    @period.Value
+                </button>
+            }
+
+            <div class="custom-period">
+                <MudDatePicker Date="_filter.FromDate"
+                               DateChanged="@(d => { _filter.FromDate = d ?? _filter.FromDate; _filter.PeriodType = "Custom"; _ = LoadReport(); })"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Label="من" Class="date-pick" />
+                <MudDatePicker Date="_filter.ToDate"
+                               DateChanged="@(d => { _filter.ToDate = d ?? _filter.ToDate; _filter.PeriodType = "Custom"; _ = LoadReport(); })"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Label="إلى" Class="date-pick" />
+            </div>
+        </div>
+
+        @if (_isReloading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mb-2" />
+        }
+
+        <!-- ⭐ HERO STATS - الأرقام الرئيسية -->
+        <div class="hero-stats">
+            <!-- الإيرادات -->
+            <div class="hero-card revenue">
+                <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.TrendingUp" /></div>
+                <div class="hero-info">
+                    <span class="hero-label">إجمالي الإيرادات</span>
+                    <span class="hero-value">@FormatMoney(_report.NetRevenue)</span>
+                    <span class="hero-meta">@_report.InvoicesCount فاتورة • متوسط: @FormatMoney(_report.AverageInvoiceValue) ج</span>
+                </div>
+            </div>
+
+            <!-- COGS -->
+            <div class="hero-card cogs">
+                <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.LocalShipping" /></div>
+                <div class="hero-info">
+                    <span class="hero-label">تكلفة المبيعات</span>
+                    <span class="hero-value">-@FormatMoney(_report.CostOfGoodsSold)</span>
+                    <span class="hero-meta">سعر الشراء للأصناف المباعة</span>
+                </div>
+            </div>
+
+            <!-- Gross Profit -->
+            <div class="hero-card gross">
+                <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.AccountBalance" /></div>
+                <div class="hero-info">
+                    <span class="hero-label">الربح الإجمالي</span>
+                    <span class="hero-value">@FormatMoney(_report.GrossProfit)</span>
+                    <span class="hero-meta">هامش: @_report.GrossProfitMargin%</span>
+                </div>
+            </div>
+
+            <!-- Operating Expenses -->
+            <div class="hero-card expenses">
+                <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.MoneyOff" /></div>
+                <div class="hero-info">
+                    <span class="hero-label">المصروفات التشغيلية</span>
+                    <span class="hero-value">-@FormatMoney(_report.TotalOperatingExpenses)</span>
+                    <span class="hero-meta">@_report.ExpensesByGroup.Count مجموعة</span>
+                </div>
+            </div>
+
+            <!-- ⭐ NET PROFIT - الأهم -->
+            <div class="hero-card net @(_report.NetProfit >= 0 ? "profit" : "loss")">
+                <div class="hero-icon">
+                    <MudIcon Icon="@(_report.NetProfit >= 0 ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Warning)" />
+                </div>
+                <div class="hero-info">
+                    <span class="hero-label">⭐ صافي الربح</span>
+                    <span class="hero-value-big">@FormatMoney(_report.NetProfit)</span>
+                    <span class="hero-margin">@_report.NetProfitMargin% هامش • @_report.ProfitStatus</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ⭐ TARGET + BREAK-EVEN -->
+        <div class="analysis-grid">
+            <!-- Profit Target -->
+            <div class="analysis-card target-card">
+                <div class="card-header">
+                    <h3>
+                        <span class="card-icon">@_report.ProfitTarget.Icon</span>
+                        الهدف الذكي للربح
+                    </h3>
+                    <span class="status-badge @GetTargetStatusClass()">@_report.ProfitTarget.Status</span>
+                </div>
+                <div class="card-body">
+                    <div class="target-progress">
+                        <div class="target-info">
+                            <div>
+                                <span class="t-label">الهدف الحالي</span>
+                                <span class="t-value">@_report.ProfitTarget.CurrentTargetPercentage%</span>
+                            </div>
+                            <div>
+                                <span class="t-label">المحقق</span>
+                                <span class="t-value @(_report.NetProfitMargin >= _report.ProfitTarget.CurrentTargetPercentage ? "achieved" : "")">
+                                    @_report.ProfitTarget.CurrentMargin.ToString("N1")%
+                                </span>
+                            </div>
+                            <div>
+                                <span class="t-label">الهدف القادم</span>
+                                <span class="t-value next">@_report.ProfitTarget.NextTargetPercentage%</span>
+                            </div>
+                        </div>
+
+                        <!-- Progress Bar -->
+                        <div class="progress-container">
+                            <div class="progress-bar" style="width:@(Math.Min(100, _report.ProfitTarget.AchievementPercentage))%;
+                                background: @(GetProgressColor(_report.ProfitTarget.AchievementPercentage));"></div>
+                            <div class="progress-marker" style="right: @(_report.ProfitTarget.AchievementPercentage)%;">
+                                @_report.ProfitTarget.AchievementPercentage%
+                            </div>
+                        </div>
+
+                        <p class="target-message">@_report.ProfitTarget.Message</p>
+
+                        @if (_report.ProfitTarget.GapToNextTarget > 0)
+                        {
+                            <div class="next-target-tips">
+                                <strong>للوصول لـ @_report.ProfitTarget.NextTargetPercentage%:</strong>
+                                <div class="tip-row">
+                                    <span>📈 زيادة الإيرادات بـ:</span>
+                                    <strong>@FormatMoney(_report.ProfitTarget.RevenueIncreaseNeeded) ج</strong>
+                                </div>
+                                <div class="tip-row">
+                                    <span>📉 أو تقليل المصروفات بـ:</span>
+                                    <strong>@FormatMoney(_report.ProfitTarget.ExpensesReductionNeeded) ج</strong>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <!-- Break Even -->
+            <div class="analysis-card breakeven-card">
+                <div class="card-header">
+                    <h3>
+                        <span class="card-icon">@_report.BreakEvenAnalysis.StatusIcon</span>
+                        نقطة التعادل
+                    </h3>
+                    <span class="status-badge @GetBreakEvenStatusClass()">@_report.BreakEvenAnalysis.Status</span>
+                </div>
+                <div class="card-body">
+                    <div class="be-rows">
+                        <div class="be-row">
+                            <span>المصروفات الثابتة:</span>
+                            <strong>@FormatMoney(_report.BreakEvenAnalysis.FixedExpenses) ج</strong>
+                        </div>
+                        <div class="be-row">
+                            <span>هامش الربح الإجمالي:</span>
+                            <strong>@_report.BreakEvenAnalysis.GrossProfitMargin%</strong>
+                        </div>
+                        <div class="be-row highlight">
+                            <span>🎯 نقطة التعادل:</span>
+                            <strong class="be-value">@FormatMoney(_report.BreakEvenAnalysis.BreakEvenRevenue) ج</strong>
+                        </div>
+                        <div class="be-row">
+                            <span>الإيراد الفعلي:</span>
+                            <strong>@FormatMoney(_report.BreakEvenAnalysis.CurrentRevenue) ج</strong>
+                        </div>
+                        <div class="be-row @(_report.BreakEvenAnalysis.AboveBreakEven ? "positive" : "negative")">
+                            <span>الفرق:</span>
+                            <strong>
+                                @(_report.BreakEvenAnalysis.RevenueGap >= 0 ? "+" : "")@FormatMoney(_report.BreakEvenAnalysis.RevenueGap) ج
+                            </strong>
+                        </div>
+                        @if (_report.BreakEvenAnalysis.AboveBreakEven)
+                        {
+                            <div class="be-row positive">
+                                <span>هامش الأمان:</span>
+                                <strong>+@_report.BreakEvenAnalysis.SafetyMargin%</strong>
+                            </div>
+                        }
+                    </div>
+                    <p class="be-description">@_report.BreakEvenAnalysis.Description</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ⭐ SMART RECOMMENDATIONS -->
+        @if (_report.Recommendations.Any())
+        {
+            <div class="recommendations-section">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.Lightbulb" />
+                    التوصيات الذكية (@_report.Recommendations.Count)
+                </h3>
+                <div class="recommendations-grid">
+                    @foreach (var rec in _report.Recommendations)
+                    {
+                        <div class="rec-card" style="border-right-color: @rec.Color;">
+                            <div class="rec-icon" style="background: @(rec.Color)22; color: @rec.Color;">
+                                <span>@rec.Icon</span>
+                            </div>
+                            <div class="rec-body">
+                                <h4 style="color: @rec.Color;">@rec.Title</h4>
+                                <p>@rec.Description</p>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- ⭐ INCOME STATEMENT TABLE -->
+        <div class="statement-card">
+            <h3 class="section-title">
+                <MudIcon Icon="@Icons.Material.Filled.TableChart" />
+                قائمة الدخل التفصيلية
+            </h3>
+
+            <table class="income-table">
+                <tbody>
+                    <!-- الإيرادات -->
+                    <tr class="section-header-row">
+                        <td colspan="2">📥 الإيرادات</td>
+                    </tr>
+                    <tr>
+                        <td>إجمالي المبيعات</td>
+                        <td class="num">@FormatMoney(_report.TotalRevenue) ج</td>
+                    </tr>
+                    <tr class="subtotal">
+                        <td><strong>صافي الإيرادات</strong></td>
+                        <td class="num"><strong>@FormatMoney(_report.NetRevenue) ج</strong></td>
+                    </tr>
+
+                    <!-- COGS -->
+                    <tr class="section-header-row">
+                        <td colspan="2">📦 تكلفة المبيعات</td>
+                    </tr>
+                    <tr>
+                        <td>تكلفة الأصناف المباعة</td>
+                        <td class="num negative">-@FormatMoney(_report.CostOfGoodsSold) ج</td>
+                    </tr>
+
+                    <!-- Gross Profit -->
+                    <tr class="gross-profit-row">
+                        <td><strong>= الربح الإجمالي (@_report.GrossProfitMargin%)</strong></td>
+                        <td class="num"><strong>@FormatMoney(_report.GrossProfit) ج</strong></td>
+                    </tr>
+
+                    <!-- Operating Expenses by Group -->
+                    <tr class="section-header-row">
+                        <td colspan="2">💸 المصروفات التشغيلية</td>
+                    </tr>
+                    @foreach (var grp in _report.ExpensesByGroup)
+                    {
+                        <tr>
+                            <td>
+                                <span class="grp-color" style="background: @grp.Color;"></span>
+                                @grp.GroupName
+                                <small>(@grp.Percentage%)</small>
+                            </td>
+                            <td class="num negative">-@FormatMoney(grp.Amount) ج</td>
+                        </tr>
+                    }
+                    <tr class="subtotal">
+                        <td><strong>إجمالي المصروفات التشغيلية</strong></td>
+                        <td class="num"><strong>-@FormatMoney(_report.TotalOperatingExpenses) ج</strong></td>
+                    </tr>
+
+                    <!-- Net Profit -->
+                    <tr class="net-profit-row @(_report.NetProfit >= 0 ? "profit" : "loss")">
+                        <td>
+                            <strong>@(_report.NetProfit >= 0 ? "🌟 صافي الربح" : "🔴 صافي الخسارة") (@_report.NetProfitMargin%)</strong>
+                        </td>
+                        <td class="num"><strong>@FormatMoney(_report.NetProfit) ج</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ⭐ COMPARISONS -->
+        @if (_report.PreviousPeriod != null || _report.PreviousYear != null)
+        {
+            <div class="comparisons-section">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.CompareArrows" />
+                    مقارنات
+                </h3>
+                <div class="comp-grid">
+                    @if (_report.PreviousPeriod != null)
+                    {
+                        @RenderComparison(_report.PreviousPeriod)
+                    }
+                    @if (_report.PreviousYear != null)
+                    {
+                        @RenderComparison(_report.PreviousYear)
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- ⭐ MONTHLY TREND CHART -->
+        @if (_report.MonthlyTrend.Any())
+        {
+            <div class="trend-card">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.ShowChart" />
+                    ترند آخر 12 شهر
+                </h3>
+                <div class="trend-chart-wrap">
+                    <svg viewBox="0 0 1000 300" class="trend-chart" preserveAspectRatio="xMidYMid meet">
+                        @{
+                            var maxRev = _report.MonthlyTrend.Max(m => Math.Max(m.Revenue, m.Expenses));
+                            if (maxRev == 0) maxRev = 1;
+                            var barWidth = 1000.0 / _report.MonthlyTrend.Count / 3.5;
+                            var gap = 1000.0 / _report.MonthlyTrend.Count;
+                        }
+                        <!-- Grid -->
+                        @for (int i = 0; i <= 4; i++)
+                        {
+                            var y = 30 + (200 * i / 4.0);
+                            <line x1="0" y1="@y" x2="1000" y2="@y" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="3,3" />
+                        }
+
+                        @for (int i = 0; i < _report.MonthlyTrend.Count; i++)
+                        {
+                            var m = _report.MonthlyTrend[i];
+                            var x = i * gap + gap / 5;
+                            var revH = (double)m.Revenue / (double)maxRev * 200;
+                            var expH = (double)m.Expenses / (double)maxRev * 200;
+                            var profitH = Math.Abs((double)m.NetProfit) / (double)maxRev * 200;
+
+                            <!-- Revenue -->
+                            <rect x="@(x.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  y="@((230 - revH).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  height="@(revH.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  fill="#10b981" rx="2">
+                                <title>@m.MonthLabel - إيرادات: @FormatMoney(m.Revenue)</title>
+                            </rect>
+                            <!-- Expenses -->
+                            <rect x="@((x + barWidth + 1).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  y="@((230 - expH).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  height="@(expH.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  fill="#ef4444" rx="2">
+                                <title>@m.MonthLabel - مصروفات: @FormatMoney(m.Expenses)</title>
+                            </rect>
+                            <!-- Profit -->
+                            <rect x="@((x + 2*barWidth + 2).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  y="@((230 - profitH).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  height="@(profitH.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  fill="@(m.NetProfit >= 0 ? "#3b82f6" : "#dc2626")" rx="2">
+                                <title>@m.MonthLabel - ربح: @FormatMoney(m.NetProfit)</title>
+                            </rect>
+
+                            <!-- Month label -->
+                            <svg:text x="@((x + barWidth * 1.5).ToString("F1", CultureInfo.InvariantCulture))" 
+          y="255" 
+          text-anchor="middle" font-size="10" fill="#6b7280">
+    @m.Month.ToString("MM/yy")
+</svg:text>
+                        }
+                        <line x1="0" y1="230" x2="1000" y2="230" stroke="#374151" stroke-width="1.5" />
+                    </svg>
+                </div>
+                <div class="chart-legend">
+                    <span><span class="dot" style="background:#10b981;"></span> إيرادات</span>
+                    <span><span class="dot" style="background:#ef4444;"></span> مصروفات</span>
+                    <span><span class="dot" style="background:#3b82f6;"></span> صافي ربح</span>
+                </div>
+            </div>
+        }
+
+        <!-- ⭐ TOP EXPENSES -->
+        @if (_report.TopExpenses.Any())
+        {
+            <div class="top-expenses-card">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.AttachMoney" />
+                    أعلى 10 مصروفات
+                </h3>
+                <table class="top-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>المصروف</th>
+                            <th>المجموعة</th>
+                            <th>التاريخ</th>
+                            <th>المبلغ</th>
+                            <th>%</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{ int rank = 1; }
+                        @foreach (var exp in _report.TopExpenses)
+                        {
+                            <tr>
+                                <td><span class="rank-badge">@rank</span></td>
+                                <td><strong>@exp.ExpenseName</strong></td>
+                                <td>@(exp.GroupName ?? "-")</td>
+                                <td>@exp.Date.ToString("yyyy/MM/dd")</td>
+                                <td class="num"><strong>@FormatMoney(exp.Amount) ج</strong></td>
+                                <td><span class="pct-pill">@exp.PercentageOfTotal%</span></td>
+                            </tr>
+                            rank++;
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <!-- Print Footer -->
+        <div class="print-footer print-only">
+            <p>تم إصدار هذا التقرير في @DateTime.Now.ToString("yyyy/MM/dd HH:mm") • COCOBOLO ERP</p>
+        </div>
+    </div>
+}
+
+@* Render comparison helper *@
+@code {
+    private RenderFragment RenderComparison(IncomeComparisonDto comp) => __builder =>
+    {
+        var trendIcon = comp.NetProfitChange > 5 ? "📈" : comp.NetProfitChange < -5 ? "📉" : "➡️";
+        var trendColor = comp.NetProfitChange > 5 ? "#10b981" : comp.NetProfitChange < -5 ? "#ef4444" : "#94a3b8";
+
+        <div class="comp-card">
+            <div class="comp-header">
+                <span>@comp.Label</span>
+                <span class="comp-trend" style="color: @trendColor;">@trendIcon @comp.Trend</span>
+            </div>
+            <div class="comp-rows">
+                <div class="cr">
+                    <span>الإيرادات</span>
+                    <div class="cr-vals">
+                        <strong>@FormatMoney(comp.Revenue) ج</strong>
+                        <span class="@GetChangeClass(comp.RevenueChange)">
+                            @(comp.RevenueChange >= 0 ? "+" : "")@comp.RevenueChange.ToString("N1")%
+                        </span>
+                    </div>
+                </div>
+                <div class="cr">
+                    <span>المصروفات</span>
+                    <div class="cr-vals">
+                        <strong>@FormatMoney(comp.Expenses) ج</strong>
+                        <span class="@GetChangeClass(-comp.ExpensesChange)">
+                            @(comp.ExpensesChange >= 0 ? "+" : "")@comp.ExpensesChange.ToString("N1")%
+                        </span>
+                    </div>
+                </div>
+                <div class="cr highlight">
+                    <span>صافي الربح</span>
+                    <div class="cr-vals">
+                        <strong>@FormatMoney(comp.NetProfit) ج</strong>
+                        <span class="@GetChangeClass(comp.NetProfitChange)">
+                            @(comp.NetProfitChange >= 0 ? "+" : "")@comp.NetProfitChange.ToString("N1")%
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    };
+}
+
+<style>
+    .income-page {
+        max-width: 1800px;
+        margin: 0 auto;
+        padding: 0 1.25rem 2rem;
+        position: relative;
+        direction: rtl;
+    }
+
+    .loading-screen {
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        min-height: 60vh;
+    }
+
+    .bg-decorations { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+    .bg-orb { position: absolute; border-radius: 50%; filter: blur(80px); }
+    .bg-orb-1 { width: 450px; height: 450px; top: -200px; right: -150px;
+                background: radial-gradient(circle, rgba(59,130,246,0.1), transparent 70%); }
+    .bg-orb-2 { width: 400px; height: 400px; bottom: -180px; left: -120px;
+                background: radial-gradient(circle, rgba(16,185,129,0.08), transparent 70%); }
+
+    /* ═══════ HEADER ═══════ */
+    .income-header {
+        position: relative;
+        border-radius: 24px;
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+    }
+    .header-bg { position: absolute; inset: 0; }
+    .header-gradient {
+        position: absolute; inset: 0;
+        background: linear-gradient(135deg, #0F1D36 0%, #1B2A4A 50%, #2D4A7A 100%);
+    }
+    .header-orbs { position: absolute; inset: 0; overflow: hidden; }
+    .header-orb { position: absolute; border-radius: 50%; }
+    .orb-1 { width: 380px; height: 380px; top: -160px; right: -100px;
+             background: radial-gradient(circle, rgba(212,168,83,0.3), transparent 60%); }
+    .orb-2 { width: 280px; height: 280px; bottom: -100px; left: 30%;
+             background: radial-gradient(circle, rgba(59,130,246,0.2), transparent 60%); }
+
+    .header-content {
+        position: relative; z-index: 1;
+        padding: 2rem;
+        display: flex; align-items: center; justify-content: space-between;
+        flex-wrap: wrap; gap: 1.5rem;
+    }
+    .header-info { display: flex; align-items: center; gap: 1.25rem; }
+    .header-icon-wrapper { position: relative; }
+    .header-icon {
+        background: rgba(255,255,255,0.15); backdrop-filter: blur(20px);
+        border-radius: 16px; width: 64px; height: 64px;
+        display: flex; align-items: center; justify-content: center;
+        color: white; border: 1px solid rgba(255,255,255,0.3);
+    }
+    .header-icon ::deep .mud-icon-root { font-size: 32px !important; color: white !important; }
+    .header-info h1 { color: white; font-size: 1.75rem; font-weight: 800; margin: 0; }
+    .header-info p { color: rgba(255,255,255,0.85); margin: 0.4rem 0 0; }
+    .header-actions { display: flex; gap: 0.5rem; }
+
+    /* ═══════ FILTERS ═══════ */
+    .filters-bar {
+        display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px; padding: 0.75rem 1rem;
+        margin-bottom: 1.5rem;
+    }
+    .filter-label { font-weight: 700; color: var(--mud-palette-text-primary); }
+    .period-btn {
+        padding: 0.4rem 0.85rem;
+        background: var(--mud-palette-background);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 8px;
+        cursor: pointer; font-family: inherit;
+        font-size: 0.85rem; font-weight: 600;
+        color: var(--mud-palette-text-primary);
+        transition: all 0.2s;
+    }
+    .period-btn:hover { border-color: #3b82f6; }
+    .period-btn.active {
+        background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+        color: white; border-color: #3b82f6;
+    }
+    .custom-period { display: flex; gap: 0.5rem; margin-right: auto; }
+    .date-pick { max-width: 150px; }
+
+    /* ═══════ HERO STATS ═══════ */
+    .hero-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+        position: relative; z-index: 1;
+    }
+    .hero-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.25rem;
+        display: flex; align-items: center; gap: 1rem;
+        transition: all 0.3s;
+        position: relative; overflow: hidden;
+    }
+    .hero-card::before {
+        content: ''; position: absolute; top: -30px; right: -30px;
+        width: 120px; height: 120px; border-radius: 50%;
+        opacity: 0.1;
+    }
+    .hero-card.revenue::before { background: #10b981; }
+    .hero-card.cogs::before { background: #f59e0b; }
+    .hero-card.gross::before { background: #3b82f6; }
+    .hero-card.expenses::before { background: #ef4444; }
+    .hero-card.net.profit::before { background: #10b981; opacity: 0.2; }
+    .hero-card.net.loss::before { background: #ef4444; opacity: 0.2; }
+
+    .hero-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+
+    .hero-icon {
+        width: 56px; height: 56px;
+        border-radius: 14px;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0; color: white;
+    }
+    .hero-card.revenue .hero-icon { background: linear-gradient(135deg, #10b981, #059669); }
+    .hero-card.cogs .hero-icon { background: linear-gradient(135deg, #f59e0b, #d97706); }
+    .hero-card.gross .hero-icon { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+    .hero-card.expenses .hero-icon { background: linear-gradient(135deg, #ef4444, #dc2626); }
+    .hero-card.net.profit .hero-icon { background: linear-gradient(135deg, #10b981, #059669); }
+    .hero-card.net.loss .hero-icon { background: linear-gradient(135deg, #ef4444, #dc2626); }
+
+    .hero-icon ::deep .mud-icon-root { font-size: 28px !important; color: white !important; }
+
+    .hero-info { flex: 1; min-width: 0; }
+    .hero-label { display: block; font-size: 0.85rem; color: var(--mud-palette-text-secondary); font-weight: 600; }
+    .hero-value { display: block; font-size: 1.5rem; font-weight: 900; color: var(--mud-palette-text-primary); margin-top: 0.25rem; }
+    .hero-value-big { display: block; font-size: 1.85rem; font-weight: 900; margin-top: 0.25rem; }
+    .hero-card.net.profit .hero-value-big { color: #10b981; }
+    .hero-card.net.loss .hero-value-big { color: #ef4444; }
+    .hero-meta { display: block; font-size: 0.78rem; color: var(--mud-palette-text-secondary); margin-top: 0.2rem; }
+    .hero-margin { display: block; font-size: 0.85rem; font-weight: 700; margin-top: 0.2rem; }
+    .hero-card.net.profit .hero-margin { color: #10b981; }
+    .hero-card.net.loss .hero-margin { color: #ef4444; }
+
+    /* ═══════ ANALYSIS CARDS ═══════ */
+    .analysis-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.25rem;
+        margin-bottom: 1.5rem;
+    }
+    .analysis-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        overflow: hidden;
+    }
+    .target-card { background: linear-gradient(135deg, var(--mud-palette-surface), rgba(59,130,246,0.03)); }
+    .breakeven-card { background: linear-gradient(135deg, var(--mud-palette-surface), rgba(245,158,11,0.03)); }
+
+    .card-header {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-background);
+    }
+    .card-header h3 {
+        margin: 0; font-size: 1.05rem; font-weight: 800;
+        display: flex; align-items: center; gap: 0.5rem;
+    }
+    .card-icon { font-size: 1.4rem; }
+    .status-badge {
+        padding: 0.3rem 0.75rem;
+        border-radius: 8px;
+        font-size: 0.78rem; font-weight: 700;
+    }
+    .status-badge.success { background: rgba(16,185,129,0.15); color: #10b981; }
+    .status-badge.warning { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .status-badge.danger { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .status-badge.info { background: rgba(59,130,246,0.15); color: #3b82f6; }
+
+    .card-body { padding: 1.25rem; }
+
+    /* Target Card */
+    .target-info {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+    }
+    .target-info > div {
+        text-align: center;
+        padding: 0.75rem;
+        background: var(--mud-palette-background);
+        border-radius: 10px;
+    }
+    .t-label { display: block; font-size: 0.75rem; color: var(--mud-palette-text-secondary); font-weight: 600; }
+    .t-value { display: block; font-size: 1.5rem; font-weight: 900; color: var(--mud-palette-text-primary); margin-top: 0.25rem; }
+    .t-value.achieved { color: #10b981; }
+    .t-value.next { color: #3b82f6; }
+
+    .progress-container {
+        position: relative;
+        background: var(--mud-palette-background);
+        border-radius: 10px;
+        height: 14px;
+        overflow: visible;
+        margin: 1rem 0;
+    }
+    .progress-bar {
+        height: 100%;
+        border-radius: 10px;
+        transition: width 0.6s ease;
+    }
+    .progress-marker {
+        position: absolute; top: -8px;
+        background: white; padding: 2px 6px;
+        border-radius: 6px; border: 2px solid #3b82f6;
+        font-size: 0.7rem; font-weight: 800;
+        transform: translateX(50%);
+        white-space: nowrap;
+    }
+
+    .target-message {
+        background: var(--mud-palette-background);
+        padding: 0.75rem;
+        border-radius: 10px;
+        margin: 1rem 0 0.75rem; font-size: 0.9rem;
+        border-right: 3px solid #3b82f6;
+    }
+
+    .next-target-tips {
+        background: rgba(16,185,129,0.05);
+        border: 1px dashed rgba(16,185,129,0.3);
+        border-radius: 10px;
+        padding: 0.75rem;
+        font-size: 0.85rem;
+    }
+    .next-target-tips strong { display: block; margin-bottom: 0.5rem; color: #10b981; }
+    .tip-row {
+        display: flex; justify-content: space-between;
+        padding: 0.3rem 0;
+        border-bottom: 1px dashed rgba(0,0,0,0.05);
+    }
+    .tip-row:last-child { border-bottom: none; }
+
+    /* Break-Even */
+    .be-rows { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1rem; }
+    .be-row {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.5rem 0.75rem;
+        background: var(--mud-palette-background);
+        border-radius: 8px; font-size: 0.9rem;
+    }
+    .be-row.highlight {
+        background: linear-gradient(135deg, rgba(212,168,83,0.15), rgba(212,168,83,0.05));
+        border: 1px solid rgba(212,168,83,0.3);
+    }
+    .be-row.positive { background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.2); }
+    .be-row.negative { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); }
+    .be-value { font-size: 1.1rem; color: #d4a853; }
+    .be-description {
+        background: rgba(59,130,246,0.05);
+        border-right: 3px solid #3b82f6;
+        padding: 0.75rem; border-radius: 8px;
+        font-size: 0.88rem; margin: 0;
+    }
+
+    /* ═══════ RECOMMENDATIONS ═══════ */
+    .recommendations-section, .comparisons-section, .trend-card, .top-expenses-card, .statement-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+    .section-title {
+        display: flex; align-items: center; gap: 0.5rem;
+        margin: 0 0 1rem; font-size: 1.1rem; font-weight: 800;
+        padding-bottom: 0.75rem;
+        border-bottom: 2px solid var(--gold);
+    }
+    .section-title ::deep .mud-icon-root { color: var(--gold); }
+
+    .recommendations-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 1rem;
+    }
+    .rec-card {
+        background: var(--mud-palette-background);
+        border-right: 4px solid;
+        border-radius: 12px;
+        padding: 1rem;
+        display: flex; gap: 0.75rem;
+        transition: transform 0.2s;
+    }
+    .rec-card:hover { transform: translateX(-3px); }
+    .rec-icon {
+        width: 48px; height: 48px;
+        border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.5rem; flex-shrink: 0;
+    }
+    .rec-body h4 {
+        margin: 0 0 0.4rem; font-size: 1rem; font-weight: 800;
+    }
+    .rec-body p { margin: 0; font-size: 0.88rem; color: var(--mud-palette-text-primary); line-height: 1.6; }
+
+    /* ═══════ INCOME TABLE ═══════ */
+    .income-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .income-table td {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+    .income-table .num { text-align: left; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .income-table .negative { color: #ef4444; }
+
+    .section-header-row td {
+        background: var(--mud-palette-background);
+        font-weight: 800; font-size: 0.95rem;
+        color: var(--mud-palette-text-primary);
+        padding: 0.85rem 1rem;
+    }
+
+    .subtotal td { background: rgba(59,130,246,0.05); font-weight: 700; }
+    .gross-profit-row td { background: linear-gradient(135deg, rgba(59,130,246,0.1), rgba(59,130,246,0.05)); border-top: 2px solid #3b82f6; border-bottom: 2px solid #3b82f6; font-size: 1.05rem; }
+
+    .net-profit-row td {
+        font-size: 1.2rem;
+        padding: 1rem;
+        border-top: 3px solid; border-bottom: 3px solid;
+    }
+    .net-profit-row.profit td {
+        background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));
+        border-color: #10b981; color: #047857;
+    }
+    .net-profit-row.loss td {
+        background: linear-gradient(135deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05));
+        border-color: #ef4444; color: #b91c1c;
+    }
+
+    .grp-color {
+        display: inline-block; width: 10px; height: 10px;
+        border-radius: 3px; margin-left: 0.4rem;
+    }
+    .income-table small { color: var(--mud-palette-text-secondary); margin-right: 0.4rem; }
+
+    /* ═══════ COMPARISONS ═══════ */
+    .comp-grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;
+    }
+    .comp-card {
+        background: var(--mud-palette-background);
+        border-radius: 12px; padding: 1rem;
+    }
+    .comp-header {
+        display: flex; justify-content: space-between;
+        font-weight: 700; margin-bottom: 0.75rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px dashed var(--mud-palette-divider);
+    }
+    .comp-trend { font-size: 0.9rem; font-weight: 700; }
+    .comp-rows { display: flex; flex-direction: column; gap: 0.5rem; }
+    .cr {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.5rem 0.75rem;
+        background: var(--mud-palette-surface);
+        border-radius: 8px; font-size: 0.88rem;
+    }
+    .cr.highlight {
+        background: linear-gradient(135deg, rgba(212,168,83,0.1), rgba(212,168,83,0.05));
+        border: 1px solid rgba(212,168,83,0.2);
+        font-weight: 700;
+    }
+    .cr-vals { display: flex; align-items: center; gap: 0.5rem; }
+    .cr-vals .pos { color: #10b981; font-weight: 700; }
+    .cr-vals .neg { color: #ef4444; font-weight: 700; }
+    .cr-vals .neutral { color: #94a3b8; font-weight: 700; }
+
+    /* ═══════ CHART ═══════ */
+    .trend-chart-wrap {
+        background: var(--mud-palette-background);
+        border-radius: 12px; padding: 1rem;
+        overflow-x: auto;
+    }
+    .trend-chart { width: 100%; height: 300px; }
+    .chart-legend {
+        display: flex; justify-content: center; gap: 1.5rem;
+        margin-top: 1rem; font-size: 0.9rem;
+    }
+    .chart-legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+    .chart-legend .dot { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+
+    /* ═══════ TOP EXPENSES TABLE ═══════ */
+    .top-table { width: 100%; border-collapse: collapse; }
+    .top-table thead {
+        background: var(--mud-palette-background);
+    }
+    .top-table th {
+        padding: 0.75rem 1rem;
+        text-align: right;
+        font-weight: 700; font-size: 0.85rem;
+        color: var(--mud-palette-text-secondary);
+    }
+    .top-table td {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+    .top-table .num { text-align: left; }
+    .rank-badge {
+        display: inline-block; width: 28px; height: 28px;
+        background: linear-gradient(135deg, var(--gold), var(--gold-dark));
+        color: white; border-radius: 50%;
+        text-align: center; line-height: 28px;
+        font-weight: 800; font-size: 0.85rem;
+    }
+    .pct-pill {
+        background: rgba(239,68,68,0.1); color: #ef4444;
+        padding: 0.2rem 0.5rem; border-radius: 4px;
+        font-size: 0.78rem; font-weight: 700;
+    }
+
+    .print-only { display: none; }
+    .print-footer {
+        text-align: center; padding: 1rem;
+        color: #999; font-size: 0.85rem;
+        border-top: 1px dashed #ddd; margin-top: 2rem;
+    }
+
+    /* ═══════ PRINT STYLES ═══════ */
+    @@media print {
+        .no-print { display: none !important; }
+        .print-only { display: block !important; }
+        body { background: white !important; }
+        .income-page { padding: 0; }
+        .income-header { background: #f9f9f9; color: #1a2842; }
+        .header-info h1, .header-info p { color: #1a2842 !important; }
+        .header-icon { background: #d4a853; }
+        .hero-card, .analysis-card, .recommendations-section,
+        .comparisons-section, .trend-card, .top-expenses-card,
+        .statement-card, .comp-card { box-shadow: none; }
+        @@page { size: A4; margin: 1cm; }
+    }
+
+    @@media (max-width: 1100px) {
+        .analysis-grid, .comp-grid { grid-template-columns: 1fr; }
+    }
+    @@media (max-width: 700px) {
+        .hero-stats { grid-template-columns: 1fr; }
+        .target-info { grid-template-columns: 1fr; }
+        .filters-bar { flex-direction: column; align-items: stretch; }
+        .custom-period { margin-right: 0; flex-wrap: wrap; }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _isReloading = false;
+    private IncomeStatementDto? _report;
+    private IncomeStatementFilterDto _filter = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var canView = user.HasClaim("Permission", "frmIncomeStatement:View")
+                   || user.HasClaim("Permission", "frmCashBoxDashboard:View")
+                   || user.IsInRole("Admin");
+        if (!canView) { Navigation.NavigateTo("/"); return; }
+
+        await SetPeriod("Month");
+        _isLoading = false;
+    }
+
+    private async Task LoadReport()
+    {
+        _isReloading = true;
+        try
+        {
+            _report = await FinancialService.GetIncomeStatementAsync(_filter);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isReloading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SetPeriod(string period)
+    {
+        _filter.PeriodType = period;
+        var today = DateTime.Today;
+
+        switch (period)
+        {
+            case "Today":
+                _filter.FromDate = today; _filter.ToDate = today; break;
+            case "Week":
+                _filter.FromDate = today.AddDays(-(int)today.DayOfWeek); _filter.ToDate = today; break;
+            case "Month":
+                _filter.FromDate = new DateTime(today.Year, today.Month, 1); _filter.ToDate = today; break;
+            case "Quarter":
+                var qStart = new DateTime(today.Year, ((today.Month - 1) / 3) * 3 + 1, 1);
+                _filter.FromDate = qStart; _filter.ToDate = today; break;
+            case "Year":
+                _filter.FromDate = new DateTime(today.Year, 1, 1); _filter.ToDate = today; break;
+        }
+
+        await LoadReport();
+    }
+
+    private async Task Print() => await JS.InvokeVoidAsync("window.print");
+
+    private string FormatMoney(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+
+    private string GetTargetStatusClass()
+    {
+        if (_report?.ProfitTarget.Status.Contains("متجاوز") == true) return "success";
+        if (_report?.ProfitTarget.Status.Contains("محقق") == true) return "success";
+        if (_report?.ProfitTarget.Status.Contains("قريب") == true) return "warning";
+        return "danger";
+    }
+
+    private string GetBreakEvenStatusClass()
+    {
+        if (_report?.BreakEvenAnalysis.Status.Contains("آمن") == true) return "success";
+        if (_report?.BreakEvenAnalysis.Status == "حرج") return "warning";
+        return "danger";
+    }
+
+    private string GetProgressColor(decimal pct)
+    {
+        if (pct >= 100) return "linear-gradient(90deg, #10b981, #059669)";
+        if (pct >= 70) return "linear-gradient(90deg, #3b82f6, #1d4ed8)";
+        if (pct >= 40) return "linear-gradient(90deg, #f59e0b, #d97706)";
+        return "linear-gradient(90deg, #ef4444, #dc2626)";
+    }
+
+    private string GetChangeClass(decimal change) =>
+        change > 0 ? "pos" : change < 0 ? "neg" : "neutral";
+}

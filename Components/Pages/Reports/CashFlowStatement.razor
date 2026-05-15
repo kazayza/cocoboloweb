@@ -1,0 +1,969 @@
+@page "/reports/cash-flow"
+@page "/financial/cash-flow"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+
+@inject ICashFlowService CashFlowService
+@inject ICashBoxService CashBoxService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+@if (_isLoading)
+{
+    <div class="loading-screen">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <p>جاري تحليل التدفقات النقدية...</p>
+    </div>
+}
+else if (_report != null)
+{
+    <div class="cf-page" dir="rtl">
+
+        <!-- Background Decorations -->
+        <div class="bg-decorations no-print">
+            <div class="bg-orb bg-orb-1"></div>
+            <div class="bg-orb bg-orb-2"></div>
+        </div>
+
+        <!-- ⭐ HEADER -->
+        <div class="cf-header">
+            <div class="header-bg">
+                <div class="header-gradient"></div>
+                <div class="header-orbs">
+                    <div class="header-orb orb-1"></div>
+                    <div class="header-orb orb-2"></div>
+                </div>
+            </div>
+            <div class="header-content">
+                <div class="header-info">
+                    <div class="header-icon-wrapper">
+                        <div class="header-icon">
+                            <MudIcon Icon="@Icons.Material.Filled.WaterDrop" />
+                        </div>
+                    </div>
+                    <div>
+                        <h1>قائمة التدفقات النقدية</h1>
+                        <p>
+                            <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="Size.Small" Style="vertical-align:middle;" />
+                            <strong>@_report.PeriodLabel</strong>
+                        </p>
+                    </div>
+                </div>
+                <div class="header-actions no-print">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Print" OnClick="Print">
+                        طباعة
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                               StartIcon="@Icons.Material.Filled.Analytics"
+                               OnClick="@(() => Navigation.NavigateTo("/reports/income-statement"))">
+                        قائمة الدخل
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                               StartIcon="@Icons.Material.Filled.Dashboard"
+                               OnClick="@(() => Navigation.NavigateTo("/cashbox/dashboard"))">
+                        Dashboard
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+
+        <!-- ⭐ FILTERS -->
+        <div class="filters-bar no-print">
+            <span class="filter-label">📅 الفترة:</span>
+            <button class="period-btn @(_filter.PeriodType == "Today" ? "active" : "")"
+                    @onclick="@(() => SetPeriod("Today"))">اليوم</button>
+            <button class="period-btn @(_filter.PeriodType == "Week" ? "active" : "")"
+                    @onclick="@(() => SetPeriod("Week"))">أسبوع</button>
+            <button class="period-btn @(_filter.PeriodType == "Month" ? "active" : "")"
+                    @onclick="@(() => SetPeriod("Month"))">شهر</button>
+            <button class="period-btn @(_filter.PeriodType == "Quarter" ? "active" : "")"
+                    @onclick="@(() => SetPeriod("Quarter"))">ربع</button>
+            <button class="period-btn @(_filter.PeriodType == "Year" ? "active" : "")"
+                    @onclick="@(() => SetPeriod("Year"))">سنة</button>
+
+            <div class="custom-period">
+                <MudDatePicker Date="_filter.FromDate"
+                               DateChanged="@(d => { _filter.FromDate = d ?? _filter.FromDate; _filter.PeriodType = "Custom"; _ = LoadReport(); })"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Label="من" Class="date-pick" />
+                <MudDatePicker Date="_filter.ToDate"
+                               DateChanged="@(d => { _filter.ToDate = d ?? _filter.ToDate; _filter.PeriodType = "Custom"; _ = LoadReport(); })"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Label="إلى" Class="date-pick" />
+
+                <MudSelect T="int?" @bind-Value="_filter.CashBoxId" @bind-Value:after="LoadReport"
+                           Placeholder="كل الخزن" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Clearable="true" Class="cb-select">
+                    @foreach (var cb in _boxes)
+                    {
+                        <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName</MudSelectItem>
+                    }
+                </MudSelect>
+            </div>
+        </div>
+
+        @if (_isReloading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mb-2" />
+        }
+
+        <!-- ⭐ HERO STATS - الأرقام الرئيسية -->
+        <div class="hero-stats">
+            <div class="hero-card opening">
+                <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.Stars" /></div>
+                <div class="hero-info">
+                    <span class="hero-label">رصيد افتتاحي</span>
+                    <span class="hero-value">@FormatMoney(_report.OpeningBalance)</span>
+                    <span class="hero-meta">بداية الفترة</span>
+                </div>
+            </div>
+
+            <div class="hero-card inflows">
+                <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.TrendingUp" /></div>
+                <div class="hero-info">
+                    <span class="hero-label">إجمالي الداخل</span>
+                    <span class="hero-value">+@FormatMoney(_report.TotalInflows)</span>
+                    <span class="hero-meta">@_report.Inflows.Sum(i => i.Count) عملية قبض</span>
+                </div>
+            </div>
+
+            <div class="hero-card outflows">
+                <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.TrendingDown" /></div>
+                <div class="hero-info">
+                    <span class="hero-label">إجمالي الخارج</span>
+                    <span class="hero-value">-@FormatMoney(_report.TotalOutflows)</span>
+                    <span class="hero-meta">@_report.Outflows.Sum(o => o.Count) عملية صرف</span>
+                </div>
+            </div>
+
+            <div class="hero-card net @(_report.NetCashFlow >= 0 ? "positive" : "negative")">
+                <div class="hero-icon">
+                    <MudIcon Icon="@(_report.NetCashFlow >= 0 ? Icons.Material.Filled.AddCircle : Icons.Material.Filled.RemoveCircle)" />
+                </div>
+                <div class="hero-info">
+                    <span class="hero-label">⭐ صافي التدفق</span>
+                    <span class="hero-value-big">
+                        @(_report.NetCashFlow >= 0 ? "+" : "")@FormatMoney(_report.NetCashFlow)
+                    </span>
+                    <span class="hero-meta">في الفترة</span>
+                </div>
+            </div>
+
+            <div class="hero-card closing">
+                <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" /></div>
+                <div class="hero-info">
+                    <span class="hero-label">الرصيد الختامي</span>
+                    <span class="hero-value-big">@FormatMoney(_report.ClosingBalance)</span>
+                    <span class="hero-meta">نهاية الفترة</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ⭐ LIQUIDITY + FORECAST -->
+        <div class="analysis-grid">
+            <!-- Liquidity -->
+            <div class="analysis-card liquidity-card">
+                <div class="card-header">
+                    <h3>
+                        <span class="card-icon">@_report.LiquidityAnalysis.Icon</span>
+                        مؤشر السيولة
+                    </h3>
+                    <span class="status-badge @GetLiquidityStatusClass()">@_report.LiquidityAnalysis.Status</span>
+                </div>
+                <div class="card-body">
+                    <div class="liquidity-meter">
+                        <div class="meter-row">
+                            <span>الرصيد الحالي:</span>
+                            <strong>@FormatMoney(_report.LiquidityAnalysis.CurrentBalance) ج</strong>
+                        </div>
+                        <div class="meter-row">
+                            <span>متوسط المصروفات الشهرية:</span>
+                            <strong>@FormatMoney(_report.LiquidityAnalysis.AverageMonthlyOutflow) ج</strong>
+                        </div>
+                        <div class="meter-highlight">
+                            <span>تغطية الرصيد:</span>
+                            <strong class="big-num" style="color:@GetLiquidityColor();">
+                                @_report.LiquidityAnalysis.LiquidityRatio شهر
+                            </strong>
+                        </div>
+
+                        <!-- Visual Bar -->
+                        <div class="liquidity-bar">
+                            @{
+                                var pctFill = Math.Min(100, (double)(_report.LiquidityAnalysis.LiquidityRatio / 6m) * 100);
+                            }
+                            <div class="bar-fill" style="width:@pctFill%; background: @GetLiquidityColor();"></div>
+                            <span class="bar-label">المستهدف: 6 شهور</span>
+                        </div>
+
+                        <p class="liquidity-desc">@_report.LiquidityAnalysis.Description</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Forecast -->
+            <div class="analysis-card forecast-card">
+                <div class="card-header">
+                    <h3>
+                        <span class="card-icon">@_report.Forecast.TrendIcon</span>
+                        التوقع للشهر القادم
+                    </h3>
+                    <span class="status-badge @GetTrendClass()">@_report.Forecast.Trend</span>
+                </div>
+                <div class="card-body">
+                    <div class="forecast-rows">
+                        <div class="fr-row">
+                            <span>متوسط الدخل الشهري:</span>
+                            <strong style="color:#10b981;">+@FormatMoney(_report.Forecast.AverageMonthlyInflow) ج</strong>
+                        </div>
+                        <div class="fr-row">
+                            <span>متوسط الصرف الشهري:</span>
+                            <strong style="color:#ef4444;">-@FormatMoney(_report.Forecast.AverageMonthlyOutflow) ج</strong>
+                        </div>
+                        <div class="fr-row highlight">
+                            <span>متوسط صافي التدفق:</span>
+                            <strong style="color:@(_report.Forecast.AverageMonthlyNet >= 0 ? "#10b981" : "#ef4444");">
+                                @(_report.Forecast.AverageMonthlyNet >= 0 ? "+" : "")@FormatMoney(_report.Forecast.AverageMonthlyNet) ج
+                            </strong>
+                        </div>
+
+                        <div class="forecast-divider">🔮 توقع الشهر القادم</div>
+
+                        <div class="fr-row">
+                            <span>إيرادات متوقعة:</span>
+                            <strong style="color:#10b981;">+@FormatMoney(_report.Forecast.NextMonthExpectedInflow) ج</strong>
+                        </div>
+                        <div class="fr-row">
+                            <span>مصروفات متوقعة:</span>
+                            <strong style="color:#ef4444;">-@FormatMoney(_report.Forecast.NextMonthExpectedOutflow) ج</strong>
+                        </div>
+                        <div class="fr-row highlight">
+                            <span>صافي متوقع:</span>
+                            <strong style="color:@(_report.Forecast.NextMonthExpectedNet >= 0 ? "#10b981" : "#ef4444");">
+                                @(_report.Forecast.NextMonthExpectedNet >= 0 ? "+" : "")@FormatMoney(_report.Forecast.NextMonthExpectedNet) ج
+                            </strong>
+                        </div>
+                        <div class="fr-row final">
+                            <span>الرصيد المتوقع نهاية الشهر:</span>
+                            <strong class="final-num">@FormatMoney(_report.Forecast.NextMonthExpectedBalance) ج</strong>
+                        </div>
+                    </div>
+                    <p class="forecast-desc">@_report.Forecast.Description</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ⭐ SMART ALERTS -->
+        @if (_report.Alerts.Any())
+        {
+            <div class="alerts-section">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.Notifications" />
+                    التنبيهات والتوصيات (@_report.Alerts.Count)
+                </h3>
+                <div class="alerts-grid">
+                    @foreach (var alert in _report.Alerts)
+                    {
+                        <div class="alert-card" style="border-right-color: @alert.Color;">
+                            <div class="alert-icon" style="background: @(alert.Color)22; color: @alert.Color;">
+                                @alert.Icon
+                            </div>
+                            <div class="alert-body">
+                                <h4 style="color: @alert.Color;">@alert.Title</h4>
+                                <p>@alert.Description</p>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- ⭐ CASH FLOW STATEMENT TABLE -->
+        <div class="statement-card">
+            <h3 class="section-title">
+                <MudIcon Icon="@Icons.Material.Filled.TableChart" />
+                قائمة التدفقات النقدية
+            </h3>
+
+            <table class="cf-table">
+                <tbody>
+                    <!-- Opening -->
+                    <tr class="opening-row">
+                        <td><strong>📍 الرصيد الافتتاحي (بداية الفترة)</strong></td>
+                        <td class="num"><strong>@FormatMoney(_report.OpeningBalance) ج</strong></td>
+                    </tr>
+
+                    <!-- Inflows -->
+                    <tr class="section-header-row">
+                        <td colspan="2">📥 التدفقات النقدية الداخلة</td>
+                    </tr>
+                    @foreach (var i in _report.Inflows)
+                    {
+                        <tr>
+                            <td>
+                                <span class="cat-color" style="background: @i.Color;"></span>
+                                @i.CategoryName
+                                <small>(@i.Count عملية)</small>
+                            </td>
+                            <td class="num positive">+@FormatMoney(i.Amount) ج</td>
+                        </tr>
+                    }
+                    <tr class="subtotal positive">
+                        <td><strong>إجمالي التدفقات الداخلة</strong></td>
+                        <td class="num"><strong>+@FormatMoney(_report.TotalInflows) ج</strong></td>
+                    </tr>
+
+                    <!-- Outflows -->
+                    <tr class="section-header-row">
+                        <td colspan="2">📤 التدفقات النقدية الخارجة</td>
+                    </tr>
+                    @foreach (var o in _report.Outflows)
+                    {
+                        <tr>
+                            <td>
+                                <span class="cat-color" style="background: @o.Color;"></span>
+                                @o.CategoryName
+                                <small>(@o.Count عملية)</small>
+                            </td>
+                            <td class="num negative">-@FormatMoney(o.Amount) ج</td>
+                        </tr>
+                    }
+                    <tr class="subtotal negative">
+                        <td><strong>إجمالي التدفقات الخارجة</strong></td>
+                        <td class="num"><strong>-@FormatMoney(_report.TotalOutflows) ج</strong></td>
+                    </tr>
+
+                    <!-- Net Cash Flow -->
+                    <tr class="net-row @(_report.NetCashFlow >= 0 ? "profit" : "loss")">
+                        <td><strong>= صافي التدفق النقدي</strong></td>
+                        <td class="num">
+                            <strong>@(_report.NetCashFlow >= 0 ? "+" : "")@FormatMoney(_report.NetCashFlow) ج</strong>
+                        </td>
+                    </tr>
+
+                    <!-- Closing -->
+                    <tr class="closing-row">
+                        <td><strong>🏁 الرصيد الختامي (نهاية الفترة)</strong></td>
+                        <td class="num"><strong>@FormatMoney(_report.ClosingBalance) ج</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ⭐ BY CASHBOX -->
+        @if (_report.ByCashBox.Any())
+        {
+            <div class="cashboxes-card">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.AccountBalance" />
+                    تفصيل بحسب الخزينة
+                </h3>
+                <div class="cashboxes-grid">
+                    @foreach (var box in _report.ByCashBox)
+                    {
+                        <div class="cb-card @(box.IsActive ? "" : "inactive")"
+                             style="border-color: @(box.Color)55;">
+                            <div class="cb-strip" style="background: linear-gradient(135deg, @box.Color, @(box.Color)cc);"></div>
+                            <div class="cb-body">
+                                <div class="cb-header">
+                                    <strong>@box.CashBoxName</strong>
+                                    @if (!box.IsActive)
+                                    {
+                                        <span class="inactive-tag">معطّلة</span>
+                                    }
+                                </div>
+                                <div class="cb-rows">
+                                    <div class="cb-row">
+                                        <span>افتتاحي:</span>
+                                        <strong>@FormatMoney(box.OpeningBalance)</strong>
+                                    </div>
+                                    <div class="cb-row inflow">
+                                        <span>↑ داخل:</span>
+                                        <strong>+@FormatMoney(box.Inflows)</strong>
+                                    </div>
+                                    <div class="cb-row outflow">
+                                        <span>↓ خارج:</span>
+                                        <strong>-@FormatMoney(box.Outflows)</strong>
+                                    </div>
+                                    <div class="cb-row net">
+                                        <span>صافي:</span>
+                                        <strong style="color: @(box.NetFlow >= 0 ? "#10b981" : "#ef4444");">
+                                            @(box.NetFlow >= 0 ? "+" : "")@FormatMoney(box.NetFlow)
+                                        </strong>
+                                    </div>
+                                    <div class="cb-row closing">
+                                        <span>الختامي:</span>
+                                        <strong style="color: @box.Color;">@FormatMoney(box.ClosingBalance) ج</strong>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- ⭐ MONTHLY TREND CHART -->
+        @if (_report.MonthlyTrend.Any())
+        {
+            <div class="trend-card">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.ShowChart" />
+                    التدفق النقدي - آخر 12 شهر
+                </h3>
+                <div class="chart-wrap">
+                    <svg viewBox="0 0 1000 280" class="cf-chart" preserveAspectRatio="xMidYMid meet">
+                        @{
+                            var maxVal = _report.MonthlyTrend.Max(m => Math.Max(m.Inflows, m.Outflows));
+                            if (maxVal == 0) maxVal = 1;
+                            var barWidth = 1000.0 / _report.MonthlyTrend.Count / 3;
+                            var gap = 1000.0 / _report.MonthlyTrend.Count;
+                        }
+                        @for (int i = 0; i <= 4; i++)
+                        {
+                            var y = 30 + (180 * i / 4.0);
+                            <line x1="0" y1="@y" x2="1000" y2="@y" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="3,3" />
+                        }
+
+                        @for (int i = 0; i < _report.MonthlyTrend.Count; i++)
+                        {
+                            var m = _report.MonthlyTrend[i];
+                            var x = i * gap + gap / 6;
+                            var inH = (double)m.Inflows / (double)maxVal * 180;
+                            var outH = (double)m.Outflows / (double)maxVal * 180;
+
+                            <rect x="@(x.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  y="@((210 - inH).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  height="@(inH.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  fill="#10b981" rx="2">
+                                <title>@m.MonthLabel - داخل: @FormatMoney(m.Inflows)</title>
+                            </rect>
+                            <rect x="@((x + barWidth + 1).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  y="@((210 - outH).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  height="@(outH.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  fill="#ef4444" rx="2">
+                                <title>@m.MonthLabel - خارج: @FormatMoney(m.Outflows)</title>
+                            </rect>
+
+                            <svg:text x="@((x + barWidth).ToString("F1", CultureInfo.InvariantCulture))" 
+          y="235" text-anchor="middle" font-size="10" fill="#6b7280">
+    @m.Month.ToString("MM/yy")
+</svg:text>
+                        }
+                        <line x1="0" y1="210" x2="1000" y2="210" stroke="#374151" stroke-width="1.5" />
+                    </svg>
+                </div>
+                <div class="chart-legend">
+                    <span><span class="dot" style="background:#10b981;"></span> تدفقات داخلة</span>
+                    <span><span class="dot" style="background:#ef4444;"></span> تدفقات خارجة</span>
+                </div>
+            </div>
+        }
+
+        <!-- ⭐ TOP FLOWS -->
+        <div class="top-flows-grid">
+            @if (_report.TopInflows.Any())
+            {
+                <div class="top-card">
+                    <h3 class="section-title small">
+                        <MudIcon Icon="@Icons.Material.Filled.TrendingUp" Style="color:#10b981;" />
+                        أعلى 5 تدفقات داخلة
+                    </h3>
+                    @foreach (var t in _report.TopInflows)
+                    {
+                        <div class="top-row inflow">
+                            <div class="t-info">
+                                <strong>@t.Description</strong>
+                                <small>@t.Date.ToString("yyyy/MM/dd") • @t.CashBoxName • @t.ReferenceTypeAr</small>
+                            </div>
+                            <span class="t-amount">+@FormatMoney(t.Amount) ج</span>
+                        </div>
+                    }
+                </div>
+            }
+
+            @if (_report.TopOutflows.Any())
+            {
+                <div class="top-card">
+                    <h3 class="section-title small">
+                        <MudIcon Icon="@Icons.Material.Filled.TrendingDown" Style="color:#ef4444;" />
+                        أعلى 5 تدفقات خارجة
+                    </h3>
+                    @foreach (var t in _report.TopOutflows)
+                    {
+                        <div class="top-row outflow">
+                            <div class="t-info">
+                                <strong>@t.Description</strong>
+                                <small>@t.Date.ToString("yyyy/MM/dd") • @t.CashBoxName • @t.ReferenceTypeAr</small>
+                            </div>
+                            <span class="t-amount">-@FormatMoney(t.Amount) ج</span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- Print Footer -->
+        <div class="print-footer print-only">
+            <p>تم إصدار هذا التقرير في @DateTime.Now.ToString("yyyy/MM/dd HH:mm") • COCOBOLO ERP</p>
+        </div>
+    </div>
+}
+
+<style>
+    .cf-page {
+        max-width: 1800px; margin: 0 auto;
+        padding: 0 1.25rem 2rem; position: relative;
+        direction: rtl;
+    }
+    .loading-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; }
+
+    .bg-decorations { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+    .bg-orb { position: absolute; border-radius: 50%; filter: blur(80px); }
+    .bg-orb-1 { width: 450px; height: 450px; top: -200px; right: -150px;
+                background: radial-gradient(circle, rgba(6,182,212,0.1), transparent 70%); }
+    .bg-orb-2 { width: 400px; height: 400px; bottom: -180px; left: -120px;
+                background: radial-gradient(circle, rgba(16,185,129,0.08), transparent 70%); }
+
+    /* ═══════ HEADER ═══════ */
+    .cf-header { position: relative; border-radius: 24px; overflow: hidden; margin-bottom: 1.5rem; }
+    .header-bg { position: absolute; inset: 0; }
+    .header-gradient {
+        position: absolute; inset: 0;
+        background: linear-gradient(135deg, #064e3b 0%, #065f46 50%, #0e7490 100%);
+    }
+    .header-orbs { position: absolute; inset: 0; overflow: hidden; }
+    .header-orb { position: absolute; border-radius: 50%; }
+    .orb-1 { width: 380px; height: 380px; top: -160px; right: -100px;
+             background: radial-gradient(circle, rgba(6,182,212,0.4), transparent 60%); }
+    .orb-2 { width: 280px; height: 280px; bottom: -100px; left: 30%;
+             background: radial-gradient(circle, rgba(16,185,129,0.3), transparent 60%); }
+
+    .header-content {
+        position: relative; z-index: 1; padding: 2rem;
+        display: flex; align-items: center; justify-content: space-between;
+        flex-wrap: wrap; gap: 1.5rem;
+    }
+    .header-info { display: flex; align-items: center; gap: 1.25rem; }
+    .header-icon {
+        background: rgba(255,255,255,0.15); backdrop-filter: blur(20px);
+        border-radius: 16px; width: 64px; height: 64px;
+        display: flex; align-items: center; justify-content: center;
+        color: white; border: 1px solid rgba(255,255,255,0.3);
+    }
+    .header-icon ::deep .mud-icon-root { font-size: 32px !important; color: white !important; }
+    .header-info h1 { color: white; font-size: 1.75rem; font-weight: 800; margin: 0; }
+    .header-info p { color: rgba(255,255,255,0.85); margin: 0.4rem 0 0; }
+    .header-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+    /* ═══════ FILTERS ═══════ */
+    .filters-bar {
+        display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px; padding: 0.75rem 1rem;
+        margin-bottom: 1.5rem;
+    }
+    .filter-label { font-weight: 700; }
+    .period-btn {
+        padding: 0.4rem 0.85rem;
+        background: var(--mud-palette-background);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 8px;
+        cursor: pointer; font-family: inherit;
+        font-size: 0.85rem; font-weight: 600;
+        color: var(--mud-palette-text-primary);
+        transition: all 0.2s;
+    }
+    .period-btn:hover { border-color: #06b6d4; }
+    .period-btn.active {
+        background: linear-gradient(135deg, #06b6d4, #0891b2);
+        color: white; border-color: #06b6d4;
+    }
+    .custom-period { display: flex; gap: 0.5rem; margin-right: auto; }
+    .date-pick { max-width: 150px; }
+    .cb-select { max-width: 180px; }
+
+    /* ═══════ HERO STATS ═══════ */
+    .hero-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1rem; margin-bottom: 1.5rem; position: relative; z-index: 1;
+    }
+    .hero-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.25rem;
+        display: flex; align-items: center; gap: 1rem;
+        transition: all 0.3s; position: relative; overflow: hidden;
+    }
+    .hero-card::before {
+        content: ''; position: absolute; top: -30px; right: -30px;
+        width: 120px; height: 120px; border-radius: 50%; opacity: 0.1;
+    }
+    .hero-card.opening::before { background: #6366f1; }
+    .hero-card.inflows::before { background: #10b981; }
+    .hero-card.outflows::before { background: #ef4444; }
+    .hero-card.net.positive::before { background: #10b981; opacity: 0.2; }
+    .hero-card.net.negative::before { background: #ef4444; opacity: 0.2; }
+    .hero-card.closing::before { background: #06b6d4; }
+    .hero-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+
+    .hero-icon {
+        width: 56px; height: 56px; border-radius: 14px;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0; color: white;
+    }
+    .hero-card.opening .hero-icon { background: linear-gradient(135deg, #6366f1, #4f46e5); }
+    .hero-card.inflows .hero-icon { background: linear-gradient(135deg, #10b981, #059669); }
+    .hero-card.outflows .hero-icon { background: linear-gradient(135deg, #ef4444, #dc2626); }
+    .hero-card.net.positive .hero-icon { background: linear-gradient(135deg, #10b981, #059669); }
+    .hero-card.net.negative .hero-icon { background: linear-gradient(135deg, #ef4444, #dc2626); }
+    .hero-card.closing .hero-icon { background: linear-gradient(135deg, #06b6d4, #0891b2); }
+    .hero-icon ::deep .mud-icon-root { font-size: 28px !important; color: white !important; }
+
+    .hero-info { flex: 1; min-width: 0; }
+    .hero-label { display: block; font-size: 0.85rem; color: var(--mud-palette-text-secondary); font-weight: 600; }
+    .hero-value { display: block; font-size: 1.4rem; font-weight: 900; color: var(--mud-palette-text-primary); margin-top: 0.25rem; }
+    .hero-value-big { display: block; font-size: 1.7rem; font-weight: 900; margin-top: 0.25rem; color: var(--mud-palette-text-primary); }
+    .hero-card.net.positive .hero-value-big { color: #10b981; }
+    .hero-card.net.negative .hero-value-big { color: #ef4444; }
+    .hero-card.closing .hero-value-big { color: #06b6d4; }
+    .hero-meta { display: block; font-size: 0.78rem; color: var(--mud-palette-text-secondary); margin-top: 0.2rem; }
+
+    /* ═══════ ANALYSIS CARDS ═══════ */
+    .analysis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.5rem; }
+    .analysis-card { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: 16px; overflow: hidden; }
+    .liquidity-card { background: linear-gradient(135deg, var(--mud-palette-surface), rgba(6,182,212,0.03)); }
+    .forecast-card { background: linear-gradient(135deg, var(--mud-palette-surface), rgba(139,92,246,0.03)); }
+
+    .card-header {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 1rem 1.25rem; border-bottom: 1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-background);
+    }
+    .card-header h3 { margin: 0; font-size: 1.05rem; font-weight: 800; display: flex; align-items: center; gap: 0.5rem; }
+    .card-icon { font-size: 1.4rem; }
+    .status-badge { padding: 0.3rem 0.75rem; border-radius: 8px; font-size: 0.78rem; font-weight: 700; }
+    .status-badge.success { background: rgba(16,185,129,0.15); color: #10b981; }
+    .status-badge.warning { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .status-badge.danger { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .status-badge.info { background: rgba(59,130,246,0.15); color: #3b82f6; }
+
+    .card-body { padding: 1.25rem; }
+
+    /* Liquidity */
+    .meter-row, .meter-highlight {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.5rem 0.75rem; background: var(--mud-palette-background);
+        border-radius: 8px; margin-bottom: 0.5rem; font-size: 0.9rem;
+    }
+    .meter-highlight {
+        background: linear-gradient(135deg, rgba(6,182,212,0.1), rgba(6,182,212,0.05));
+        border: 1px solid rgba(6,182,212,0.3);
+    }
+    .big-num { font-size: 1.3rem; font-weight: 900; }
+
+    .liquidity-bar {
+        position: relative; background: var(--mud-palette-background);
+        height: 12px; border-radius: 6px; overflow: hidden;
+        margin: 1rem 0 0.5rem;
+    }
+    .bar-fill { height: 100%; border-radius: 6px; transition: width 0.6s ease; }
+    .bar-label {
+        position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
+        font-size: 0.75rem; color: var(--mud-palette-text-secondary);
+    }
+
+    .liquidity-desc {
+        background: rgba(6,182,212,0.05); border-right: 3px solid #06b6d4;
+        padding: 0.75rem; border-radius: 8px;
+        font-size: 0.88rem; margin: 1.5rem 0 0;
+    }
+
+    /* Forecast */
+    .forecast-rows { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.75rem; }
+    .fr-row {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.5rem 0.75rem; background: var(--mud-palette-background);
+        border-radius: 8px; font-size: 0.88rem;
+    }
+    .fr-row.highlight {
+        background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(139,92,246,0.05));
+        border: 1px solid rgba(139,92,246,0.3); font-weight: 700;
+    }
+    .fr-row.final {
+        background: linear-gradient(135deg, var(--gold-subtle), var(--gold-subtle-hover));
+        border: 2px solid var(--gold);
+        font-size: 1rem; font-weight: 800;
+    }
+    .final-num { font-size: 1.15rem; color: var(--gold-dark); }
+    .forecast-divider {
+        text-align: center; padding: 0.5rem;
+        background: rgba(139,92,246,0.1); border-radius: 8px;
+        font-weight: 700; color: #8b5cf6; margin: 0.5rem 0;
+    }
+    .forecast-desc {
+        background: rgba(139,92,246,0.05); border-right: 3px solid #8b5cf6;
+        padding: 0.75rem; border-radius: 8px; font-size: 0.88rem; margin: 1rem 0 0;
+    }
+
+    /* ═══════ ALERTS ═══════ */
+    .alerts-section, .statement-card, .cashboxes-card, .trend-card, .top-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.5rem; margin-bottom: 1.5rem;
+    }
+    .section-title {
+        display: flex; align-items: center; gap: 0.5rem;
+        margin: 0 0 1rem; font-size: 1.1rem; font-weight: 800;
+        padding-bottom: 0.75rem; border-bottom: 2px solid #06b6d4;
+    }
+    .section-title.small { font-size: 1rem; }
+    .section-title ::deep .mud-icon-root { color: #06b6d4; }
+
+    .alerts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+    .alert-card {
+        background: var(--mud-palette-background); border-right: 4px solid;
+        border-radius: 12px; padding: 1rem;
+        display: flex; gap: 0.75rem; transition: transform 0.2s;
+    }
+    .alert-card:hover { transform: translateX(-3px); }
+    .alert-icon {
+        width: 48px; height: 48px; border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.5rem; flex-shrink: 0;
+    }
+    .alert-body h4 { margin: 0 0 0.4rem; font-size: 1rem; font-weight: 800; }
+    .alert-body p { margin: 0; font-size: 0.88rem; line-height: 1.6; }
+
+    /* ═══════ CF TABLE ═══════ */
+    .cf-table { width: 100%; border-collapse: collapse; }
+    .cf-table td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--mud-palette-divider); }
+    .cf-table .num { text-align: left; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .cf-table .positive { color: #10b981; }
+    .cf-table .negative { color: #ef4444; }
+
+    .opening-row td {
+        background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(99,102,241,0.05));
+        border-top: 2px solid #6366f1; border-bottom: 2px solid #6366f1;
+        font-size: 1.05rem;
+    }
+
+    .section-header-row td {
+        background: var(--mud-palette-background);
+        font-weight: 800; font-size: 0.95rem;
+        padding: 0.85rem 1rem;
+    }
+
+    .subtotal td { font-weight: 700; }
+    .subtotal.positive td { background: rgba(16,185,129,0.08); }
+    .subtotal.negative td { background: rgba(239,68,68,0.08); }
+
+    .net-row td {
+        font-size: 1.2rem; padding: 1rem;
+        border-top: 3px solid; border-bottom: 3px solid;
+    }
+    .net-row.profit td {
+        background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.05));
+        border-color: #10b981; color: #047857;
+    }
+    .net-row.loss td {
+        background: linear-gradient(135deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05));
+        border-color: #ef4444; color: #b91c1c;
+    }
+
+    .closing-row td {
+        background: linear-gradient(135deg, rgba(6,182,212,0.15), rgba(6,182,212,0.05));
+        border-top: 3px solid #06b6d4; border-bottom: 3px solid #06b6d4;
+        font-size: 1.15rem; color: #0e7490;
+    }
+
+    .cat-color { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-left: 0.4rem; }
+    .cf-table small { color: var(--mud-palette-text-secondary); margin-right: 0.4rem; }
+
+    /* ═══════ CASHBOXES ═══════ */
+    .cashboxes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+    .cb-card {
+        background: var(--mud-palette-background);
+        border: 2px solid var(--mud-palette-divider);
+        border-radius: 14px; overflow: hidden;
+    }
+    .cb-card.inactive { opacity: 0.6; }
+    .cb-strip { height: 6px; }
+    .cb-body { padding: 1rem; }
+    .cb-header {
+        display: flex; justify-content: space-between;
+        margin-bottom: 0.75rem; font-weight: 800;
+    }
+    .inactive-tag { font-size: 0.7rem; background: rgba(156,163,175,0.2); color: #6b7280; padding: 0.15rem 0.4rem; border-radius: 4px; }
+    .cb-rows { display: flex; flex-direction: column; gap: 0.3rem; }
+    .cb-row {
+        display: flex; justify-content: space-between;
+        padding: 0.4rem 0.6rem; font-size: 0.85rem;
+        background: var(--mud-palette-surface); border-radius: 6px;
+    }
+    .cb-row.inflow { color: #10b981; }
+    .cb-row.outflow { color: #ef4444; }
+    .cb-row.net { background: rgba(0,0,0,0.03); font-weight: 700; }
+    .cb-row.closing {
+        background: linear-gradient(135deg, var(--gold-subtle), var(--gold-subtle-hover));
+        border: 1px solid var(--gold-border); font-weight: 800;
+    }
+
+    /* ═══════ CHART ═══════ */
+    .chart-wrap { background: var(--mud-palette-background); border-radius: 12px; padding: 1rem; overflow-x: auto; }
+    .cf-chart { width: 100%; height: 280px; }
+    .chart-legend {
+        display: flex; justify-content: center; gap: 1.5rem;
+        margin-top: 1rem; font-size: 0.9rem;
+    }
+    .chart-legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+    .chart-legend .dot { width: 14px; height: 14px; border-radius: 4px; }
+
+    /* ═══════ TOP FLOWS ═══════ */
+    .top-flows-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    .top-row {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.75rem 1rem; margin-bottom: 0.5rem;
+        background: var(--mud-palette-background); border-radius: 10px;
+        border-right: 3px solid;
+    }
+    .top-row.inflow { border-right-color: #10b981; }
+    .top-row.outflow { border-right-color: #ef4444; }
+    .t-info { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+    .t-info strong { font-size: 0.9rem; }
+    .t-info small { font-size: 0.75rem; color: var(--mud-palette-text-secondary); margin-top: 0.15rem; }
+    .t-amount { font-weight: 800; font-size: 1rem; }
+    .top-row.inflow .t-amount { color: #10b981; }
+    .top-row.outflow .t-amount { color: #ef4444; }
+
+    .print-only { display: none; }
+    .print-footer { text-align: center; padding: 1rem; color: #999; font-size: 0.85rem; border-top: 1px dashed #ddd; margin-top: 2rem; }
+
+    /* PRINT */
+    @@media print {
+        .no-print { display: none !important; }
+        .print-only { display: block !important; }
+        body { background: white !important; }
+        .cf-page { padding: 0; }
+        .cf-header { background: #f9f9f9; color: #1a2842; }
+        .header-info h1, .header-info p { color: #1a2842 !important; }
+        .header-icon { background: #06b6d4; }
+        .alert-card, .analysis-card, .statement-card, .cashboxes-card, .trend-card, .top-card { box-shadow: none; }
+        @@page { size: A4; margin: 1cm; }
+    }
+
+    @@media (max-width: 1100px) {
+        .analysis-grid, .top-flows-grid { grid-template-columns: 1fr; }
+    }
+    @@media (max-width: 700px) {
+        .hero-stats { grid-template-columns: 1fr; }
+        .filters-bar { flex-direction: column; align-items: stretch; }
+        .custom-period { margin-right: 0; flex-wrap: wrap; }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _isReloading = false;
+    private CashFlowStatementDto? _report;
+    private CashFlowFilterDto _filter = new();
+    private List<CashBoxListDto> _boxes = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var canView = user.HasClaim("Permission", "frm_CashFlowNew:View")
+                   || user.HasClaim("Permission", "frmCashBoxDashboard:View")
+                   || user.IsInRole("Admin");
+        if (!canView) { Navigation.NavigateTo("/"); return; }
+
+        _boxes = await CashBoxService.GetCashBoxesAsync();
+        await SetPeriod("Month");
+        _isLoading = false;
+    }
+
+    private async Task LoadReport()
+    {
+        _isReloading = true;
+        try
+        {
+            _report = await CashFlowService.GetCashFlowStatementAsync(_filter);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isReloading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SetPeriod(string period)
+    {
+        _filter.PeriodType = period;
+        var today = DateTime.Today;
+
+        switch (period)
+        {
+            case "Today":
+                _filter.FromDate = today; _filter.ToDate = today; break;
+            case "Week":
+                _filter.FromDate = today.AddDays(-(int)today.DayOfWeek); _filter.ToDate = today; break;
+            case "Month":
+                _filter.FromDate = new DateTime(today.Year, today.Month, 1); _filter.ToDate = today; break;
+            case "Quarter":
+                var qStart = new DateTime(today.Year, ((today.Month - 1) / 3) * 3 + 1, 1);
+                _filter.FromDate = qStart; _filter.ToDate = today; break;
+            case "Year":
+                _filter.FromDate = new DateTime(today.Year, 1, 1); _filter.ToDate = today; break;
+        }
+
+        await LoadReport();
+    }
+
+    private async Task Print() => await JS.InvokeVoidAsync("window.print");
+
+    private string FormatMoney(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+
+    private string GetLiquidityStatusClass()
+    {
+        return _report?.LiquidityAnalysis.Status switch
+        {
+            "ممتاز" or "جيد" => "success",
+            "متوسط" => "warning",
+            _ => "danger"
+        };
+    }
+
+    private string GetLiquidityColor()
+    {
+        var ratio = _report?.LiquidityAnalysis.LiquidityRatio ?? 0;
+        if (ratio >= 6) return "#10b981";
+        if (ratio >= 3) return "#22c55e";
+        if (ratio >= 1) return "#f59e0b";
+        if (ratio > 0) return "#fb923c";
+        return "#ef4444";
+    }
+
+    private string GetTrendClass()
+    {
+        return _report?.Forecast.Trend switch
+        {
+            "نمو" => "success",
+            "تراجع" => "danger",
+            _ => "info"
+        };
+    }
+}

@@ -76,6 +76,9 @@ builder.Services.AddScoped<IAdditionalChargeService, AdditionalChargeService>();
 builder.Services.AddScoped<ICashBoxService, CashBoxService>();
 builder.Services.AddScoped<IPersonalAccountService, PersonalAccountService>();
 builder.Services.AddScoped<IExpenseService, ExpenseService>();
+builder.Services.AddScoped<IFinancialReportsService, FinancialReportsService>();
+builder.Services.AddScoped<ICashFlowService, CashFlowService>(); 
+builder.Services.AddScoped<IFinancialDashboardService, FinancialDashboardService>();
 
 var app = builder.Build();
 

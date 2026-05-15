@@ -343,102 +343,119 @@ public class CashBoxService : ICashBoxService
     // ============================================================
     //  Helper: استخرج معلومات المصدر
     // ============================================================
-    private async Task<(string? Title, string? Url, string? PartyName, string? PersonalAccountName)>
-        GetSourceInfoAsync(string? refType, int? refId, int? paymentId)
+    // ============================================================
+//  Helper: استخرج معلومات المصدر + Routes صحيحة
+// ============================================================
+private async Task<(string? Title, string? Url, string? PartyName, string? PersonalAccountName)>
+    GetSourceInfoAsync(string? refType, int? refId, int? paymentId)
+{
+    try
     {
-        try
+        switch (refType)
         {
-            switch (refType)
-            {
-                case CashBoxRefTypes.SaleInvoice:
-                    if (refId.HasValue)
+            case CashBoxRefTypes.SaleInvoice:
+                if (refId.HasValue)
+                {
+                    var inv = await _db.Transactions.AsNoTracking()
+                        .Where(t => t.TransactionId == refId.Value)
+                        .Select(t => new { t.ReferenceNumber, t.PartyId })
+                        .FirstOrDefaultAsync();
+                    if (inv != null)
                     {
-                        var inv = await _db.Transactions.AsNoTracking()
-                            .Where(t => t.TransactionId == refId.Value)
-                            .Select(t => new { t.ReferenceNumber, t.PartyId })
-                            .FirstOrDefaultAsync();
-                        if (inv != null)
-                        {
-                            var pname = await _db.Parties.AsNoTracking()
-                                .Where(p => p.PartyId == inv.PartyId)
-                                .Select(p => p.PartyName).FirstOrDefaultAsync();
-                            return ($"فاتورة {inv.ReferenceNumber}",
-                                    $"/sales/invoices/{refId.Value}", pname, null);
-                        }
+                        var pname = await _db.Parties.AsNoTracking()
+                            .Where(p => p.PartyId == inv.PartyId)
+                            .Select(p => p.PartyName).FirstOrDefaultAsync();
+                        return ($"فاتورة {inv.ReferenceNumber}",
+                                $"/sales/invoices/{refId.Value}", pname, null);
                     }
-                    break;
+                }
+                break;
 
-                case CashBoxRefTypes.PurchaseInvoice:
-                    if (refId.HasValue)
+            case CashBoxRefTypes.PurchaseInvoice:
+                if (refId.HasValue)
+                {
+                    var inv = await _db.Transactions.AsNoTracking()
+                        .Where(t => t.TransactionId == refId.Value)
+                        .Select(t => new { t.ReferenceNumber })
+                        .FirstOrDefaultAsync();
+                    if (inv != null)
+                        return ($"فاتورة شراء {inv.ReferenceNumber}",
+                                $"/sales/invoices/{refId.Value}", null, null);
+                }
+                break;
+
+            case CashBoxRefTypes.Expense:
+                if (refId.HasValue)
+                {
+                    // ⭐ FIX: نقرأ المصروف ونتحقق لو كان شهر فرعي → نوديه على الأصل
+                    var exp = await _db.Expenses.AsNoTracking()
+                        .Where(e => e.ExpenseId == refId.Value)
+                        .Select(e => new {
+                            e.ExpenseId,
+                            e.ExpenseName,
+                            e.Torecipient,
+                            e.AdvanceParentExpenseId
+                        })
+                        .FirstOrDefaultAsync();
+
+                    if (exp != null)
                     {
-                        var inv = await _db.Transactions.AsNoTracking()
-                            .Where(t => t.TransactionId == refId.Value)
-                            .Select(t => new { t.ReferenceNumber })
-                            .FirstOrDefaultAsync();
-                        if (inv != null)
-                            return ($"فاتورة شراء {inv.ReferenceNumber}",
-                                    $"/sales/invoices/{refId.Value}", null, null);
+                        // ⭐ لو شهر فرعي، نوديه على الأصل
+                        var targetId = exp.AdvanceParentExpenseId ?? exp.ExpenseId;
+                        return ($"مصروف: {exp.ExpenseName}",
+                                $"/expenses/{targetId}/edit",  // ⭐ الـ Route الصحيح
+                                exp.Torecipient, null);
                     }
-                    break;
+                }
+                break;
 
-                case CashBoxRefTypes.Expense:
-                    if (refId.HasValue)
-                    {
-                        var exp = await _db.Expenses.AsNoTracking()
-                            .Where(e => e.ExpenseId == refId.Value)
-                            .Select(e => new { e.ExpenseName, e.Torecipient })
-                            .FirstOrDefaultAsync();
-                        if (exp != null)
-                            return ($"مصروف: {exp.ExpenseName}",
-                                    $"/expenses/{refId.Value}", exp.Torecipient, null);
-                    }
-                    break;
+            case CashBoxRefTypes.Loan:
+                if (refId.HasValue)
+                {
+                    var acc = await _db.PersonalAccounts.AsNoTracking()
+                        .Where(p => p.PersonalAccountId == refId.Value)
+                        .Select(p => new { p.AccountName })
+                        .FirstOrDefaultAsync();
+                    if (acc != null)
+                        return ($"حساب: {acc.AccountName}",
+                                $"/cashbox/personal-accounts/{refId.Value}/statement",
+                                null, acc.AccountName);
+                }
+                break;
 
-                case CashBoxRefTypes.Loan:
-                    if (refId.HasValue)
-                    {
-                        var acc = await _db.PersonalAccounts.AsNoTracking()
-                            .Where(p => p.PersonalAccountId == refId.Value)
-                            .Select(p => new { p.AccountName })
-                            .FirstOrDefaultAsync();
-                        if (acc != null)
-                            return ($"حساب: {acc.AccountName}",
-                                    $"/cashbox/personal-accounts/{refId.Value}/statement",
-                                    null, acc.AccountName);
-                    }
-                    break;
+            case CashBoxRefTypes.TransferIn:
+            case CashBoxRefTypes.TransferOut:
+                if (refId.HasValue)
+                {
+                    var box = await _db.CashBoxes.AsNoTracking()
+                        .Where(c => c.CashBoxId == refId.Value)
+                        .Select(c => new { c.CashBoxName })
+                        .FirstOrDefaultAsync();
+                    if (box != null)
+                        return ($"تحويل ↔ {box.CashBoxName}",
+                                $"/cashbox/transactions?cashBoxId={refId.Value}",
+                                null, null);
+                }
+                break;
 
-                case CashBoxRefTypes.TransferIn:
-                case CashBoxRefTypes.TransferOut:
-                    if (refId.HasValue)
-                    {
-                        var box = await _db.CashBoxes.AsNoTracking()
-                            .Where(c => c.CashBoxId == refId.Value)
-                            .Select(c => new { c.CashBoxName })
-                            .FirstOrDefaultAsync();
-                        if (box != null)
-                            return ($"تحويل ↔ {box.CashBoxName}",
-                                    "/cashbox/transactions", null, null);
-                    }
-                    break;
+            case CashBoxRefTypes.AdvanceCharge:
+                return ("رسوم معاينة", "/additional-charges", null, null);
 
-                case CashBoxRefTypes.AdvanceCharge:
-                    return ("رسوم معاينة", "/additional-charges", null, null);
+            case CashBoxRefTypes.OpeningBalance:
+                // ⭐ نوديه على إدارة الخزينة
+                return ("رصيد افتتاحي", "/cashbox/manage", null, null);
 
-                case CashBoxRefTypes.OpeningBalance:
-                    return ("رصيد افتتاحي", null, null, null);
+            case CashBoxRefTypes.ManualReceipt:
+                return ("سند قبض يدوي", "/cashbox/transactions", null, null);
 
-                case CashBoxRefTypes.ManualReceipt:
-                    return ("سند قبض يدوي", "/cashbox/transactions", null, null);
-
-                case CashBoxRefTypes.ManualPayment:
-                    return ("سند صرف يدوي", "/cashbox/transactions", null, null);
-            }
+            case CashBoxRefTypes.ManualPayment:
+                return ("سند صرف يدوي", "/cashbox/transactions", null, null);
         }
-        catch { }
-
-        return (null, null, null, null);
     }
+    catch { }
+
+    return (null, null, null, null);
+}
 
     // ============================================================
     //  Manual Operations

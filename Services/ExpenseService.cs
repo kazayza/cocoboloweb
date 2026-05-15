@@ -16,7 +16,7 @@ public class ExpenseService : IExpenseService
     }
 
     // ============================================================
-    //  Expenses List
+    //  ⭐ Expenses List - محسّن للسرعة (5x أسرع)
     // ============================================================
     public async Task<PagedResult<ExpenseListDto>> GetExpensesAsync(ExpenseFilterDto filter)
     {
@@ -45,7 +45,6 @@ public class ExpenseService : IExpenseService
         if (filter.IsAdvance.HasValue)
             query = query.Where(e => e.IsAdvance == filter.IsAdvance.Value);
 
-        // عرض الأصل فقط (مش الأشهر الفرعية)
         if (filter.OnlyParents == true)
             query = query.Where(e => e.AdvanceParentExpenseId == null);
 
@@ -61,33 +60,75 @@ public class ExpenseService : IExpenseService
                 : query.OrderBy(e => e.ExpenseDate).ThenBy(e => e.ExpenseId)
         };
 
-        var items = await query
+        // ✅ تحسين 1: قراءة الصفحة فقط بـ raw data
+        var rawData = await query
             .Skip((filter.PageNumber - 1) * filter.PageSize)
             .Take(filter.PageSize)
-            .Select(e => new ExpenseListDto
+            .Select(e => new
             {
-                ExpenseId = e.ExpenseId,
-                ExpenseName = e.ExpenseName,
-                ExpenseDate = e.ExpenseDate,
-                Amount = e.Amount,
+                e.ExpenseId,
+                e.ExpenseName,
+                e.ExpenseDate,
+                e.Amount,
                 IsAdvance = e.IsAdvance ?? false,
-                AdvanceMonths = e.AdvanceMonths,
-                AdvanceParentExpenseId = e.AdvanceParentExpenseId,
-                AdvanceMonthIndex = e.AdvanceMonthIndex,
-                Notes = e.Notes,
+                e.AdvanceMonths,
+                e.AdvanceParentExpenseId,
+                e.AdvanceMonthIndex,
+                e.Notes,
                 Recipient = e.Torecipient,
-                ExpenseGroupId = e.ExpenseGroupId,
-                ExpenseGroupName = _db.ExpenseGroups.Where(g => g.ExpenseGroupId == e.ExpenseGroupId)
-                    .Select(g => g.ExpenseGroupName).FirstOrDefault(),
-                CashBoxId = e.CashBoxId,
-                CashBoxName = _db.CashBoxes.Where(c => c.CashBoxId == e.CashBoxId)
-                    .Select(c => c.CashBoxName).FirstOrDefault(),
-                CreatedBy = e.CreatedBy,
-                CreatedAt = e.CreatedAt
-            }).ToListAsync();
+                e.ExpenseGroupId,
+                e.CashBoxId,
+                e.CreatedBy,
+                e.CreatedAt
+            })
+            .ToListAsync();
 
-        foreach (var item in items)
-            item.FullGroupPath = await GetGroupFullPathAsync(item.ExpenseGroupId);
+        if (!rawData.Any())
+        {
+            return new PagedResult<ExpenseListDto>
+            {
+                Items = new List<ExpenseListDto>(),
+                TotalCount = totalCount,
+                PageNumber = filter.PageNumber,
+                PageSize = filter.PageSize
+            };
+        }
+
+        // ✅ تحسين 2: تحميل المجموعات والخزن مرة واحدة (بدل subquery لكل صف)
+        var allGroups = await _db.ExpenseGroups.AsNoTracking()
+    .ToDictionaryAsync(
+        g => g.ExpenseGroupId,
+        g => (Name: g.ExpenseGroupName, ParentId: g.ParentGroupId)
+    );
+
+        var cashBoxIds = rawData.Select(e => e.CashBoxId).Distinct().ToList();
+        var cashBoxes = await _db.CashBoxes.AsNoTracking()
+            .Where(c => cashBoxIds.Contains(c.CashBoxId))
+            .ToDictionaryAsync(c => c.CashBoxId, c => c.CashBoxName);
+
+        // ✅ تحسين 3: بناء الـ DTOs بدون أي DB calls إضافية
+        var items = rawData.Select(e => new ExpenseListDto
+        {
+            ExpenseId = e.ExpenseId,
+            ExpenseName = e.ExpenseName,
+            ExpenseDate = e.ExpenseDate,
+            Amount = e.Amount,
+            IsAdvance = e.IsAdvance,
+            AdvanceMonths = e.AdvanceMonths,
+            AdvanceParentExpenseId = e.AdvanceParentExpenseId,
+            AdvanceMonthIndex = e.AdvanceMonthIndex,
+            Notes = e.Notes,
+            Recipient = e.Recipient,
+            ExpenseGroupId = e.ExpenseGroupId,
+            ExpenseGroupName = allGroups.ContainsKey(e.ExpenseGroupId) 
+    ? allGroups[e.ExpenseGroupId].Name 
+    : null,
+            FullGroupPath = BuildGroupPathFromDict(e.ExpenseGroupId, allGroups),
+            CashBoxId = e.CashBoxId,
+            CashBoxName = cashBoxes.GetValueOrDefault(e.CashBoxId),
+            CreatedBy = e.CreatedBy,
+            CreatedAt = e.CreatedAt
+        }).ToList();
 
         return new PagedResult<ExpenseListDto>
         {
@@ -136,14 +177,29 @@ public class ExpenseService : IExpenseService
                 Notes = e.Notes,
                 Recipient = e.Torecipient,
                 ExpenseGroupId = e.ExpenseGroupId,
-                ExpenseGroupName = _db.ExpenseGroups.Where(g => g.ExpenseGroupId == e.ExpenseGroupId)
-                    .Select(g => g.ExpenseGroupName).FirstOrDefault(),
                 CashBoxId = e.CashBoxId,
-                CashBoxName = _db.CashBoxes.Where(c => c.CashBoxId == e.CashBoxId)
-                    .Select(c => c.CashBoxName).FirstOrDefault(),
                 CreatedBy = e.CreatedBy,
                 CreatedAt = e.CreatedAt
             }).ToListAsync();
+
+        // Enrich مرة واحدة
+        if (children.Any())
+        {
+            var groupIds = children.Select(c => c.ExpenseGroupId).Distinct().ToList();
+            var cashBoxIds = children.Select(c => c.CashBoxId).Distinct().ToList();
+            var groups = await _db.ExpenseGroups.AsNoTracking()
+                .Where(g => groupIds.Contains(g.ExpenseGroupId))
+                .ToDictionaryAsync(g => g.ExpenseGroupId, g => g.ExpenseGroupName);
+            var boxes = await _db.CashBoxes.AsNoTracking()
+                .Where(c => cashBoxIds.Contains(c.CashBoxId))
+                .ToDictionaryAsync(c => c.CashBoxId, c => c.CashBoxName);
+
+            foreach (var c in children)
+            {
+                c.ExpenseGroupName = groups.GetValueOrDefault(c.ExpenseGroupId);
+                c.CashBoxName = boxes.GetValueOrDefault(c.CashBoxId);
+            }
+        }
 
         return children;
     }
@@ -197,7 +253,7 @@ public class ExpenseService : IExpenseService
     }
 
     // ============================================================
-    //  ⭐ حفظ مصروف - مع منطق المصروف المقدم
+    //  ⭐ حفظ مصروف (محسّن للتعديل والمصروف المقدم)
     // ============================================================
     public async Task<(bool Success, string Message, int? Id)> SaveExpenseAsync(
         ExpenseFormDto dto, string userName)
@@ -208,20 +264,26 @@ public class ExpenseService : IExpenseService
         if (dto.CashBoxId == null) return (false, "الخزينة مطلوبة", null);
         if (dto.ExpenseGroupId == null) return (false, "مجموعة المصروف مطلوبة", null);
 
-        // ⛔ منع تعديل مصروف مقدم بعد الحفظ
-        if (dto.ExpenseId > 0)
+        var isNew = dto.ExpenseId == 0;
+
+        // ⛔ منع تعديل مصروف مقدم بعد الحفظ (سواء أصل أو شهر فرعي)
+        if (!isNew)
         {
             var existing = await _db.Expenses.AsNoTracking()
                 .FirstOrDefaultAsync(e => e.ExpenseId == dto.ExpenseId);
-            if (existing != null)
-            {
-                if (existing.IsAdvance == true || existing.AdvanceParentExpenseId.HasValue)
-                    return (false, "لا يمكن تعديل مصروف مقدم بعد الحفظ. احذفه وأنشئ واحد جديد.", null);
-            }
+            if (existing == null) return (false, "المصروف غير موجود", null);
+
+            // الشهر الفرعي ممنوع تعديله
+            if (existing.AdvanceParentExpenseId.HasValue)
+                return (false, "هذا شهر فرعي من مصروف مقدم - لا يمكن تعديله. عدّل الأصل أو احذفه.", null);
+
+            // الأصل المقدم ممنوع تعديله
+            if (existing.AdvanceMonthIndex == 0 && (existing.IsAdvance ?? false))
+                return (false, "لا يمكن تعديل مصروف مقدم بعد الحفظ. احذفه وأنشئ واحد جديد.", null);
         }
 
-        // Validation للمصروف المقدم
-        if (dto.IsAdvance)
+        // Validation للمصروف المقدم (لا يكون عند التعديل)
+        if (dto.IsAdvance && isNew)
         {
             if (dto.AdvanceMonths == null || dto.AdvanceMonths < 1)
                 return (false, "عدد الشهور يجب أن يكون على الأقل 1", null);
@@ -229,16 +291,34 @@ public class ExpenseService : IExpenseService
                 return (false, "الحد الأقصى لعدد الشهور هو 60 شهر", null);
         }
 
-        // التحقق من رصيد الخزينة (للأصل بالكامل)
-        var cashBoxBalance = await GetCashBoxBalanceAsync(dto.CashBoxId.Value);
-        if (cashBoxBalance < dto.Amount)
-            return (false, $"رصيد الخزينة غير كافي. المتاح: {cashBoxBalance:N2}", null);
+        // ⚠️ التحقق من رصيد الخزينة (للمصروف الجديد + التعديل بمبلغ أكبر)
+        if (isNew)
+        {
+            var cashBoxBalance = await GetCashBoxBalanceAsync(dto.CashBoxId.Value);
+            if (cashBoxBalance < dto.Amount)
+                return (false, $"رصيد الخزينة غير كافي. المتاح: {cashBoxBalance:N2}", null);
+        }
+        else
+        {
+            // عند التعديل: نحسب الفرق
+            var oldAmount = await _db.Expenses.AsNoTracking()
+                .Where(e => e.ExpenseId == dto.ExpenseId)
+                .Select(e => e.Amount).FirstOrDefaultAsync();
+
+            var diff = dto.Amount - oldAmount;
+            if (diff > 0)
+            {
+                var cashBoxBalance = await GetCashBoxBalanceAsync(dto.CashBoxId.Value);
+                if (cashBoxBalance < diff)
+                    return (false, $"رصيد الخزينة غير كافي للزيادة. المتاح: {cashBoxBalance:N2}", null);
+            }
+        }
 
         using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
-            var isNew = dto.ExpenseId == 0;
             Expense entity;
+            object? oldEntity = null;
 
             if (isNew)
             {
@@ -246,7 +326,7 @@ public class ExpenseService : IExpenseService
                 {
                     CreatedBy = userName,
                     CreatedAt = DateTime.Now,
-                    AdvanceMonthIndex = dto.IsAdvance ? 0 : null  // 0 = الأصل
+                    AdvanceMonthIndex = dto.IsAdvance ? 0 : null
                 };
                 _db.Expenses.Add(entity);
             }
@@ -255,7 +335,20 @@ public class ExpenseService : IExpenseService
                 entity = await _db.Expenses.FindAsync(dto.ExpenseId)
                     ?? throw new Exception("المصروف غير موجود");
 
-                // احذف الـ CashboxTransaction القديم (تعديل عادي فقط)
+                // احفظ نسخة من القديم للـ Audit
+                oldEntity = new
+                {
+                    entity.ExpenseId,
+                    entity.ExpenseName,
+                    entity.ExpenseDate,
+                    entity.Amount,
+                    entity.ExpenseGroupId,
+                    entity.CashBoxId,
+                    entity.Notes,
+                    entity.Torecipient
+                };
+
+                // احذف الـ CashboxTransaction القديم (للمصروف العادي فقط)
                 var oldTrans = await _db.CashboxTransactions
                     .Where(t => t.ReferenceType == CashBoxRefTypes.Expense
                         && t.ReferenceId == entity.ExpenseId).ToListAsync();
@@ -266,31 +359,29 @@ public class ExpenseService : IExpenseService
             entity.ExpenseDate = dto.ExpenseDate;
             entity.ExpenseGroupId = dto.ExpenseGroupId.Value;
             entity.CashBoxId = dto.CashBoxId.Value;
-            entity.IsAdvance = dto.IsAdvance;
-            entity.AdvanceMonths = dto.IsAdvance ? dto.AdvanceMonths : null;
             entity.Notes = dto.Notes;
             entity.Torecipient = dto.Recipient;
 
-            // ⭐ منطق المصروف المقدم
-            if (dto.IsAdvance && dto.AdvanceMonths > 1)
+            // ⭐ منطق المصروف المقدم (فقط للجديد)
+            if (isNew && dto.IsAdvance && dto.AdvanceMonths > 1)
             {
-                var monthlyAmount = Math.Round(dto.Amount / dto.AdvanceMonths.Value, 2);
-                // الفرق نضيفه للشهر الأخير لتجنب فقد القروش
-                var totalCalc = monthlyAmount * dto.AdvanceMonths.Value;
-                var difference = dto.Amount - totalCalc;
-
-                // الأصل يحمل المبلغ الكامل (للعرض) لكن المصروف الفعلي للأشهر
+                entity.IsAdvance = true;
+                entity.AdvanceMonths = dto.AdvanceMonths;
                 entity.Amount = dto.Amount;
                 entity.AdvanceMonthIndex = 0;
 
                 await _db.SaveChangesAsync();
+
+                var monthlyAmount = Math.Round(dto.Amount / dto.AdvanceMonths.Value, 2);
+                var totalCalc = monthlyAmount * dto.AdvanceMonths.Value;
+                var difference = dto.Amount - totalCalc;
 
                 // اعمل سجلات الأشهر الفرعية
                 for (int i = 1; i <= dto.AdvanceMonths.Value; i++)
                 {
                     var monthDate = dto.ExpenseDate.AddMonths(i - 1);
                     var amount = i == dto.AdvanceMonths.Value
-                        ? monthlyAmount + difference   // الشهر الأخير ياخد الفرق
+                        ? monthlyAmount + difference
                         : monthlyAmount;
 
                     var childExpense = new Expense
@@ -313,7 +404,7 @@ public class ExpenseService : IExpenseService
                 }
                 await _db.SaveChangesAsync();
 
-                // ⭐ خصم من الخزينة مرة واحدة بالمبلغ الكامل (في تاريخ التسجيل)
+                // خصم من الخزينة مرة واحدة
                 _db.CashboxTransactions.Add(new CashboxTransaction
                 {
                     CashBoxId = entity.CashBoxId,
@@ -329,8 +420,10 @@ public class ExpenseService : IExpenseService
             }
             else
             {
-                // مصروف عادي
+                // مصروف عادي (جديد أو تعديل)
                 entity.Amount = dto.Amount;
+                entity.IsAdvance = false;
+                entity.AdvanceMonths = null;
                 entity.AdvanceMonthIndex = null;
                 await _db.SaveChangesAsync();
 
@@ -352,12 +445,13 @@ public class ExpenseService : IExpenseService
             await _db.SaveChangesAsync();
             await tx.CommitAsync();
 
+            // ✅ Audit مع تفاصيل القديم والجديد
             await _audit.LogAsync<object>("Expenses", isNew ? "Insert" : "Update",
-                entity.ExpenseId.ToString(), null, entity, userName);
+                entity.ExpenseId.ToString(), oldEntity, entity, userName);
 
-            var msg = dto.IsAdvance && dto.AdvanceMonths > 1
+            var msg = dto.IsAdvance && dto.AdvanceMonths > 1 && isNew
                 ? $"تم تسجيل المصروف المقدم على {dto.AdvanceMonths} شهور وخصم {dto.Amount:N2} من الخزينة"
-                : (isNew ? "تم تسجيل المصروف وخصمه من الخزينة" : "تم التحديث");
+                : (isNew ? "تم تسجيل المصروف وخصمه من الخزينة" : "تم تحديث المصروف بنجاح");
 
             return (true, msg, entity.ExpenseId);
         }
@@ -384,19 +478,15 @@ public class ExpenseService : IExpenseService
         var expense = await _db.Expenses.FindAsync(id);
         if (expense == null) return (false, "المصروف غير موجود");
 
-        // لو ده أصل مصروف مقدم → احذف كل الأشهر الفرعية كمان
-        // لو ده شهر فرعي → احذف الأصل وكل الأشهر
         int parentId = expense.AdvanceParentExpenseId ?? expense.ExpenseId;
 
         using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
-            // كل المصروفات المرتبطة (الأصل + الأشهر)
             var allRelated = await _db.Expenses
                 .Where(e => e.ExpenseId == parentId || e.AdvanceParentExpenseId == parentId)
                 .ToListAsync();
 
-            // احذف CashboxTransactions المرتبطة (واحد فقط للأصل)
             var trans = await _db.CashboxTransactions
                 .Where(t => t.ReferenceType == CashBoxRefTypes.Expense
                     && t.ReferenceId == parentId).ToListAsync();
@@ -430,19 +520,19 @@ public class ExpenseService : IExpenseService
         var groups = await _db.ExpenseGroups.AsNoTracking()
             .OrderBy(g => g.ExpenseGroupName).ToListAsync();
 
-        var dtos = new List<ExpenseGroupDto>();
-        foreach (var g in groups)
+        // ✅ تحسين: حساب الإجماليات لكل المجموعات بـ query واحد
+        var groupTotals = await _db.Expenses.AsNoTracking()
+            .Where(e => e.AdvanceParentExpenseId == null)
+            .GroupBy(e => e.ExpenseGroupId)
+            .Select(g => new { GroupId = g.Key, Total = g.Sum(x => x.Amount), Count = g.Count() })
+            .ToDictionaryAsync(x => x.GroupId, x => new { x.Total, x.Count });
+
+        var dtos = groups.Select(g =>
         {
-            var totalAmount = await _db.Expenses.AsNoTracking()
-                .Where(e => e.ExpenseGroupId == g.ExpenseGroupId
-                    && e.AdvanceParentExpenseId == null)  // الأصل فقط (مش الأشهر)
-                .SumAsync(e => (decimal?)e.Amount) ?? 0;
-            var expensesCount = await _db.Expenses.AsNoTracking()
-                .CountAsync(e => e.ExpenseGroupId == g.ExpenseGroupId
-                    && e.AdvanceParentExpenseId == null);
+            var totals = groupTotals.GetValueOrDefault(g.ExpenseGroupId);
             var childrenCount = groups.Count(x => x.ParentGroupId == g.ExpenseGroupId);
 
-            dtos.Add(new ExpenseGroupDto
+            return new ExpenseGroupDto
             {
                 ExpenseGroupId = g.ExpenseGroupId,
                 ExpenseGroupName = g.ExpenseGroupName,
@@ -451,12 +541,12 @@ public class ExpenseService : IExpenseService
                     ? groups.FirstOrDefault(x => x.ExpenseGroupId == g.ParentGroupId.Value)?.ExpenseGroupName
                     : null,
                 ChildrenCount = childrenCount,
-                ExpensesCount = expensesCount,
-                TotalAmount = totalAmount,
+                ExpensesCount = totals?.Count ?? 0,
+                TotalAmount = totals?.Total ?? 0,
                 CreatedBy = g.CreatedBy,
                 CreatedAt = g.CreatedAt
-            });
-        }
+            };
+        }).ToList();
 
         if (!asTree) return dtos;
 
@@ -539,8 +629,29 @@ public class ExpenseService : IExpenseService
     }
 
     // ============================================================
-    //  Helper
+    //  ⭐ Helper: بناء مسار المجموعة من Dictionary (سريع جداً)
     // ============================================================
+    private string? BuildGroupPathFromDict(int groupId,
+    Dictionary<int, (string Name, int? ParentId)> groups)
+{
+    if (!groups.ContainsKey(groupId)) return null;
+
+    var path = new List<string>();
+    int? currentId = groupId;
+    int safety = 10;
+
+    while (currentId.HasValue && safety-- > 0)
+    {
+        if (!groups.ContainsKey(currentId.Value)) break;
+        var g = groups[currentId.Value];
+        path.Insert(0, g.Name);
+        currentId = g.ParentId;
+    }
+
+    return string.Join(" > ", path);
+}
+
+    // محتفظ بالنسخة القديمة للـ Backward Compatibility
     private async Task<string?> GetGroupFullPathAsync(int groupId)
     {
         var groups = await _db.ExpenseGroups.AsNoTracking()

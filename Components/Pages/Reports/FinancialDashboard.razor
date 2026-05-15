@@ -1,0 +1,1100 @@
+@page "/reports/financial-dashboard"
+@page "/financial/dashboard"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+
+@inject IFinancialDashboardService DashboardService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+@if (_isLoading)
+{
+    <div class="loading-screen">
+        <div class="loading-content">
+            <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+            <h3>جاري إعداد لوحة القيادة المالية</h3>
+            <p>تحليل جميع البيانات المالية...</p>
+        </div>
+    </div>
+}
+else if (_dashboard != null)
+{
+    <div class="fd-page" dir="rtl">
+
+        <!-- Background -->
+        <div class="bg-deco no-print">
+            <div class="bg-orb orb-1"></div>
+            <div class="bg-orb orb-2"></div>
+            <div class="bg-orb orb-3"></div>
+        </div>
+
+        <!-- ⭐ HERO HEADER -->
+        <div class="fd-header">
+            <div class="header-bg">
+                <div class="hb-gradient"></div>
+                <div class="hb-grid"></div>
+            </div>
+            <div class="header-content">
+                <div class="header-left">
+                    <div class="header-icon-wrap">
+                        <div class="header-icon">
+                            <MudIcon Icon="@Icons.Material.Filled.Insights" />
+                        </div>
+                        <span class="premium-badge">
+                            <MudIcon Icon="@Icons.Material.Filled.AutoAwesome" Size="Size.Small" />
+                            Premium Analytics
+                        </span>
+                    </div>
+                    <div>
+                        <h1>لوحة القيادة المالية</h1>
+                        <p>تحليل شامل وذكي لأداء الشركة المالي • <strong>@_dashboard.PeriodLabel</strong></p>
+                    </div>
+                </div>
+                <div class="header-actions no-print">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Print" OnClick="Print">
+                        طباعة
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                               StartIcon="@Icons.Material.Filled.Analytics"
+                               OnClick="@(() => Navigation.NavigateTo("/reports/income-statement"))">
+                        قائمة الدخل
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                               StartIcon="@Icons.Material.Filled.WaterDrop"
+                               OnClick="@(() => Navigation.NavigateTo("/reports/cash-flow"))">
+                        التدفقات
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+
+        <!-- ⭐ FILTERS -->
+        <div class="filters-bar no-print">
+            <span class="filter-label">📅 الفترة:</span>
+            <button class="period-btn @(_filter.PeriodType == "Today" ? "active" : "")" @onclick="@(() => SetPeriod("Today"))">اليوم</button>
+            <button class="period-btn @(_filter.PeriodType == "Week" ? "active" : "")" @onclick="@(() => SetPeriod("Week"))">أسبوع</button>
+            <button class="period-btn @(_filter.PeriodType == "Month" ? "active" : "")" @onclick="@(() => SetPeriod("Month"))">شهر</button>
+            <button class="period-btn @(_filter.PeriodType == "Quarter" ? "active" : "")" @onclick="@(() => SetPeriod("Quarter"))">ربع</button>
+            <button class="period-btn @(_filter.PeriodType == "Year" ? "active" : "")" @onclick="@(() => SetPeriod("Year"))">سنة</button>
+
+            <div class="custom-period">
+                <MudDatePicker Date="_filter.FromDate"
+                               DateChanged="@(d => { _filter.FromDate = d ?? _filter.FromDate; _filter.PeriodType = "Custom"; _ = LoadDashboard(); })"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Label="من" Class="date-pick" />
+                <MudDatePicker Date="_filter.ToDate"
+                               DateChanged="@(d => { _filter.ToDate = d ?? _filter.ToDate; _filter.PeriodType = "Custom"; _ = LoadDashboard(); })"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Label="إلى" Class="date-pick" />
+            </div>
+        </div>
+
+        @if (_isReloading)
+        {
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mb-2" />
+        }
+
+        <!-- ⭐ HEALTH SCORE - الصحة المالية -->
+        <div class="health-section">
+            <div class="health-main">
+                <div class="health-circle-wrap">
+                    <svg viewBox="0 0 200 200" class="health-circle">
+                        <circle cx="100" cy="100" r="85" stroke="#e5e7eb" stroke-width="14" fill="none" />
+                        <circle cx="100" cy="100" r="85"
+                                stroke="@_dashboard.HealthScore.Color" stroke-width="14"
+                                fill="none" stroke-linecap="round"
+                                stroke-dasharray="@(534 * _dashboard.HealthScore.OverallScore / 100), 534"
+                                transform="rotate(-90 100 100)"
+                                style="transition: stroke-dasharray 1s ease;" />
+                        <text x="100" y="95" text-anchor="middle" font-size="48" font-weight="900" fill="@_dashboard.HealthScore.Color">
+                            @_dashboard.HealthScore.OverallScore
+                        </text>
+                        <text x="100" y="125" text-anchor="middle" font-size="14" fill="#6b7280">
+                            من 100
+                        </text>
+                    </svg>
+                </div>
+                <div class="health-info">
+                    <div class="grade-badge" style="background: @_dashboard.HealthScore.Color;">
+                        @_dashboard.HealthScore.Grade
+                    </div>
+                    <h2>الصحة المالية: @_dashboard.HealthScore.Status</h2>
+                    <p>@_dashboard.HealthScore.Description</p>
+                </div>
+            </div>
+            <div class="health-factors">
+                @foreach (var factor in _dashboard.HealthScore.Factors)
+                {
+                    <div class="factor-card">
+                        <div class="factor-header">
+                            <span class="factor-name">@factor.Name</span>
+                            <span class="factor-score" style="color: @factor.Color;">@factor.Score / @factor.MaxScore</span>
+                        </div>
+                        <div class="factor-bar">
+                            <div class="factor-fill" style="width: @((double)factor.Score / factor.MaxScore * 100)%; background: @factor.Color;"></div>
+                        </div>
+                        <small class="factor-desc">@factor.Description</small>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- ⭐ MAIN KPIs -->
+        <div class="kpis-grid">
+            @foreach (var kpi in _dashboard.MainKpis)
+            {
+                <div class="kpi-card" style="border-top-color: @kpi.Color;">
+                    <div class="kpi-header">
+                        <div class="kpi-icon" style="background: @(kpi.Color)22; color: @kpi.Color;">
+                            <MudIcon Icon="@GetIcon(kpi.Icon)" />
+                        </div>
+                        @if (kpi.ChangePercentage.HasValue)
+                        {
+                            <span class="kpi-change @GetChangeClass(kpi.ChangePercentage.Value)">
+                                @kpi.TrendIcon @(kpi.ChangePercentage >= 0 ? "+" : "")@kpi.ChangePercentage.Value.ToString("N1")%
+                            </span>
+                        }
+                    </div>
+                    <div class="kpi-body">
+                        <span class="kpi-title">@kpi.Title</span>
+                        <span class="kpi-value">@kpi.FormattedValue</span>
+                        <span class="kpi-subtitle">@kpi.Subtitle</span>
+                        @if (!string.IsNullOrEmpty(kpi.ChangeLabel))
+                        {
+                            <small class="kpi-change-label">@kpi.ChangeLabel</small>
+                        }
+                    </div>
+                    @if (!string.IsNullOrEmpty(kpi.Url))
+                    {
+                        <button class="kpi-link" @onclick="@(() => Navigation.NavigateTo(kpi.Url))">
+                            عرض التفاصيل →
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- ⭐ FINANCIAL RATIOS -->
+        <div class="ratios-section">
+            <h3 class="section-title">
+                <MudIcon Icon="@Icons.Material.Filled.PieChart" />
+                المؤشرات المالية النسبية
+            </h3>
+            <div class="ratios-grid">
+                <div class="ratio-card">
+                    <div class="r-icon">📈</div>
+                    <span class="r-name">هامش الربح الإجمالي</span>
+                    <strong class="r-value @GetRatioClass(_dashboard.Ratios.GrossProfitMargin, 30, 50)">
+                        @_dashboard.Ratios.GrossProfitMargin.ToString("N1")%
+                    </strong>
+                </div>
+                <div class="ratio-card">
+                    <div class="r-icon">💰</div>
+                    <span class="r-name">صافي الربح</span>
+                    <strong class="r-value @GetRatioClass(_dashboard.Ratios.NetProfitMargin, 10, 20)">
+                        @_dashboard.Ratios.NetProfitMargin.ToString("N1")%
+                    </strong>
+                </div>
+                <div class="ratio-card">
+                    <div class="r-icon">💧</div>
+                    <span class="r-name">السيولة (شهور)</span>
+                    <strong class="r-value @GetRatioClass(_dashboard.Ratios.CashRatio, 1, 3)">
+                        @_dashboard.Ratios.CashRatio.ToString("N1")
+                    </strong>
+                </div>
+                <div class="ratio-card">
+                    <div class="r-icon">⚡</div>
+                    <span class="r-name">السيولة السريعة</span>
+                    <strong class="r-value @GetRatioClass(_dashboard.Ratios.QuickRatio, 1, 3)">
+                        @_dashboard.Ratios.QuickRatio.ToString("N1")
+                    </strong>
+                </div>
+                <div class="ratio-card">
+                    <div class="r-icon">📊</div>
+                    <span class="r-name">نسبة المصروفات</span>
+                    <strong class="r-value @GetRatioClass(100 - _dashboard.Ratios.OperatingExpenseRatio, 50, 70)">
+                        @_dashboard.Ratios.OperatingExpenseRatio.ToString("N1")%
+                    </strong>
+                </div>
+                <div class="ratio-card">
+                    <div class="r-icon">💸</div>
+                    <span class="r-name">معدل التحصيل</span>
+                    <strong class="r-value @GetRatioClass(_dashboard.Ratios.CollectionRate, 60, 90)">
+                        @_dashboard.Ratios.CollectionRate.ToString("N1")%
+                    </strong>
+                </div>
+                <div class="ratio-card">
+                    <div class="r-icon">🚀</div>
+                    <span class="r-name">نمو الإيرادات</span>
+                    <strong class="r-value @GetRatioClass(_dashboard.Ratios.RevenueGrowthRate, 0, 10)">
+                        @(_dashboard.Ratios.RevenueGrowthRate >= 0 ? "+" : "")@_dashboard.Ratios.RevenueGrowthRate.ToString("N1")%
+                    </strong>
+                </div>
+                <div class="ratio-card">
+                    <div class="r-icon">🧾</div>
+                    <span class="r-name">متوسط الفاتورة</span>
+                    <strong class="r-value">@FormatMoney(_dashboard.Ratios.RevenuePerInvoice) ج</strong>
+                </div>
+            </div>
+        </div>
+
+        <!-- ⭐ COMPARISONS -->
+        @if (_dashboard.VsPreviousPeriod != null || _dashboard.VsLastYear != null)
+        {
+            <div class="comparisons-section">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.CompareArrows" />
+                    المقارنات الزمنية
+                </h3>
+                <div class="comp-grid">
+                    @if (_dashboard.VsPreviousPeriod != null)
+                    {
+                        @RenderComparisonCard(_dashboard.VsPreviousPeriod)
+                    }
+                    @if (_dashboard.VsLastYear != null)
+                    {
+                        @RenderComparisonCard(_dashboard.VsLastYear)
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- ⭐ UNIFIED MONTHLY TREND -->
+        @if (_dashboard.Last12Months.Any())
+        {
+            <div class="trend-section">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.ShowChart" />
+                    الترند المالي الشامل - 12 شهر
+                </h3>
+                <div class="chart-wrap">
+                    <svg viewBox="0 0 1200 320" class="unified-chart" preserveAspectRatio="xMidYMid meet">
+                        @{
+                            var maxVal = _dashboard.Last12Months.Max(m => Math.Max(m.Revenue, Math.Max(m.Expenses, Math.Abs(m.NetProfit))));
+                            if (maxVal == 0) maxVal = 1;
+                            var sectionWidth = 1200.0 / _dashboard.Last12Months.Count;
+                            var barWidth = sectionWidth / 4;
+                        }
+
+                        @for (int i = 0; i <= 4; i++)
+                        {
+                            var y = 30 + (220 * i / 4.0);
+                            <line x1="0" y1="@y" x2="1200" y2="@y" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="3,3" />
+                        }
+
+                        @for (int i = 0; i < _dashboard.Last12Months.Count; i++)
+                        {
+                            var m = _dashboard.Last12Months[i];
+                            var baseX = i * sectionWidth + sectionWidth / 8;
+                            var revH = (double)m.Revenue / (double)maxVal * 220;
+                            var expH = (double)m.Expenses / (double)maxVal * 220;
+                            var profitH = Math.Abs((double)m.NetProfit) / (double)maxVal * 220;
+
+                            <rect x="@(baseX.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  y="@((250 - revH).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  height="@(revH.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  fill="#10b981" rx="2">
+                                <title>@m.MonthLabel - إيرادات: @FormatMoney(m.Revenue)</title>
+                            </rect>
+                            <rect x="@((baseX + barWidth + 1).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  y="@((250 - expH).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  height="@(expH.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  fill="#ef4444" rx="2">
+                                <title>@m.MonthLabel - مصروفات: @FormatMoney(m.Expenses)</title>
+                            </rect>
+                            <rect x="@((baseX + 2 * barWidth + 2).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  y="@((250 - profitH).ToString("F1", CultureInfo.InvariantCulture))" 
+                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  height="@(profitH.ToString("F1", CultureInfo.InvariantCulture))" 
+                                  fill="@(m.NetProfit >= 0 ? "#3b82f6" : "#dc2626")" rx="2">
+                                <title>@m.MonthLabel - ربح: @FormatMoney(m.NetProfit)</title>
+                            </rect>
+
+                            <svg:text x="@((baseX + barWidth * 1.5).ToString("F1", CultureInfo.InvariantCulture))" 
+          y="280" text-anchor="middle" font-size="11" fill="#6b7280" font-weight="600">
+    @m.Month.ToString("MM/yy")
+</svg:text>
+
+                            @if (m.Revenue > 0)
+{
+    <svg:text x="@((baseX + barWidth * 1.5).ToString("F1", CultureInfo.InvariantCulture))" 
+              y="@((250 - profitH - 5).ToString("F1", CultureInfo.InvariantCulture))" 
+              text-anchor="middle" font-size="10" fill="@(m.NetProfit >= 0 ? "#3b82f6" : "#dc2626")" font-weight="700">
+        @m.NetProfitMargin.ToString("N0")%
+    </svg:text>
+}
+                        }
+                        <line x1="0" y1="250" x2="1200" y2="250" stroke="#374151" stroke-width="1.5" />
+                    </svg>
+                </div>
+                <div class="chart-legend">
+                    <span><span class="dot" style="background:#10b981;"></span> إيرادات</span>
+                    <span><span class="dot" style="background:#ef4444;"></span> مصروفات</span>
+                    <span><span class="dot" style="background:#3b82f6;"></span> صافي الربح</span>
+                </div>
+            </div>
+        }
+
+        <!-- ⭐ ALERTS -->
+        @if (_dashboard.Alerts.Any())
+        {
+            <div class="alerts-section">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.Notifications" />
+                    التنبيهات والتوصيات (@_dashboard.Alerts.Count)
+                </h3>
+                <div class="alerts-grid">
+                    @foreach (var alert in _dashboard.Alerts)
+                    {
+                        <div class="alert-card" style="border-right-color: @alert.Color;">
+                            <div class="alert-icon" style="background: @(alert.Color)22; color: @alert.Color;">@alert.Icon</div>
+                            <div class="alert-body">
+                                <div class="alert-cat" style="color: @alert.Color;">@GetCategoryLabel(alert.Category)</div>
+                                <h4 style="color: @alert.Color;">@alert.Title</h4>
+                                <p>@alert.Description</p>
+                                @if (!string.IsNullOrEmpty(alert.ActionUrl))
+                                {
+                                    <button class="alert-btn" style="color: @alert.Color; border-color: @alert.Color;"
+                                            @onclick="@(() => Navigation.NavigateTo(alert.ActionUrl!))">
+                                        @alert.ActionLabel ←
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
+        <!-- ⭐ TOP PRODUCTS + CUSTOMERS -->
+        <div class="top-grid">
+            @if (_dashboard.TopProducts.Any())
+            {
+                <div class="top-section">
+                    <h3 class="section-title small">
+                        <MudIcon Icon="@Icons.Material.Filled.Inventory2" />
+                        أعلى 10 منتجات مبيعاً
+                    </h3>
+                    <table class="top-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>المنتج</th>
+                                <th>كمية</th>
+                                <th>الإيرادات</th>
+                                <th>الربح</th>
+                                <th>%</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @{ int rank = 1; }
+                            @foreach (var p in _dashboard.TopProducts)
+                            {
+                                <tr>
+                                    <td><span class="rank">@rank</span></td>
+                                    <td><strong>@p.ProductName</strong></td>
+                                    <td>@p.QuantitySold</td>
+                                    <td class="num">@FormatMoney(p.Revenue)</td>
+                                    <td class="num pos">@FormatMoney(p.Profit)</td>
+                                    <td><span class="margin-pill">@p.ProfitMargin.ToString("N1")%</span></td>
+                                </tr>
+                                rank++;
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            @if (_dashboard.TopCustomers.Any())
+            {
+                <div class="top-section">
+                    <h3 class="section-title small">
+                        <MudIcon Icon="@Icons.Material.Filled.Stars" />
+                        أعلى 10 عملاء
+                    </h3>
+                    <table class="top-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>العميل</th>
+                                <th>فواتير</th>
+                                <th>إيرادات</th>
+                                <th>متبقي</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @{ int crank = 1; }
+                            @foreach (var c in _dashboard.TopCustomers)
+                            {
+                                <tr>
+                                    <td><span class="rank">@crank</span></td>
+                                    <td>
+                                        <strong>@c.CustomerName</strong>
+                                        @if (!string.IsNullOrEmpty(c.Phone))
+                                        {
+                                            <small>@c.Phone</small>
+                                        }
+                                    </td>
+                                    <td>@c.InvoicesCount</td>
+                                    <td class="num">@FormatMoney(c.TotalRevenue)</td>
+                                    <td class="num @(c.Remaining > 0 ? "warn" : "")">@FormatMoney(c.Remaining)</td>
+                                </tr>
+                                crank++;
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <!-- ⭐ EXPENSE CATEGORIES + RECEIVABLES -->
+        <div class="bottom-grid">
+            @if (_dashboard.TopExpenseCategories.Any())
+            {
+                <div class="bottom-card">
+                    <h3 class="section-title small">
+                        <MudIcon Icon="@Icons.Material.Filled.MoneyOff" />
+                        تصنيفات المصروفات
+                    </h3>
+                    <div class="cat-list">
+                        @foreach (var c in _dashboard.TopExpenseCategories)
+                        {
+                            <div class="cat-row">
+                                <div class="cat-info">
+                                    <span class="cat-color" style="background: @c.Color;"></span>
+                                    <span>@c.GroupName</span>
+                                </div>
+                                <div class="cat-bar-wrap">
+                                    <div class="cat-bar" style="width: @c.Percentage%; background: @c.Color;"></div>
+                                </div>
+                                <div class="cat-vals">
+                                    <strong>@FormatMoney(c.Amount)</strong>
+                                    <small>@c.Percentage%</small>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            <div class="bottom-card">
+                <h3 class="section-title small">
+                    <MudIcon Icon="@Icons.Material.Filled.AccountBalance" />
+                    ملخص الذمم
+                </h3>
+                <div class="receivables-grid">
+                    <div class="rec-item credit">
+                        <span class="rec-label">📥 على العملاء</span>
+                        <strong>@FormatMoney(_dashboard.Receivables.CustomerReceivables) ج</strong>
+                        <small>@_dashboard.Receivables.CustomersWithDebtCount عميل</small>
+                    </div>
+                    <div class="rec-item debit">
+                        <span class="rec-label">📤 للموردين</span>
+                        <strong>@FormatMoney(_dashboard.Receivables.SupplierPayables) ج</strong>
+                    </div>
+                    <div class="rec-item credit">
+                        <span class="rec-label">💼 ذمم شخصية (عليكم)</span>
+                        <strong>@FormatMoney(_dashboard.Receivables.PersonalAccountsCredit) ج</strong>
+                    </div>
+                    <div class="rec-item debit">
+                        <span class="rec-label">💼 ذمم شخصية (لكم)</span>
+                        <strong>@FormatMoney(_dashboard.Receivables.PersonalAccountsDebit) ج</strong>
+                    </div>
+                    @if (_dashboard.Receivables.OverdueInvoicesCount > 0)
+                    {
+                        <div class="rec-item warn">
+                            <span class="rec-label">🚨 فواتير متأخرة</span>
+                            <strong>@_dashboard.Receivables.OverdueInvoicesCount فاتورة</strong>
+                        </div>
+                    }
+                    <div class="rec-item net">
+                        <span class="rec-label">💰 الصافي</span>
+                        <strong style="color: @(_dashboard.Receivables.NetReceivables >= 0 ? "#10b981" : "#ef4444");">
+                            @FormatMoney(_dashboard.Receivables.NetReceivables) ج
+                        </strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ⭐ STRATEGIC RECOMMENDATIONS -->
+        @if (_dashboard.StrategicRecommendations.Any())
+        {
+            <div class="strategy-section">
+                <h3 class="section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.Lightbulb" />
+                    التوصيات الاستراتيجية للنمو
+                </h3>
+                <div class="strategy-grid">
+                    @foreach (var rec in _dashboard.StrategicRecommendations)
+                    {
+                        <div class="strategy-card" style="border-color: @(rec.Color)55;">
+                            <div class="s-header" style="background: linear-gradient(135deg, @rec.Color, @(rec.Color)cc);">
+                                <span class="s-icon">@rec.Icon</span>
+                                <span class="s-title">@rec.Title</span>
+                                <div class="s-tags">
+                                    <span class="s-tag impact-@rec.Impact.ToLower()">@GetImpactLabel(rec.Impact)</span>
+                                    <span class="s-tag diff-@rec.Difficulty.ToLower()">@GetDifficultyLabel(rec.Difficulty)</span>
+                                </div>
+                            </div>
+                            <div class="s-body">
+                                <p class="s-desc">@rec.Description</p>
+                                <div class="s-outcome">
+                                    <strong>🎯 النتيجة المتوقعة:</strong> @rec.ExpectedOutcome
+                                </div>
+                                <div class="s-steps">
+                                    <strong>📋 خطوات التنفيذ:</strong>
+                                    <ol>
+                                        @foreach (var step in rec.ActionSteps)
+                                        {
+                                            <li>@step</li>
+                                        }
+                                    </ol>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
+        <div class="print-footer print-only">
+            <p>تم إصدار هذا التقرير في @DateTime.Now.ToString("yyyy/MM/dd HH:mm") • COCOBOLO ERP</p>
+        </div>
+    </div>
+}
+
+@* Render comparison helper *@
+@code {
+    private RenderFragment RenderComparisonCard(PeriodComparisonDto comp) => __builder =>
+    {
+        var trendColor = comp.NetProfitChange > 5 ? "#10b981" : comp.NetProfitChange < -5 ? "#ef4444" : "#94a3b8";
+
+        <div class="comp-card" style="border-top-color: @trendColor;">
+            <div class="comp-head">
+                <strong>@comp.Label</strong>
+                <span class="comp-trend" style="color: @trendColor;">@comp.TrendIcon @comp.OverallTrend</span>
+            </div>
+            <div class="comp-body">
+                <div class="comp-metric">
+                    <span>الإيرادات</span>
+                    <div class="comp-vals">
+                        <strong>@FormatMoney(comp.Revenue) ج</strong>
+                        <span class="@GetChangeClass(comp.RevenueChange)">
+                            @(comp.RevenueChange >= 0 ? "+" : "")@comp.RevenueChange.ToString("N1")%
+                        </span>
+                    </div>
+                </div>
+                <div class="comp-metric">
+                    <span>المصروفات</span>
+                    <div class="comp-vals">
+                        <strong>@FormatMoney(comp.Expenses) ج</strong>
+                        <span class="@GetChangeClass(-comp.ExpensesChange)">
+                            @(comp.ExpensesChange >= 0 ? "+" : "")@comp.ExpensesChange.ToString("N1")%
+                        </span>
+                    </div>
+                </div>
+                <div class="comp-metric highlight">
+                    <span>صافي الربح</span>
+                    <div class="comp-vals">
+                        <strong>@FormatMoney(comp.NetProfit) ج</strong>
+                        <span class="@GetChangeClass(comp.NetProfitChange)">
+                            @(comp.NetProfitChange >= 0 ? "+" : "")@comp.NetProfitChange.ToString("N1")%
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    };
+}
+
+<style>
+    .fd-page { max-width: 1800px; margin: 0 auto; padding: 0 1.25rem 2rem; position: relative; direction: rtl; }
+    .loading-screen { display: flex; align-items: center; justify-content: center; min-height: 70vh; }
+    .loading-content { text-align: center; }
+    .loading-content h3 { margin: 1rem 0 0.5rem; }
+    .loading-content p { color: var(--mud-palette-text-secondary); }
+
+    .bg-deco { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+    .bg-orb { position: absolute; border-radius: 50%; filter: blur(100px); }
+    .orb-1 { width: 500px; height: 500px; top: -250px; right: -200px; background: radial-gradient(circle, rgba(99,102,241,0.1), transparent 70%); }
+    .orb-2 { width: 400px; height: 400px; bottom: -200px; left: -150px; background: radial-gradient(circle, rgba(16,185,129,0.08), transparent 70%); }
+    .orb-3 { width: 350px; height: 350px; top: 40%; left: 50%; background: radial-gradient(circle, rgba(212,168,83,0.06), transparent 70%); }
+
+    /* ═════ HEADER ═════ */
+    .fd-header { position: relative; border-radius: 28px; overflow: hidden; margin-bottom: 1.5rem; }
+    .header-bg { position: absolute; inset: 0; }
+    .hb-gradient {
+        position: absolute; inset: 0;
+        background: linear-gradient(135deg, #0F1D36 0%, #1B2A4A 30%, #4338ca 70%, #6366f1 100%);
+    }
+    .hb-grid {
+        position: absolute; inset: 0;
+        background-image:
+            linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+        background-size: 30px 30px;
+    }
+    .header-content {
+        position: relative; z-index: 1; padding: 2.5rem 2rem;
+        display: flex; align-items: center; justify-content: space-between;
+        flex-wrap: wrap; gap: 1.5rem;
+    }
+    .header-left { display: flex; align-items: center; gap: 1.5rem; }
+    .header-icon-wrap { position: relative; }
+    .header-icon {
+        background: linear-gradient(135deg, #fbbf24, #d97706);
+        border-radius: 20px; width: 80px; height: 80px;
+        display: flex; align-items: center; justify-content: center;
+        color: white; box-shadow: 0 10px 30px rgba(251,191,36,0.4);
+    }
+    .header-icon ::deep .mud-icon-root { font-size: 40px !important; color: white !important; }
+    .premium-badge {
+        position: absolute; top: -8px; left: -8px;
+        background: linear-gradient(135deg, #f59e0b, #d97706);
+        color: white; padding: 0.25rem 0.6rem;
+        border-radius: 12px; font-size: 0.65rem; font-weight: 800;
+        display: flex; align-items: center; gap: 0.25rem;
+        box-shadow: 0 4px 12px rgba(245,158,11,0.4);
+    }
+    .premium-badge ::deep .mud-icon-root { font-size: 12px !important; color: white !important; }
+    .header-left h1 { color: white; font-size: 2rem; font-weight: 900; margin: 0; }
+    .header-left p { color: rgba(255,255,255,0.85); margin: 0.5rem 0 0; }
+    .header-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+    /* ═════ FILTERS ═════ */
+    .filters-bar {
+        display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px; padding: 0.75rem 1rem;
+        margin-bottom: 1.5rem;
+    }
+    .filter-label { font-weight: 700; }
+    .period-btn {
+        padding: 0.4rem 0.85rem;
+        background: var(--mud-palette-background);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 8px;
+        cursor: pointer; font-family: inherit;
+        font-size: 0.85rem; font-weight: 600;
+        color: var(--mud-palette-text-primary);
+        transition: all 0.2s;
+    }
+    .period-btn:hover { border-color: #6366f1; }
+    .period-btn.active {
+        background: linear-gradient(135deg, #6366f1, #4338ca);
+        color: white; border-color: #6366f1;
+    }
+    .custom-period { display: flex; gap: 0.5rem; margin-right: auto; }
+    .date-pick { max-width: 150px; }
+
+    /* ═════ HEALTH SCORE ═════ */
+    .health-section {
+        display: grid; grid-template-columns: 350px 1fr; gap: 1.5rem;
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 20px; padding: 2rem;
+        margin-bottom: 1.5rem;
+    }
+    .health-main { display: flex; flex-direction: column; align-items: center; gap: 1rem; text-align: center; }
+    .health-circle-wrap { width: 200px; height: 200px; }
+    .health-circle { width: 100%; height: 100%; }
+    .grade-badge {
+        color: white; padding: 0.4rem 1rem;
+        border-radius: 12px; font-size: 1.5rem; font-weight: 900;
+        display: inline-block;
+    }
+    .health-info h2 { margin: 0.5rem 0; font-size: 1.25rem; font-weight: 800; }
+    .health-info p { margin: 0; font-size: 0.9rem; color: var(--mud-palette-text-secondary); }
+
+    .health-factors { display: flex; flex-direction: column; gap: 0.75rem; justify-content: center; }
+    .factor-card {
+        background: var(--mud-palette-background);
+        border-radius: 12px; padding: 0.85rem 1rem;
+    }
+    .factor-header {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 0.5rem;
+    }
+    .factor-name { font-weight: 700; font-size: 0.9rem; }
+    .factor-score { font-weight: 800; font-size: 0.95rem; }
+    .factor-bar {
+        height: 8px; background: var(--mud-palette-divider);
+        border-radius: 4px; overflow: hidden; margin-bottom: 0.4rem;
+    }
+    .factor-fill { height: 100%; transition: width 0.6s ease; }
+    .factor-desc { font-size: 0.78rem; color: var(--mud-palette-text-secondary); }
+
+    /* ═════ KPIs ═════ */
+    .kpis-grid {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 1rem; margin-bottom: 1.5rem;
+    }
+    .kpi-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-top: 4px solid;
+        border-radius: 16px; padding: 1.25rem;
+        transition: all 0.3s;
+        display: flex; flex-direction: column;
+    }
+    .kpi-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+    .kpi-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem; }
+    .kpi-icon {
+        width: 48px; height: 48px;
+        border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .kpi-icon ::deep .mud-icon-root { font-size: 24px !important; }
+    .kpi-change {
+        font-size: 0.8rem; font-weight: 700;
+        padding: 0.25rem 0.5rem; border-radius: 6px;
+    }
+    .kpi-change.pos { background: rgba(16,185,129,0.15); color: #10b981; }
+    .kpi-change.neg { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .kpi-change.neutral { background: rgba(148,163,184,0.15); color: #94a3b8; }
+    .kpi-body { display: flex; flex-direction: column; flex: 1; }
+    .kpi-title { font-size: 0.85rem; color: var(--mud-palette-text-secondary); font-weight: 600; }
+    .kpi-value { font-size: 1.6rem; font-weight: 900; color: var(--mud-palette-text-primary); margin: 0.4rem 0; }
+    .kpi-subtitle { font-size: 0.78rem; color: var(--mud-palette-text-secondary); }
+    .kpi-change-label { font-size: 0.7rem; color: var(--mud-palette-text-secondary); margin-top: 0.2rem; }
+    .kpi-link {
+        background: none; border: none; padding: 0.5rem 0 0;
+        color: var(--mud-palette-primary); cursor: pointer;
+        font-family: inherit; font-size: 0.8rem; font-weight: 700;
+        text-align: right;
+    }
+
+    /* ═════ RATIOS ═════ */
+    .ratios-section, .comparisons-section, .trend-section, .alerts-section, .strategy-section {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+    .section-title {
+        display: flex; align-items: center; gap: 0.5rem;
+        margin: 0 0 1.25rem; font-size: 1.15rem; font-weight: 800;
+        padding-bottom: 0.75rem; border-bottom: 2px solid #6366f1;
+    }
+    .section-title.small { font-size: 1rem; }
+    .section-title ::deep .mud-icon-root { color: #6366f1; }
+
+    .ratios-grid {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 0.75rem;
+    }
+    .ratio-card {
+        background: var(--mud-palette-background);
+        border-radius: 12px; padding: 1rem;
+        display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
+        transition: transform 0.2s;
+    }
+    .ratio-card:hover { transform: scale(1.02); }
+    .r-icon { font-size: 1.75rem; }
+    .r-name { font-size: 0.78rem; color: var(--mud-palette-text-secondary); font-weight: 600; text-align: center; }
+    .r-value { font-size: 1.4rem; font-weight: 900; }
+    .r-value.good { color: #10b981; }
+    .r-value.fair { color: #f59e0b; }
+    .r-value.bad { color: #ef4444; }
+
+    /* ═════ COMPARISONS ═════ */
+    .comp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .comp-card {
+        background: var(--mud-palette-background);
+        border: 1px solid var(--mud-palette-divider);
+        border-top: 4px solid;
+        border-radius: 12px; padding: 1.25rem;
+    }
+    .comp-head {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 1rem; padding-bottom: 0.75rem;
+        border-bottom: 1px dashed var(--mud-palette-divider);
+    }
+    .comp-trend { font-weight: 700; font-size: 0.95rem; }
+    .comp-body { display: flex; flex-direction: column; gap: 0.6rem; }
+    .comp-metric {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.6rem 0.85rem;
+        background: var(--mud-palette-surface);
+        border-radius: 8px; font-size: 0.9rem;
+    }
+    .comp-metric.highlight {
+        background: linear-gradient(135deg, rgba(212,168,83,0.1), rgba(212,168,83,0.05));
+        border: 1px solid rgba(212,168,83,0.3); font-weight: 700;
+    }
+    .comp-vals { display: flex; align-items: center; gap: 0.5rem; }
+    .comp-vals .pos { color: #10b981; font-weight: 700; }
+    .comp-vals .neg { color: #ef4444; font-weight: 700; }
+    .comp-vals .neutral { color: #94a3b8; font-weight: 700; }
+
+    /* ═════ CHART ═════ */
+    .chart-wrap { background: var(--mud-palette-background); border-radius: 12px; padding: 1rem; overflow-x: auto; }
+    .unified-chart { width: 100%; min-width: 800px; height: 320px; }
+    .chart-legend { display: flex; justify-content: center; gap: 1.5rem; margin-top: 1rem; font-size: 0.9rem; }
+    .chart-legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+    .chart-legend .dot { width: 14px; height: 14px; border-radius: 4px; }
+
+    /* ═════ ALERTS ═════ */
+    .alerts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+    .alert-card {
+        background: var(--mud-palette-background);
+        border-right: 4px solid; border-radius: 12px; padding: 1rem;
+        display: flex; gap: 0.75rem; transition: transform 0.2s;
+    }
+    .alert-card:hover { transform: translateX(-3px); }
+    .alert-icon {
+        width: 48px; height: 48px; border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.5rem; flex-shrink: 0;
+    }
+    .alert-cat { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; }
+    .alert-body h4 { margin: 0.25rem 0; font-size: 1rem; font-weight: 800; }
+    .alert-body p { margin: 0 0 0.5rem; font-size: 0.85rem; line-height: 1.6; }
+    .alert-btn {
+        background: transparent; border: 1px solid; border-radius: 8px;
+        padding: 0.4rem 0.85rem; font-family: inherit; font-size: 0.78rem;
+        font-weight: 700; cursor: pointer; transition: all 0.2s;
+    }
+    .alert-btn:hover { background: rgba(0,0,0,0.05); }
+
+    /* ═════ TOP TABLES ═════ */
+    .top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    .top-section, .bottom-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.25rem;
+    }
+    .top-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .top-table thead { background: var(--mud-palette-background); }
+    .top-table th, .top-table td {
+        padding: 0.6rem 0.5rem; text-align: right;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+    .top-table th { font-weight: 700; font-size: 0.78rem; color: var(--mud-palette-text-secondary); }
+    .top-table .num { text-align: left; font-variant-numeric: tabular-nums; }
+    .top-table .pos { color: #10b981; font-weight: 700; }
+    .top-table .warn { color: #ef4444; font-weight: 700; }
+    .top-table small { display: block; color: var(--mud-palette-text-secondary); font-size: 0.7rem; }
+    .rank {
+        display: inline-block; width: 24px; height: 24px;
+        background: linear-gradient(135deg, #6366f1, #4338ca);
+        color: white; border-radius: 50%;
+        text-align: center; line-height: 24px;
+        font-weight: 800; font-size: 0.78rem;
+    }
+    .margin-pill {
+        background: rgba(99,102,241,0.1); color: #6366f1;
+        padding: 0.15rem 0.5rem; border-radius: 4px;
+        font-size: 0.75rem; font-weight: 700;
+    }
+
+    /* ═════ BOTTOM ═════ */
+    .bottom-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    .cat-list { display: flex; flex-direction: column; gap: 0.6rem; }
+    .cat-row {
+        display: grid; grid-template-columns: 1.5fr 2fr auto; gap: 0.75rem;
+        align-items: center; padding: 0.5rem; border-radius: 8px;
+        background: var(--mud-palette-background);
+    }
+    .cat-info { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; font-weight: 600; }
+    .cat-color { width: 12px; height: 12px; border-radius: 3px; }
+    .cat-bar-wrap { background: var(--mud-palette-divider); height: 8px; border-radius: 4px; overflow: hidden; }
+    .cat-bar { height: 100%; transition: width 0.6s ease; }
+    .cat-vals { text-align: left; }
+    .cat-vals strong { display: block; font-size: 0.85rem; }
+    .cat-vals small { font-size: 0.7rem; color: var(--mud-palette-text-secondary); }
+
+    .receivables-grid { display: flex; flex-direction: column; gap: 0.5rem; }
+    .rec-item {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.75rem; border-radius: 10px; font-size: 0.9rem;
+    }
+    .rec-item.credit { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); }
+    .rec-item.debit { background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.2); }
+    .rec-item.warn { background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); }
+    .rec-item.net {
+        background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(99,102,241,0.05));
+        border: 2px solid rgba(99,102,241,0.3); margin-top: 0.5rem;
+        font-size: 1rem; font-weight: 700;
+    }
+    .rec-label { color: var(--mud-palette-text-primary); font-weight: 600; }
+    .rec-item small { display: block; font-size: 0.7rem; color: var(--mud-palette-text-secondary); margin-top: 0.15rem; }
+
+    /* ═════ STRATEGY ═════ */
+    .strategy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 1.25rem; }
+    .strategy-card {
+        background: var(--mud-palette-surface);
+        border: 2px solid; border-radius: 16px; overflow: hidden;
+        transition: all 0.3s;
+    }
+    .strategy-card:hover { transform: translateY(-3px); box-shadow: 0 12px 32px rgba(0,0,0,0.1); }
+    .s-header {
+        padding: 1rem 1.25rem; color: white;
+        display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+    }
+    .s-icon { font-size: 2rem; }
+    .s-title { font-size: 1rem; font-weight: 800; flex: 1; }
+    .s-tags { display: flex; gap: 0.4rem; }
+    .s-tag {
+        padding: 0.2rem 0.5rem; border-radius: 6px;
+        font-size: 0.65rem; font-weight: 700;
+        background: rgba(255,255,255,0.25); color: white;
+    }
+    .s-tag.impact-high { background: rgba(255,255,255,0.4); }
+    .s-tag.diff-easy { background: rgba(16,185,129,0.5); }
+    .s-tag.diff-medium { background: rgba(245,158,11,0.5); }
+    .s-tag.diff-hard { background: rgba(239,68,68,0.5); }
+
+    .s-body { padding: 1.25rem; }
+    .s-desc { margin: 0 0 1rem; font-size: 0.92rem; line-height: 1.6; }
+    .s-outcome {
+        background: var(--mud-palette-background);
+        padding: 0.75rem; border-radius: 8px;
+        font-size: 0.85rem; margin-bottom: 1rem;
+    }
+    .s-steps strong { display: block; margin-bottom: 0.5rem; font-size: 0.9rem; }
+    .s-steps ol { margin: 0; padding-right: 1.2rem; }
+    .s-steps li { font-size: 0.85rem; padding: 0.3rem 0; line-height: 1.5; }
+
+    .print-only { display: none; }
+    .print-footer { text-align: center; padding: 1rem; color: #999; font-size: 0.85rem; border-top: 1px dashed #ddd; margin-top: 2rem; }
+
+    /* PRINT */
+    @@media print {
+        .no-print { display: none !important; }
+        .print-only { display: block !important; }
+        body { background: white !important; }
+        .fd-page { padding: 0; }
+        .fd-header { background: #f9f9f9; color: #1a2842; }
+        .header-left h1, .header-left p { color: #1a2842 !important; }
+        .health-section, .ratios-section, .comparisons-section, .trend-section,
+        .alerts-section, .strategy-section, .top-section, .bottom-card { box-shadow: none; }
+        @@page { size: A4; margin: 1cm; }
+    }
+
+    @@media (max-width: 1100px) {
+        .health-section, .top-grid, .bottom-grid, .comp-grid { grid-template-columns: 1fr; }
+        .strategy-grid { grid-template-columns: 1fr; }
+    }
+    @@media (max-width: 700px) {
+        .kpis-grid, .ratios-grid { grid-template-columns: 1fr; }
+        .filters-bar { flex-direction: column; align-items: stretch; }
+        .custom-period { margin-right: 0; flex-wrap: wrap; }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _isReloading = false;
+    private FinancialDashboardDto? _dashboard;
+    private FinancialDashboardFilterDto _filter = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var canView = user.HasClaim("Permission", "frmFinancialDashboard:View")
+                   || user.HasClaim("Permission", "frmCashBoxDashboard:View")
+                   || user.IsInRole("Admin");
+        if (!canView) { Navigation.NavigateTo("/"); return; }
+
+        await SetPeriod("Month");
+        _isLoading = false;
+    }
+
+    private async Task LoadDashboard()
+    {
+        _isReloading = true;
+        try
+        {
+            _dashboard = await DashboardService.GetDashboardAsync(_filter);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isReloading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SetPeriod(string period)
+    {
+        _filter.PeriodType = period;
+        var today = DateTime.Today;
+
+        switch (period)
+        {
+            case "Today": _filter.FromDate = today; _filter.ToDate = today; break;
+            case "Week": _filter.FromDate = today.AddDays(-(int)today.DayOfWeek); _filter.ToDate = today; break;
+            case "Month": _filter.FromDate = new DateTime(today.Year, today.Month, 1); _filter.ToDate = today; break;
+            case "Quarter":
+                var qStart = new DateTime(today.Year, ((today.Month - 1) / 3) * 3 + 1, 1);
+                _filter.FromDate = qStart; _filter.ToDate = today; break;
+            case "Year": _filter.FromDate = new DateTime(today.Year, 1, 1); _filter.ToDate = today; break;
+        }
+
+        await LoadDashboard();
+    }
+
+    private async Task Print() => await JS.InvokeVoidAsync("window.print");
+
+    private string FormatMoney(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+
+    private string GetChangeClass(decimal change) => change > 0 ? "pos" : change < 0 ? "neg" : "neutral";
+
+    private string GetRatioClass(decimal value, decimal goodMin, decimal excellentMin)
+    {
+        if (value >= excellentMin) return "good";
+        if (value >= goodMin) return "fair";
+        return "bad";
+    }
+
+    private string GetCategoryLabel(string cat) => cat switch
+    {
+        "Income" => "📊 قائمة الدخل",
+        "CashFlow" => "💧 التدفقات",
+        "Expenses" => "💸 المصروفات",
+        "Receivables" => "💰 الذمم",
+        _ => "💡 عام"
+    };
+
+    private string GetImpactLabel(string imp) => imp switch
+    {
+        "High" => "تأثير عالي",
+        "Medium" => "تأثير متوسط",
+        "Low" => "تأثير منخفض",
+        _ => imp
+    };
+
+    private string GetDifficultyLabel(string diff) => diff switch
+    {
+        "Easy" => "سهل",
+        "Medium" => "متوسط",
+        "Hard" => "صعب",
+        _ => diff
+    };
+
+    private string GetIcon(string iconName) => iconName switch
+    {
+        "TrendingUp" => Icons.Material.Filled.TrendingUp,
+        "TrendingDown" => Icons.Material.Filled.TrendingDown,
+        "AccountBalance" => Icons.Material.Filled.AccountBalance,
+        "Warning" => Icons.Material.Filled.Warning,
+        "MoneyOff" => Icons.Material.Filled.MoneyOff,
+        "AccountBalanceWallet" => Icons.Material.Filled.AccountBalanceWallet,
+        "PieChart" => Icons.Material.Filled.PieChart,
+        _ => Icons.Material.Filled.Insights
+    };
+}
