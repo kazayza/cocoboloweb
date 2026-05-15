@@ -689,7 +689,7 @@ public async Task<IEnumerable<PartyLookupDto>> SearchPartiesAsync(string search)
         await _db.SaveChangesAsync();
 
         // نوع الحركة في الخزينة (قبض للمبيعات / صرف للمشتريات)
-        var cashboxType = isSale ? "In" : "Out";
+        var cashboxType = isSale ? "قبض" : "صرف";
         var refType = isSale ? "SaleInvoice" : "PurchaseInvoice";
 
         var cashTrans = new CashboxTransaction

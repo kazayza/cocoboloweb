@@ -1,0 +1,550 @@
+@page "/cashbox/personal-accounts/{Id:int}/statement"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+
+@inject IPersonalAccountService AccountService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else if (_statement == null)
+{
+    <MudAlert Severity="Severity.Error">الحساب غير موجود</MudAlert>
+}
+else
+{
+    var acc = _statement.Account;
+    var color = acc.AccountTypeColor ?? "#6b7280";
+
+    <!-- Toolbar (لا يطبع) -->
+    <div class="toolbar no-print">
+        <div class="tb-left">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowForward"
+                           Color="Color.Inherit" OnClick="GoBack" />
+            <h2>كشف حساب: @acc.AccountName</h2>
+        </div>
+        <div class="tb-right">
+            <MudDatePicker Date="_dateFrom" DateChanged="OnFromChanged"
+                           Label="من" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Clearable="true" Class="date-pick" />
+            <MudDatePicker Date="_dateTo" DateChanged="OnToChanged"
+                           Label="إلى" Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Clearable="true" Class="date-pick" />
+            <MudButton Variant="Variant.Filled" Color="Color.Success"
+                       StartIcon="@Icons.Material.Filled.SwapHoriz"
+                       OnClick="@(() => Navigation.NavigateTo($"/cashbox/personal-accounts/{Id}/transaction"))">
+                حركة جديدة
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Print"
+                       OnClick="Print">
+                طباعة
+            </MudButton>
+        </div>
+    </div>
+
+    <!-- Statement (يطبع) -->
+    <div class="statement-page" dir="rtl">
+
+        <!-- Header للطباعة -->
+        <div class="stmt-header">
+            <div class="company-info">
+                <h1>COCOBOLO</h1>
+                <p>كشف حساب شخصي</p>
+                <small>تاريخ الطباعة: @DateTime.Now.ToString("yyyy/MM/dd HH:mm")</small>
+            </div>
+            <div class="title-tag" style="background: linear-gradient(135deg, @color, @(color)cc);">
+                <strong>كشف حساب</strong>
+                <small>STATEMENT</small>
+            </div>
+        </div>
+
+        <!-- Account Info -->
+        <div class="acc-card-stmt" style="border-color: @(color)55;">
+            <div class="acc-strip-stmt" style="background: linear-gradient(135deg, @color, @(color)cc);"></div>
+            <div class="acc-content">
+                <div class="acc-main">
+                    <div class="acc-icon-big" style="background: @(color)22; color: @color;">
+                        <MudIcon Icon="@GetIcon(acc.AccountTypeIcon)" />
+                    </div>
+                    <div class="acc-details">
+                        <h2>@acc.AccountName</h2>
+                        <span class="acc-type-pill" style="background: @(color)22; color: @color;">
+                            @acc.AccountTypeAr
+                        </span>
+                        <div class="acc-contact-grid">
+                            @if (!string.IsNullOrEmpty(acc.Phone))
+                            {
+                                <span><strong>📞</strong> @acc.Phone</span>
+                            }
+                            @if (!string.IsNullOrEmpty(acc.Email))
+                            {
+                                <span><strong>✉️</strong> @acc.Email</span>
+                            }
+                            @if (!string.IsNullOrEmpty(acc.NationalId))
+                            {
+                                <span><strong>🆔</strong> @acc.NationalId</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                @{
+                    var balColor = acc.CurrentBalance > 0 ? "#ef4444"
+                        : acc.CurrentBalance < 0 ? "#10b981" : "#94a3b8";
+                }
+                <div class="balance-display" style="background: @(balColor)0d; border-color: @(balColor)55;">
+                    <span class="bd-label">الرصيد الحالي</span>
+                    <strong class="bd-value" style="color: @balColor;">
+                        @FormatMoney(Math.Abs(acc.CurrentBalance)) ج
+                    </strong>
+                    <small class="bd-status">@acc.BalanceStatus</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Period & Summary -->
+        <div class="stmt-summary">
+            <div class="ss-item">
+                <span>الفترة</span>
+                <strong>
+                    @if (_statement.FromDate.HasValue && _statement.ToDate.HasValue)
+                    {
+                        @_statement.FromDate.Value.ToString("yyyy/MM/dd") @:- @_statement.ToDate.Value.ToString("yyyy/MM/dd")
+                    }
+                    else
+                    {
+                        @:كل الفترات
+                    }
+                </strong>
+            </div>
+            <div class="ss-item">
+                <span>الرصيد قبل الفترة</span>
+                <strong style="color: @(_statement.OpeningBalanceAtStart > 0 ? "#ef4444" : _statement.OpeningBalanceAtStart < 0 ? "#10b981" : "inherit");">
+                    @FormatMoney(_statement.OpeningBalanceAtStart) ج
+                </strong>
+            </div>
+            <div class="ss-item">
+                <span>عدد الحركات</span>
+                <strong>@_statement.Transactions.Count</strong>
+            </div>
+            <div class="ss-item">
+                <span>الرصيد بعد الفترة</span>
+                <strong style="color: @(_statement.ClosingBalanceAtEnd > 0 ? "#ef4444" : _statement.ClosingBalanceAtEnd < 0 ? "#10b981" : "inherit");">
+                    @FormatMoney(_statement.ClosingBalanceAtEnd) ج
+                </strong>
+            </div>
+        </div>
+
+        <!-- Transactions Table -->
+        <div class="stmt-table-wrap">
+            <table class="stmt-table">
+                <thead>
+                    <tr>
+                        <th>التاريخ</th>
+                        <th>البيان</th>
+                        <th>الخزينة</th>
+                        <th class="num">دخل (له)</th>
+                        <th class="num">خرج (عليه)</th>
+                        <th class="num">الرصيد</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Opening Balance Row -->
+                    <tr class="opening-row">
+                        <td>—</td>
+                        <td colspan="2"><strong>رصيد افتتاحي للفترة</strong></td>
+                        <td class="num">—</td>
+                        <td class="num">—</td>
+                        <td class="num"><strong>@FormatMoney(_statement.OpeningBalanceAtStart) ج</strong></td>
+                    </tr>
+
+                    @if (_statement.Transactions.Any())
+                    {
+                        @foreach (var t in _statement.Transactions)
+                        {
+                            <tr>
+                                <td>@t.TransactionDate.ToString("yyyy/MM/dd")</td>
+                                <td>
+                                    <strong>@t.Description</strong>
+                                    @if (!string.IsNullOrEmpty(t.Notes))
+                                    {
+                                        <br />
+                                        <small>@t.Notes</small>
+                                    }
+                                </td>
+                                <td>@(t.CashBoxName ?? "-")</td>
+                                <td class="num in">
+                                    @if (t.AmountIn > 0)
+                                    {
+                                        @FormatMoney(t.AmountIn)
+                                    }
+                                </td>
+                                <td class="num out">
+                                    @if (t.AmountOut > 0)
+                                    {
+                                        @FormatMoney(t.AmountOut)
+                                    }
+                                </td>
+                                <td class="num bal" style="color: @(t.RunningBalance > 0 ? "#ef4444" : t.RunningBalance < 0 ? "#10b981" : "inherit");">
+                                    <strong>@FormatMoney(t.RunningBalance) ج</strong>
+                                </td>
+                            </tr>
+                        }
+                    }
+                    else
+                    {
+                        <tr class="empty-row">
+                            <td colspan="6">لا توجد حركات في هذه الفترة</td>
+                        </tr>
+                    }
+
+                    <!-- Closing Total -->
+                    <tr class="closing-row">
+                        <td>—</td>
+                        <td colspan="2"><strong>الرصيد الختامي</strong></td>
+                        <td class="num in"><strong>+@FormatMoney(_statement.Transactions.Sum(t => t.AmountIn)) ج</strong></td>
+                        <td class="num out"><strong>-@FormatMoney(_statement.Transactions.Sum(t => t.AmountOut)) ج</strong></td>
+                        <td class="num bal">
+                            <strong style="color: @(_statement.ClosingBalanceAtEnd > 0 ? "#ef4444" : _statement.ClosingBalanceAtEnd < 0 ? "#10b981" : "inherit");">
+                                @FormatMoney(_statement.ClosingBalanceAtEnd) ج
+                            </strong>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Notes / Status -->
+        <div class="stmt-footer">
+            <div class="footer-status" style="background: @(balColor)0d; border-color: @(balColor)44;">
+                <strong style="color: @balColor;">حالة الحساب:</strong>
+                <span>@acc.BalanceStatus بمبلغ <strong>@FormatMoney(Math.Abs(acc.CurrentBalance)) ج</strong></span>
+            </div>
+
+            <div class="signatures">
+                <div class="sig">
+                    <div class="sig-line"></div>
+                    <span>المحاسب</span>
+                </div>
+                <div class="sig">
+                    <div class="sig-line"></div>
+                    <span>المدير المالي</span>
+                </div>
+                <div class="sig">
+                    <div class="sig-line"></div>
+                    <span>صاحب الحساب</span>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .loading-container { display: flex; align-items: center; justify-content: center; min-height: 60vh; }
+
+    .toolbar {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 1rem;
+        background: var(--mud-palette-surface);
+        border-bottom: 1px solid var(--mud-palette-divider);
+        flex-wrap: wrap; gap: 1rem;
+        position: sticky; top: 0; z-index: 10;
+    }
+
+    .tb-left {
+        display: flex; align-items: center; gap: 0.5rem;
+    }
+    .tb-left h2 { margin: 0; font-size: 1.25rem; }
+
+    .tb-right {
+        display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    }
+
+    .date-pick { max-width: 160px; }
+
+    .statement-page {
+        max-width: 900px;
+        margin: 1.5rem auto;
+        padding: 2rem;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        font-family: 'Tajawal', 'Cairo', Arial, sans-serif;
+    }
+
+    .stmt-header {
+        display: flex; justify-content: space-between; align-items: flex-start;
+        padding-bottom: 1.5rem;
+        border-bottom: 3px solid var(--gold);
+        margin-bottom: 1.5rem;
+    }
+
+    .company-info h1 {
+        margin: 0; font-size: 1.8rem; font-weight: 900;
+        color: var(--navy-dark);
+    }
+    .company-info p {
+        margin: 0.25rem 0 0; color: #555;
+    }
+    .company-info small { color: #777; font-size: 0.78rem; }
+
+    .title-tag {
+        text-align: center;
+        padding: 0.75rem 1.5rem;
+        border-radius: 12px;
+        color: white;
+    }
+    .title-tag strong { display: block; font-size: 1.25rem; }
+    .title-tag small { display: block; font-size: 0.75rem; opacity: 0.85; }
+
+    .acc-card-stmt {
+        background: #fafafa;
+        border: 2px solid;
+        border-radius: 14px;
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+    }
+
+    .acc-strip-stmt { height: 6px; }
+
+    .acc-content {
+        padding: 1.25rem;
+        display: flex; gap: 1rem;
+        align-items: center; justify-content: space-between;
+        flex-wrap: wrap;
+    }
+
+    .acc-main { display: flex; gap: 1rem; align-items: center; flex: 1; min-width: 280px; }
+
+    .acc-icon-big {
+        width: 64px; height: 64px;
+        border-radius: 14px;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+    }
+    .acc-icon-big ::deep .mud-icon-root { font-size: 36px !important; }
+
+    .acc-details h2 { margin: 0; font-size: 1.4rem; font-weight: 800; }
+
+    .acc-type-pill {
+        display: inline-block;
+        padding: 0.2rem 0.7rem;
+        border-radius: 6px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        margin-top: 0.4rem;
+    }
+
+    .acc-contact-grid {
+        margin-top: 0.5rem;
+        display: flex; flex-direction: column; gap: 0.2rem;
+        font-size: 0.85rem;
+        color: #555;
+    }
+
+    .balance-display {
+        text-align: center;
+        padding: 1.25rem 1.5rem;
+        border-radius: 14px;
+        border: 2px dashed;
+        min-width: 180px;
+    }
+
+    .bd-label {
+        display: block;
+        font-size: 0.78rem;
+        color: #555;
+        font-weight: 600;
+    }
+
+    .bd-value {
+        display: block;
+        font-size: 1.8rem;
+        font-weight: 900;
+        margin: 0.25rem 0;
+    }
+
+    .bd-status {
+        display: block;
+        font-size: 0.85rem;
+        font-weight: 700;
+    }
+
+    .stmt-summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .ss-item {
+        background: var(--gold-subtle);
+        border: 1px solid var(--gold-border);
+        border-radius: 10px;
+        padding: 0.85rem;
+        display: flex; flex-direction: column;
+    }
+    .ss-item span { font-size: 0.78rem; color: #555; font-weight: 600; }
+    .ss-item strong { font-size: 1rem; font-weight: 800; margin-top: 0.25rem; color: var(--navy-dark); }
+
+    .stmt-table-wrap {
+        margin-bottom: 1.5rem;
+    }
+
+    .stmt-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.88rem;
+    }
+
+    .stmt-table thead {
+        background: linear-gradient(135deg, var(--gold), var(--gold-dark));
+        color: white;
+    }
+
+    .stmt-table thead th {
+        padding: 0.75rem;
+        text-align: right;
+        font-weight: 700;
+        font-size: 0.85rem;
+    }
+
+    .stmt-table tbody td {
+        padding: 0.65rem 0.75rem;
+        border-bottom: 1px solid #eee;
+        text-align: right;
+    }
+
+    .stmt-table tbody tr:nth-child(even) { background: #fafafa; }
+
+    .stmt-table .num { text-align: center; font-variant-numeric: tabular-nums; }
+    .stmt-table .in { color: #10b981; font-weight: 700; }
+    .stmt-table .out { color: #ef4444; font-weight: 700; }
+    .stmt-table .bal strong { font-size: 0.95rem; }
+
+    .opening-row {
+        background: #f0f9ff !important;
+        font-weight: 700;
+    }
+
+    .closing-row {
+        background: var(--gold-subtle) !important;
+        border-top: 2px solid var(--gold);
+        border-bottom: 2px solid var(--gold);
+    }
+
+    .empty-row td {
+        text-align: center;
+        padding: 2rem;
+        color: #999;
+    }
+
+    .stmt-footer {
+        margin-top: 1.5rem;
+    }
+
+    .footer-status {
+        padding: 1rem;
+        border: 1px solid;
+        border-radius: 10px;
+        display: flex; gap: 0.5rem; align-items: center;
+        margin-bottom: 2rem;
+        font-size: 0.95rem;
+    }
+
+    .signatures {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 2rem;
+        margin-top: 3rem;
+    }
+
+    .sig {
+        text-align: center;
+    }
+
+    .sig-line {
+        height: 1px;
+        background: #333;
+        margin-bottom: 0.5rem;
+    }
+
+    .sig span { font-weight: 700; color: #333; font-size: 0.85rem; }
+
+    @@media print {
+        body { background: white !important; }
+        .no-print { display: none !important; }
+        .statement-page {
+            margin: 0; padding: 1cm;
+            max-width: 100%; box-shadow: none; border-radius: 0;
+        }
+        @@page { size: A4; margin: 0; }
+    }
+
+    @@media (max-width: 700px) {
+        .stmt-table { font-size: 0.75rem; }
+        .stmt-table thead th, .stmt-table tbody td { padding: 0.5rem 0.4rem; }
+        .balance-display { min-width: 100%; }
+    }
+</style>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private bool _isLoading = true;
+    private PersonalAccountStatementDto? _statement;
+    private DateTime? _dateFrom;
+    private DateTime? _dateTo;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadStatement();
+        _isLoading = false;
+    }
+
+    private async Task LoadStatement()
+    {
+        _statement = await AccountService.GetStatementAsync(Id, _dateFrom, _dateTo);
+        StateHasChanged();
+    }
+
+    private async Task OnFromChanged(DateTime? d)
+    {
+        _dateFrom = d;
+        await LoadStatement();
+    }
+
+    private async Task OnToChanged(DateTime? d)
+    {
+        _dateTo = d;
+        await LoadStatement();
+    }
+
+    private async Task Print()
+    {
+        await JS.InvokeVoidAsync("window.print");
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/cashbox/personal-accounts");
+
+    private string GetIcon(string? iconName) => iconName switch
+    {
+        "Stars" => Icons.Material.Filled.Stars,
+        "Diamond" => Icons.Material.Filled.Diamond,
+        "AccountBalance" => Icons.Material.Filled.AccountBalance,
+        "Person" => Icons.Material.Filled.Person,
+        "PersonOutline" => Icons.Material.Filled.PersonOutline,
+        _ => Icons.Material.Filled.Person
+    };
+
+    private string FormatMoney(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+}

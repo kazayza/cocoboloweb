@@ -1,0 +1,541 @@
+@page "/cashbox/personal-accounts/new"
+@page "/cashbox/personal-accounts/{Id:int}/edit"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+
+@inject IPersonalAccountService AccountService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else
+{
+    <div class="acc-form-page" dir="rtl">
+
+        <div class="form-header" style="background: linear-gradient(135deg, @_currentColor, @(_currentColor)cc);">
+            <div class="header-left">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowForward"
+                               Color="Color.Inherit" OnClick="GoBack" />
+                <div>
+                    <h1>
+                        <MudIcon Icon="@GetIcon(_currentIcon)" />
+                        @(IsEdit ? $"تعديل: {_form.AccountName}" : "حساب شخصي جديد")
+                    </h1>
+                    <p>إدارة حسابات الأشخاص (مالك / مستثمر / مقرض / موظف)</p>
+                </div>
+            </div>
+            <div class="header-right">
+                <MudButton Variant="Variant.Outlined" Color="Color.Inherit" OnClick="GoBack"
+                           StartIcon="@Icons.Material.Filled.Close">
+                    إلغاء
+                </MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           OnClick="Save" Disabled="@_isSaving"
+                           StartIcon="@Icons.Material.Filled.Save"
+                           Class="save-btn">
+                    @if (_isSaving)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                    }
+                    حفظ
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <div class="main-col">
+
+                <!-- نوع الحساب -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Category" />
+                        <h3>نوع الحساب *</h3>
+                    </div>
+                    <div class="types-grid">
+                        @foreach (var t in PersonalAccountTypes.All)
+                        {
+                            var color = PersonalAccountTypes.Colors.GetValueOrDefault(t.Key, "#6b7280");
+                            var icon = PersonalAccountTypes.Icons.GetValueOrDefault(t.Key, "PersonOutline");
+                            <button type="button"
+                                    class="type-card @(_form.AccountType == t.Key ? "selected" : "")"
+                                    style="@(_form.AccountType == t.Key ? $"border-color: {color}; background: {color}15;" : "")"
+                                    @onclick="@(() => SelectType(t.Key, color, icon))">
+                                <div class="type-icon" style="background: @color;">
+                                    <MudIcon Icon="@GetIcon(icon)" />
+                                </div>
+                                <div class="type-name">@t.Value</div>
+                            </button>
+                        }
+                    </div>
+                </MudPaper>
+
+                <!-- معلومات الحساب -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.PersonOutline" />
+                        <h3>معلومات الحساب</h3>
+                    </div>
+                    <div class="grid-2">
+                        <MudTextField @bind-Value="_form.AccountName"
+                                      Label="اسم الحساب *"
+                                      Variant="Variant.Outlined"
+                                      MaxLength="200" />
+                        <MudTextField @bind-Value="_form.Phone"
+                                      Label="الهاتف"
+                                      Variant="Variant.Outlined"
+                                      MaxLength="20"
+                                      InputMode="InputMode.tel" />
+                        <MudTextField @bind-Value="_form.Email"
+                                      Label="البريد الإلكتروني"
+                                      Variant="Variant.Outlined"
+                                      MaxLength="100"
+                                      InputType="InputType.Email" />
+                        <MudTextField @bind-Value="_form.NationalId"
+                                      Label="الرقم القومي"
+                                      Variant="Variant.Outlined"
+                                      MaxLength="50" />
+                    </div>
+                    <MudTextField @bind-Value="_form.Notes"
+                                  Label="ملاحظات"
+                                  Variant="Variant.Outlined" Lines="2" Class="mt-3" />
+                </MudPaper>
+
+                <!-- الرصيد الافتتاحي -->
+                @if (!IsEdit)
+                {
+                    <MudPaper Class="form-section opening-section" Elevation="0">
+                        <div class="section-header">
+                            <MudIcon Icon="@Icons.Material.Filled.Stars" Style="color: var(--gold);" />
+                            <h3>الرصيد الافتتاحي</h3>
+                        </div>
+
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                            <small>
+                                💡 لو الحساب عليه فلوس قديمة (قبل النظام) سجّلها هنا.
+                                <br />
+                                • <strong>له (دائن)</strong>: الشركة عليها فلوس له (مثلاً: قرض قديم)
+                                <br />
+                                • <strong>عليه (مدين)</strong>: هو عليه فلوس للشركة (مثلاً: سلفة قديمة)
+                            </small>
+                        </MudAlert>
+
+                        <div class="opening-types">
+                            <button type="button"
+                                    class="ot-btn @(_form.OpeningType == "Credit" ? "selected" : "")"
+                                    style="@(_form.OpeningType == "Credit" ? "border-color:#ef4444; background:#ef444415;" : "")"
+                                    @onclick="@(() => _form.OpeningType = "Credit")">
+                                <MudIcon Icon="@Icons.Material.Filled.ArrowDownward" Style="color:#ef4444;" />
+                                <div>
+                                    <strong>له (دائن)</strong>
+                                    <small>الشركة عليها فلوس له</small>
+                                </div>
+                            </button>
+                            <button type="button"
+                                    class="ot-btn @(_form.OpeningType == "Debit" ? "selected" : "")"
+                                    style="@(_form.OpeningType == "Debit" ? "border-color:#10b981; background:#10b98115;" : "")"
+                                    @onclick="@(() => _form.OpeningType = "Debit")">
+                                <MudIcon Icon="@Icons.Material.Filled.ArrowUpward" Style="color:#10b981;" />
+                                <div>
+                                    <strong>عليه (مدين)</strong>
+                                    <small>هو عليه فلوس للشركة</small>
+                                </div>
+                            </button>
+                        </div>
+
+                        <div class="grid-2 mt-3">
+                            <MudNumericField @bind-Value="_form.OpeningBalance"
+                                             Label="المبلغ الافتتاحي"
+                                             Variant="Variant.Outlined"
+                                             Min="0m" Step="100m"
+                                             Adornment="Adornment.End" AdornmentText="ج" />
+                            <MudDatePicker Date="_form.OpeningDate"
+                                           DateChanged="@(d => _form.OpeningDate = d)"
+                                           Label="تاريخ الرصيد الافتتاحي"
+                                           Variant="Variant.Outlined" />
+                        </div>
+                    </MudPaper>
+                }
+
+                <!-- الإعدادات -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Settings" />
+                        <h3>الإعدادات</h3>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <strong>الحساب نشط</strong>
+                            <small>الحسابات المعطّلة لا تظهر في القروض والمدفوعات</small>
+                        </div>
+                        <MudSwitch @bind-Value="_form.IsActive" Color="Color.Success" />
+                    </div>
+                </MudPaper>
+            </div>
+
+            <!-- Sidebar Preview -->
+            <div class="sidebar-col">
+                <MudPaper Class="preview-card" Elevation="0">
+                    <h3>معاينة الحساب</h3>
+                    <div class="preview-box" style="border-color: @(_currentColor)55;">
+                        <div class="prev-strip" style="background: linear-gradient(135deg, @_currentColor, @(_currentColor)cc);">
+                            <span class="prev-type-tag">@PersonalAccountTypes.All.GetValueOrDefault(_form.AccountType, "—")</span>
+                        </div>
+                        <div class="prev-body">
+                            <div class="prev-icon" style="background: @(_currentColor)22; color: @_currentColor;">
+                                <MudIcon Icon="@GetIcon(_currentIcon)" />
+                            </div>
+                            <h4>@(string.IsNullOrEmpty(_form.AccountName) ? "اسم الحساب" : _form.AccountName)</h4>
+                            <div class="prev-contacts">
+                                @if (!string.IsNullOrEmpty(_form.Phone))
+                                {
+                                    <div>📞 @_form.Phone</div>
+                                }
+                                @if (!string.IsNullOrEmpty(_form.Email))
+                                {
+                                    <div>✉️ @_form.Email</div>
+                                }
+                            </div>
+
+                            @if (!IsEdit && _form.OpeningBalance > 0)
+                            {
+                                var color = _form.OpeningType == "Credit" ? "#ef4444" : "#10b981";
+                                var status = _form.OpeningType == "Credit" ? "له على الشركة" : "عليه للشركة";
+                                <div class="prev-balance" style="background: @(color)0d; color: @color;">
+                                    <span>رصيد افتتاحي</span>
+                                    <strong>@_form.OpeningBalance.ToString("N2") ج</strong>
+                                    <small>@status</small>
+                                </div>
+                            }
+
+                            <div class="prev-status-tag @(_form.IsActive ? "active" : "inactive")">
+                                @(_form.IsActive ? "نشط" : "معطّل")
+                            </div>
+                        </div>
+                    </div>
+
+                    <MudButton Variant="Variant.Filled" FullWidth="true" Size="Size.Large"
+                               OnClick="Save" Disabled="@(_isSaving || string.IsNullOrWhiteSpace(_form.AccountName))"
+                               StartIcon="@Icons.Material.Filled.Save"
+                               Style="@($"background: {_currentColor}; color: white; margin-top: 1rem;")">
+                        @(IsEdit ? "حفظ التعديلات" : "إنشاء الحساب")
+                    </MudButton>
+                </MudPaper>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .acc-form-page { padding: 1rem; max-width: 1400px; margin: 0 auto; direction: rtl; }
+    .loading-container { display: flex; align-items: center; justify-content: center; min-height: 60vh; }
+
+    .form-header {
+        border-radius: 16px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;
+        display: flex; align-items: center; justify-content: space-between;
+        flex-wrap: wrap; gap: 1rem; color: white;
+        transition: background 0.4s ease;
+    }
+    .header-left { display: flex; align-items: center; gap: 1rem; }
+    .header-left h1 {
+        margin: 0; font-size: 1.5rem; font-weight: 800;
+        display: flex; align-items: center; gap: 0.5rem;
+    }
+    .header-left p { margin: 0.25rem 0 0; font-size: 0.85rem; }
+    .header-right { display: flex; gap: 0.5rem; }
+
+    .save-btn {
+        background: white !important;
+        color: var(--navy-dark) !important;
+        font-weight: 700 !important;
+    }
+
+    .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 360px;
+        gap: 1.25rem;
+    }
+
+    .main-col, .sidebar-col {
+        display: flex; flex-direction: column; gap: 1rem;
+    }
+
+    .form-section {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.25rem;
+    }
+
+    .section-header {
+        display: flex; align-items: center; gap: 0.5rem;
+        margin-bottom: 1rem; padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+    .section-header h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+
+    .types-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 0.75rem;
+    }
+
+    .type-card {
+        background: var(--mud-palette-background);
+        border: 2px solid var(--mud-palette-divider);
+        border-radius: 12px;
+        padding: 1rem 0.5rem;
+        display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-family: inherit;
+    }
+
+    .type-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+
+    .type-card.selected { font-weight: 700; }
+
+    .type-icon {
+        width: 48px; height: 48px;
+        border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        color: white;
+    }
+
+    .type-icon ::deep .mud-icon-root { font-size: 28px !important; color: white !important; }
+
+    .type-name {
+        font-size: 0.85rem;
+        color: var(--mud-palette-text-primary);
+        text-align: center;
+    }
+
+    .opening-section {
+        border: 2px dashed var(--gold-border);
+        background: var(--gold-subtle);
+    }
+
+    .opening-types {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+    }
+
+    .ot-btn {
+        background: var(--mud-palette-surface);
+        border: 2px solid var(--mud-palette-divider);
+        border-radius: 12px;
+        padding: 1rem;
+        display: flex; align-items: center; gap: 0.75rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-family: inherit;
+        text-align: right;
+    }
+
+    .ot-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+
+    .ot-btn ::deep .mud-icon-root { font-size: 28px !important; flex-shrink: 0; }
+
+    .ot-btn div { display: flex; flex-direction: column; }
+    .ot-btn strong { font-size: 0.95rem; }
+    .ot-btn small { font-size: 0.75rem; color: var(--mud-palette-text-secondary); }
+
+    .setting-item {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 1rem;
+        background: var(--mud-palette-background);
+        border-radius: 12px;
+    }
+    .setting-info { display: flex; flex-direction: column; gap: 0.2rem; }
+    .setting-info strong { font-size: 0.95rem; }
+    .setting-info small { font-size: 0.78rem; color: var(--mud-palette-text-secondary); }
+
+    .preview-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.25rem;
+        position: sticky; top: 1rem;
+    }
+    .preview-card h3 {
+        margin: 0 0 1rem 0; font-size: 1rem; font-weight: 700;
+        padding-bottom: 0.5rem; border-bottom: 2px solid var(--gold);
+    }
+
+    .preview-box {
+        background: var(--mud-palette-background);
+        border: 2px solid;
+        border-radius: 14px;
+        overflow: hidden;
+        transition: border-color 0.3s ease;
+    }
+
+    .prev-strip {
+        height: 40px;
+        position: relative;
+        transition: background 0.3s ease;
+    }
+
+    .prev-type-tag {
+        position: absolute; top: 8px; right: 12px;
+        padding: 0.25rem 0.6rem;
+        background: rgba(255,255,255,0.95);
+        border-radius: 6px;
+        font-size: 0.72rem; font-weight: 700;
+        color: var(--navy-dark);
+    }
+
+    .prev-body {
+        padding: 1.25rem;
+        text-align: center;
+    }
+
+    .prev-icon {
+        width: 64px; height: 64px;
+        border-radius: 16px;
+        display: flex; align-items: center; justify-content: center;
+        margin: 0 auto 0.75rem;
+    }
+    .prev-icon ::deep .mud-icon-root { font-size: 32px !important; }
+
+    .prev-body h4 {
+        margin: 0; font-size: 1.15rem; font-weight: 800;
+    }
+
+    .prev-contacts {
+        margin-top: 0.5rem;
+        font-size: 0.78rem;
+        color: var(--mud-palette-text-secondary);
+        display: flex; flex-direction: column; gap: 0.15rem;
+    }
+
+    .prev-balance {
+        margin-top: 0.75rem;
+        padding: 0.75rem;
+        border-radius: 10px;
+        display: flex; flex-direction: column; align-items: center;
+    }
+    .prev-balance span { font-size: 0.75rem; }
+    .prev-balance strong { font-size: 1.25rem; font-weight: 800; margin: 0.15rem 0; }
+    .prev-balance small { font-size: 0.7rem; opacity: 0.8; }
+
+    .prev-status-tag {
+        display: inline-block;
+        margin-top: 0.75rem;
+        padding: 0.25rem 0.7rem;
+        border-radius: 6px;
+        font-size: 0.78rem; font-weight: 700;
+    }
+    .prev-status-tag.active { background: rgba(16,185,129,0.15); color: #10b981; }
+    .prev-status-tag.inactive { background: rgba(156,163,175,0.2); color: #6b7280; }
+
+    @@media (max-width: 1100px) {
+        .form-grid { grid-template-columns: 1fr; }
+        .preview-card { position: static; }
+    }
+
+    @@media (max-width: 700px) {
+        .grid-2 { grid-template-columns: 1fr; }
+        .opening-types { grid-template-columns: 1fr; }
+    }
+</style>
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    private bool IsEdit => Id.HasValue && Id.Value > 0;
+
+    private bool _isLoading = true;
+    private bool _isSaving = false;
+
+    private PersonalAccountFormDto _form = new()
+    {
+        AccountType = PersonalAccountTypes.Owner,
+        OpeningType = "Credit",
+        IsActive = true,
+        OpeningDate = DateTime.Today
+    };
+
+    private string _currentColor = "#d4af37";
+    private string _currentIcon = "Stars";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var canManage = user.HasClaim("Permission", IsEdit ? "frmPersonalAccounts:Edit" : "frmPersonalAccounts:Add")
+            || user.IsInRole("Admin");
+        if (!canManage) { Navigation.NavigateTo("/cashbox/personal-accounts"); return; }
+
+        if (IsEdit)
+        {
+            var loaded = await AccountService.GetAccountForEditAsync(Id!.Value);
+            if (loaded == null)
+            {
+                Snackbar.Add("الحساب غير موجود", Severity.Error);
+                Navigation.NavigateTo("/cashbox/personal-accounts");
+                return;
+            }
+            _form = loaded;
+        }
+
+        UpdateColors();
+        _isLoading = false;
+    }
+
+    private void SelectType(string type, string color, string icon)
+    {
+        _form.AccountType = type;
+        _currentColor = color;
+        _currentIcon = icon;
+    }
+
+    private void UpdateColors()
+    {
+        _currentColor = PersonalAccountTypes.Colors.GetValueOrDefault(_form.AccountType, "#6b7280");
+        _currentIcon = PersonalAccountTypes.Icons.GetValueOrDefault(_form.AccountType, "PersonOutline");
+    }
+
+    private async Task Save()
+    {
+        if (string.IsNullOrWhiteSpace(_form.AccountName))
+        {
+            Snackbar.Add("اسم الحساب مطلوب", Severity.Warning);
+            return;
+        }
+
+        _isSaving = true;
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var userName = auth.User.Identity?.Name ?? "System";
+
+        var (ok, msg, _) = await AccountService.SaveAccountAsync(_form, userName);
+        _isSaving = false;
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) Navigation.NavigateTo("/cashbox/personal-accounts");
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/cashbox/personal-accounts");
+
+    private string GetIcon(string? iconName) => iconName switch
+    {
+        "Stars" => Icons.Material.Filled.Stars,
+        "Diamond" => Icons.Material.Filled.Diamond,
+        "AccountBalance" => Icons.Material.Filled.AccountBalance,
+        "Person" => Icons.Material.Filled.Person,
+        "PersonOutline" => Icons.Material.Filled.PersonOutline,
+        _ => Icons.Material.Filled.Person
+    };
+}

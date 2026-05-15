@@ -1,0 +1,623 @@
+@page "/cashbox/transactions"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+
+@inject ICashBoxService CashBoxService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<!-- ⭐ LOADING                                                                  -->
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+@if (_isLoading)
+{
+    <div class="loading-screen">
+        <div class="loading-box">
+            <div class="loading-logo"><MudIcon Icon="@Icons.Material.Filled.SwapVerticalCircle" Size="Size.Large" /></div>
+            <h2>حركات الخزينة</h2>
+            <p>جاري تحميل الحركات المالية...</p>
+            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Style="border-radius:10px;height:6px;" />
+        </div>
+    </div>
+}
+else
+{
+<div class="tx-page" dir="rtl">
+
+    <div class="page-bg-deco"><div class="bg-orb bg-orb-1"></div><div class="bg-orb bg-orb-2"></div></div>
+    <div class="top-accent"><div class="accent-shimmer"></div></div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- ⭐ HEADER                                                               -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="tx-header">
+        <div class="txh-bg">
+            <div class="txh-gradient"></div>
+            <div class="txh-orbs"><div class="txh-orb txh-o1"></div><div class="txh-orb txh-o2"></div></div>
+            <div class="txh-grid"></div>
+        </div>
+        <div class="txh-content">
+            <div class="txh-top">
+                <div class="txh-info">
+                    <div class="txh-icon-wrap">
+                        <div class="txh-icon-glow"></div>
+                        <div class="txh-icon"><MudIcon Icon="@Icons.Material.Filled.SwapVerticalCircle" Size="Size.Large" /></div>
+                        <div class="txh-badge"><MudIcon Icon="@Icons.Material.Filled.AutoAwesome" Size="Size.Small" /></div>
+                    </div>
+                    <div class="txh-text">
+                        <h1>حركات الخزينة</h1>
+                        <p>
+                            <MudIcon Icon="@Icons.Material.Filled.Timeline" Size="Size.Small" Class="txh-sub-icon" />
+                            كل الحركات المالية — دخل وصرف
+                        </p>
+                    </div>
+                </div>
+                <div class="txh-actions">
+                    @if (_canAdd)
+                    {
+                        <MudButton Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Add"
+                                   OnClick="@(() => Navigation.NavigateTo("/cashbox/manual"))" Class="txh-btn-primary">
+                            <span class="btn-shine"></span>حركة يدوية
+                        </MudButton>
+                    }
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Dashboard"
+                               OnClick="@(() => Navigation.NavigateTo("/cashbox/dashboard"))" Class="txh-btn-ghost">Dashboard</MudButton>
+                </div>
+            </div>
+
+            <!-- Stats inside header -->
+            <div class="txh-stats">
+                <div class="txs-card txs-count">
+                    <div class="txs-icon-box"><MudIcon Icon="@Icons.Material.Filled.Receipt" Size="Size.Small" /></div>
+                    <div class="txs-data">
+                        <span class="txs-value">@_pagedResult.TotalCount</span>
+                        <span class="txs-label">حركة</span>
+                    </div>
+                </div>
+                <div class="txs-card txs-in">
+                    <div class="txs-icon-box"><MudIcon Icon="@Icons.Material.Filled.TrendingUp" Size="Size.Small" /></div>
+                    <div class="txs-data">
+                        <span class="txs-value">@FormatMoney(_totalIn)</span>
+                        <span class="txs-label">إجمالي دخل</span>
+                    </div>
+                </div>
+                <div class="txs-card txs-out">
+                    <div class="txs-icon-box"><MudIcon Icon="@Icons.Material.Filled.TrendingDown" Size="Size.Small" /></div>
+                    <div class="txs-data">
+                        <span class="txs-value">@FormatMoney(_totalOut)</span>
+                        <span class="txs-label">إجمالي صرف</span>
+                    </div>
+                </div>
+                <div class="txs-card txs-net">
+                    <div class="txs-icon-box">
+                        <MudIcon Icon="@(_totalIn >= _totalOut ? Icons.Material.Filled.AddCircle : Icons.Material.Filled.RemoveCircle)" Size="Size.Small" />
+                    </div>
+                    <div class="txs-data">
+                        <span class="txs-value @(_totalIn >= _totalOut ? "" : "txs-neg")">
+                            @(_totalIn >= _totalOut ? "+" : "")@FormatMoney(_totalIn - _totalOut)
+                        </span>
+                        <span class="txs-label">الصافي</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- ⭐ FILTER BAR                                                           -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="filter-panel">
+        <div class="fp-header" @onclick="() => _filterExpanded = !_filterExpanded">
+            <div class="fp-header-right">
+                <div class="fp-icon-box"><MudIcon Icon="@Icons.Material.Filled.FilterList" Size="Size.Small" /></div>
+                <span class="fp-title">بحث وتصفية</span>
+                @if (HasActiveFilters())
+                {
+                    <span class="fp-active-badge">فلتر نشط</span>
+                }
+            </div>
+            <div class="fp-header-left">
+                @if (HasActiveFilters())
+                {
+                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Close" OnClick="ResetFilters" Class="fp-reset">مسح الكل</MudButton>
+                }
+                <div class="fp-expand @(_filterExpanded ? "expanded" : "")">
+                    <MudIcon Icon="@Icons.Material.Filled.ExpandMore" Size="Size.Small" />
+                </div>
+            </div>
+        </div>
+
+        @if (_filterExpanded)
+        {
+            <div class="fp-content">
+                <div class="fp-grid">
+                    <!-- Search -->
+                    <div class="search-box">
+                        <div class="sb-icon"><MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" /></div>
+                        <input type="text" value="@_searchDisplay" @oninput="OnSearchInput"
+                               placeholder="بحث في الملاحظات أو الوصف..." class="sb-input" />
+                        @if (!string.IsNullOrWhiteSpace(_searchDisplay))
+                        {
+                            <button class="sb-clear" @onclick="ClearSearch"><MudIcon Icon="@Icons.Material.Filled.Close" Size="Size.Small" /></button>
+                        }
+                    </div>
+
+                    <!-- CashBox -->
+                    <MudSelect T="int?" @bind-Value="_filter.CashBoxId" @bind-Value:after="OnFilterChange"
+                               Label="الخزينة" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Clearable="true" AnchorOrigin="Origin.BottomCenter" Class="fp-select">
+                        @foreach (var box in _boxes)
+                        {
+                            <MudSelectItem T="int?" Value="@((int?)box.CashBoxId)">@box.CashBoxName</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <!-- Transaction Type -->
+                    <MudSelect T="string" @bind-Value="_filter.TransactionType" @bind-Value:after="OnFilterChange"
+                               Label="نوع الحركة" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Clearable="true" AnchorOrigin="Origin.BottomCenter" Class="fp-select">
+                        <MudSelectItem T="string" Value="@("قبض")">↑ دخل (قبض)</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("صرف")">↓ صرف</MudSelectItem>
+                    </MudSelect>
+
+                    <!-- Reference Type -->
+                    <MudSelect T="string" @bind-Value="_filter.ReferenceType" @bind-Value:after="OnFilterChange"
+                               Label="المصدر" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Clearable="true" AnchorOrigin="Origin.BottomCenter" Class="fp-select">
+                        @foreach (var rt in CashBoxRefTypes.All)
+                        {
+                            <MudSelectItem T="string" Value="@rt.Key">@rt.Value</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <!-- Dates -->
+                    <MudDatePicker Date="_dateFrom" DateChanged="@(d => { _dateFrom = d; _filter.DateFrom = d; _ = OnFilterChange(); })"
+                                   Label="من تاريخ" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                   Clearable="true" Class="fp-select"
+                                   Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.CalendarMonth" />
+                    <MudDatePicker Date="_dateTo" DateChanged="@(d => { _dateTo = d; _filter.DateTo = d; _ = OnFilterChange(); })"
+                                   Label="إلى تاريخ" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                   Clearable="true" Class="fp-select" />
+                </div>
+            </div>
+        }
+    </div>
+
+    @if (_isTableLoading)
+    {
+        <div class="loading-bar"><MudProgressLinear Color="Color.Primary" Indeterminate="true" /></div>
+    }
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- ⭐ TABLE                                                                -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <div class="table-panel">
+        <div class="tp-header">
+            <div class="tp-header-right">
+                <span class="tp-dot"></span>
+                <span class="tp-title">سجل الحركات</span>
+                <span class="tp-count">@_pagedResult.TotalCount حركة</span>
+            </div>
+        </div>
+
+        <MudTable Items="@_pagedResult.Items" Hover="true" Striped="true" Class="premium-table">
+            <HeaderContent>
+                <MudTh>التاريخ</MudTh>
+                <MudTh>الخزينة</MudTh>
+                <MudTh>الاتجاه</MudTh>
+                <MudTh>المصدر</MudTh>
+                <MudTh>التفاصيل</MudTh>
+                <MudTh>المستخدم</MudTh>
+                <MudTh>المبلغ</MudTh>
+                <MudTh Style="width:60px;"></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <!-- التاريخ -->
+                <MudTd DataLabel="التاريخ">
+                    <div class="td-date">
+                        <span class="td-date-main">@context.TransactionDate.ToString("yyyy/MM/dd")</span>
+                        <span class="td-date-time">@context.TransactionDate.ToString("HH:mm")</span>
+                    </div>
+                </MudTd>
+
+                <!-- الخزينة -->
+                <MudTd DataLabel="الخزينة">
+                    <span class="td-cashbox" style="background:@(context.CashBoxColor)10; color:@context.CashBoxColor; border:1px solid @(context.CashBoxColor)30;">
+                        <span class="td-cb-dot" style="background:@context.CashBoxColor;"></span>
+                        @context.CashBoxName
+                    </span>
+                </MudTd>
+
+                <!-- الاتجاه -->
+                <MudTd DataLabel="الاتجاه">
+                    @if (context.TransactionType == "قبض")
+                    {
+                        <span class="td-direction td-dir-in">
+                            <MudIcon Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small" />
+                            دخل
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="td-direction td-dir-out">
+                            <MudIcon Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small" />
+                            صرف
+                        </span>
+                    }
+                </MudTd>
+
+                <!-- المصدر -->
+                <MudTd DataLabel="المصدر">
+                    <span class="td-ref" style="background:@(context.ReferenceColor)10; color:@context.ReferenceColor; border:1px solid @(context.ReferenceColor)25;">
+                        @context.ReferenceTypeAr
+                    </span>
+                </MudTd>
+
+                <!-- التفاصيل -->
+                <MudTd DataLabel="التفاصيل">
+                    <div class="td-details">
+                        @if (!string.IsNullOrEmpty(context.SourceTitle))
+                        {
+                            <div class="td-detail-title">@context.SourceTitle</div>
+                        }
+                        @if (!string.IsNullOrEmpty(context.PartyName))
+                        {
+                            <div class="td-detail-sub">
+                                <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                                @context.PartyName
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(context.PersonalAccountName))
+                        {
+                            <div class="td-detail-sub">
+                                <MudIcon Icon="@Icons.Material.Filled.AccountBalance" Size="Size.Small" />
+                                @context.PersonalAccountName
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(context.Notes))
+                        {
+                            <div class="td-detail-notes">@context.Notes</div>
+                        }
+                    </div>
+                </MudTd>
+
+                <!-- المستخدم -->
+                <MudTd DataLabel="المستخدم">
+                    <div class="td-user">
+                        <div class="td-user-avatar">
+                            @(context.CreatedBy?.Length >= 2 ? context.CreatedBy.Substring(0, 2) : "؟")
+                        </div>
+                        <span class="td-user-name">@(context.CreatedBy ?? "—")</span>
+                    </div>
+                </MudTd>
+
+                <!-- المبلغ -->
+                <MudTd DataLabel="المبلغ">
+                    <div class="td-amount @(context.TransactionType == "قبض" ? "td-amt-in" : "td-amt-out")">
+                        <span class="td-amt-val">@(context.TransactionType == "قبض" ? "+" : "-")@FormatMoney(context.Amount)</span>
+                        <span class="td-amt-curr">ج.م</span>
+                    </div>
+                </MudTd>
+
+                <!-- الإجراءات -->
+                <MudTd>
+                    @if (!string.IsNullOrEmpty(context.SourceUrl))
+                    {
+                        <MudTooltip Text="عرض المصدر" Placement="Placement.Top">
+                            <button class="td-action-btn td-act-view" @onclick="@(() => Navigation.NavigateTo(context.SourceUrl!))">
+                                <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" />
+                            </button>
+                        </MudTooltip>
+                    }
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+
+        @if (!_pagedResult.Items.Any())
+        {
+            <div class="empty-state">
+                <div class="empty-illustration">
+                    <div class="empty-icon-box"><MudIcon Icon="@Icons.Material.Filled.Inbox" Size="Size.Large" /></div>
+                </div>
+                <h3>لا توجد حركات</h3>
+                <p>لم يتم العثور على حركات بالفلاتر الحالية</p>
+            </div>
+        }
+    </div>
+
+    <!-- Pagination -->
+    @if (_pagedResult.TotalPages > 1)
+    {
+        <div class="pagination-bar">
+            <span class="pag-info">صفحة <strong>@_filter.PageNumber</strong> من <strong>@_pagedResult.TotalPages</strong></span>
+            <MudPagination Count="@_pagedResult.TotalPages" Selected="@_filter.PageNumber"
+                           SelectedChanged="OnPageChanged" Color="Color.Primary"
+                           ShowFirstButton="true" ShowLastButton="true" BoundaryCount="1" MiddleCount="3" />
+        </div>
+    }
+
+    <!-- Footer -->
+    <div class="dash-footer">
+        <div class="footer-inner">
+            <MudIcon Icon="@Icons.Material.Filled.AutoAwesome" Size="Size.Small" Class="footer-icon" />
+            <span>COCOBOLO ERP — حركات الخزينة</span>
+            <span class="footer-premium">Premium</span>
+        </div>
+    </div>
+
+</div>
+}
+
+<style>
+    :root { --gold:#D4A853; --gold-dark:#B8912A; --gold-bg:#FEFBF3; --navy:#1B2A4A; --navy-dark:#0F1D36; --navy-light:#2D4A7A; }
+
+    @@keyframes fadeInUp { from { opacity:0; transform:translateY(25px); } to { opacity:1; transform:translateY(0); } }
+    @@keyframes float { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-18px); } }
+    @@keyframes pulseGlow { 0%,100% { box-shadow:0 0 0 0 rgba(212,168,83,0.4); } 50% { box-shadow:0 0 25px 8px rgba(212,168,83,0.15); } }
+    @@keyframes shimmer { 0% { transform:translateX(-100%); } 100% { transform:translateX(100%); } }
+    @@keyframes bounceSoft { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-4px); } }
+    @@keyframes ping { 75%,100% { transform:scale(2); opacity:0; } }
+
+    /* Loading */
+    .loading-screen { display:flex; align-items:center; justify-content:center; min-height:70vh; }
+    .loading-box { text-align:center; max-width:300px; }
+    .loading-logo { width:76px; height:76px; margin:0 auto 1.25rem; background:linear-gradient(135deg,var(--gold),var(--gold-dark)); border-radius:20px; display:flex; align-items:center; justify-content:center; color:white; animation:bounceSoft 2s ease-in-out infinite; }
+    .loading-box h2 { margin:0 0 0.5rem; font-weight:800; font-size:1.3rem; }
+    .loading-box p { color:var(--mud-palette-text-secondary); margin:0 0 1.5rem; font-size:0.88rem; }
+
+    /* Page */
+    .tx-page { max-width:1800px; margin:0 auto; padding:0 1.25rem 2rem; position:relative; }
+    .page-bg-deco { position:fixed; inset:0; pointer-events:none; z-index:0; }
+    .bg-orb { position:absolute; border-radius:50%; filter:blur(80px); }
+    .bg-orb-1 { width:400px; height:400px; top:-200px; right:-150px; background:radial-gradient(circle,rgba(212,168,83,0.12),transparent 70%); animation:float 12s ease-in-out infinite; }
+    .bg-orb-2 { width:350px; height:350px; bottom:-150px; left:-100px; background:radial-gradient(circle,rgba(59,130,246,0.06),transparent 70%); }
+    .top-accent { height:5px; background:linear-gradient(90deg,var(--gold),var(--gold-dark),var(--gold)); position:relative; overflow:hidden; margin-bottom:1.5rem; border-radius:0 0 10px 10px; }
+    .accent-shimmer { position:absolute; inset:0; background:linear-gradient(90deg,transparent,rgba(255,255,255,0.4),transparent); animation:shimmer 3s ease-in-out infinite; }
+
+    /* ═══════ HEADER ═══════ */
+    .tx-header { position:relative; border-radius:24px; overflow:hidden; margin-bottom:1.5rem; }
+    .txh-bg { position:absolute; inset:0; }
+    .txh-gradient { position:absolute; inset:0; background:linear-gradient(135deg,var(--navy-dark),var(--navy),var(--navy-light)); }
+    .txh-orbs { position:absolute; inset:0; overflow:hidden; }
+    .txh-orb { position:absolute; border-radius:50%; }
+    .txh-o1 { width:350px; height:350px; top:-150px; right:-100px; background:radial-gradient(circle,rgba(212,168,83,0.25),transparent 60%); animation:float 8s ease-in-out infinite; }
+    .txh-o2 { width:200px; height:200px; bottom:-80px; left:20%; background:radial-gradient(circle,rgba(212,168,83,0.12),transparent 60%); }
+    .txh-grid { position:absolute; inset:0; background-image:linear-gradient(rgba(255,255,255,0.02) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.02) 1px,transparent 1px); background-size:40px 40px; }
+    .txh-content { position:relative; z-index:2; padding:2rem 2.5rem; }
+    .txh-top { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1.5rem; margin-bottom:2rem; }
+    .txh-info { display:flex; align-items:center; gap:1.25rem; }
+    .txh-icon-wrap { position:relative; }
+    .txh-icon-glow { position:absolute; inset:-10px; background:var(--gold); border-radius:20px; filter:blur(20px); opacity:0.3; animation:pulseGlow 4s ease-in-out infinite; }
+    .txh-icon { position:relative; width:64px; height:64px; background:rgba(255,255,255,0.1); backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,0.2); border-radius:20px; display:flex; align-items:center; justify-content:center; color:var(--gold); }
+    .txh-icon::before { content:''; position:absolute; inset:0; border-radius:20px; background:linear-gradient(135deg,rgba(255,255,255,0.2),transparent 50%); }
+    .txh-badge { position:absolute; top:-6px; right:-6px; width:24px; height:24px; background:linear-gradient(135deg,var(--gold),var(--gold-dark)); border-radius:50%; display:flex; align-items:center; justify-content:center; color:white; box-shadow:0 4px 12px rgba(212,168,83,0.5); animation:bounceSoft 2s ease-in-out infinite; }
+    .txh-badge .mud-icon-root { font-size:12px !important; }
+    .txh-text h1 { margin:0; font-size:1.75rem; font-weight:900; color:white; }
+    .txh-text p { margin:0.5rem 0 0; font-size:0.9rem; color:rgba(255,255,255,0.6); display:flex; align-items:center; gap:0.4rem; }
+    .txh-sub-icon { color:#10b981 !important; font-size:16px !important; }
+    .txh-actions { display:flex; gap:0.75rem; flex-wrap:wrap; }
+    .txh-btn-primary { position:relative; overflow:hidden; background:linear-gradient(135deg,var(--gold),var(--gold-dark)) !important; color:white !important; font-weight:700 !important; padding:0.875rem 1.75rem !important; border-radius:14px !important; box-shadow:0 6px 20px rgba(212,168,83,0.35) !important; transition:all 0.3s !important; }
+    .txh-btn-primary:hover { transform:translateY(-2px); }
+    .btn-shine { position:absolute; top:0; left:-100%; width:100%; height:100%; background:linear-gradient(90deg,transparent,rgba(255,255,255,0.25),transparent); transition:left 0.6s; }
+    .txh-btn-primary:hover .btn-shine { left:100%; }
+    .txh-btn-ghost { background:rgba(255,255,255,0.08) !important; border-color:rgba(255,255,255,0.2) !important; color:white !important; font-weight:600 !important; border-radius:14px !important; }
+
+    /* Stats (inside header) */
+    .txh-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; }
+    .txs-card { display:flex; align-items:center; gap:0.75rem; padding:1rem 1.25rem; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1); border-radius:14px; transition:all 0.3s; }
+    .txs-card:hover { background:rgba(255,255,255,0.1); transform:translateY(-2px); }
+    .txs-icon-box { width:42px; height:42px; border-radius:12px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .txs-count .txs-icon-box { background:rgba(212,168,83,0.2); color:var(--gold); }
+    .txs-in .txs-icon-box { background:rgba(16,185,129,0.2); color:#10b981; }
+    .txs-out .txs-icon-box { background:rgba(239,68,68,0.2); color:#ef4444; }
+    .txs-net .txs-icon-box { background:rgba(59,130,246,0.2); color:#3b82f6; }
+    .txs-data { flex:1; }
+    .txs-value { display:block; font-size:1.3rem; font-weight:900; color:white; line-height:1; }
+    .txs-neg { color:#ef4444 !important; }
+    .txs-label { display:block; font-size:0.72rem; color:rgba(255,255,255,0.6); font-weight:600; margin-top:0.15rem; }
+
+    /* ═══════ FILTER ═══════ */
+    .filter-panel { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:20px; margin-bottom:1.25rem; overflow:hidden; }
+    .fp-header { display:flex; align-items:center; justify-content:space-between; padding:1rem 1.5rem; cursor:pointer; transition:background 0.2s; }
+    .fp-header:hover { background:var(--mud-palette-background-gray); }
+    .fp-header-right { display:flex; align-items:center; gap:0.75rem; }
+    .fp-icon-box { width:36px; height:36px; background:var(--mud-palette-background-gray); border-radius:10px; display:flex; align-items:center; justify-content:center; color:var(--mud-palette-text-secondary); transition:all 0.3s; }
+    .fp-header:hover .fp-icon-box { background:var(--gold); color:white; }
+    .fp-title { font-size:0.9rem; font-weight:700; color:var(--mud-palette-text-primary); }
+    .fp-active-badge { background:var(--gold); color:white; font-size:0.68rem; font-weight:700; padding:0.25rem 0.6rem; border-radius:12px; }
+    .fp-header-left { display:flex; align-items:center; gap:0.5rem; }
+    .fp-reset { font-size:0.75rem !important; }
+    .fp-expand { transition:transform 0.3s; }
+    .fp-expand.expanded { transform:rotate(180deg); }
+    .fp-content { padding:0 1.5rem 1.25rem; border-top:1px solid var(--mud-palette-divider); }
+    .fp-grid { display:grid; grid-template-columns:2fr repeat(5,1fr); gap:0.875rem; padding-top:1rem; }
+    .search-box { display:flex; align-items:center; background:var(--mud-palette-background); border:1px solid var(--mud-palette-divider); border-radius:12px; padding:0 0.75rem; height:42px; transition:all 0.3s; }
+    .search-box:focus-within { border-color:var(--gold); box-shadow:0 0 0 3px rgba(212,168,83,0.1); }
+    .sb-icon { color:var(--mud-palette-text-secondary); margin-left:0.5rem; }
+    .sb-input { flex:1; background:transparent; border:none; outline:none; color:var(--mud-palette-text-primary); font-size:0.875rem; padding:0 0.5rem; font-family:inherit; }
+    .sb-input::placeholder { color:var(--mud-palette-text-secondary); }
+    .sb-clear { width:24px; height:24px; border-radius:6px; display:flex; align-items:center; justify-content:center; background:var(--mud-palette-background-gray); border:none; cursor:pointer; color:var(--mud-palette-text-secondary); transition:all 0.2s; }
+    .sb-clear:hover { background:#fef2f2; color:#ef4444; }
+    ::deep .fp-select .mud-input-outlined-border { border-radius:12px !important; }
+    .loading-bar { margin-bottom:1rem; border-radius:10px; overflow:hidden; }
+
+    /* ═══════ TABLE ═══════ */
+    .table-panel { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:20px; overflow:hidden; margin-bottom:1.5rem; transition:box-shadow 0.3s; }
+    .table-panel:hover { box-shadow:0 8px 30px rgba(0,0,0,0.05); }
+    .tp-header { padding:1rem 1.5rem; border-bottom:1px solid var(--mud-palette-divider); display:flex; align-items:center; justify-content:space-between; background:linear-gradient(90deg,var(--mud-palette-background-gray),var(--mud-palette-surface)); }
+    .tp-header-right { display:flex; align-items:center; gap:0.5rem; }
+    .tp-dot { width:10px; height:10px; border-radius:50%; background:linear-gradient(135deg,var(--gold),var(--gold-dark)); position:relative; }
+    .tp-dot::after { content:''; position:absolute; inset:0; border-radius:50%; background:var(--gold); animation:ping 2s ease-in-out infinite; }
+    .tp-title { font-size:0.95rem; font-weight:700; color:var(--mud-palette-text-primary); }
+    .tp-count { font-size:0.72rem; color:var(--mud-palette-text-secondary); background:var(--mud-palette-background-gray); padding:0.25rem 0.6rem; border-radius:12px; font-weight:600; }
+
+    /* Table rows */
+    ::deep .premium-table .mud-table-head th { background:var(--mud-palette-background-gray) !important; font-size:0.82rem !important; font-weight:700 !important; color:var(--mud-palette-text-secondary) !important; padding:1rem !important; }
+    ::deep .premium-table .mud-table-body tr { transition:all 0.3s; }
+    ::deep .premium-table .mud-table-body tr:hover { background:var(--gold-bg) !important; }
+    ::deep .premium-table .mud-table-body td { padding:1rem !important; vertical-align:middle !important; }
+
+    /* Table cells */
+    .td-date { display:flex; flex-direction:column; }
+    .td-date-main { font-size:0.88rem; font-weight:600; color:var(--mud-palette-text-primary); }
+    .td-date-time { font-size:0.68rem; color:var(--mud-palette-text-secondary); }
+
+    .td-cashbox { display:inline-flex; align-items:center; gap:0.4rem; padding:0.35rem 0.7rem; border-radius:10px; font-size:0.82rem; font-weight:700; }
+    .td-cb-dot { width:8px; height:8px; border-radius:50%; }
+
+    .td-direction { display:inline-flex; align-items:center; gap:0.3rem; padding:0.35rem 0.75rem; border-radius:20px; font-size:0.82rem; font-weight:700; }
+    .td-direction .mud-icon-root { font-size:16px !important; }
+    .td-dir-in { background:rgba(16,185,129,0.1); color:#10b981; border:1px solid rgba(16,185,129,0.2); }
+    .td-dir-out { background:rgba(239,68,68,0.1); color:#ef4444; border:1px solid rgba(239,68,68,0.2); }
+
+    .td-ref { display:inline-block; padding:0.3rem 0.6rem; border-radius:8px; font-size:0.78rem; font-weight:700; }
+
+    .td-details { display:flex; flex-direction:column; gap:0.2rem; max-width:280px; }
+    .td-detail-title { font-weight:700; font-size:0.88rem; color:var(--mud-palette-text-primary); }
+    .td-detail-sub { display:flex; align-items:center; gap:0.3rem; font-size:0.78rem; color:var(--mud-palette-text-secondary); }
+    .td-detail-sub .mud-icon-root { font-size:14px !important; color:var(--gold) !important; }
+    .td-detail-notes { font-size:0.72rem; color:var(--mud-palette-text-secondary); font-style:italic; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+    .td-user { display:flex; align-items:center; gap:0.5rem; }
+    .td-user-avatar { width:30px; height:30px; border-radius:8px; background:linear-gradient(135deg,var(--gold),var(--gold-dark)); color:white; display:flex; align-items:center; justify-content:center; font-size:0.65rem; font-weight:800; flex-shrink:0; }
+    .td-user-name { font-size:0.82rem; color:var(--mud-palette-text-secondary); font-weight:600; }
+
+    .td-amount { display:flex; align-items:baseline; gap:0.25rem; }
+    .td-amt-val { font-size:1.05rem; font-weight:900; }
+    .td-amt-curr { font-size:0.65rem; font-weight:600; color:var(--mud-palette-text-disabled); background:var(--mud-palette-background-gray); padding:0.1rem 0.3rem; border-radius:4px; }
+    .td-amt-in { color:#10b981; }
+    .td-amt-out { color:#ef4444; }
+
+    .td-action-btn { width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:transparent; border:1px solid var(--mud-palette-divider); cursor:pointer; transition:all 0.2s; color:#3b82f6; }
+    .td-action-btn:hover { background:rgba(59,130,246,0.08); border-color:#3b82f6; transform:scale(1.1); }
+
+    /* Empty */
+    .empty-state { text-align:center; padding:4rem 2rem; }
+    .empty-illustration { width:100px; height:100px; margin:0 auto 1.25rem; }
+    .empty-icon-box { width:100%; height:100%; background:var(--mud-palette-background-gray); border-radius:24px; display:flex; align-items:center; justify-content:center; color:var(--mud-palette-text-disabled); }
+    .empty-state h3 { font-size:1.15rem; font-weight:700; margin:0 0 0.5rem; color:var(--mud-palette-text-primary); }
+    .empty-state p { color:var(--mud-palette-text-secondary); margin:0; font-size:0.9rem; }
+
+    /* Pagination */
+    .pagination-bar { display:flex; align-items:center; justify-content:center; gap:1.5rem; margin-bottom:1.5rem; flex-wrap:wrap; }
+    .pag-info { font-size:0.82rem; color:var(--mud-palette-text-secondary); }
+    .pag-info strong { color:var(--mud-palette-text-primary); }
+
+    /* Footer */
+    .dash-footer { text-align:center; padding-bottom:1.5rem; }
+    .footer-inner { display:inline-flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:var(--mud-palette-text-secondary); background:var(--mud-palette-surface); padding:0.6rem 1.25rem; border-radius:20px; border:1px solid var(--mud-palette-divider); }
+    .footer-icon { color:var(--gold) !important; }
+    .footer-premium { color:var(--gold); font-weight:700; }
+
+    /* Responsive */
+    @@media (max-width:1200px) { .txh-stats { grid-template-columns:repeat(2,1fr); } .fp-grid { grid-template-columns:1fr 1fr; } .search-box { grid-column:span 2; } }
+    @@media (max-width:768px) { .txh-stats { grid-template-columns:1fr; } .txh-top { flex-direction:column; align-items:stretch; } .txh-info { justify-content:center; } .txh-actions { justify-content:center; } .fp-grid { grid-template-columns:1fr; } .search-box { grid-column:span 1; } .pagination-bar { flex-direction:column; } }
+</style>
+
+@code {
+    [SupplyParameterFromQuery(Name = "cashBoxId")]
+    public int? PreCashBoxId { get; set; }
+
+    private bool _isLoading = true;
+    private bool _isTableLoading = false;
+    private bool _filterExpanded = true;
+    private string _searchDisplay = "";
+
+    private CashBoxTransactionFilterDto _filter = new();
+    private PagedResult<CashBoxTransactionDto> _pagedResult = new();
+    private List<CashBoxListDto> _boxes = new();
+    private DateTime? _dateFrom, _dateTo;
+    private decimal _totalIn = 0, _totalOut = 0;
+
+    private bool _canAdd = false;
+    private System.Timers.Timer? _searchTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var canView = user.HasClaim("Permission", "frmCashBoxTransactions:View") || user.IsInRole("Admin");
+        if (!canView) { Navigation.NavigateTo("/"); return; }
+
+        _canAdd = user.HasClaim("Permission", "frmCashBoxManual:Add") || user.IsInRole("Admin");
+        _boxes = await CashBoxService.GetCashBoxesAsync();
+
+        if (PreCashBoxId.HasValue)
+            _filter.CashBoxId = PreCashBoxId;
+
+        await LoadData();
+        _isLoading = false;
+    }
+
+    private async Task LoadData()
+    {
+        _isTableLoading = true;
+        StateHasChanged();
+        _pagedResult = await CashBoxService.GetTransactionsAsync(_filter);
+        _totalIn = _pagedResult.Items.Where(t => t.TransactionType == "قبض").Sum(t => t.Amount);
+        _totalOut = _pagedResult.Items.Where(t => t.TransactionType == "صرف").Sum(t => t.Amount);
+        _isTableLoading = false;
+        StateHasChanged();
+    }
+
+    // Search with Arabic normalize + debounce
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? "";
+        _searchDisplay = value;
+        _filter.SearchText = value.NormalizeArabic();
+
+        _searchTimer?.Stop();
+        _searchTimer?.Dispose();
+        _searchTimer = new System.Timers.Timer(400);
+        _searchTimer.Elapsed += async (_, _) =>
+        {
+            _searchTimer?.Stop();
+            await InvokeAsync(async () => { _filter.PageNumber = 1; await LoadData(); StateHasChanged(); });
+        };
+        _searchTimer.AutoReset = false;
+        _searchTimer.Start();
+    }
+
+    private async Task ClearSearch()
+    {
+        _searchDisplay = "";
+        _filter.SearchText = "";
+        _filter.PageNumber = 1;
+        await LoadData();
+    }
+
+    private bool HasActiveFilters() =>
+        !string.IsNullOrWhiteSpace(_searchDisplay) ||
+        _filter.CashBoxId.HasValue ||
+        !string.IsNullOrEmpty(_filter.TransactionType) ||
+        !string.IsNullOrEmpty(_filter.ReferenceType) ||
+        _dateFrom.HasValue || _dateTo.HasValue;
+
+    private async Task OnFilterChange()
+    {
+        _filter.PageNumber = 1;
+        await LoadData();
+    }
+
+    private async Task OnPageChanged(int p)
+    {
+        _filter.PageNumber = p;
+        await LoadData();
+    }
+
+    private async Task ResetFilters()
+    {
+        _searchDisplay = "";
+        _filter = new();
+        _dateFrom = null; _dateTo = null;
+        if (PreCashBoxId.HasValue) _filter.CashBoxId = PreCashBoxId;
+        await LoadData();
+    }
+
+    private string FormatMoney(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+}

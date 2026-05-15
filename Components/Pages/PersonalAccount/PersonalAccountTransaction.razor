@@ -1,0 +1,466 @@
+@page "/cashbox/personal-accounts/{Id:int}/transaction"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+
+@inject IPersonalAccountService AccountService
+@inject ICashBoxService CashBoxService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else if (_account == null)
+{
+    <MudAlert Severity="Severity.Error">الحساب غير موجود</MudAlert>
+}
+else
+{
+    var opColor = _form.OperationType == "LoanIn" ? "#3b82f6" : "#8b5cf6";
+    var opIcon = _form.OperationType == "LoanIn" ? "TrendingUp" : "TrendingDown";
+
+    <div class="trans-page" dir="rtl">
+
+        <div class="form-header" style="background: linear-gradient(135deg, @opColor, @(opColor)cc);">
+            <div class="header-left">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowForward"
+                               Color="Color.Inherit" OnClick="GoBack" />
+                <div>
+                    <h1>
+                        <MudIcon Icon="@GetIcon(opIcon)" />
+                        @(_form.OperationType == "LoanIn" ? "قرض دخل" : "تسديد قرض")
+                    </h1>
+                    <p>الحساب: @_account.AccountName</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <div class="main-col">
+
+                <!-- Operation Type -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.SwapHoriz" />
+                        <h3>نوع العملية</h3>
+                    </div>
+                    <div class="op-types">
+                        <button type="button"
+                                class="op-btn @(_form.OperationType == "LoanIn" ? "selected" : "")"
+                                style="@(_form.OperationType == "LoanIn" ? "border-color:#3b82f6; background:#3b82f615;" : "")"
+                                @onclick="@(() => _form.OperationType = "LoanIn")">
+                            <div class="op-btn-icon" style="background:#3b82f6;">
+                                <MudIcon Icon="@Icons.Material.Filled.TrendingUp" />
+                            </div>
+                            <div>
+                                <strong>قرض دخل</strong>
+                                <small>أخذ قرض من الشخص</small>
+                            </div>
+                        </button>
+
+                        <button type="button"
+                                class="op-btn @(_form.OperationType == "LoanRepayment" ? "selected" : "")"
+                                style="@(_form.OperationType == "LoanRepayment" ? "border-color:#8b5cf6; background:#8b5cf615;" : "")"
+                                @onclick="@(() => _form.OperationType = "LoanRepayment")">
+                            <div class="op-btn-icon" style="background:#8b5cf6;">
+                                <MudIcon Icon="@Icons.Material.Filled.TrendingDown" />
+                            </div>
+                            <div>
+                                <strong>تسديد قرض</strong>
+                                <small>سداد للشخص</small>
+                            </div>
+                        </button>
+                    </div>
+
+                    @if (_form.OperationType == "LoanIn")
+                    {
+                        <MudAlert Severity="Severity.Info" Class="mt-3" Dense="true">
+                            <small>
+                                <strong>قرض دخل:</strong> سيزيد رصيد الخزينة + يصبح الشخص دائناً (الشركة عليها له)
+                            </small>
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Warning" Class="mt-3" Dense="true">
+                            <small>
+                                <strong>تسديد قرض:</strong> سينقص رصيد الخزينة + ينقص رصيد الدائن (تسديد جزء من القرض)
+                            </small>
+                        </MudAlert>
+                    }
+                </MudPaper>
+
+                <!-- Details -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Edit" />
+                        <h3>تفاصيل العملية</h3>
+                    </div>
+
+                    <div class="grid-2">
+                        <MudDatePicker Date="_form.TransactionDate"
+                                       DateChanged="@(d => _form.TransactionDate = d ?? DateTime.Now)"
+                                       Label="التاريخ" Variant="Variant.Outlined" />
+
+                        <MudNumericField @bind-Value="_form.Amount"
+                                         Label="المبلغ *"
+                                         Variant="Variant.Outlined"
+                                         Min="0.01m" Step="100m"
+                                         Adornment="Adornment.End" AdornmentText="ج" />
+                    </div>
+
+                    <MudSelect T="int?" @bind-Value="_form.CashBoxId"
+                               Label="الخزينة *"
+                               Variant="Variant.Outlined" Class="mt-3">
+                        @foreach (var box in _boxes)
+                        {
+                            <MudSelectItem T="int?" Value="@((int?)box.CashBoxId)">
+                                @box.CashBoxName (@box.CurrentBalance.ToString("N2", CultureInfo.InvariantCulture) ج)
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <MudTextField @bind-Value="_form.Notes"
+                                  Label="ملاحظات"
+                                  Variant="Variant.Outlined" Lines="2" Class="mt-3" />
+                </MudPaper>
+            </div>
+
+            <!-- Sidebar -->
+            <div class="sidebar-col">
+                <MudPaper Class="summary-card" Elevation="0">
+                    <h3>ملخص الحساب</h3>
+
+                    <!-- معلومات الحساب -->
+                    @{
+                        var color = _account.AccountTypeColor ?? "#6b7280";
+                        var balColor = _account.CurrentBalance > 0 ? "#ef4444"
+                            : _account.CurrentBalance < 0 ? "#10b981" : "#94a3b8";
+                    }
+                    <div class="acc-summary" style="border-color: @(color)55;">
+                        <div class="acc-sum-icon" style="background: @(color)22; color: @color;">
+                            <MudIcon Icon="@GetIcon(_account.AccountTypeIcon)" />
+                        </div>
+                        <div class="acc-sum-info">
+                            <strong>@_account.AccountName</strong>
+                            <small>@_account.AccountTypeAr</small>
+                        </div>
+                    </div>
+
+                    <!-- الرصيد الحالي -->
+                    <div class="cur-bal-box" style="background: @(balColor)0d; border-color: @(balColor)44;">
+                        <span class="cb-label">الرصيد قبل العملية</span>
+                        <strong class="cb-value" style="color: @balColor;">
+                            @FormatMoney(Math.Abs(_account.CurrentBalance)) ج
+                        </strong>
+                        <small class="cb-status">@_account.BalanceStatus</small>
+                    </div>
+
+                    <!-- الرصيد المتوقع بعد العملية -->
+                    @if (_form.Amount > 0)
+                    {
+                        var afterBalance = _account.CurrentBalance;
+                        if (_form.OperationType == "LoanIn") afterBalance += _form.Amount;
+                        else afterBalance -= _form.Amount;
+
+                        var afterColor = afterBalance > 0 ? "#ef4444" : afterBalance < 0 ? "#10b981" : "#94a3b8";
+                        var afterStatus = afterBalance > 0 ? "له على الشركة"
+                            : afterBalance < 0 ? "عليه للشركة" : "مسوى";
+
+                        <div class="after-bal-box" style="background: @(afterColor)0d; border-color: @(afterColor)44;">
+                            <span class="cb-label">الرصيد بعد العملية</span>
+                            <strong class="cb-value" style="color: @afterColor;">
+                                @FormatMoney(Math.Abs(afterBalance)) ج
+                            </strong>
+                            <small class="cb-status">@afterStatus</small>
+                        </div>
+                    }
+
+                    <!-- الخزينة -->
+                    @{ var selectedBox = _boxes.FirstOrDefault(b => b.CashBoxId == _form.CashBoxId); }
+                    @if (selectedBox != null)
+                    {
+                        <div class="box-info-row">
+                            <span>الخزينة:</span>
+                            <strong style="color: @selectedBox.Color;">@selectedBox.CashBoxName</strong>
+                        </div>
+                        <div class="box-info-row">
+                            <span>الرصيد الحالي للخزينة:</span>
+                            <strong>@selectedBox.CurrentBalance.ToString("N2", CultureInfo.InvariantCulture) ج</strong>
+                        </div>
+
+                        @if (_form.OperationType == "LoanRepayment" && _form.Amount > 0
+                             && selectedBox.CurrentBalance < _form.Amount)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">
+                                ⚠️ رصيد الخزينة غير كافي
+                            </MudAlert>
+                        }
+                    }
+
+                    <!-- Actions -->
+                    <div class="actions-row">
+                        <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                                   FullWidth="true" OnClick="GoBack">
+                            إلغاء
+                        </MudButton>
+                        <MudButton Variant="Variant.Filled" FullWidth="true" Size="Size.Large"
+                                   OnClick="Save" Disabled="@(_isSaving || !CanSave)"
+                                   StartIcon="@Icons.Material.Filled.Save"
+                                   Style="@($"background: {opColor}; color: white;")">
+                            @if (_isSaving)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                            }
+                            تأكيد
+                        </MudButton>
+                    </div>
+                </MudPaper>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .trans-page { padding: 1rem; max-width: 1400px; margin: 0 auto; direction: rtl; }
+    .loading-container { display: flex; align-items: center; justify-content: center; min-height: 60vh; }
+
+    .form-header {
+        border-radius: 16px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;
+        display: flex; align-items: center; gap: 1rem; color: white;
+        transition: background 0.4s ease;
+    }
+    .header-left { display: flex; align-items: center; gap: 1rem; }
+    .header-left h1 {
+        margin: 0; font-size: 1.5rem; font-weight: 800;
+        display: flex; align-items: center; gap: 0.5rem;
+    }
+    .header-left p { margin: 0.25rem 0 0; font-size: 0.85rem; }
+
+    .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 360px;
+        gap: 1.25rem;
+    }
+
+    .main-col, .sidebar-col {
+        display: flex; flex-direction: column; gap: 1rem;
+    }
+
+    .form-section {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.25rem;
+    }
+
+    .section-header {
+        display: flex; align-items: center; gap: 0.5rem;
+        margin-bottom: 1rem; padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+    .section-header h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+
+    .op-types {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+    }
+
+    .op-btn {
+        background: var(--mud-palette-background);
+        border: 2px solid var(--mud-palette-divider);
+        border-radius: 12px;
+        padding: 1rem;
+        display: flex; align-items: center; gap: 0.75rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-family: inherit; text-align: right;
+    }
+
+    .op-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+
+    .op-btn.selected { font-weight: 700; }
+
+    .op-btn-icon {
+        width: 48px; height: 48px;
+        border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0; color: white;
+    }
+
+    .op-btn-icon ::deep .mud-icon-root { font-size: 24px !important; color: white !important; }
+
+    .op-btn div:not(.op-btn-icon) { display: flex; flex-direction: column; }
+    .op-btn strong { font-size: 0.95rem; }
+    .op-btn small { font-size: 0.75rem; color: var(--mud-palette-text-secondary); }
+
+    .summary-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.25rem;
+        position: sticky; top: 1rem;
+    }
+    .summary-card h3 {
+        margin: 0 0 1rem 0; font-size: 1rem; font-weight: 700;
+        padding-bottom: 0.5rem; border-bottom: 2px solid var(--gold);
+    }
+
+    .acc-summary {
+        display: flex; gap: 0.75rem; align-items: center;
+        padding: 0.75rem;
+        border: 1px solid;
+        border-radius: 10px;
+        margin-bottom: 0.75rem;
+    }
+
+    .acc-sum-icon {
+        width: 40px; height: 40px;
+        border-radius: 10px;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .acc-sum-icon ::deep .mud-icon-root { font-size: 24px !important; }
+
+    .acc-sum-info { display: flex; flex-direction: column; }
+    .acc-sum-info strong { font-size: 0.95rem; }
+    .acc-sum-info small { font-size: 0.78rem; color: var(--mud-palette-text-secondary); }
+
+    .cur-bal-box, .after-bal-box {
+        text-align: center;
+        padding: 1rem;
+        border: 1.5px dashed;
+        border-radius: 10px;
+        margin-bottom: 0.75rem;
+    }
+
+    .cb-label {
+        display: block;
+        font-size: 0.75rem;
+        color: var(--mud-palette-text-secondary);
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+
+    .cb-value {
+        display: block;
+        font-size: 1.5rem;
+        font-weight: 900;
+    }
+
+    .cb-status {
+        display: block;
+        font-size: 0.75rem;
+        font-weight: 700;
+        margin-top: 0.25rem;
+    }
+
+    .after-bal-box {
+        background: var(--gold-subtle) !important;
+    }
+
+    .box-info-row {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.4rem 0;
+        font-size: 0.85rem;
+    }
+    .box-info-row span { color: var(--mud-palette-text-secondary); }
+
+    .actions-row {
+        display: flex; gap: 0.5rem;
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--mud-palette-divider);
+    }
+
+    @@media (max-width: 1100px) {
+        .form-grid { grid-template-columns: 1fr; }
+        .summary-card { position: static; }
+    }
+    @@media (max-width: 700px) {
+        .grid-2 { grid-template-columns: 1fr; }
+        .op-types { grid-template-columns: 1fr; }
+    }
+</style>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private bool _isLoading = true;
+    private bool _isSaving = false;
+
+    private PersonalAccountListDto? _account;
+    private List<CashBoxListDto> _boxes = new();
+    private PersonalAccountTransactionFormDto _form = new()
+    {
+        OperationType = "LoanIn",
+        TransactionDate = DateTime.Now
+    };
+
+    private bool CanSave =>
+        _form.Amount > 0 && _form.CashBoxId.HasValue && _account != null && _account.IsActive;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var canManage = user.HasClaim("Permission", "frmPersonalAccounts:Add") || user.IsInRole("Admin");
+        if (!canManage) { Navigation.NavigateTo("/cashbox/personal-accounts"); return; }
+
+        _form.PersonalAccountId = Id;
+        _account = await AccountService.GetAccountByIdAsync(Id);
+        if (_account == null)
+        {
+            Snackbar.Add("الحساب غير موجود", Severity.Error);
+            Navigation.NavigateTo("/cashbox/personal-accounts");
+            return;
+        }
+
+        _boxes = await CashBoxService.GetCashBoxesAsync(activeOnly: true);
+        var defaultBox = _boxes.FirstOrDefault(b => b.IsDefault) ?? _boxes.FirstOrDefault();
+        if (defaultBox != null)
+            _form.CashBoxId = defaultBox.CashBoxId;
+
+        _isLoading = false;
+    }
+
+    private async Task Save()
+    {
+        if (!CanSave) return;
+
+        _isSaving = true;
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var userName = auth.User.Identity?.Name ?? "System";
+
+        var (ok, msg, _) = await AccountService.CreateLoanTransactionAsync(_form, userName);
+        _isSaving = false;
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) Navigation.NavigateTo($"/cashbox/personal-accounts/{Id}/statement");
+    }
+
+    private void GoBack() => Navigation.NavigateTo($"/cashbox/personal-accounts/{Id}/statement");
+
+    private string GetIcon(string? iconName) => iconName switch
+    {
+        "Stars" => Icons.Material.Filled.Stars,
+        "Diamond" => Icons.Material.Filled.Diamond,
+        "AccountBalance" => Icons.Material.Filled.AccountBalance,
+        "Person" => Icons.Material.Filled.Person,
+        "PersonOutline" => Icons.Material.Filled.PersonOutline,
+        "TrendingUp" => Icons.Material.Filled.TrendingUp,
+        "TrendingDown" => Icons.Material.Filled.TrendingDown,
+        _ => Icons.Material.Filled.Person
+    };
+
+    private string FormatMoney(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+}

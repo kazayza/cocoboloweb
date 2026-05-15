@@ -1,4 +1,5 @@
-﻿using System;
+﻿
+using System;
 using System.Collections.Generic;
 
 namespace COCOBOLOERPNEW.Models;
@@ -28,6 +29,10 @@ public partial class Expense
     public DateTime? CreatedAt { get; set; }
 
     public string? Torecipient { get; set; }
+
+    // ========== الحقول الجديدة ==========
+    public int? AdvanceParentExpenseId { get; set; }    // ID الأصل لو ده شهر فرعي
+    public int? AdvanceMonthIndex { get; set; }          // 0 للأصل، 1, 2, 3 للأشهر
 
     public virtual ExpenseGroup ExpenseGroup { get; set; } = null!;
 }

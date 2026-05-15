@@ -55,6 +55,10 @@ public class PartyFormDto
     public string? NationalId { get; set; }
     public string? FloorNumber { get; set; }
     public string? DataDone { get; set; }
+    public string? CreatedBy { get; set; }
+public DateTime? CreatedAt { get; set; }
+public string? LastUpdatedBy { get; set; }
+public DateTime? LastUpdatedAt { get; set; }
 
     // New Fields
     public string? CustomerStage { get; set; }

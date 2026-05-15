@@ -73,6 +73,9 @@ builder.Services.AddScoped<PartyService>();
 builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IAdditionalChargeService, AdditionalChargeService>();
+builder.Services.AddScoped<ICashBoxService, CashBoxService>();
+builder.Services.AddScoped<IPersonalAccountService, PersonalAccountService>();
+builder.Services.AddScoped<IExpenseService, ExpenseService>();
 
 var app = builder.Build();
 

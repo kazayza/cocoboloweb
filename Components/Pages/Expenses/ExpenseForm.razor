@@ -1,0 +1,500 @@
+@page "/expenses/new"
+@page "/expenses/{Id:int}/edit"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+
+@inject IExpenseService ExpenseService
+@inject ICashBoxService CashBoxService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else
+{
+    <div class="exp-form-page" dir="rtl">
+
+        <div class="form-header">
+            <div class="header-left">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowForward"
+                               Color="Color.Inherit" OnClick="GoBack" />
+                <div>
+                    <h1>
+                        <MudIcon Icon="@Icons.Material.Filled.MoneyOff" />
+                        @(IsEdit ? "تعديل مصروف" : "تسجيل مصروف جديد")
+                    </h1>
+                    <p>@(IsEdit ? "تعديل بيانات المصروف" : "إضافة مصروف وخصمه من الخزينة تلقائياً")</p>
+                </div>
+            </div>
+            <div class="header-right">
+                <MudButton Variant="Variant.Outlined" Color="Color.Inherit" OnClick="GoBack"
+                           StartIcon="@Icons.Material.Filled.Close">إلغاء</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           OnClick="Save" Disabled="@_isSaving"
+                           StartIcon="@Icons.Material.Filled.Save"
+                           Class="save-btn">
+                    @if (_isSaving)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                    }
+                    حفظ
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <div class="main-col">
+
+                <!-- معلومات أساسية -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Description" />
+                        <h3>معلومات المصروف</h3>
+                    </div>
+                    <div class="grid-2">
+                        <MudTextField @bind-Value="_form.ExpenseName"
+                                      Label="اسم المصروف *"
+                                      Variant="Variant.Outlined" />
+                        <MudDatePicker Date="_form.ExpenseDate"
+                                       DateChanged="@(d => _form.ExpenseDate = d ?? DateTime.Today)"
+                                       Label="تاريخ المصروف *" Variant="Variant.Outlined" />
+
+                        <MudSelect T="int?" @bind-Value="_form.ExpenseGroupId"
+                                   Label="المجموعة *" Variant="Variant.Outlined">
+                            @foreach (var g in _groups)
+                            {
+                                <MudSelectItem T="int?" Value="@((int?)g.ExpenseGroupId)">
+                                    @(string.IsNullOrEmpty(g.ParentGroupName)
+                                        ? g.ExpenseGroupName
+                                        : $"{g.ParentGroupName} > {g.ExpenseGroupName}")
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudNumericField @bind-Value="_form.Amount"
+                                         Label="المبلغ *"
+                                         Variant="Variant.Outlined"
+                                         Min="0.01m" Step="100m"
+                                         Adornment="Adornment.End" AdornmentText="ج" />
+                    </div>
+
+                    <div class="grid-2 mt-3">
+                        <MudSelect T="int?" @bind-Value="_form.CashBoxId"
+                                   Label="الخزينة *" Variant="Variant.Outlined">
+                            @foreach (var box in _boxes)
+                            {
+                                <MudSelectItem T="int?" Value="@((int?)box.CashBoxId)">
+                                    @box.CashBoxName (@box.CurrentBalance.ToString("N2", CultureInfo.InvariantCulture) ج)
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudTextField @bind-Value="_form.Recipient"
+                                      Label="المستلم"
+                                      Variant="Variant.Outlined" />
+                    </div>
+
+                    <MudTextField @bind-Value="_form.Notes"
+                                  Label="ملاحظات"
+                                  Variant="Variant.Outlined" Lines="2" Class="mt-3" />
+                </MudPaper>
+
+                <!-- المصروف المقدم -->
+                @if (!IsEdit)
+                {
+                    <MudPaper Class="form-section advance-section" Elevation="0">
+                        <div class="section-header">
+                            <MudIcon Icon="@Icons.Material.Filled.Schedule" Style="color:#d97706;" />
+                            <h3>المصروف المقدم</h3>
+                        </div>
+
+                        <div class="advance-toggle">
+                            <div class="toggle-info">
+                                <strong>هل هو مصروف مقدم؟</strong>
+                                <small>يُدفع مرة واحدة لكن يُحتسب على عدة أشهر (مثل: إيجار 90,000 على 3 شهور)</small>
+                            </div>
+                            <MudSwitch @bind-Value="_form.IsAdvance" Color="Color.Warning" />
+                        </div>
+
+                        @if (_form.IsAdvance)
+                        {
+                            <div class="advance-config">
+                                <MudNumericField @bind-Value="_form.AdvanceMonths"
+                                                 Label="عدد الشهور *"
+                                                 Variant="Variant.Outlined"
+                                                 Min="1" Max="60" Step="1"
+                                                 Adornment="Adornment.End" AdornmentText="شهر" />
+
+                                @if (_form.Amount > 0 && _form.AdvanceMonths > 1)
+                                {
+                                    var monthly = Math.Round(_form.Amount / _form.AdvanceMonths.Value, 2);
+                                    <div class="advance-preview">
+                                        <h4>📅 جدول التقسيط:</h4>
+                                        <div class="months-grid">
+                                            @for (int i = 1; i <= _form.AdvanceMonths.Value; i++)
+                                            {
+                                                var mDate = _form.ExpenseDate.AddMonths(i - 1);
+                                                <div class="month-card">
+                                                    <span class="m-num">شهر @i</span>
+                                                    <strong class="m-date">@mDate.ToString("yyyy/MM/dd")</strong>
+                                                    <span class="m-amount">@monthly.ToString("N2", CultureInfo.InvariantCulture) ج</span>
+                                                </div>
+                                            }
+                                        </div>
+                                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+                                            <small>
+                                                💡 سيتم خصم <strong>@_form.Amount.ToString("N2", CultureInfo.InvariantCulture) ج</strong> من الخزينة مرة واحدة في
+                                                <strong>@_form.ExpenseDate.ToString("yyyy/MM/dd")</strong>،
+                                                وتسجيل <strong>@_form.AdvanceMonths شهور</strong> في المصروفات.
+                                            </small>
+                                        </MudAlert>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </MudPaper>
+                }
+            </div>
+
+            <!-- Sidebar -->
+            <div class="sidebar-col">
+                <MudPaper Class="summary-card" Elevation="0">
+                    <h3>ملخص المصروف</h3>
+
+                    <div class="sum-row">
+                        <span>المصروف:</span>
+                        <strong>@(string.IsNullOrEmpty(_form.ExpenseName) ? "—" : _form.ExpenseName)</strong>
+                    </div>
+                    <div class="sum-row">
+                        <span>التاريخ:</span>
+                        <strong>@_form.ExpenseDate.ToString("yyyy/MM/dd")</strong>
+                    </div>
+
+                    @{ var selectedGroup = _groups.FirstOrDefault(g => g.ExpenseGroupId == _form.ExpenseGroupId); }
+                    @if (selectedGroup != null)
+                    {
+                        <div class="sum-row">
+                            <span>المجموعة:</span>
+                            <strong>@selectedGroup.ExpenseGroupName</strong>
+                        </div>
+                    }
+
+                    @{ var selectedBox = _boxes.FirstOrDefault(b => b.CashBoxId == _form.CashBoxId); }
+                    @if (selectedBox != null)
+                    {
+                        <div class="sum-row">
+                            <span>الخزينة:</span>
+                            <strong style="color: @selectedBox.Color;">@selectedBox.CashBoxName</strong>
+                        </div>
+                        <div class="sum-row">
+                            <span>الرصيد الحالي:</span>
+                            <strong>@selectedBox.CurrentBalance.ToString("N2", CultureInfo.InvariantCulture) ج</strong>
+                        </div>
+                    }
+
+                    <div class="sum-divider"></div>
+
+                    <div class="amount-box">
+                        <span>إجمالي المصروف</span>
+                        <strong class="amount-val">@_form.Amount.ToString("N2", CultureInfo.InvariantCulture) ج</strong>
+                    </div>
+
+                    @if (_form.IsAdvance && _form.AdvanceMonths > 1 && _form.Amount > 0)
+                    {
+                        var monthly = Math.Round(_form.Amount / _form.AdvanceMonths.Value, 2);
+                        <div class="advance-info">
+                            <small>
+                                💼 يتم تقسيمه على <strong>@_form.AdvanceMonths شهور</strong>
+                                بمعدل <strong>@monthly.ToString("N2", CultureInfo.InvariantCulture) ج</strong> شهرياً
+                            </small>
+                        </div>
+                    }
+
+                    @if (selectedBox != null && _form.Amount > 0)
+                    {
+                        var afterBalance = selectedBox.CurrentBalance - _form.Amount;
+                        <div class="after-bal" style="background: @(afterBalance < 0 ? "rgba(239,68,68,0.08)" : "rgba(16,185,129,0.08)"); border-color: @(afterBalance < 0 ? "rgba(239,68,68,0.3)" : "rgba(16,185,129,0.3)");">
+                            <span>الرصيد بعد الخصم:</span>
+                            <strong style="color: @(afterBalance < 0 ? "#ef4444" : "#10b981");">
+                                @afterBalance.ToString("N2", CultureInfo.InvariantCulture) ج
+                            </strong>
+                        </div>
+
+                        @if (afterBalance < 0)
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">
+                                ⚠️ الرصيد غير كافي
+                            </MudAlert>
+                        }
+                    }
+
+                    <div class="actions-row">
+                        <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                                   FullWidth="true" OnClick="GoBack">
+                            إلغاء
+                        </MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                                   FullWidth="true" Size="Size.Large"
+                                   OnClick="Save" Disabled="@(_isSaving || !CanSave)"
+                                   StartIcon="@Icons.Material.Filled.Save">
+                            @if (_isSaving)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                            }
+                            تأكيد
+                        </MudButton>
+                    </div>
+                </MudPaper>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .exp-form-page { padding: 1rem; max-width: 1400px; margin: 0 auto; direction: rtl; }
+    .loading-container { display: flex; align-items: center; justify-content: center; min-height: 60vh; }
+
+    .form-header {
+        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        border-radius: 16px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;
+        display: flex; align-items: center; justify-content: space-between;
+        flex-wrap: wrap; gap: 1rem; color: white;
+    }
+    .header-left { display: flex; align-items: center; gap: 1rem; }
+    .header-left h1 {
+        margin: 0; font-size: 1.5rem; font-weight: 800;
+        display: flex; align-items: center; gap: 0.5rem;
+    }
+    .header-left p { margin: 0.25rem 0 0; font-size: 0.85rem; }
+    .header-right { display: flex; gap: 0.5rem; }
+
+    .save-btn {
+        background: white !important;
+        color: #d97706 !important;
+        font-weight: 700 !important;
+    }
+
+    .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 360px;
+        gap: 1.25rem;
+    }
+
+    .main-col, .sidebar-col {
+        display: flex; flex-direction: column; gap: 1rem;
+    }
+
+    .form-section {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.25rem;
+    }
+
+    .section-header {
+        display: flex; align-items: center; gap: 0.5rem;
+        margin-bottom: 1rem; padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+    .section-header h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+
+    .advance-section {
+        border: 2px dashed rgba(245,158,11,0.5);
+        background: rgba(245,158,11,0.03);
+    }
+
+    .advance-toggle {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 1rem;
+        background: var(--mud-palette-background);
+        border-radius: 12px;
+    }
+
+    .toggle-info { display: flex; flex-direction: column; gap: 0.2rem; }
+    .toggle-info strong { font-size: 1rem; }
+    .toggle-info small { font-size: 0.78rem; color: var(--mud-palette-text-secondary); }
+
+    .advance-config {
+        margin-top: 1rem;
+        padding: 1rem;
+        background: var(--mud-palette-background);
+        border-radius: 12px;
+    }
+
+    .advance-preview { margin-top: 1rem; }
+    .advance-preview h4 { margin: 0 0 0.5rem 0; font-size: 0.95rem; font-weight: 700; }
+
+    .months-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 0.5rem;
+    }
+
+    .month-card {
+        background: white;
+        border: 1px solid #fbd38d;
+        border-radius: 8px;
+        padding: 0.75rem;
+        display: flex; flex-direction: column; gap: 0.2rem;
+        text-align: center;
+    }
+
+    .m-num {
+        font-size: 0.7rem;
+        font-weight: 700;
+        color: #d97706;
+    }
+    .m-date {
+        font-size: 0.78rem;
+        color: var(--mud-palette-text-primary);
+    }
+    .m-amount {
+        font-size: 0.95rem;
+        font-weight: 800;
+        color: #d97706;
+    }
+
+    .summary-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.25rem;
+        position: sticky; top: 1rem;
+    }
+    .summary-card h3 {
+        margin: 0 0 1rem 0; font-size: 1rem; font-weight: 700;
+        padding-bottom: 0.5rem; border-bottom: 2px solid #f59e0b;
+    }
+
+    .sum-row {
+        display: flex; justify-content: space-between;
+        padding: 0.4rem 0;
+        font-size: 0.88rem;
+    }
+    .sum-row span { color: var(--mud-palette-text-secondary); }
+
+    .sum-divider { height: 1px; background: var(--mud-palette-divider); margin: 0.5rem 0; }
+
+    .amount-box {
+        background: rgba(239,68,68,0.08);
+        border: 1px solid rgba(239,68,68,0.2);
+        border-radius: 10px;
+        padding: 0.75rem 1rem;
+        display: flex; flex-direction: column;
+        text-align: center;
+        margin-bottom: 0.75rem;
+    }
+    .amount-box span { font-size: 0.78rem; color: #555; font-weight: 600; }
+    .amount-val { font-size: 1.6rem; font-weight: 900; color: #ef4444; }
+
+    .advance-info {
+        padding: 0.6rem;
+        background: rgba(245,158,11,0.1);
+        border-radius: 8px;
+        font-size: 0.8rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .after-bal {
+        padding: 0.75rem;
+        border: 1px solid;
+        border-radius: 10px;
+        display: flex; justify-content: space-between;
+        font-size: 0.95rem;
+    }
+
+    .actions-row {
+        display: flex; gap: 0.5rem;
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--mud-palette-divider);
+    }
+
+    @@media (max-width: 1100px) {
+        .form-grid { grid-template-columns: 1fr; }
+        .summary-card { position: static; }
+    }
+    @@media (max-width: 700px) {
+        .grid-2 { grid-template-columns: 1fr; }
+    }
+</style>
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    private bool IsEdit => Id.HasValue && Id.Value > 0;
+
+    private bool _isLoading = true;
+    private bool _isSaving = false;
+
+    private ExpenseFormDto _form = new()
+    {
+        ExpenseDate = DateTime.Today,
+        AdvanceMonths = 1
+    };
+
+    private List<ExpenseGroupDto> _groups = new();
+    private List<CashBoxListDto> _boxes = new();
+
+    private bool CanSave =>
+        !string.IsNullOrWhiteSpace(_form.ExpenseName) &&
+        _form.Amount > 0 &&
+        _form.ExpenseGroupId.HasValue &&
+        _form.CashBoxId.HasValue &&
+        (!_form.IsAdvance || (_form.AdvanceMonths.HasValue && _form.AdvanceMonths.Value >= 1));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var canManage = user.HasClaim("Permission", IsEdit ? "frmExpenses:Edit" : "frmExpenses:Add")
+            || user.IsInRole("Admin");
+        if (!canManage) { Navigation.NavigateTo("/expenses"); return; }
+
+        _groups = await ExpenseService.GetExpenseGroupsAsync();
+        _boxes = await CashBoxService.GetCashBoxesAsync(activeOnly: true);
+
+        if (IsEdit)
+        {
+            var loaded = await ExpenseService.GetExpenseForEditAsync(Id!.Value);
+            if (loaded == null)
+            {
+                Snackbar.Add("المصروف غير موجود", Severity.Error);
+                Navigation.NavigateTo("/expenses");
+                return;
+            }
+            _form = loaded;
+        }
+        else
+        {
+            // Default cashbox
+            var defaultBox = _boxes.FirstOrDefault(b => b.IsDefault) ?? _boxes.FirstOrDefault();
+            if (defaultBox != null) _form.CashBoxId = defaultBox.CashBoxId;
+        }
+
+        _isLoading = false;
+    }
+
+    private async Task Save()
+    {
+        if (!CanSave) return;
+
+        _isSaving = true;
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var userName = auth.User.Identity?.Name ?? "System";
+
+        var (ok, msg, _) = await ExpenseService.SaveExpenseAsync(_form, userName);
+        _isSaving = false;
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) Navigation.NavigateTo("/expenses");
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/expenses");
+}

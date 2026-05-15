@@ -167,8 +167,8 @@ private readonly IAuditService _audit;
     {
         CashBoxId = cashBoxId,
         ReferenceId = charge.ChargeId,
-        ReferenceType = "AdditionalCharge",
-        TransactionType = "In",
+        ReferenceType = "Charge",
+        TransactionType = "قبض",
         Amount = dto.ChargeAmount,
         TransactionDate = DateTime.Now,
         Notes = cashNote,
@@ -205,7 +205,7 @@ private readonly IAuditService _audit;
 
     // ⭐ تحديث حركة الخزينة
     var cashTrans = await _db.CashboxTransactions
-        .FirstOrDefaultAsync(ct => ct.ReferenceId == chargeId && ct.ReferenceType == "AdditionalCharge");
+        .FirstOrDefaultAsync(ct => ct.ReferenceId == chargeId && ct.ReferenceType == "Charge");
 
     if (cashTrans != null)
     {
@@ -238,7 +238,7 @@ private readonly IAuditService _audit;
 
     // ⭐ حذف حركة الخزينة المرتبطة
     var cashTrans = await _db.CashboxTransactions
-        .Where(ct => ct.ReferenceId == chargeId && ct.ReferenceType == "AdditionalCharge")
+        .Where(ct => ct.ReferenceId == chargeId && ct.ReferenceType == "Charge")
         .ToListAsync();
     _db.CashboxTransactions.RemoveRange(cashTrans);
 
@@ -310,7 +310,7 @@ private readonly IAuditService _audit;
 
     // ⭐ الفلوس فضلت في الخزينة - بس نحدّث الملاحظة
     var cashTrans = await _db.CashboxTransactions
-        .FirstOrDefaultAsync(ct => ct.ReferenceId == chargeId && ct.ReferenceType == "AdditionalCharge");
+        .FirstOrDefaultAsync(ct => ct.ReferenceId == chargeId && ct.ReferenceType == "Charge");
 
     if (cashTrans != null)
     {

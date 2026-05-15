@@ -71,6 +71,7 @@ public partial class db24804Context : DbContext
     public virtual DbSet<PartyContact> PartyContacts { get; set; }
 
     public virtual DbSet<PartyType> PartyTypes { get; set; }
+    public virtual DbSet<PersonalAccount> PersonalAccounts { get; set; }
 
     public virtual DbSet<Payment> Payments { get; set; }
 
@@ -163,6 +164,26 @@ public partial class db24804Context : DbContext
             entity.Property(e => e.LastUpdatedAt).HasColumnType("datetime");
             entity.Property(e => e.LastUpdatedBy).HasMaxLength(50);
         });
+        modelBuilder.Entity<PersonalAccount>(entity =>
+{
+    entity.HasKey(e => e.PersonalAccountId);
+    entity.Property(e => e.AccountName).IsRequired().HasMaxLength(200);
+    entity.Property(e => e.AccountType).IsRequired().HasMaxLength(50);
+    entity.Property(e => e.Phone).HasMaxLength(20);
+    entity.Property(e => e.Email).HasMaxLength(100);
+    entity.Property(e => e.NationalId).HasMaxLength(50);
+    entity.Property(e => e.OpeningBalance)
+          .HasColumnType("decimal(18, 2)")
+          .HasDefaultValue(0m);
+    entity.Property(e => e.OpeningType)
+          .IsRequired()
+          .HasMaxLength(20)
+          .HasDefaultValue("Credit");
+    entity.Property(e => e.IsActive).HasDefaultValue(true);
+    entity.Property(e => e.CreatedBy).HasMaxLength(100);
+    entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETDATE()");
+    entity.Property(e => e.LastUpdatedBy).HasMaxLength(100);
+});
 
         modelBuilder.Entity<AdditionalCharge>(entity =>
         {
@@ -269,6 +290,14 @@ public partial class db24804Context : DbContext
             entity.Property(e => e.Description).HasMaxLength(255);
             entity.Property(e => e.LastUpdatedAt).HasColumnType("datetime");
             entity.Property(e => e.LastUpdatedBy).HasMaxLength(50);
+             entity.Property(e => e.OpeningBalance)
+          .HasColumnType("decimal(18, 2)")
+          .HasDefaultValue(0m);
+    entity.Property(e => e.IsActive).HasDefaultValue(true);
+    entity.Property(e => e.IsDefault).HasDefaultValue(false);
+    entity.Property(e => e.CashBoxKind).HasMaxLength(50);
+    entity.Property(e => e.Icon).HasMaxLength(50);
+    entity.Property(e => e.Color).HasMaxLength(20);
         });
 
         modelBuilder.Entity<CashboxTransaction>(entity =>
@@ -697,6 +726,8 @@ public partial class db24804Context : DbContext
                 .HasForeignKey(d => d.ExpenseGroupId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK__Expenses__Expens__0B5CAFEA");
+             entity.Property(e => e.AdvanceParentExpenseId);
+            entity.Property(e => e.AdvanceMonthIndex);
         });
 
         modelBuilder.Entity<ExpenseGroup>(entity =>
