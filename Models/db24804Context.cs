@@ -142,6 +142,8 @@ public partial class db24804Context : DbContext
     public virtual DbSet<VwSalesOpportunity> VwSalesOpportunities { get; set; }
 
     public virtual DbSet<Warehouse> Warehouses { get; set; }
+    public virtual DbSet<EmployeeLoan>     EmployeeLoans     { get; set; }
+    public virtual DbSet<LoanInstallment>  LoanInstallments  { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {

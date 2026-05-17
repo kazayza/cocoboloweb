@@ -1,0 +1,213 @@
+@page "/hr/loans"
+@attribute [Authorize]
+@using Microsoft.AspNetCore.Authorization
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+
+@inject IEmployeeLoanService LoanService
+@inject ICashBoxService       CashBoxService
+@inject ISnackbar             Snackbar
+@inject IDialogService        DialogService
+
+<PageTitle>سلف الموظفين</PageTitle>
+
+<!-- ── Stats Cards ── -->
+@if (_stats is not null)
+{
+    <MudGrid Class="mb-4">
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4 rounded-xl" Style="background:#10b981;color:white">
+                <MudText Typo="Typo.caption">سلف نشطة</MudText>
+                <MudText Typo="Typo.h4"><b>@_stats.ActiveLoansCount</b></MudText>
+                <MudText Typo="Typo.caption">لـ @_stats.EmployeesWithLoans موظف</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4 rounded-xl" Style="background:#f59e0b;color:white">
+                <MudText Typo="Typo.caption">إجمالي المتبقي</MudText>
+                <MudText Typo="Typo.h5"><b>@_stats.TotalRemainingAmount.ToString("N2") جـ</b></MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4 rounded-xl" Style="background:#3b82f6;color:white">
+                <MudText Typo="Typo.caption">خصومات الشهر الحالي</MudText>
+                <MudText Typo="Typo.h5"><b>@_stats.ThisMonthDeductions.ToString("N2") جـ</b></MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4 rounded-xl" Style="background:#8b5cf6;color:white">
+                <MudText Typo="Typo.caption">انتهت هذا الشهر</MudText>
+                <MudText Typo="Typo.h4"><b>@_stats.CompletedThisMonth</b></MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+<!-- ── Toolbar ── -->
+<MudPaper Class="pa-3 mb-3 rounded-xl d-flex align-center gap-3 flex-wrap">
+    <MudText Typo="Typo.h6" Class="mr-2">💰 سلف الموظفين</MudText>
+    <MudSpacer />
+    <MudTextField @bind-Value="_filter.SearchText" Placeholder="بحث باسم الموظف..."
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                  Immediate="true" OnKeyUp="OnSearchKeyUp"
+                  Style="max-width:220px" Variant="Variant.Outlined" Margin="Margin.Dense" />
+    <MudSelect @bind-Value="_filter.Status" Placeholder="الحالة"
+               Style="max-width:140px" Variant="Variant.Outlined" Margin="Margin.Dense"
+               Clearable="true" T="string">
+        <MudSelectItem Value="@("Active")">نشطة</MudSelectItem>
+        <MudSelectItem Value="@("Completed")">منتهية</MudSelectItem>
+        <MudSelectItem Value="@("Cancelled")">ملغية</MudSelectItem>
+    </MudSelect>
+    <MudButton Variant="Variant.Filled" Color="Color.Success"
+               StartIcon="@Icons.Material.Filled.Add"
+               OnClick="OpenAddDialog">سلفة جديدة</MudButton>
+</MudPaper>
+
+<!-- ── Table ── -->
+<MudPaper Class="rounded-xl overflow-hidden">
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate Color="Color.Primary" />
+    }
+
+    <MudTable Items="_loans" Dense Hover Striped
+              Loading="_loading" LoadingProgressColor="Color.Primary">
+        <HeaderContent>
+            <MudTh>الموظف</MudTh>
+            <MudTh>قيمة السلفة</MudTh>
+            <MudTh>القسط الشهري</MudTh>
+            <MudTh>الأقساط</MudTh>
+            <MudTh>المتبقي</MudTh>
+            <MudTh>بداية الخصم</MudTh>
+            <MudTh>الحالة</MudTh>
+            <MudTh>إجراءات</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>
+                <MudText><b>@context.EmployeeName</b></MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Department</MudText>
+            </MudTd>
+            <MudTd><b>@context.LoanAmount.ToString("N2")</b> جـ</MudTd>
+            <MudTd>@context.MonthlyInstallment.ToString("N2") جـ</MudTd>
+            <MudTd>
+                <MudChip Size="Size.Small" Color="Color.Default">
+                    @context.PaidInstallments / @context.TotalInstallments
+                </MudChip>
+            </MudTd>
+            <MudTd>
+                <MudText Color="@(context.RemainingAmount > 0 ? Color.Error : Color.Success)">
+                    <b>@context.RemainingAmount.ToString("N2")</b> جـ
+                </MudText>
+            </MudTd>
+            <MudTd>@context.StartDeductionMonth</MudTd>
+            <MudTd>
+                <MudChip Size="Size.Small"
+                         Style="@($"background:{context.StatusColor};color:white")">
+                    @context.StatusAr
+                </MudChip>
+            </MudTd>
+            <MudTd>
+                <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small"
+                               Color="Color.Primary" Title="التفاصيل"
+                               OnClick="() => OpenDetailDialog(context.LoanId)" />
+                @if (context.Status == "Active")
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Cancel" Size="Size.Small"
+                                   Color="Color.Error" Title="إلغاء"
+                                   OnClick="() => ConfirmCancel(context)" />
+                }
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Class="pa-4" Color="Color.Secondary">لا توجد سلف</MudText>
+        </NoRecordsContent>
+    </MudTable>
+
+    <!-- Pagination -->
+    <div class="d-flex justify-center pa-3">
+        <MudPagination Count="_totalPages" @bind-Selected="_filter.PageNumber"
+                       SelectedChanged="LoadData" />
+    </div>
+</MudPaper>
+
+@code {
+    // ── State ───────────────────────────────────────────────
+    private List<LoanListDto> _loans    = new();
+    private LoanStatsDto?     _stats;
+    private LoanFilterDto     _filter   = new();
+    private bool              _loading  = true;
+    private int               _total;
+    private int               _totalPages => (int)Math.Ceiling((double)_total / _filter.PageSize);
+
+    // ── Init ────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+        => await LoadData();
+
+    private async Task LoadData()
+    {
+        _loading = true;
+        try
+        {
+            var result = await LoanService.GetLoansAsync(_filter);
+            _loans  = result.Items;
+            _total  = result.TotalCount;
+            _stats  = await LoanService.GetStatsAsync();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" || e.Key == "Backspace")
+        {
+            _filter.PageNumber = 1;
+            await LoadData();
+        }
+    }
+
+    // ── Dialog - إضافة سلفة ─────────────────────────────────
+    private async Task OpenAddDialog()
+    {
+        var parameters = new DialogParameters
+        {
+            ["OnSaved"] = EventCallback.Factory.Create(this, LoadData)
+        };
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            CloseButton = true
+        };
+        await DialogService.ShowAsync<LoanFormDialog>("إضافة سلفة جديدة", parameters, options);
+    }
+
+    // ── Dialog - تفاصيل سلفة ────────────────────────────────
+    private async Task OpenDetailDialog(int loanId)
+    {
+        var parameters = new DialogParameters { ["LoanId"] = loanId };
+        var options    = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<LoanDetailDialog>("تفاصيل السلفة", parameters, options);
+    }
+
+    // ── إلغاء سلفة ──────────────────────────────────────────
+    private async Task ConfirmCancel(LoanListDto loan)
+    {
+        bool? confirmed = await DialogService.ShowMessageBox(
+            "تأكيد الإلغاء",
+            $"هل تريد إلغاء سلفة {loan.EmployeeName} بقيمة {loan.LoanAmount:N2} جـ؟",
+            yesText: "إلغاء السلفة", cancelText: "تراجع");
+
+        if (confirmed == true)
+        {
+            // TODO: اجيب اسم المستخدم من AuthState
+            var result = await LoanService.CancelLoanAsync(loan.LoanId, "current_user");
+            if (result.Success)
+            {
+                Snackbar.Add(result.Message, Severity.Success);
+                await LoadData();
+            }
+            else
+                Snackbar.Add(result.Message, Severity.Error);
+        }
+    }
+}
