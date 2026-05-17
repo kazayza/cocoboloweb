@@ -144,8 +144,9 @@ public partial class db24804Context : DbContext
     public virtual DbSet<Warehouse> Warehouses { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-#warning To protect potentially sensitive information in your connection string, you should move it out of source code. You can avoid scaffolding the connection string by using the Name= syntax to read it from configuration - see https://go.microsoft.com/fwlink/?linkid=2131148. For more guidance on storing connection strings, see https://go.microsoft.com/fwlink/?LinkId=723263.
-        => optionsBuilder.UseSqlServer("Server=db24804.public.databaseasp.net;Database=db24804;User Id=db24804;Password=3Aj+Lz-9x2K?;Encrypt=False;TrustServerCertificate=True;MultipleActiveResultSets=True;Connection Timeout=60;");
+    {
+        // ✅ Connection String بتتحمل من appsettings.json فقط عبر DI
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -1662,6 +1663,7 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.IsActive).HasDefaultValue(true);
             entity.Property(e => e.LastLogin).HasColumnType("datetime");
             entity.Property(e => e.Password).HasMaxLength(100);
+            entity.Property(e => e.HashedPassword).HasMaxLength(500);
             entity.Property(e => e.Role)
                 .HasMaxLength(50)
                 .HasDefaultValue("User");

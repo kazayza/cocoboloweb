@@ -231,6 +231,10 @@ StageColor = p.Stage != null ? p.Stage.StageColor : null,
             ContactSourceId = party.ContactSourceId,
             LastContactDate = party.LastContactDate,
             Rating = party.Rating,
+            CreatedBy = party.CreatedBy,
+            CreatedAt = party.CreatedAt,
+            LastUpdatedBy = party.LastUpdatedBy,
+            LastUpdatedAt = party.LastUpdatedAt,
             Contacts = party.PartyContacts.Select(c => new PartyContactDto
             {
                 ContactId = c.ContactId,
