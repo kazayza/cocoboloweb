@@ -17,6 +17,10 @@ builder.Services.AddRazorComponents()
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddMudServices();
 
+// ✅ Memory Cache
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<CacheService>();
+
 builder.Services.AddDbContext<db24804Context>(options =>
     options.UseSqlServer(
         builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -44,7 +48,6 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
                     context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                     return Task.CompletedTask;
                 }
-
                 context.Response.Redirect(context.RedirectUri);
                 return Task.CompletedTask;
             },
@@ -55,7 +58,6 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
                     context.Response.StatusCode = StatusCodes.Status403Forbidden;
                     return Task.CompletedTask;
                 }
-
                 context.Response.Redirect(context.RedirectUri);
                 return Task.CompletedTask;
             }
@@ -77,7 +79,7 @@ builder.Services.AddScoped<ICashBoxService, CashBoxService>();
 builder.Services.AddScoped<IPersonalAccountService, PersonalAccountService>();
 builder.Services.AddScoped<IExpenseService, ExpenseService>();
 builder.Services.AddScoped<IFinancialReportsService, FinancialReportsService>();
-builder.Services.AddScoped<ICashFlowService, CashFlowService>(); 
+builder.Services.AddScoped<ICashFlowService, CashFlowService>();
 builder.Services.AddScoped<IFinancialDashboardService, FinancialDashboardService>();
 
 var app = builder.Build();
@@ -98,6 +100,9 @@ app.UseAntiforgery();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
+// ============================================================
+// 🔐 Login — تشفير تلقائي للباسوردات القديمة
+// ============================================================
 app.MapPost("/auth/login", async (
     [FromBody] LoginRequest request,
     HttpContext http,
@@ -110,7 +115,6 @@ app.MapPost("/auth/login", async (
         return Results.BadRequest("يرجى إدخال اسم المستخدم وكلمة المرور.");
 
     var user = await db.Users
-        .AsNoTracking()
         .SingleOrDefaultAsync(u => u.Username == username);
 
     if (user is null)
@@ -119,11 +123,32 @@ app.MapPost("/auth/login", async (
     if (user.IsActive == false)
         return Results.BadRequest("الحساب غير مفعل.");
 
-    // ملاحظة مهمة:
-    // هذا يحافظ على التوافق مع قاعدة البيانات الحالية عندك.
-    // لاحقًا لازم نستبدله بـ Password Hashing حقيقي.
-    if (!VerifyPassword(user.Password, password))
+    // ✅ نظام التحقق مع التوافق التلقائي
+    bool passwordValid;
+    bool needsMigration = false;
+
+    if (!string.IsNullOrEmpty(user.HashedPassword) && PasswordHasher.IsBcryptHash(user.HashedPassword))
+    {
+        // 🟢 مشفر — تحقق من Hash
+        passwordValid = PasswordHasher.VerifyPassword(password, user.HashedPassword);
+    }
+    else
+    {
+        // 🟡 قديم — تحقق من Plain Text
+        passwordValid = string.Equals(user.Password, password, StringComparison.Ordinal);
+        needsMigration = passwordValid;
+    }
+
+    if (!passwordValid)
         return Results.BadRequest("كلمة المرور غير صحيحة.");
+
+    // ✅ تشفير تلقائي
+    if (needsMigration)
+    {
+        user.HashedPassword = PasswordHasher.HashPassword(password);
+    }
+    user.LastLogin = DateTime.Now;
+    await db.SaveChangesAsync();
 
     var claims = new List<Claim>
     {
@@ -137,35 +162,18 @@ app.MapPost("/auth/login", async (
         join p in db.Permissions.AsNoTracking()
             on up.PermissionId equals p.PermissionId
         where up.UserId == user.UserId
-        select new
-        {
-            p.FormName,
-            up.CanView,
-            up.CanAdd,
-            up.CanEdit,
-            up.CanDelete
-        }
+        select new { p.FormName, up.CanView, up.CanAdd, up.CanEdit, up.CanDelete }
     ).ToListAsync();
 
     foreach (var item in permissions)
     {
-        if (item.CanView)
-            claims.Add(new Claim("Permission", $"{item.FormName}:View"));
-
-        if (item.CanAdd)
-            claims.Add(new Claim("Permission", $"{item.FormName}:Add"));
-
-        if (item.CanEdit)
-            claims.Add(new Claim("Permission", $"{item.FormName}:Edit"));
-
-        if (item.CanDelete)
-            claims.Add(new Claim("Permission", $"{item.FormName}:Delete"));
+        if (item.CanView)  claims.Add(new Claim("Permission", $"{item.FormName}:View"));
+        if (item.CanAdd)   claims.Add(new Claim("Permission", $"{item.FormName}:Add"));
+        if (item.CanEdit)  claims.Add(new Claim("Permission", $"{item.FormName}:Edit"));
+        if (item.CanDelete) claims.Add(new Claim("Permission", $"{item.FormName}:Delete"));
     }
 
-    var identity = new ClaimsIdentity(
-        claims,
-        CookieAuthenticationDefaults.AuthenticationScheme);
-
+    var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
     var principal = new ClaimsPrincipal(identity);
 
     await http.SignInAsync(
@@ -189,34 +197,22 @@ app.MapPost("/auth/logout", async (HttpContext http) =>
 
 app.MapGet("/auth/current-user", (ClaimsPrincipal user) =>
 {
-    var result = new
+    return Results.Ok(new
     {
         Username = user.Identity?.Name,
         Role = user.FindFirst(ClaimTypes.Role)?.Value,
         UserId = user.FindFirst("UserId")?.Value,
-        Permissions = user.Claims
-            .Where(c => c.Type == "Permission")
-            .Select(c => c.Value)
-            .ToList()
-    };
-
-    return Results.Ok(result);
+        Permissions = user.Claims.Where(c => c.Type == "Permission").Select(c => c.Value).ToList()
+    });
 }).RequireAuthorization();
 
 app.Run();
 
 static bool IsApiRequest(HttpRequest request)
 {
-    if (request.Path.StartsWithSegments("/auth"))
-        return true;
-
+    if (request.Path.StartsWithSegments("/auth")) return true;
     return request.Headers.Accept.Any(h =>
         h?.Contains("application/json", StringComparison.OrdinalIgnoreCase) == true);
-}
-
-static bool VerifyPassword(string? storedPassword, string? incomingPassword)
-{
-    return string.Equals(storedPassword, incomingPassword, StringComparison.Ordinal);
 }
 
 public sealed record LoginRequest(string Username, string Password);

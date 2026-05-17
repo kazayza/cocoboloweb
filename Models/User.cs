@@ -10,6 +10,7 @@ public partial class User
     public string Username { get; set; } = null!;
 
     public string Password { get; set; } = null!;
+    public string? HashedPassword { get; set; }
 
     public string FullName { get; set; } = null!;
 

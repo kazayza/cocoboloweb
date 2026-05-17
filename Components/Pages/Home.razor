@@ -1,7 +1,414 @@
 ﻿@page "/"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Models
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
 
-<PageTitle>Home</PageTitle>
+@inject IProductService ProductService
+@inject ICashBoxService CashBoxService
+@inject NotificationService NotificationService
+@inject AuthenticationStateProvider AuthProvider
+@inject db24804Context Db
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
 
-<h1>Hello, world!</h1>
+<PageTitle>لوحة التحكم — COCOBOLO ERP</PageTitle>
 
-Welcome to your new app.
+@if (_isLoading)
+{
+    <div style="display:flex;flex-direction:column;align-items:center;padding:5rem 2rem;gap:1rem;">
+        <AppLoading Message="جاري تحميل لوحة التحكم..." />
+    </div>
+}
+else
+{
+    <div class="home-page" dir="rtl">
+
+        <!-- ═══ HERO ═══ -->
+        <div class="hero-section">
+            <div class="hero-bg"><div class="hero-gradient"></div></div>
+            <div class="hero-content">
+                <div class="hero-left">
+                    <div class="hero-avatar"><span>@_avatarLetter</span></div>
+                    <div>
+                        <h1>مرحباً، @_currentUserName 👋</h1>
+                        <p>@_greetingMessage — @DateTime.Now.ToString("dddd، dd MMMM yyyy")</p>
+                    </div>
+                </div>
+                <div class="hero-actions">
+                    @if (HasPermission("frm_PartiesInvoices", "Add"))
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Receipt"
+                                   OnClick="@(() => Navigation.NavigateTo("/sales/invoices/new"))">
+                            فاتورة جديدة
+                        </MudButton>
+                    }
+                    @if (HasPermission("frm_ProductList", "Add"))
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                                   StartIcon="@Icons.Material.Filled.AddBox"
+                                   Style="border-color:rgba(255,255,255,0.3);color:white;"
+                                   OnClick="@(() => Navigation.NavigateTo("/products/new"))">
+                            إضافة منتج
+                        </MudButton>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ KPI CARDS ═══ -->
+        <div class="kpi-grid">
+            <div class="kpi-card" @onclick="@(() => Navigation.NavigateTo("/products"))">
+                <div class="kpi-icon-wrap" style="background:rgba(99,102,241,0.1);color:#6366f1;">
+                    <MudIcon Icon="@Icons.Material.Filled.Inventory2" />
+                </div>
+                <div class="kpi-info">
+                    <span class="kpi-value">@_stats.ProductsCount.ToString("N0")</span>
+                    <span class="kpi-label">إجمالي المنتجات</span>
+                </div>
+                <div class="kpi-badge" style="background:rgba(99,102,241,0.1);color:#6366f1;">
+                    @_stats.PricedCount تسعير
+                </div>
+            </div>
+
+            <div class="kpi-card" @onclick="@(() => Navigation.NavigateTo("/customers"))">
+                <div class="kpi-icon-wrap" style="background:rgba(16,185,129,0.1);color:#10b981;">
+                    <MudIcon Icon="@Icons.Material.Filled.Groups" />
+                </div>
+                <div class="kpi-info">
+                    <span class="kpi-value">@_stats.CustomersCount.ToString("N0")</span>
+                    <span class="kpi-label">العملاء</span>
+                </div>
+                <div class="kpi-badge" style="background:rgba(16,185,129,0.1);color:#10b981;">
+                    @_stats.ActiveCustomers نشط
+                </div>
+            </div>
+
+            <div class="kpi-card" @onclick="@(() => Navigation.NavigateTo("/sales/invoices"))">
+                <div class="kpi-icon-wrap" style="background:rgba(245,158,11,0.1);color:#f59e0b;">
+                    <MudIcon Icon="@Icons.Material.Filled.Receipt" />
+                </div>
+                <div class="kpi-info">
+                    <span class="kpi-value">@_stats.InvoicesCount.ToString("N0")</span>
+                    <span class="kpi-label">فواتير هذا الشهر</span>
+                </div>
+                <div class="kpi-badge" style="background:rgba(245,158,11,0.1);color:#f59e0b;">
+                    @_stats.InvoicesTotal.ToString("N0") ج.م
+                </div>
+            </div>
+
+            <div class="kpi-card" @onclick="@(() => Navigation.NavigateTo("/cashbox/dashboard"))">
+                <div class="kpi-icon-wrap" style="background:rgba(212,175,55,0.1);color:#D4AF37;">
+                    <MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" />
+                </div>
+                <div class="kpi-info">
+                    <span class="kpi-value">@_stats.CashBoxBalance.ToString("N0")</span>
+                    <span class="kpi-label">رصيد الخزينة</span>
+                </div>
+                <div class="kpi-badge @(_stats.CashBoxBalance >= 0 ? "badge-success" : "badge-danger")">
+                    @(_stats.CashBoxBalance >= 0 ? "✅ موجب" : "⚠️ سالب")
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ INVOICES + NOTIFICATIONS ═══ -->
+        <div class="two-col">
+            <div class="card">
+                <div class="card-header">
+                    <h3><MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Small" /> آخر الفواتير</h3>
+                    <MudButton Variant="Variant.Text" Size="Size.Small"
+                               OnClick="@(() => Navigation.NavigateTo("/sales/invoices"))">عرض الكل</MudButton>
+                </div>
+                @if (_recentInvoices.Any())
+                {
+                    <MudTable Items="_recentInvoices" Hover="true" Elevation="0" Dense="true">
+                        <HeaderContent>
+                            <MudTh>رقم</MudTh>
+                            <MudTh>العميل</MudTh>
+                            <MudTh>المبلغ</MudTh>
+                            <MudTh>الحالة</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudButton Variant="Variant.Text" Size="Size.Small"
+                                           OnClick="@(() => Navigation.NavigateTo($"/sales/invoices/{context.TransactionId}"))">
+                                    #@context.TransactionId
+                                </MudButton>
+                            </MudTd>
+                            <MudTd>@context.PartyName</MudTd>
+                            <MudTd>@context.GrandTotal.ToString("N2")</MudTd>
+                            <MudTd>
+                                <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(context.InvoiceStatus)">
+                                    @context.InvoiceStatus
+                                </MudChip>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+                else
+                {
+                    <AppEmpty Icon="@Icons.Material.Filled.ReceiptLong" Message="لا توجد فواتير حديثة" />
+                }
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3><MudIcon Icon="@Icons.Material.Filled.Notifications" Size="Size.Small" /> الإشعارات</h3>
+                    @if (_unreadNotifications > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Error">@_unreadNotifications جديد</MudChip>
+                    }
+                </div>
+                @if (_notifications.Any())
+                {
+                    <div class="notif-list">
+                        @foreach (var n in _notifications)
+                        {
+                            <div class="notif-item @(n.IsRead == false ? "unread" : "")">
+                                <div class="notif-icon-wrap">
+                                    <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
+                                </div>
+                                <div class="notif-content">
+                                    <strong>@n.Title</strong>
+                                    <p>@n.Message</p>
+                                    <small>@n.CreatedAt.ToString("dd/MM HH:mm")</small>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <AppEmpty Icon="@Icons.Material.Filled.NotificationsNone" Message="لا توجد إشعارات" />
+                }
+            </div>
+        </div>
+
+        <!-- ═══ QUICK ACTIONS ═══ -->
+        <div class="quick-actions">
+            <h3 class="section-title"><MudIcon Icon="@Icons.Material.Filled.Bolt" /> اختصارات سريعة</h3>
+            <div class="actions-grid">
+                @if (HasPermission("frm_PartiesList", "View"))
+                {
+                    <div class="action-card" @onclick="@(() => Navigation.NavigateTo("/customers"))">
+                        <MudIcon Icon="@Icons.Material.Filled.Groups" Style="font-size:2rem;color:#10b981;" />
+                        <span>العملاء</span>
+                    </div>
+                }
+                @if (HasPermission("frm_Payments", "View"))
+                {
+                    <div class="action-card" @onclick="@(() => Navigation.NavigateTo("/payments"))">
+                        <MudIcon Icon="@Icons.Material.Filled.Payments" Style="font-size:2rem;color:#f59e0b;" />
+                        <span>المدفوعات</span>
+                    </div>
+                }
+                @if (HasPermission("frmCashBox", "View"))
+                {
+                    <div class="action-card" @onclick="@(() => Navigation.NavigateTo("/cashbox/dashboard"))">
+                        <MudIcon Icon="@Icons.Material.Filled.AccountBalance" Style="font-size:2rem;color:#D4AF37;" />
+                        <span>الخزينة</span>
+                    </div>
+                }
+                @if (HasPermission("frm_ExpensesList", "View"))
+                {
+                    <div class="action-card" @onclick="@(() => Navigation.NavigateTo("/expenses/list"))">
+                        <MudIcon Icon="@Icons.Material.Filled.ReceiptLong" Style="font-size:2rem;color:#ef4444;" />
+                        <span>المصروفات</span>
+                    </div>
+                }
+                @if (HasPermission("frmIncomeStatement", "View"))
+                {
+                    <div class="action-card" @onclick="@(() => Navigation.NavigateTo("/reports/income-statement"))">
+                        <MudIcon Icon="@Icons.Material.Filled.Timeline" Style="font-size:2rem;color:#6366f1;" />
+                        <span>قائمة الدخل</span>
+                    </div>
+                }
+                @if (HasPermission("frm_CashFlowNew", "View"))
+                {
+                    <div class="action-card" @onclick="@(() => Navigation.NavigateTo("/reports/cashflow"))">
+                        <MudIcon Icon="@Icons.Material.Filled.WaterfallChart" Style="font-size:2rem;color:#0ea5e9;" />
+                        <span>التدفقات النقدية</span>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .hero-section { position:relative; border-radius:20px; overflow:hidden; margin-bottom:1.5rem; }
+    .hero-bg { position:absolute; inset:0; }
+    .hero-gradient { position:absolute; inset:0; background:linear-gradient(135deg,#0a1628 0%,#162847 50%,#1a2744 100%); }
+    .hero-content { position:relative; z-index:1; display:flex; justify-content:space-between; align-items:center; padding:2rem 2.5rem; color:white; flex-wrap:wrap; gap:1rem; }
+    .hero-left { display:flex; align-items:center; gap:1.25rem; }
+    .hero-avatar { width:64px; height:64px; border-radius:18px; background:linear-gradient(135deg,#D4AF37,#a67c00); display:flex; align-items:center; justify-content:center; font-size:1.75rem; font-weight:900; color:white; box-shadow:0 4px 20px rgba(212,175,55,0.4); }
+    .hero-text h1 { font-size:1.5rem; font-weight:800; margin:0; }
+    .hero-text p { opacity:0.7; margin:0.3rem 0 0; font-size:0.9rem; }
+    .hero-actions { display:flex; gap:0.75rem; flex-wrap:wrap; }
+    .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:1rem; margin-bottom:1.5rem; }
+    .kpi-card { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-lines-default); border-radius:16px; padding:1.25rem; display:flex; align-items:center; gap:1rem; cursor:pointer; transition:all 0.25s; position:relative; }
+    .kpi-card:hover { transform:translateY(-3px); box-shadow:0 8px 24px rgba(0,0,0,0.08); }
+    .kpi-icon-wrap { width:52px; height:52px; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:1.5rem; flex-shrink:0; }
+    .kpi-info { flex:1; }
+    .kpi-value { display:block; font-size:1.5rem; font-weight:800; line-height:1.2; }
+    .kpi-label { display:block; font-size:0.8rem; color:var(--mud-palette-text-secondary); }
+    .kpi-badge { position:absolute; top:0.75rem; left:0.75rem; padding:0.2rem 0.6rem; border-radius:8px; font-size:0.7rem; font-weight:700; }
+    .badge-success { background:rgba(16,185,129,0.1); color:#10b981; }
+    .badge-danger { background:rgba(239,68,68,0.1); color:#ef4444; }
+    .two-col { display:grid; grid-template-columns:1.2fr 0.8fr; gap:1rem; margin-bottom:1.5rem; }
+    .card { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-lines-default); border-radius:16px; padding:1.25rem; }
+    .card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; }
+    .card-header h3 { display:flex; align-items:center; gap:0.5rem; font-size:1rem; font-weight:700; margin:0; }
+    .notif-list { display:flex; flex-direction:column; gap:0.5rem; max-height:320px; overflow-y:auto; }
+    .notif-item { display:flex; gap:0.75rem; padding:0.75rem; border-radius:10px; background:var(--mud-palette-background); }
+    .notif-item.unread { border-right:3px solid #D4AF37; }
+    .notif-icon-wrap { width:36px; height:36px; border-radius:10px; background:rgba(99,102,241,0.1); color:#6366f1; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .notif-content { flex:1; }
+    .notif-content strong { font-size:0.85rem; display:block; }
+    .notif-content p { font-size:0.78rem; color:var(--mud-palette-text-secondary); margin:0.2rem 0; }
+    .notif-content small { font-size:0.7rem; color:var(--mud-palette-text-disabled); }
+    .quick-actions { margin-bottom:1rem; }
+    .section-title { display:flex; align-items:center; gap:0.5rem; font-size:1rem; font-weight:700; margin:0 0 1rem; }
+    .actions-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:0.75rem; }
+    .action-card { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-lines-default); border-radius:14px; padding:1.25rem; display:flex; flex-direction:column; align-items:center; gap:0.75rem; cursor:pointer; transition:all 0.25s; }
+    .action-card:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,0.08); }
+    .action-card span { font-size:0.85rem; font-weight:600; }
+    @@media (max-width:900px) { .two-col { grid-template-columns:1fr; } .hero-content { padding:1.5rem; } }
+    @@media (max-width:600px) { .kpi-grid { grid-template-columns:1fr 1fr; } .hero-actions { width:100%; } }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private string _currentUserName = "";
+    private string _currentUserRole = "";
+    private string _avatarLetter = "U";
+    private ClaimsPrincipal? _user;
+    private int _unreadNotifications = 0;
+    private readonly DashboardStats _stats = new();
+    private List<RecentInvoice> _recentInvoices = new();
+    private List<Notification> _notifications = new();
+
+    private string _greetingMessage => DateTime.Now.Hour switch
+    {
+        >= 5 and < 12 => "صباح الخير",
+        >= 12 and < 17 => "مساء النور",
+        >= 17 and < 21 => "مساء الخير",
+        _ => "أهلاً بك"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            _user = auth.User;
+            if (_user.Identity?.IsAuthenticated == true)
+            {
+                _currentUserName = _user.Identity.Name ?? "";
+                _currentUserRole = _user.FindFirst(ClaimTypes.Role)?.Value ?? "User";
+                _avatarLetter = string.IsNullOrEmpty(_currentUserName) ? "U" : _currentUserName[..1].ToUpper();
+            }
+            await Task.WhenAll(LoadStats(), LoadRecentInvoices(), LoadNotifications());
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally { _isLoading = false; }
+    }
+
+    private async Task LoadStats()
+    {
+        try
+        {
+            var products = await ProductService.GetProductsAsync(null);
+            _stats.ProductsCount = products.Count;
+            _stats.PricedCount = products.Count(p => p.PricingStatusId == 3);
+
+            var today = DateTime.Today;
+            var monthStart = new DateTime(today.Year, today.Month, 1);
+
+            _stats.CustomersCount = await Db.Parties.AsNoTracking().CountAsync();
+            _stats.ActiveCustomers = await Db.Parties.AsNoTracking().CountAsync(p => p.IsActive == true);
+            _stats.InvoicesCount = await Db.Transactions.AsNoTracking()
+                .CountAsync(t => t.TransactionDate >= monthStart && t.TransactionType == "Sale");
+            _stats.InvoicesTotal = await Db.Transactions.AsNoTracking()
+                .Where(t => t.TransactionDate >= monthStart && t.TransactionType == "Sale")
+                .SumAsync(t => t.GrandTotal);
+
+            var cashBoxes = await CashBoxService.GetCashBoxesAsync(true);
+            _stats.CashBoxBalance = cashBoxes.Sum(c => c.CurrentBalance);
+        }
+        catch { }
+    }
+
+    private async Task LoadRecentInvoices()
+    {
+        try
+        {
+            _recentInvoices = await Db.Transactions.AsNoTracking()
+                .Where(t => t.TransactionType == "Sale")
+                .OrderByDescending(t => t.TransactionDate)
+                .Take(5)
+                .Join(Db.Parties.AsNoTracking(),
+                    t => t.PartyId, p => p.PartyId,
+                    (t, p) => new RecentInvoice
+                    {
+                        TransactionId = t.TransactionId,
+                        PartyName = p.PartyName,
+                        GrandTotal = t.GrandTotal,
+                        InvoiceStatus = t.InvoiceStatus ?? "مفتوحة",
+                        Date = t.TransactionDate
+                    })
+                .ToListAsync();
+        }
+        catch { _recentInvoices = new(); }
+    }
+
+    private async Task LoadNotifications()
+    {
+        try
+        {
+            _unreadNotifications = await NotificationService.GetUnreadCountAsync(_currentUserName, _currentUserRole);
+            _notifications = await NotificationService.GetLatestAsync(_currentUserName, _currentUserRole, 8);
+        }
+        catch { _notifications = new(); }
+    }
+
+    private bool HasPermission(string formName, string action)
+    {
+        if (_user?.Identity?.IsAuthenticated != true) return false;
+        return _user.HasClaim("Permission", $"{formName}:{action}");
+    }
+
+    private Color GetStatusColor(string? status) => status switch
+    {
+        "مدفوعة" or "Paid" => Color.Success,
+        "ملغاة" or "Cancelled" => Color.Error,
+        "مفتوحة" or "Open" => Color.Warning,
+        _ => Color.Info
+    };
+
+    private class DashboardStats
+    {
+        public int ProductsCount { get; set; }
+        public int PricedCount { get; set; }
+        public int CustomersCount { get; set; }
+        public int ActiveCustomers { get; set; }
+        public int InvoicesCount { get; set; }
+        public decimal InvoicesTotal { get; set; }
+        public decimal CashBoxBalance { get; set; }
+    }
+
+    private class RecentInvoice
+    {
+        public int TransactionId { get; set; }
+        public string PartyName { get; set; } = "";
+        public decimal GrandTotal { get; set; }
+        public string InvoiceStatus { get; set; } = "";
+        public DateTime Date { get; set; }
+    }
+}
