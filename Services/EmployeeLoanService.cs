@@ -4,6 +4,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services;
 
+// ============================================================
+// ✅ EmployeeLoanService - النسخة المُصلَحة الكاملة
+// استبدل الملف بالكامل
+// ============================================================
+
 public class EmployeeLoanService : IEmployeeLoanService
 {
     private readonly db24804Context _db;
@@ -25,7 +30,6 @@ public class EmployeeLoanService : IEmployeeLoanService
                         on l.EmployeeId equals e.EmployeeId
                     select new { l, e };
 
-        // فلاتر
         if (filter.EmployeeId.HasValue)
             query = query.Where(x => x.l.EmployeeId == filter.EmployeeId.Value);
 
@@ -42,6 +46,7 @@ public class EmployeeLoanService : IEmployeeLoanService
 
         var totalCount = await query.CountAsync();
 
+        // ✅ جلب اسم الخزينة بـ Join مش subquery
         var rawData = await query
             .OrderByDescending(x => x.l.LoanDate)
             .Skip((filter.PageNumber - 1) * filter.PageSize)
@@ -65,21 +70,26 @@ public class EmployeeLoanService : IEmployeeLoanService
                 x.l.ApprovedBy,
                 x.l.CreatedBy,
                 x.l.CreatedAt,
-                CashBoxName = x.l.CashBoxId == null ? null
-                    : _db.CashBoxes.Where(c => c.CashBoxId == x.l.CashBoxId)
-                                   .Select(c => c.CashBoxName).FirstOrDefault()
+                x.l.CashBoxId
             })
             .ToListAsync();
 
+        // ✅ جيب أسماء الخزن دفعة واحدة
+        var cashBoxIds = rawData.Where(x => x.CashBoxId.HasValue)
+                                .Select(x => x.CashBoxId!.Value).Distinct().ToList();
+        var cashBoxNames = cashBoxIds.Any()
+            ? await _db.CashBoxes.AsNoTracking()
+                       .Where(c => cashBoxIds.Contains(c.CashBoxId))
+                       .ToDictionaryAsync(c => c.CashBoxId, c => c.CashBoxName)
+            : new Dictionary<int, string>();
+
         var items = rawData.Select(x =>
         {
-            // حساب آخر شهر خصم متوقع
             string? expectedEnd = null;
             if (DateTime.TryParseExact(x.StartDeductionMonth + "-01", "yyyy-MM-dd",
                 null, System.Globalization.DateTimeStyles.None, out var startDate))
             {
-                var remaining = x.TotalInstallments - x.PaidInstallments;
-                if (remaining > 0)
+                if (x.TotalInstallments - x.PaidInstallments > 0)
                     expectedEnd = startDate.AddMonths(x.TotalInstallments - 1).ToString("yyyy-MM");
             }
 
@@ -99,7 +109,9 @@ public class EmployeeLoanService : IEmployeeLoanService
                 StartDeductionMonth = x.StartDeductionMonth,
                 ExpectedEndMonth    = expectedEnd,
                 Status              = x.Status,
-                CashBoxName         = x.CashBoxName,
+                CashBoxName         = x.CashBoxId.HasValue
+                                    ? cashBoxNames.GetValueOrDefault(x.CashBoxId.Value)
+                                    : null,
                 Notes               = x.Notes,
                 ApprovedBy          = x.ApprovedBy,
                 CreatedBy           = x.CreatedBy,
@@ -111,48 +123,54 @@ public class EmployeeLoanService : IEmployeeLoanService
         {
             Items      = items,
             TotalCount = totalCount,
-            PageNumber  = filter.PageNumber,
-            PageSize    = filter.PageSize
+            PageNumber = filter.PageNumber,
+            PageSize   = filter.PageSize
         };
     }
 
     // ============================================================
-    // تفاصيل سلفة واحدة مع أقساطها
+    // تفاصيل سلفة مع الأقساط
     // ============================================================
     public async Task<LoanDetailDto?> GetLoanDetailAsync(int loanId)
     {
         var loan = await (
             from l in _db.EmployeeLoans.AsNoTracking()
             join e in _db.Employees.AsNoTracking() on l.EmployeeId equals e.EmployeeId
+            join cb in _db.CashBoxes.AsNoTracking() on l.CashBoxId equals cb.CashBoxId into cbs
+            from cb in cbs.DefaultIfEmpty()
             where l.LoanId == loanId
             select new LoanListDto
             {
-                LoanId             = l.LoanId,
-                EmployeeId         = l.EmployeeId,
-                EmployeeName       = e.FullName,
-                Department         = e.Department,
-                JobTitle           = e.JobTitle,
-                LoanAmount         = l.LoanAmount,
-                MonthlyInstallment = l.MonthlyInstallment,
-                TotalInstallments  = l.TotalInstallments,
-                PaidInstallments   = l.PaidInstallments,
-                RemainingAmount    = l.RemainingAmount,
-                LoanDate           = l.LoanDate,
-                StartDeductionMonth= l.StartDeductionMonth,
-                Status             = l.Status,
-                Notes              = l.Notes,
-                ApprovedBy         = l.ApprovedBy,
-                CreatedBy          = l.CreatedBy,
-                CreatedAt          = l.CreatedAt
+                LoanId              = l.LoanId,
+                EmployeeId          = l.EmployeeId,
+                EmployeeName        = e.FullName,
+                Department          = e.Department,
+                JobTitle            = e.JobTitle,
+                LoanAmount          = l.LoanAmount,
+                MonthlyInstallment  = l.MonthlyInstallment,
+                TotalInstallments   = l.TotalInstallments,
+                PaidInstallments    = l.PaidInstallments,
+                RemainingAmount     = l.RemainingAmount,
+                LoanDate            = l.LoanDate,
+                StartDeductionMonth = l.StartDeductionMonth,
+                Status              = l.Status,
+                CashBoxName         = cb != null ? cb.CashBoxName : null,
+                Notes               = l.Notes,
+                ApprovedBy          = l.ApprovedBy,
+                CreatedBy           = l.CreatedBy,
+                CreatedAt           = l.CreatedAt
             }).FirstOrDefaultAsync();
 
         if (loan is null) return null;
 
-        var installments = await _db.LoanInstallments
-            .AsNoTracking()
-            .Where(i => i.LoanId == loanId)
-            .OrderBy(i => i.InstallmentNumber)
-            .Select(i => new InstallmentListDto
+        // جلب الأقساط مع اسم شهر الراتب
+        var installments = await (
+            from i in _db.LoanInstallments.AsNoTracking()
+            join p in _db.Payrolls.AsNoTracking() on i.PayrollId equals p.PayrollId into payrolls
+            from p in payrolls.DefaultIfEmpty()
+            where i.LoanId == loanId
+            orderby i.InstallmentNumber
+            select new InstallmentListDto
             {
                 InstallmentId     = i.InstallmentId,
                 LoanId            = i.LoanId,
@@ -162,11 +180,8 @@ public class EmployeeLoanService : IEmployeeLoanService
                 Status            = i.Status,
                 DeductionDate     = i.DeductionDate,
                 Notes             = i.Notes,
-                PayrollMonth      = i.PayrollId == null ? null
-                    : _db.Payrolls.Where(p => p.PayrollId == i.PayrollId)
-                                  .Select(p => p.PayrollMonth).FirstOrDefault()
-            })
-            .ToListAsync();
+                PayrollMonth      = p != null ? p.PayrollMonth : null
+            }).ToListAsync();
 
         return new LoanDetailDto { Loan = loan, Installments = installments };
     }
@@ -197,45 +212,43 @@ public class EmployeeLoanService : IEmployeeLoanService
     }
 
     // ============================================================
-    // ⭐ إضافة سلفة جديدة - الـ Method الأهم
+    // ⭐ حفظ سلفة جديدة
     // ============================================================
     public async Task<(bool Success, string Message, int? LoanId)> SaveLoanAsync(
         LoanFormDto dto, string userName)
     {
-        // ── Validation ──────────────────────────────────────
         if (dto.EmployeeId == 0)
             return (false, "يرجى اختيار الموظف", null);
-
         if (dto.LoanAmount <= 0)
             return (false, "قيمة السلفة يجب أن تكون أكبر من صفر", null);
-
         if (dto.TotalInstallments <= 0)
             return (false, "عدد الأقساط يجب أن يكون أكبر من صفر", null);
-
         if (string.IsNullOrWhiteSpace(dto.StartDeductionMonth))
             return (false, "يرجى تحديد شهر بداية الخصم", null);
-
         if (!dto.CashBoxId.HasValue || dto.CashBoxId == 0)
             return (false, "يرجى اختيار الخزينة", null);
 
-        // ── تحقق من الموظف ──────────────────────────────────
         var employee = await _db.Employees.AsNoTracking()
             .FirstOrDefaultAsync(e => e.EmployeeId == dto.EmployeeId);
         if (employee is null)
             return (false, "الموظف غير موجود", null);
 
-        // ── تحقق من الخزينة ─────────────────────────────────
-        var cashBox = await _db.CashBoxes.FirstOrDefaultAsync(c => c.CashBoxId == dto.CashBoxId);
+        var cashBox = await _db.CashBoxes
+            .FirstOrDefaultAsync(c => c.CashBoxId == dto.CashBoxId);
         if (cashBox is null)
             return (false, "الخزينة غير موجودة", null);
 
-        // ── حساب القسط الشهري ────────────────────────────────
+        // ✅ التحقق من رصيد الخزينة قبل الصرف
+        var balance = await GetCashBoxBalanceAsync(dto.CashBoxId!.Value);
+        if (balance < dto.LoanAmount)
+            return (false, $"رصيد الخزينة ({balance:N2} جـ) أقل من قيمة السلفة ({dto.LoanAmount:N2} جـ)", null);
+
         dto.MonthlyInstallment = Math.Round(dto.LoanAmount / dto.TotalInstallments, 2);
 
         using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
-            // ── 1. إنشاء السلفة ─────────────────────────────
+            // 1. إنشاء السلفة
             var loan = new EmployeeLoan
             {
                 EmployeeId          = dto.EmployeeId,
@@ -255,28 +268,23 @@ public class EmployeeLoanService : IEmployeeLoanService
             };
 
             _db.EmployeeLoans.Add(loan);
-            await _db.SaveChangesAsync(); // عشان ناخد الـ LoanId
+            await _db.SaveChangesAsync();
 
-            // ── 2. إنشاء الأقساط تلقائياً ───────────────────
+            // 2. إنشاء الأقساط
             if (!DateTime.TryParseExact(dto.StartDeductionMonth + "-01", "yyyy-MM-dd",
                 null, System.Globalization.DateTimeStyles.None, out var startDate))
-                throw new Exception("صيغة شهر البداية غير صحيحة");
+                throw new Exception("صيغة شهر البداية غير صحيحة (مثال: 2026-06)");
 
-            var installments = new List<LoanInstallment>();
-            decimal cumulativeAmount = 0;
+            decimal cumulative = 0;
+            var installments   = new List<LoanInstallment>();
 
             for (int i = 0; i < dto.TotalInstallments; i++)
             {
-                var month  = startDate.AddMonths(i).ToString("yyyy-MM");
-                decimal amt;
-
-                // آخر قسط = الباقي (لتفادي فروق التقريب)
-                if (i == dto.TotalInstallments - 1)
-                    amt = dto.LoanAmount - cumulativeAmount;
-                else
-                    amt = dto.MonthlyInstallment;
-
-                cumulativeAmount += amt;
+                var month = startDate.AddMonths(i).ToString("yyyy-MM");
+                decimal amt = (i == dto.TotalInstallments - 1)
+                    ? dto.LoanAmount - cumulative   // آخر قسط = الباقي
+                    : dto.MonthlyInstallment;
+                cumulative += amt;
 
                 installments.Add(new LoanInstallment
                 {
@@ -293,7 +301,7 @@ public class EmployeeLoanService : IEmployeeLoanService
 
             _db.LoanInstallments.AddRange(installments);
 
-            // ── 3. حركة الخزينة (صرف من الخزينة) ───────────
+            // 3. حركة خزينة (صرف)
             var cashTx = new CashboxTransaction
             {
                 CashBoxId       = dto.CashBoxId!.Value,
@@ -308,12 +316,11 @@ public class EmployeeLoanService : IEmployeeLoanService
             _db.CashboxTransactions.Add(cashTx);
             await _db.SaveChangesAsync();
 
-            // ربط الحركة بالسلفة
             loan.CashboxTransactionId = cashTx.CashboxTransactionId;
             await _db.SaveChangesAsync();
 
             await _audit.LogAsync("EmployeeLoans", "Insert",
-                loan.LoanId.ToString(), null, loan, userName);
+                loan.LoanId.ToString(), null, new { loan.LoanId, loan.LoanAmount, loan.EmployeeId }, userName);
 
             await tx.CommitAsync();
             return (true, $"✅ تم صرف سلفة {dto.LoanAmount:N2} جـ للموظف {employee.FullName}", loan.LoanId);
@@ -334,28 +341,27 @@ public class EmployeeLoanService : IEmployeeLoanService
             .Include(l => l.Installments)
             .FirstOrDefaultAsync(l => l.LoanId == loanId);
 
-        if (loan is null)          return (false, "السلفة غير موجودة");
+        if (loan is null)            return (false, "السلفة غير موجودة");
         if (loan.Status != "Active") return (false, "لا يمكن إلغاء سلفة غير نشطة");
 
         var hasDeducted = loan.Installments.Any(i => i.Status == "Deducted");
         if (hasDeducted)
-            return (false, "لا يمكن إلغاء سلفة تم خصم أقساط منها. استخدم الإلغاء الجزئي.");
+            return (false, "لا يمكن إلغاء سلفة تم خصم أقساط منها");
 
         loan.Status        = "Cancelled";
         loan.LastUpdatedAt = DateTime.Now;
 
-        // إلغاء الأقساط المتبقية
         foreach (var inst in loan.Installments.Where(i => i.Status == "Pending"))
             inst.Status = "Skipped";
 
         await _db.SaveChangesAsync();
-        await _audit.LogAsync("EmployeeLoans", "Cancel", loanId.ToString(), null, loan, userName);
+        await _audit.LogAsync("EmployeeLoans", "Cancel", loanId.ToString(), null, new { loanId }, userName);
 
         return (true, "تم إلغاء السلفة");
     }
 
     // ============================================================
-    // الأقساط المستحقة في شهر معين
+    // أقساط شهر معين (كل الموظفين)
     // ============================================================
     public async Task<List<InstallmentListDto>> GetMonthInstallmentsAsync(string month)
     {
@@ -401,7 +407,7 @@ public class EmployeeLoanService : IEmployeeLoanService
     }
 
     // ============================================================
-    // تسجيل خصم قسط (يُستدعى من شاشة الراتب)
+    // خصم قسط
     // ============================================================
     public async Task<(bool Success, string Message)> DeductInstallmentAsync(
         int installmentId, int payrollDetailId, string userName)
@@ -410,23 +416,21 @@ public class EmployeeLoanService : IEmployeeLoanService
             .Include(i => i.Loan)
             .FirstOrDefaultAsync(i => i.InstallmentId == installmentId);
 
-        if (inst is null)               return (false, "القسط غير موجود");
-        if (inst.Status != "Pending")   return (false, "القسط مش في حالة انتظار");
+        if (inst is null)             return (false, "القسط غير موجود");
+        if (inst.Status != "Pending") return (false, "القسط تم خصمه مسبقاً");
 
-        inst.Status         = "Deducted";
-        inst.PayrollDetailId= payrollDetailId;
-        inst.DeductionDate  = DateTime.Now;
+        inst.Status          = "Deducted";
+        inst.PayrollDetailId = payrollDetailId;
+        inst.DeductionDate   = DateTime.Now;
 
-        // تحديث السلفة
         var loan = inst.Loan;
         loan.PaidInstallments++;
         loan.RemainingAmount -= inst.Amount;
-        loan.LastUpdatedAt   = DateTime.Now;
+        loan.LastUpdatedAt    = DateTime.Now;
 
-        // لو كلمنا خلصت → أغلق السلفة
         if (loan.RemainingAmount <= 0 || loan.PaidInstallments >= loan.TotalInstallments)
         {
-            loan.Status         = "Completed";
+            loan.Status          = "Completed";
             loan.RemainingAmount = 0;
         }
 
@@ -435,7 +439,7 @@ public class EmployeeLoanService : IEmployeeLoanService
     }
 
     // ============================================================
-    // تأجيل قسط
+    // تأجيل قسط للشهر التالي
     // ============================================================
     public async Task<(bool Success, string Message)> SkipInstallmentAsync(
         int installmentId, string reason, string userName)
@@ -445,12 +449,11 @@ public class EmployeeLoanService : IEmployeeLoanService
             .FirstOrDefaultAsync(i => i.InstallmentId == installmentId);
 
         if (inst is null)             return (false, "القسط غير موجود");
-        if (inst.Status != "Pending") return (false, "القسط مش في حالة انتظار");
+        if (inst.Status != "Pending") return (false, "لا يمكن تأجيل هذا القسط");
 
         inst.Status = "Skipped";
         inst.Notes  = reason;
 
-        // أضف قسط جديد في الشهر التالي
         var lastInst = await _db.LoanInstallments
             .Where(i => i.LoanId == inst.LoanId)
             .OrderByDescending(i => i.InstallmentNumber)
@@ -468,12 +471,11 @@ public class EmployeeLoanService : IEmployeeLoanService
                 DeductionMonth    = lastDate.AddMonths(1).ToString("yyyy-MM"),
                 Amount            = inst.Amount,
                 Status            = "Pending",
-                Notes             = $"مُرحَّل من {inst.DeductionMonth}",
+                Notes             = $"مُرحَّل من {inst.DeductionMonth} - {reason}",
                 CreatedBy         = userName,
                 CreatedAt         = DateTime.Now
             });
 
-            // تحديث السلفة
             inst.Loan.TotalInstallments++;
             inst.Loan.LastUpdatedAt = DateTime.Now;
         }
@@ -492,6 +494,7 @@ public class EmployeeLoanService : IEmployeeLoanService
         var activeLoans = await _db.EmployeeLoans
             .AsNoTracking()
             .Where(l => l.Status == "Active")
+            .Select(l => new { l.RemainingAmount, l.EmployeeId })
             .ToListAsync();
 
         var thisMonthDeductions = await _db.LoanInstallments
@@ -501,10 +504,10 @@ public class EmployeeLoanService : IEmployeeLoanService
 
         var completedThisMonth = await _db.EmployeeLoans
             .AsNoTracking()
-            .Where(l => l.Status == "Completed" &&
-                        l.LastUpdatedAt.HasValue &&
-                        l.LastUpdatedAt.Value.Month == DateTime.Today.Month &&
-                        l.LastUpdatedAt.Value.Year  == DateTime.Today.Year)
+            .Where(l => l.Status == "Completed"
+                     && l.LastUpdatedAt.HasValue
+                     && l.LastUpdatedAt.Value.Month == DateTime.Today.Month
+                     && l.LastUpdatedAt.Value.Year  == DateTime.Today.Year)
             .CountAsync();
 
         return new LoanStatsDto
@@ -516,50 +519,118 @@ public class EmployeeLoanService : IEmployeeLoanService
             EmployeesWithLoans   = activeLoans.Select(l => l.EmployeeId).Distinct().Count()
         };
     }
-    // ============================================================
-// Lookups
-// ============================================================
-public async Task<List<EmployeeLookupDto>> GetEmployeesLookupAsync(string? search = null)
-{
-    var query = _db.Employees
-        .AsNoTracking()
-        .Where(e => e.Status == "نشط" || e.Status == "Active");
 
-    if (!string.IsNullOrWhiteSpace(search))
+    // ============================================================
+    // Lookups
+    // ============================================================
+    public async Task<List<EmployeeLookupDto>> GetEmployeesLookupAsync(string? search = null)
     {
-        var s = search.Trim();
-        query = query.Where(e => 
-            e.FullName.Contains(s) || 
-            (e.Department != null && e.Department.Contains(s)));
+        var query = _db.Employees.AsNoTracking()
+            // ✅ لا تفلتر بالـ Status خليه يجيب كل الموظفين النشطين
+            .Where(e => e.Status != "Terminated" && e.Status != "منتهي");
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            query = query.Where(e =>
+                e.FullName.Contains(s) ||
+                (e.Department != null && e.Department.Contains(s)));
+        }
+
+        return await query
+            .OrderBy(e => e.FullName)
+            .Take(50)
+            .Select(e => new EmployeeLookupDto
+            {
+                EmployeeId = e.EmployeeId,
+                FullName   = e.FullName,
+                Department = e.Department,
+                JobTitle   = e.JobTitle
+            })
+            .ToListAsync();
     }
 
-    return await query
-        .OrderBy(e => e.FullName)
-        .Take(50)
-        .Select(e => new EmployeeLookupDto
-        {
-            EmployeeId = e.EmployeeId,
-            FullName   = e.FullName,
-            Department = e.Department,
-            JobTitle   = e.JobTitle
-        })
-        .ToListAsync();
-}
-
-public async Task<List<CashBoxLookupDto>> GetCashBoxesLookupAsync()
+    public async Task<List<CashBoxLookupDto>> GetCashBoxesLookupAsync()
 {
-    return await _db.CashBoxes
+    var boxes = await _db.CashBoxes
         .AsNoTracking()
         .Where(c => c.IsActive == true)
         .OrderByDescending(c => c.IsDefault)
         .ThenBy(c => c.CashBoxName)
-        .Select(c => new CashBoxLookupDto
+        .Select(c => new
         {
-            CashBoxId      = c.CashBoxId,
-            CashBoxName    = c.CashBoxName,
-            CurrentBalance = c.CurrentBalance ?? 0,
-            IsDefault      = c.IsDefault ?? false
+            c.CashBoxId,
+            c.CashBoxName,
+            c.OpeningBalance,  // decimal (non-nullable) - مش محتاج ??
+            c.IsDefault        // bool (non-nullable) - مش محتاج ??
         })
         .ToListAsync();
+
+    if (!boxes.Any()) return new();
+
+    var boxIds = boxes.Select(b => b.CashBoxId).ToList();
+
+    var txSummary = await _db.CashboxTransactions
+        .AsNoTracking()
+        .Where(t => boxIds.Contains(t.CashBoxId))
+        .GroupBy(t => new { t.CashBoxId, t.TransactionType })
+        .Select(g => new
+        {
+            g.Key.CashBoxId,
+            g.Key.TransactionType,
+            Total = g.Sum(x => (decimal?)x.Amount) ?? 0
+        })
+        .ToListAsync();
+
+    var inflows  = txSummary
+        .Where(x => x.TransactionType == "قبض")
+        .ToDictionary(x => x.CashBoxId, x => x.Total);
+
+    var outflows = txSummary
+        .Where(x => x.TransactionType == "صرف")
+        .ToDictionary(x => x.CashBoxId, x => x.Total);
+
+    return boxes.Select(b =>
+    {
+        // ✅ OpeningBalance non-nullable → مش محتاج ??
+        var balance = b.OpeningBalance
+                    + inflows.GetValueOrDefault(b.CashBoxId, 0)
+                    - outflows.GetValueOrDefault(b.CashBoxId, 0);
+
+        return new CashBoxLookupDto
+        {
+            CashBoxId      = b.CashBoxId,
+            CashBoxName    = b.CashBoxName,
+            CurrentBalance = balance,
+            IsDefault      = b.IsDefault  // ✅ bool non-nullable → مش محتاج ??
+        };
+    }).ToList();
+}
+
+    // ============================================================
+    // Helper خاص - رصيد خزينة
+    // ============================================================
+    private async Task<decimal> GetCashBoxBalanceAsync(int cashBoxId)
+{
+    var box = await _db.CashBoxes
+        .AsNoTracking()
+        .Where(c => c.CashBoxId == cashBoxId)
+        .Select(c => new { c.OpeningBalance })
+        .FirstOrDefaultAsync();
+
+    if (box is null) return 0;
+
+    var txIn = await _db.CashboxTransactions
+        .AsNoTracking()
+        .Where(t => t.CashBoxId == cashBoxId && t.TransactionType == "قبض")
+        .SumAsync(t => (decimal?)t.Amount) ?? 0;
+
+    var txOut = await _db.CashboxTransactions
+        .AsNoTracking()
+        .Where(t => t.CashBoxId == cashBoxId && t.TransactionType == "صرف")
+        .SumAsync(t => (decimal?)t.Amount) ?? 0;
+
+    // ✅ OpeningBalance non-nullable → مش محتاج ??
+    return box.OpeningBalance + txIn - txOut;
 }
 }
