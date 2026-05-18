@@ -1,213 +1,394 @@
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
-@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
 
 @inject IEmployeeLoanService LoanService
-@inject ICashBoxService       CashBoxService
-@inject ISnackbar             Snackbar
+@inject ISnackbar            Snackbar
 @inject AuthenticationStateProvider AuthProvider
 
 <MudDialog>
     <TitleContent>
-        <MudText Typo="Typo.h6">💰 إضافة سلفة جديدة</MudText>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.AddCard" Color="Color.Success" />
+            <MudText Typo="Typo.h6">إضافة سلفة جديدة</MudText>
+        </div>
     </TitleContent>
+
     <DialogContent>
-        <MudGrid>
-            <!-- الموظف -->
-            <MudItem xs="12">
-                <MudAutocomplete T="EmployeeDropdownItem"
-                                 Label="الموظف *"
-                                 @bind-Value="_selectedEmployee"
-                                 SearchFunc="SearchEmployees"
-                                 ToStringFunc="e => e?.FullName ?? ''"
-                                 Variant="Variant.Outlined"
-                                 AdornmentIcon="@Icons.Material.Filled.Person"
-                                 Adornment="Adornment.Start"
-                                 Clearable="true"
-                                 ValueChanged="OnEmployeeChanged" />
-            </MudItem>
+        @if (_initialLoading)
+        {
+            <div class="d-flex justify-center align-center" style="height:200px">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+            </div>
+        }
+        else
+        {
+            <MudForm @ref="_form" @bind-IsValid="_formValid">
+                <MudGrid Spacing="3">
 
-            <!-- قيمة السلفة -->
-            <MudItem xs="12" sm="6">
-                <MudNumericField @bind-Value="_form.LoanAmount"
-                                 Label="قيمة السلفة (جـ) *"
-                                 Min="1" Format="N2"
-                                 Variant="Variant.Outlined"
-                                 Adornment="Adornment.End" AdornmentText="جـ"
-                                 ValueChanged="RecalcInstallment" />
-            </MudItem>
+                    <!-- ═══ الموظف ═══ -->
+                    <MudItem xs="12">
+                        <MudAutocomplete T="EmployeeLookupDto"
+                                         Label="الموظف *"
+                                         @bind-Value="_selectedEmployee"
+                                         SearchFunc="SearchEmployeesAsync"
+                                         ToStringFunc="@(e => e?.DisplayText ?? "")"
+                                         Variant="Variant.Outlined"
+                                         Dense="true"
+                                         Required="true"
+                                         RequiredError="يجب اختيار الموظف"
+                                         ResetValueOnEmptyText="true"
+                                         AdornmentIcon="@Icons.Material.Filled.Person"
+                                         Adornment="Adornment.Start"
+                                         MaxItems="20"
+                                         MinCharacters="0"
+                                         DebounceInterval="300"
+                                         ShowProgressIndicator="true">
+                            <ItemTemplate Context="emp">
+                                <div class="d-flex align-center gap-2">
+                                    <MudAvatar Size="Size.Small" Color="Color.Primary">
+                                        @emp.FullName.FirstOrDefault()
+                                    </MudAvatar>
+                                    <div>
+                                        <MudText Typo="Typo.body2">@emp.FullName</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @(emp.Department ?? "بدون قسم")
+                                        </MudText>
+                                    </div>
+                                </div>
+                            </ItemTemplate>
+                            <NoItemsTemplate>
+                                <MudText Class="pa-2" Color="Color.Secondary">
+                                    لا يوجد موظفين مطابقين
+                                </MudText>
+                            </NoItemsTemplate>
+                        </MudAutocomplete>
+                    </MudItem>
 
-            <!-- عدد الأقساط -->
-            <MudItem xs="12" sm="6">
-                <MudNumericField @bind-Value="_form.TotalInstallments"
-                                 Label="عدد الأقساط *"
-                                 Min="1" Max="60"
-                                 Variant="Variant.Outlined"
-                                 ValueChanged="RecalcInstallment" />
-            </MudItem>
+                    <!-- ═══ قيمة السلفة ═══ -->
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="decimal"
+                                         Value="_dto.LoanAmount"
+                                         ValueChanged="OnAmountChanged"
+                                         Label="قيمة السلفة (جـ) *"
+                                         Variant="Variant.Outlined"
+                                         Dense="true"
+                                         Required="true"
+                                         RequiredError="أدخل قيمة السلفة"
+                                         Min="1M"
+                                         Format="N2"
+                                         Adornment="Adornment.End"
+                                         AdornmentText="جـ"
+                                         Immediate="true" />
+                    </MudItem>
 
-            <!-- القسط الشهري (للعرض فقط) -->
-            <MudItem xs="12" sm="6">
-                <MudTextField Value="@(_form.MonthlyInstallment.ToString("N2") + " جـ")"
-                              Label="القسط الشهري"
-                              Variant="Variant.Outlined"
-                              ReadOnly="true"
-                              Style="background:#f0fdf4" />
-            </MudItem>
+                    <!-- ═══ عدد الأقساط ═══ -->
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="int"
+                                         Value="_dto.TotalInstallments"
+                                         ValueChanged="OnInstallmentsChanged"
+                                         Label="عدد الأقساط *"
+                                         Variant="Variant.Outlined"
+                                         Dense="true"
+                                         Required="true"
+                                         RequiredError="أدخل عدد الأقساط"
+                                         Min="1"
+                                         Max="60"
+                                         Immediate="true" />
+                    </MudItem>
 
-            <!-- تاريخ السلفة -->
-            <MudItem xs="12" sm="6">
-                <MudDatePicker @bind-Date="_loanDate"
-                               Label="تاريخ السلفة *"
-                               Variant="Variant.Outlined"
-                               DateFormat="dd/MM/yyyy" />
-            </MudItem>
+                    <!-- ═══ القسط الشهري (محسوب) ═══ -->
+                    <MudItem xs="12" sm="6">
+                        <MudTextField T="string"
+                                      Value="@_installmentDisplay"
+                                      Label="القسط الشهري"
+                                      Variant="Variant.Outlined"
+                                      Dense="true"
+                                      ReadOnly="true"
+                                      Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.Calculate"
+                                      Style="background:#f0fdf4" />
+                    </MudItem>
 
-            <!-- شهر بداية الخصم -->
-            <MudItem xs="12" sm="6">
-                <MudTextField @bind-Value="_form.StartDeductionMonth"
-                              Label="بداية الخصم (مثال: 2026-06) *"
-                              Variant="Variant.Outlined"
-                              Placeholder="yyyy-MM" />
-            </MudItem>
+                    <!-- ═══ تاريخ السلفة ═══ -->
+                    <MudItem xs="12" sm="6">
+                        <MudDatePicker @bind-Date="_loanDate"
+                                       Label="تاريخ السلفة *"
+                                       Variant="Variant.Outlined"
+                                       Dense="true"
+                                       Required="true"
+                                       RequiredError="حدد تاريخ السلفة"
+                                       DateFormat="dd/MM/yyyy"
+                                       Editable="true" />
+                    </MudItem>
 
-            <!-- الخزينة -->
-            <MudItem xs="12" sm="6">
-                <MudSelect @bind-Value="_form.CashBoxId"
-                           Label="الخزينة *"
-                           Variant="Variant.Outlined"
-                           T="int?">
-                    @foreach (var cb in _cashBoxes)
+                    <!-- ═══ شهر بداية الخصم ═══ -->
+                    <MudItem xs="12" sm="6">
+                        <MudTextField T="string"
+                                      @bind-Value="_dto.StartDeductionMonth"
+                                      Label="شهر بداية الخصم *"
+                                      Variant="Variant.Outlined"
+                                      Dense="true"
+                                      Required="true"
+                                      RequiredError="حدد شهر بداية الخصم"
+                                      Placeholder="مثال: 2025-02"
+                                      Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.CalendarMonth"
+                                      HelperText="صيغة: سنة-شهر (مثال: 2025-02)" />
+                    </MudItem>
+
+                    <!-- ═══ الخزينة ═══ -->
+                    <MudItem xs="12" sm="6">
+                        <MudSelect T="int?"
+                                   @bind-Value="_dto.CashBoxId"
+                                   Label="الخزينة *"
+                                   Variant="Variant.Outlined"
+                                   Dense="true"
+                                   Required="true"
+                                   RequiredError="اختر الخزينة"
+                                   AnchorOrigin="Origin.BottomCenter">
+                            @foreach (var cb in _cashBoxes)
+                            {
+                                <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">
+                                    @cb.CashBoxName (@cb.CurrentBalance.ToString("N0") جـ)
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+
+                    <!-- ═══ الموافق ═══ -->
+                    <MudItem xs="12" sm="6">
+                        <MudTextField T="string"
+                                      @bind-Value="_dto.ApprovedBy"
+                                      Label="الموافق على السلفة"
+                                      Variant="Variant.Outlined"
+                                      Dense="true"
+                                      Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.VerifiedUser" />
+                    </MudItem>
+
+                    <!-- ═══ ملاحظات ═══ -->
+                    <MudItem xs="12">
+                        <MudTextField T="string"
+                                      @bind-Value="_dto.Notes"
+                                      Label="ملاحظات"
+                                      Variant="Variant.Outlined"
+                                      Dense="true"
+                                      Lines="2" />
+                    </MudItem>
+
+                    <!-- ═══ ملخص السلفة ═══ -->
+                    @if (_dto.LoanAmount > 0 && _dto.TotalInstallments > 0 && _selectedEmployee != null)
                     {
-                        <MudSelectItem Value="@((int?)cb.CashBoxId)">
-                            @cb.CashBoxName (@cb.CurrentBalance.ToString("N2") جـ)
-                        </MudSelectItem>
+                        <MudItem xs="12">
+                            <MudAlert Severity="Severity.Success"
+                                      Variant="Variant.Outlined"
+                                      Dense="true"
+                                      Icon="@Icons.Material.Filled.Summarize">
+                                <div class="d-flex flex-column gap-1">
+                                    <MudText Typo="Typo.subtitle2">📋 ملخص السلفة</MudText>
+                                    <MudText Typo="Typo.body2">
+                                        الموظف: <b>@_selectedEmployee.FullName</b>
+                                    </MudText>
+                                    <MudText Typo="Typo.body2">
+                                        المبلغ: <b>@_dto.LoanAmount.ToString("N2") جـ</b>
+                                        على <b>@_dto.TotalInstallments</b> قسط
+                                    </MudText>
+                                    <MudText Typo="Typo.body2">
+                                        القسط الشهري: <b>@_dto.MonthlyInstallment.ToString("N2") جـ</b>
+                                    </MudText>
+                                    <MudText Typo="Typo.body2">
+                                        يبدأ الخصم من: <b>@_dto.StartDeductionMonth</b>
+                                    </MudText>
+                                </div>
+                            </MudAlert>
+                        </MudItem>
                     }
-                </MudSelect>
-            </MudItem>
 
-            <!-- الموافق -->
-            <MudItem xs="12" sm="6">
-                <MudTextField @bind-Value="_form.ApprovedBy"
-                              Label="الموافق على السلفة"
-                              Variant="Variant.Outlined" />
-            </MudItem>
-
-            <!-- ملاحظات -->
-            <MudItem xs="12">
-                <MudTextField @bind-Value="_form.Notes"
-                              Label="ملاحظات"
-                              Lines="2"
-                              Variant="Variant.Outlined" />
-            </MudItem>
-
-            <!-- ملخص -->
-            @if (_form.LoanAmount > 0 && _form.TotalInstallments > 0)
-            {
-                <MudItem xs="12">
-                    <MudPaper Class="pa-3 rounded-xl" Style="background:#f0fdf4;border:1px solid #10b981">
-                        <MudText Typo="Typo.subtitle2" Color="Color.Success">📋 ملخص السلفة</MudText>
-                        <MudText>المبلغ: <b>@_form.LoanAmount.ToString("N2") جـ</b></MudText>
-                        <MudText>@_form.TotalInstallments قسط × @_form.MonthlyInstallment.ToString("N2") جـ</MudText>
-                        <MudText>يبدأ الخصم من: <b>@_form.StartDeductionMonth</b></MudText>
-                    </MudPaper>
-                </MudItem>
-            }
-        </MudGrid>
+                </MudGrid>
+            </MudForm>
+        }
     </DialogContent>
+
     <DialogActions>
-        <MudButton OnClick="Cancel" Variant="Variant.Text">إلغاء</MudButton>
-        <MudButton OnClick="Submit" Variant="Variant.Filled" Color="Color.Success"
-                   Disabled="_saving" StartIcon="@Icons.Material.Filled.Save">
-            @(_saving ? "جاري الحفظ..." : "حفظ السلفة")
+        <MudButton OnClick="Cancel"
+                   Variant="Variant.Text"
+                   Disabled="_saving">
+            إلغاء
+        </MudButton>
+        <MudButton OnClick="SubmitAsync"
+                   Variant="Variant.Filled"
+                   Color="Color.Success"
+                   Disabled="@(!_formValid || _saving)"
+                   StartIcon="@Icons.Material.Filled.Save">
+            @if (_saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                <span>جاري الحفظ...</span>
+            }
+            else
+            {
+                <span>حفظ السلفة</span>
+            }
         </MudButton>
     </DialogActions>
 </MudDialog>
 
 @code {
-    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
-    [Parameter] public EventCallback OnSaved { get; set; }
+    [CascadingParameter]
+    public IMudDialogInstance MudDialog { get; set; } = null!;
 
-    private LoanFormDto _form = new()
+    [Parameter]
+    public EventCallback OnSaved { get; set; }
+
+    private MudForm?              _form;
+    private bool                  _formValid;
+    private bool                  _saving;
+    private bool                  _initialLoading = true;
+
+    private LoanFormDto _dto = new()
     {
         LoanDate            = DateTime.Today,
         StartDeductionMonth = DateTime.Today.AddMonths(1).ToString("yyyy-MM"),
         TotalInstallments   = 1
     };
 
-    private DateTime?           _loanDate         = DateTime.Today;
-    private EmployeeDropdownItem? _selectedEmployee;
-    private List<CashBoxListDto>  _cashBoxes        = new();
-    private List<EmployeeDropdownItem> _allEmployees = new();
-    private bool                 _saving;
+    private DateTime?              _loanDate = DateTime.Today;
+    private EmployeeLookupDto?     _selectedEmployee;
+    private List<CashBoxLookupDto> _cashBoxes = new();
+    private string                 _installmentDisplay = "0.00 جـ";
+    private string                 _currentUser = "system";
 
     protected override async Task OnInitializedAsync()
     {
-        _cashBoxes = await CashBoxService.GetCashBoxesAsync(activeOnly: true);
-        if (_cashBoxes.Any())
-            _form.CashBoxId = _cashBoxes.First(c => c.IsDefault).CashBoxId;
-
-        // جلب الموظفين للـ Autocomplete
-        // TODO: استبدل بـ Service حقيقي
-    }
-
-    private Task<IEnumerable<EmployeeDropdownItem>> SearchEmployees(string value, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return Task.FromResult(_allEmployees.AsEnumerable());
-        return Task.FromResult(
-            _allEmployees.Where(e => e.FullName.Contains(value, StringComparison.OrdinalIgnoreCase)));
-    }
-
-    private void OnEmployeeChanged(EmployeeDropdownItem? emp)
-    {
-        _selectedEmployee  = emp;
-        _form.EmployeeId   = emp?.EmployeeId ?? 0;
-        _form.EmployeeName = emp?.FullName   ?? "";
-    }
-
-    private void RecalcInstallment(decimal _)
-    {
-        if (_form.TotalInstallments > 0 && _form.LoanAmount > 0)
-            _form.MonthlyInstallment = Math.Round(_form.LoanAmount / _form.TotalInstallments, 2);
-    }
-
-    private void RecalcInstallment(int _) => RecalcInstallment(0m);
-
-    private async Task Submit()
-    {
-        if (_form.EmployeeId == 0)    { Snackbar.Add("اختر الموظف", Severity.Warning); return; }
-        if (_form.LoanAmount <= 0)    { Snackbar.Add("أدخل قيمة السلفة", Severity.Warning); return; }
-        if (!_form.CashBoxId.HasValue){ Snackbar.Add("اختر الخزينة", Severity.Warning); return; }
-
-        _form.LoanDate = _loanDate ?? DateTime.Today;
-
-        _saving = true;
         try
         {
             var authState = await AuthProvider.GetAuthenticationStateAsync();
-            var userName  = authState.User.Identity?.Name ?? "system";
+            _currentUser = authState.User.Identity?.Name ?? "system";
 
-            var result = await LoanService.SaveLoanAsync(_form, userName);
+            _cashBoxes = await LoanService.GetCashBoxesLookupAsync();
+
+            var defaultBox = _cashBoxes.FirstOrDefault(c => c.IsDefault)
+                             ?? _cashBoxes.FirstOrDefault();
+            if (defaultBox != null)
+                _dto.CashBoxId = defaultBox.CashBoxId;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ في تحميل البيانات: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _initialLoading = false;
+        }
+    }
+
+    private async Task<IEnumerable<EmployeeLookupDto>> SearchEmployeesAsync(
+        string? value, CancellationToken ct)
+    {
+        try
+        {
+            return await LoanService.GetEmployeesLookupAsync(value);
+        }
+        catch
+        {
+            return Enumerable.Empty<EmployeeLookupDto>();
+        }
+    }
+
+    private void OnAmountChanged(decimal value)
+    {
+        _dto.LoanAmount = value;
+        RecalculateInstallment();
+    }
+
+    private void OnInstallmentsChanged(int value)
+    {
+        _dto.TotalInstallments = value;
+        RecalculateInstallment();
+    }
+
+    private void RecalculateInstallment()
+    {
+        _dto.MonthlyInstallment = (_dto.TotalInstallments > 0 && _dto.LoanAmount > 0)
+            ? Math.Round(_dto.LoanAmount / _dto.TotalInstallments, 2)
+            : 0;
+        _installmentDisplay = $"{_dto.MonthlyInstallment:N2} جـ";
+        StateHasChanged();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (_form is null) return;
+        await _form.Validate();
+        if (!_formValid) return;
+
+        if (_selectedEmployee is null)
+        {
+            Snackbar.Add("يجب اختيار الموظف", Severity.Warning);
+            return;
+        }
+
+        if (_dto.LoanAmount <= 0)
+        {
+            Snackbar.Add("قيمة السلفة يجب أن تكون أكبر من صفر", Severity.Warning);
+            return;
+        }
+
+        if (!_dto.CashBoxId.HasValue)
+        {
+            Snackbar.Add("يجب اختيار الخزينة", Severity.Warning);
+            return;
+        }
+
+        if (!ValidateMonthFormat(_dto.StartDeductionMonth))
+        {
+            Snackbar.Add("صيغة شهر البداية غير صحيحة (مثال: 2025-02)", Severity.Warning);
+            return;
+        }
+
+        _saving = true;
+        StateHasChanged();
+
+        try
+        {
+            _dto.EmployeeId   = _selectedEmployee.EmployeeId;
+            _dto.EmployeeName = _selectedEmployee.FullName;
+            _dto.LoanDate     = _loanDate ?? DateTime.Today;
+
+            var result = await LoanService.SaveLoanAsync(_dto, _currentUser);
+
             if (result.Success)
             {
                 Snackbar.Add(result.Message, Severity.Success);
                 await OnSaved.InvokeAsync();
-                MudDialog.Close();
+                MudDialog.Close(DialogResult.Ok(result.LoanId));
             }
             else
+            {
                 Snackbar.Add(result.Message, Severity.Error);
+            }
         }
-        finally { _saving = false; }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+            StateHasChanged();
+        }
+    }
+
+    private static bool ValidateMonthFormat(string? month)
+    {
+        if (string.IsNullOrWhiteSpace(month)) return false;
+        return DateTime.TryParseExact(
+            month + "-01", "yyyy-MM-dd",
+            null, System.Globalization.DateTimeStyles.None, out _);
     }
 
     private void Cancel() => MudDialog.Cancel();
-
-    // Helper DTO
-    private class EmployeeDropdownItem
-    {
-        public int    EmployeeId { get; set; }
-        public string FullName   { get; set; } = "";
-        public string? Department{ get; set; }
-    }
 }

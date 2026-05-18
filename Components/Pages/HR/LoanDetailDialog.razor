@@ -1,0 +1,318 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
+
+@inject IEmployeeLoanService LoanService
+@inject ISnackbar            Snackbar
+@inject IDialogService       DialogService
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Receipt" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">تفاصيل السلفة</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_loading)
+        {
+            <div class="d-flex justify-center align-center" style="height:300px">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+            </div>
+        }
+        else if (_detail is null)
+        {
+            <MudAlert Severity="Severity.Error">السلفة غير موجودة</MudAlert>
+        }
+        else
+        {
+            var loan = _detail.Loan;
+
+            <!-- ═══ معلومات السلفة ═══ -->
+            <MudPaper Class="pa-4 mb-4 rounded-lg" Elevation="0"
+                      Style="border: 1px solid #e5e7eb;">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12">
+                        <div class="d-flex align-center gap-2 mb-2">
+                            <MudAvatar Color="Color.Primary" Size="Size.Medium">
+                                @loan.EmployeeName.FirstOrDefault()
+                            </MudAvatar>
+                            <div>
+                                <MudText Typo="Typo.subtitle1">
+                                    <b>@loan.EmployeeName</b>
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @(loan.Department ?? "—") | @(loan.JobTitle ?? "—")
+                                </MudText>
+                            </div>
+                            <MudSpacer />
+                            <MudChip T="string"
+                                     Size="Size.Small"
+                                     Style="@($"background:{loan.StatusColor};color:white;")">
+                                @loan.StatusAr
+                            </MudChip>
+                        </div>
+                    </MudItem>
+
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">قيمة السلفة</MudText>
+                        <MudText Typo="Typo.h6" Color="Color.Primary">
+                            <b>@loan.LoanAmount.ToString("N2")</b> جـ
+                        </MudText>
+                    </MudItem>
+
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">القسط الشهري</MudText>
+                        <MudText Typo="Typo.h6">
+                            <b>@loan.MonthlyInstallment.ToString("N2")</b> جـ
+                        </MudText>
+                    </MudItem>
+
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">المتبقي</MudText>
+                        <MudText Typo="Typo.h6"
+                                 Color="@(loan.RemainingAmount > 0 ? Color.Error : Color.Success)">
+                            <b>@loan.RemainingAmount.ToString("N2")</b> جـ
+                        </MudText>
+                    </MudItem>
+
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">تم سداده</MudText>
+                        <MudText Typo="Typo.h6" Color="Color.Success">
+                            <b>@loan.PaidAmount.ToString("N2")</b> جـ
+                        </MudText>
+                    </MudItem>
+                </MudGrid>
+
+                <MudDivider Class="my-3" />
+
+                <MudGrid Spacing="2">
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">تاريخ السلفة</MudText>
+                        <MudText Typo="Typo.body2">
+                            @loan.LoanDate.ToString("dd/MM/yyyy")
+                        </MudText>
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">بداية الخصم</MudText>
+                        <MudText Typo="Typo.body2">@FormatMonth(loan.StartDeductionMonth)</MudText>
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">الأقساط</MudText>
+                        <MudText Typo="Typo.body2">
+                            @loan.PaidInstallments / @loan.TotalInstallments
+                        </MudText>
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">الخزينة</MudText>
+                        <MudText Typo="Typo.body2">@(loan.CashBoxName ?? "—")</MudText>
+                    </MudItem>
+                </MudGrid>
+
+                @if (!string.IsNullOrWhiteSpace(loan.Notes))
+                {
+                    <MudDivider Class="my-3" />
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">ملاحظات</MudText>
+                    <MudText Typo="Typo.body2">@loan.Notes</MudText>
+                }
+            </MudPaper>
+
+            <!-- ═══ Progress Bar ═══ -->
+            <MudPaper Class="pa-3 mb-4 rounded-lg" Elevation="0"
+                      Style="border: 1px solid #e5e7eb;">
+                <div class="d-flex justify-space-between align-center mb-2">
+                    <MudText Typo="Typo.subtitle2">تقدم السداد</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Primary">
+                        @GetProgressPercent(loan).ToString("N0")%
+                    </MudText>
+                </div>
+                <MudProgressLinear Value="@GetProgressPercent(loan)"
+                                   Color="@GetProgressColor(loan)"
+                                   Rounded="true"
+                                   Size="Size.Large" />
+            </MudPaper>
+
+            <!-- ═══ جدول الأقساط ═══ -->
+            <MudText Typo="Typo.subtitle1" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.List" Size="Size.Small" Class="me-1" />
+                الأقساط (@_detail.Installments.Count)
+            </MudText>
+
+            <MudTable Items="@_detail.Installments"
+                      Dense="true"
+                      Hover="true"
+                      Striped="true"
+                      Elevation="0"
+                      Style="border: 1px solid #e5e7eb; border-radius: 8px;">
+                <HeaderContent>
+                    <MudTh Style="text-align:center">#</MudTh>
+                    <MudTh>الشهر</MudTh>
+                    <MudTh Style="text-align:center">المبلغ</MudTh>
+                    <MudTh Style="text-align:center">الحالة</MudTh>
+                    <MudTh Style="text-align:center">تاريخ الخصم</MudTh>
+                    <MudTh Style="text-align:center">إجراء</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="text-align:center">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                            @context.InstallmentNumber
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>@context.MonthDisplay</MudTd>
+                    <MudTd Style="text-align:center">
+                        <b>@context.Amount.ToString("N2")</b> جـ
+                    </MudTd>
+                    <MudTd Style="text-align:center">
+                        <MudChip T="string"
+                                 Size="Size.Small"
+                                 Style="@($"background:{context.StatusColor};color:white;")">
+                            @context.StatusAr
+                        </MudChip>
+                    </MudTd>
+                    <MudTd Style="text-align:center">
+                        @(context.DeductionDate?.ToString("dd/MM/yyyy") ?? "—")
+                    </MudTd>
+                    <MudTd Style="text-align:center">
+                        @if (context.Status == "Pending" && loan.Status == "Active")
+                        {
+                            <MudTooltip Text="تأجيل القسط للشهر القادم">
+                                <MudIconButton Icon="@Icons.Material.Filled.Schedule"
+                                               Size="Size.Small"
+                                               Color="Color.Warning"
+                                               OnClick="() => SkipInstallmentAsync(context)" />
+                            </MudTooltip>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption">—</MudText>
+                        }
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Close"
+                   Variant="Variant.Filled"
+                   Color="Color.Default">
+            إغلاق
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    public IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public int LoanId { get; set; }
+
+    [Parameter]
+    public EventCallback OnUpdated { get; set; }
+
+    private LoanDetailDto? _detail;
+    private bool           _loading = true;
+    private string         _currentUser = "system";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        _currentUser = authState.User.Identity?.Name ?? "system";
+        await LoadDetailAsync();
+    }
+
+    private async Task LoadDetailAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _detail = await LoanService.GetLoanDetailAsync(LoanId);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SkipInstallmentAsync(InstallmentListDto installment)
+{
+    var parameters = new DialogParameters<MudMessageBox>
+    {
+        { x => x.Message, 
+          $"هل تريد تأجيل القسط رقم {installment.InstallmentNumber} " +
+          $"بمبلغ {installment.Amount:N2} جـ للشهر التالي؟" },
+        { x => x.YesText, "تأجيل" },
+        { x => x.CancelText, "إلغاء" }
+    };
+
+    var options = new DialogOptions 
+    { 
+        MaxWidth = MaxWidth.ExtraSmall 
+    };
+
+    var dialog = await DialogService.ShowAsync<MudMessageBox>(
+        "تأجيل القسط", parameters, options);
+    
+    var result = await dialog.Result;
+
+    if (result is { Canceled: false })
+    {
+        var skipResult = await LoanService.SkipInstallmentAsync(
+            installment.InstallmentId,
+            "تأجيل يدوي",
+            _currentUser);
+
+        if (skipResult.Success)
+        {
+            Snackbar.Add(skipResult.Message, Severity.Success);
+            await LoadDetailAsync();
+            await OnUpdated.InvokeAsync();
+        }
+        else
+        {
+            Snackbar.Add(skipResult.Message, Severity.Error);
+        }
+    }
+}
+
+    private void Close() => MudDialog.Close();
+
+    private static string FormatMonth(string? yearMonth)
+    {
+        if (string.IsNullOrWhiteSpace(yearMonth)) return "—";
+        if (DateTime.TryParseExact(yearMonth + "-01", "yyyy-MM-dd",
+            null, System.Globalization.DateTimeStyles.None, out var date))
+        {
+            return date.ToString("MMMM yyyy",
+                new System.Globalization.CultureInfo("ar-EG"));
+        }
+        return yearMonth;
+    }
+
+    private static double GetProgressPercent(LoanListDto loan) =>
+        loan.TotalInstallments > 0
+            ? (double)loan.PaidInstallments / loan.TotalInstallments * 100
+            : 0;
+
+    private static Color GetProgressColor(LoanListDto loan)
+    {
+        var p = GetProgressPercent(loan);
+        return p switch
+        {
+            >= 100 => Color.Success,
+            >= 50  => Color.Info,
+            >= 25  => Color.Warning,
+            _      => Color.Error
+        };
+    }
+}

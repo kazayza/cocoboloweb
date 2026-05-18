@@ -146,3 +146,29 @@ public class LoanStatsDto
     public int     CompletedThisMonth   { get; set; }  // انتهت الشهر ده
     public int     EmployeesWithLoans   { get; set; }  // موظفين عندهم سلف
 }
+public class PagedResult<T>
+{
+    public List<T> Items      { get; set; } = new();
+    public int     TotalCount { get; set; }
+    public int     PageNumber { get; set; }
+    public int     PageSize   { get; set; }
+    public int     TotalPages => (int)Math.Ceiling((double)TotalCount / PageSize);
+    public bool    HasPrevious => PageNumber > 1;
+    public bool    HasNext     => PageNumber < TotalPages;
+}
+public class EmployeeLookupDto
+{
+    public int     EmployeeId  { get; set; }
+    public string  FullName    { get; set; } = "";
+    public string? Department  { get; set; }
+    public string? JobTitle    { get; set; }
+    public string  DisplayText => $"{FullName} - {Department ?? "بدون قسم"}";
+}
+public class CashBoxLookupDto
+{
+    public int     CashBoxId      { get; set; }
+    public string  CashBoxName    { get; set; } = "";
+    public decimal CurrentBalance { get; set; }
+    public bool    IsDefault      { get; set; }
+    public string  DisplayText    => $"{CashBoxName} ({CurrentBalance:N2} جـ)";
+}

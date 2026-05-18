@@ -21,4 +21,6 @@ public interface IEmployeeLoanService
 
     // ── مساعد للـ Payroll ───────────────────────────────────
     Task<List<InstallmentListDto>>  GetEmployeeInstallmentsForMonth(int employeeId, string month);
+    Task<List<EmployeeLookupDto>> GetEmployeesLookupAsync(string? search = null);
+Task<List<CashBoxLookupDto>>  GetCashBoxesLookupAsync();
 }

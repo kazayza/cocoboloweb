@@ -681,6 +681,69 @@ public partial class db24804Context : DbContext
                 .HasMaxLength(4)
                 .HasColumnName("yearqualification");
         });
+        modelBuilder.Entity<EmployeeLoan>(entity =>
+        {
+            entity.ToTable("EmployeeLoans");
+
+            entity.HasKey(e => e.LoanId);
+
+            entity.Property(e => e.LoanAmount).HasColumnType("decimal(18,2)");
+            entity.Property(e => e.MonthlyInstallment).HasColumnType("decimal(18,2)");
+            entity.Property(e => e.RemainingAmount).HasColumnType("decimal(18,2)");
+            entity.Property(e => e.StartDeductionMonth).HasMaxLength(7);
+            entity.Property(e => e.Status).HasMaxLength(20);
+            entity.Property(e => e.Notes).HasMaxLength(500);
+            entity.Property(e => e.ApprovedBy).HasMaxLength(100);
+            entity.Property(e => e.CreatedBy).HasMaxLength(100);
+
+            entity.HasOne(d => d.Employee)
+                  .WithMany()
+                  .HasForeignKey(d => d.EmployeeId)
+                  .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(d => d.CashBox)
+                  .WithMany()
+                  .HasForeignKey(d => d.CashBoxId)
+                  .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(d => d.CashboxTransaction)
+                  .WithMany()
+                  .HasForeignKey(d => d.CashboxTransactionId)
+                  .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<LoanInstallment>(entity =>
+        {
+            entity.ToTable("LoanInstallments");
+
+            entity.HasKey(e => e.InstallmentId);
+
+            entity.Property(e => e.Amount).HasColumnType("decimal(18,2)");
+            entity.Property(e => e.DeductionMonth).HasMaxLength(7);
+            entity.Property(e => e.Status).HasMaxLength(20);
+            entity.Property(e => e.Notes).HasMaxLength(300);
+            entity.Property(e => e.CreatedBy).HasMaxLength(100);
+
+            entity.HasOne(d => d.Loan)
+                  .WithMany(p => p.Installments)
+                  .HasForeignKey(d => d.LoanId)
+                  .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(d => d.Employee)
+                  .WithMany()
+                  .HasForeignKey(d => d.EmployeeId)
+                  .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(d => d.Payroll)
+                  .WithMany()
+                  .HasForeignKey(d => d.PayrollId)
+                  .OnDelete(DeleteBehavior.NoAction);
+
+            entity.HasOne(d => d.PayrollDetail)
+                  .WithMany()
+                  .HasForeignKey(d => d.PayrollDetailId)
+                  .OnDelete(DeleteBehavior.NoAction);
+        });
 
         modelBuilder.Entity<EmployeeShift>(entity =>
         {

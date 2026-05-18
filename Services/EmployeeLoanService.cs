@@ -516,4 +516,50 @@ public class EmployeeLoanService : IEmployeeLoanService
             EmployeesWithLoans   = activeLoans.Select(l => l.EmployeeId).Distinct().Count()
         };
     }
+    // ============================================================
+// Lookups
+// ============================================================
+public async Task<List<EmployeeLookupDto>> GetEmployeesLookupAsync(string? search = null)
+{
+    var query = _db.Employees
+        .AsNoTracking()
+        .Where(e => e.Status == "نشط" || e.Status == "Active");
+
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var s = search.Trim();
+        query = query.Where(e => 
+            e.FullName.Contains(s) || 
+            (e.Department != null && e.Department.Contains(s)));
+    }
+
+    return await query
+        .OrderBy(e => e.FullName)
+        .Take(50)
+        .Select(e => new EmployeeLookupDto
+        {
+            EmployeeId = e.EmployeeId,
+            FullName   = e.FullName,
+            Department = e.Department,
+            JobTitle   = e.JobTitle
+        })
+        .ToListAsync();
+}
+
+public async Task<List<CashBoxLookupDto>> GetCashBoxesLookupAsync()
+{
+    return await _db.CashBoxes
+        .AsNoTracking()
+        .Where(c => c.IsActive == true)
+        .OrderByDescending(c => c.IsDefault)
+        .ThenBy(c => c.CashBoxName)
+        .Select(c => new CashBoxLookupDto
+        {
+            CashBoxId      = c.CashBoxId,
+            CashBoxName    = c.CashBoxName,
+            CurrentBalance = c.CurrentBalance ?? 0,
+            IsDefault      = c.IsDefault ?? false
+        })
+        .ToListAsync();
+}
 }
