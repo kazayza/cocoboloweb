@@ -3,11 +3,14 @@
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
 @using System.Globalization
+@using ClosedXML.Excel 
+@using System.IO
 
 @inject ICashBoxService CashBoxService
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthProvider
 @inject ISnackbar Snackbar
+@inject IJSRuntime JS 
 
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
 <!-- ⭐ LOADING                                                                  -->
@@ -65,6 +68,21 @@ else
                     }
                     <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Dashboard"
                                OnClick="@(() => Navigation.NavigateTo("/cashbox/dashboard"))" Class="txh-btn-ghost">Dashboard</MudButton>
+                    <MudButton Variant="Variant.Filled"
+           StartIcon="@Icons.Material.Filled.FileDownload"
+           OnClick="ExportToExcelAsync"
+           Disabled="@_isExporting"
+           Class="txh-btn-excel">
+    @if (_isExporting)
+    {
+        <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Inherit" />
+        <span>جاري التصدير...</span>
+    }
+    else
+    {
+        <span>تصدير Excel</span>
+    }
+</MudButton>
                 </div>
             </div>
 
@@ -494,6 +512,19 @@ else
 
     .td-action-btn { width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:transparent; border:1px solid var(--mud-palette-divider); cursor:pointer; transition:all 0.2s; color:#3b82f6; }
     .td-action-btn:hover { background:rgba(59,130,246,0.08); border-color:#3b82f6; transform:scale(1.1); }
+    .txh-btn-excel {
+    background: linear-gradient(135deg, #10b981, #059669) !important;
+    color: white !important;
+    font-weight: 700 !important;
+    border-radius: 14px !important;
+    padding: 0.875rem 1.75rem !important;
+    box-shadow: 0 6px 20px rgba(16,185,129,0.35) !important;
+    transition: all 0.3s !important;
+}
+.txh-btn-excel:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(16,185,129,0.5) !important;
+}
 
     /* Empty */
     .empty-state { text-align:center; padding:4rem 2rem; }
@@ -618,6 +649,106 @@ else
         if (PreCashBoxId.HasValue) _filter.CashBoxId = PreCashBoxId;
         await LoadData();
     }
+    private bool _isExporting = false;
+
+private async Task ExportToExcelAsync()
+{
+    _isExporting = true;
+    StateHasChanged();
+
+    try
+    {
+        // جلب كل البيانات بناءً على الفلتر الحالي (بدون حدود الصفحات)
+        var exportFilter = new CashBoxTransactionFilterDto
+        {
+            CashBoxId = _filter.CashBoxId,
+            TransactionType = _filter.TransactionType,
+            ReferenceType = _filter.ReferenceType,
+            DateFrom = _filter.DateFrom,
+            DateTo = _filter.DateTo,
+            SearchText = _filter.SearchText,
+            PageNumber = 1,
+            PageSize = int.MaxValue // كل السجلات
+        };
+
+        var result = await CashBoxService.GetTransactionsAsync(exportFilter);
+        var data = result.Items;
+
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.Worksheets.Add("حركات الخزينة");
+
+        // تنسيق عام عربي
+        sheet.RightToLeft = true;
+        sheet.ColumnWidth = 18;
+
+        // العناوين
+        var headers = new[] { "التاريخ", "الوقت", "الخزينة", "النوع", "المصدر", "الجهة", "الحساب", "المبلغ", "الملاحظات", "المستخدم" };
+        for (int i = 0; i < headers.Length; i++)
+        {
+            var cell = sheet.Cell(1, i + 1);
+            cell.Value = headers[i];
+            cell.Style.Font.Bold = true;
+            cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#D4A853");
+            cell.Style.Font.FontColor = XLColor.White;
+            cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+        }
+
+        // البيانات
+        int row = 2;
+        foreach (var t in data)
+        {
+            sheet.Cell(row, 1).Value = t.TransactionDate.ToString("yyyy/MM/dd");
+            sheet.Cell(row, 2).Value = t.TransactionDate.ToString("HH:mm");
+            sheet.Cell(row, 3).Value = t.CashBoxName;
+            sheet.Cell(row, 4).Value = t.TransactionType;
+            sheet.Cell(row, 5).Value = t.ReferenceTypeAr;
+            sheet.Cell(row, 6).Value = t.PartyName ?? "";
+            sheet.Cell(row, 7).Value = t.PersonalAccountName ?? "";
+            sheet.Cell(row, 8).Value = t.Amount;
+            sheet.Cell(row, 8).Style.NumberFormat.Format = "#,##0.00";
+            sheet.Cell(row, 9).Value = t.Notes ?? "";
+            sheet.Cell(row, 10).Value = t.CreatedBy ?? "";
+
+            // تلوين الصفوف حسب النوع
+            if (t.TransactionType == "صرف")
+                sheet.Row(row).Style.Fill.BackgroundColor = XLColor.FromHtml("#FFF5F5");
+            else
+                sheet.Row(row).Style.Fill.BackgroundColor = XLColor.FromHtml("#F0FFF4");
+
+            row++;
+        }
+
+        // تجميد الصف الأول
+        sheet.SheetView.FreezeRows(1);
+
+        // تحويل الملف إلى بايتات وتحميله
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Seek(0, SeekOrigin.Begin);
+
+        var bytes = stream.ToArray();
+        var fileName = $"حركات_الخزينة_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
+
+        await JS.InvokeVoidAsync("eval", $@"
+    var a = document.createElement('a');
+    a.download = '{fileName}';
+    a.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{Convert.ToBase64String(bytes)}';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+");
+        Snackbar.Add("تم تصدير البيانات بنجاح", Severity.Success);
+    }
+    catch (Exception ex)
+    {
+        Snackbar.Add($"خطأ في التصدير: {ex.Message}", Severity.Error);
+    }
+    finally
+    {
+        _isExporting = false;
+        StateHasChanged();
+    }
+}
 
     private string FormatMoney(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
 }
