@@ -1084,7 +1084,8 @@ modelBuilder.Entity<PartyContact>(entity =>
 
             entity.Property(e => e.NetSalary)
                 .HasComputedColumnSql("(([BasicSalary]+ISNULL([BonusInPayroll],0))-ISNULL([Deductions],0))", true)
-                .HasColumnType("decimal(20, 2)");
+                .HasColumnType("decimal(20, 2)")
+                .ValueGeneratedOnAddOrUpdate();
 
             entity.Property(e => e.Notes)
                 .HasMaxLength(255);
@@ -1193,6 +1194,11 @@ modelBuilder.Entity<PartyContact>(entity =>
         modelBuilder.Entity<PayrollRun>(entity =>
         {
             entity.HasKey(e => e.RunId);
+            entity.Property(e => e.RunId)
+        .HasColumnName("RunID");
+
+    entity.Property(e => e.CashBoxId)
+        .HasColumnName("CashBoxID");
 
             entity.Property(e => e.PayrollMonth)
                 .HasMaxLength(7)

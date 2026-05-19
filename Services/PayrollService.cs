@@ -584,10 +584,15 @@ public class PayrollService : IPayrollService
         return (true, $"✅ تم حفظ {count} راتب بدون صرف | يمكنك صرفها من سجل المرتبات", run.RunId);
     }
     catch (Exception ex)
-    {
-        await tx.RollbackAsync();
-        return (false, $"خطأ: {ex.Message}", null);
-    }
+{
+    await tx.RollbackAsync();
+    
+    // ✅ أضف ده عشان نشوف السبب الحقيقي
+    var innerMsg = ex.InnerException?.Message ?? "لا يوجد";
+    var innerInner = ex.InnerException?.InnerException?.Message ?? "";
+    
+    return (false, $"خطأ: {ex.Message} | Inner: {innerMsg} | {innerInner}", null);
+}
 }
 
     // ============================================================
