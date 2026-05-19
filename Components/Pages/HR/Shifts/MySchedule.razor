@@ -1,0 +1,550 @@
+@page "/my-schedule"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IEmployeeShiftService ShiftService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthState
+
+<PageTitle>شيفتاتي</PageTitle>
+
+<AuthorizeView>
+    <Authorized Context="authCtx">
+        @if (!_hasPermission)
+        {
+            <MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+                <MudPaper Class="pa-8 text-center" Elevation="3" Style="border-radius: 20px;">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Large" 
+                             Style="font-size: 64px; color: #EF5350;" Class="mb-4" />
+                    <MudText Typo="Typo.h5" Color="Color.Error" Class="mb-2">غير مصرح</MudText>
+                    <MudText Typo="Typo.body1" Color="Color.Secondary">
+                        ليس لديك صلاحية الوصول لهذه الصفحة
+                    </MudText>
+                </MudPaper>
+            </MudContainer>
+        }
+        else if (_isLoading)
+        {
+            <MudContainer MaxWidth="MaxWidth.Large" Class="mt-8">
+                <MudPaper Class="pa-8" Elevation="3" Style="border-radius: 20px;">
+                    <div class="d-flex flex-column align-center gap-4">
+                        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+                        <MudText Typo="Typo.h6" Color="Color.Secondary">جاري تحميل شيفتاتك...</MudText>
+                    </div>
+                </MudPaper>
+            </MudContainer>
+        }
+        else
+        {
+            <MudContainer MaxWidth="MaxWidth.Large" Class="py-4">
+                
+                @* ═══════════════ HEADER ═══════════════ *@
+                <MudPaper Class="mb-4 overflow-hidden" Elevation="0" 
+                          Style="border-radius: 20px; background: linear-gradient(135deg, #1A237E 0%, #3949AB 50%, #5C6BC0 100%);">
+                    <div class="pa-5">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-3">
+                            <div class="d-flex align-center gap-3">
+                                <MudAvatar Size="Size.Large" 
+                                           Style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px);">
+                                    <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Medium" Color="Color.Surface" />
+                                </MudAvatar>
+                                <div>
+                                    <MudText Typo="Typo.h5" Color="Color.Surface" Class="font-weight-bold">
+                                        شيفتاتي
+                                    </MudText>
+                                    <MudText Typo="Typo.body2" Style="color: rgba(255,255,255,0.7);">
+                                        @_userName • @(_currentEmployeeInfo ?? "جدول الشيفتات الخاص بك")
+                                    </MudText>
+                                </div>
+                            </div>
+                            
+                            @if (CurrentShift != null)
+                            {
+                                <MudChip T="string" 
+                                         Variant="Variant.Filled" 
+                                         Color="Color.Success"
+                                         Size="Size.Medium"
+                                         Icon="@Icons.Material.Filled.CheckCircle">
+                                    لديك شيفت نشط
+                                </MudChip>
+                            }
+                        </div>
+                    </div>
+
+                    @* Quick Stats *@
+                    <div style="background: rgba(0,0,0,0.1); padding: 16px 20px;">
+                        <div class="d-flex justify-center gap-6 flex-wrap">
+                            <div class="d-flex align-center gap-2">
+                                <MudAvatar Size="Size.Small" Style="background: rgba(255,255,255,0.2);">
+                                    <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Color="Color.Surface" />
+                                </MudAvatar>
+                                <div>
+                                    <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">إجمالي الشيفتات</MudText>
+                                    <MudText Typo="Typo.subtitle1" Color="Color.Surface" Class="font-weight-bold">@_shifts.Count</MudText>
+                                </div>
+                            </div>
+                            <div class="d-flex align-center gap-2">
+                                <MudAvatar Size="Size.Small" Style="background: rgba(76, 175, 80, 0.3);">
+                                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Style="color: #81C784;" />
+                                </MudAvatar>
+                                <div>
+                                    <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">نشطة</MudText>
+                                    <MudText Typo="Typo.subtitle1" Color="Color.Surface" Class="font-weight-bold">@_shifts.Count(s => s.IsActive)</MudText>
+                                </div>
+                            </div>
+                            <div class="d-flex align-center gap-2">
+                                <MudAvatar Size="Size.Small" Style="background: rgba(255, 193, 7, 0.3);">
+                                    <MudIcon Icon="@Icons.Material.Filled.WbSunny" Size="Size.Small" Style="color: #FFD54F;" />
+                                </MudAvatar>
+                                <div>
+                                    <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">صباحي</MudText>
+                                    <MudText Typo="Typo.subtitle1" Color="Color.Surface" Class="font-weight-bold">@_shifts.Count(s => s.ShiftType == "صباحي")</MudText>
+                                </div>
+                            </div>
+                            <div class="d-flex align-center gap-2">
+                                <MudAvatar Size="Size.Small" Style="background: rgba(156, 39, 176, 0.3);">
+                                    <MudIcon Icon="@Icons.Material.Filled.NightsStay" Size="Size.Small" Style="color: #CE93D8;" />
+                                </MudAvatar>
+                                <div>
+                                    <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">مسائي</MudText>
+                                    <MudText Typo="Typo.subtitle1" Color="Color.Surface" Class="font-weight-bold">@_shifts.Count(s => s.ShiftType == "مسائي")</MudText>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </MudPaper>
+
+                @if (!_shifts.Any())
+                {
+                    @* ═══════════════ EMPTY STATE ═══════════════ *@
+                    <MudPaper Class="pa-8 text-center" Elevation="2" Style="border-radius: 20px;">
+                        <MudIcon Icon="@Icons.Material.Filled.EventBusy" 
+                                 Size="Size.Large" 
+                                 Style="font-size: 80px; color: #E0E0E0;" Class="mb-4" />
+                        <MudText Typo="Typo.h5" Color="Color.Secondary" Class="mb-2">
+                            لا توجد شيفتات مسجلة لك حالياً
+                        </MudText>
+                        <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mb-4">
+                            تواصل مع إدارة الموارد البشرية لتعيين شيفت
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" 
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Support">
+                            تواصل مع HR
+                        </MudButton>
+                    </MudPaper>
+                }
+                else
+                {
+                    <MudGrid Spacing="4">
+                        
+                        @* ═══════════════ CURRENT SHIFT ═══════════════ *@
+                        <MudItem xs="12" md="5">
+                            @if (CurrentShift != null)
+                            {
+                                <MudPaper Class="pa-0 h-100 overflow-hidden" Elevation="3" Style="border-radius: 20px;">
+                                    @* Shift Header *@
+                                    <div style="@GetCurrentShiftHeaderStyle()">
+                                        <div class="pa-5">
+                                            <div class="d-flex align-center justify-space-between mb-3">
+                                                <MudChip T="string" Size="Size.Small" 
+                                                         Variant="Variant.Filled"
+                                                         Style="background: rgba(255,255,255,0.2); color: white;">
+                                                    الشيفت الحالي
+                                                </MudChip>
+                                                <MudChip T="string" Size="Size.Small"
+                                                         Variant="Variant.Filled"
+                                                         Color="Color.Success">
+                                                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Class="ml-1" />
+                                                    نشط
+                                                </MudChip>
+                                            </div>
+                                            
+                                            <div class="d-flex align-center gap-3 mb-3">
+                                                <MudAvatar Size="Size.Large" Style="background: rgba(255,255,255,0.2);">
+                                                    <MudIcon Icon="@GetShiftIcon(CurrentShift.ShiftType)" Size="Size.Medium" Color="Color.Surface" />
+                                                </MudAvatar>
+                                                <div>
+                                                    <MudText Typo="Typo.h4" Color="Color.Surface" Class="font-weight-bold">
+                                                        @CurrentShift.ShiftType
+                                                    </MudText>
+                                                    <MudText Typo="Typo.body2" Style="color: rgba(255,255,255,0.8);">
+                                                        @CurrentShift.DurationDisplay
+                                                    </MudText>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    @* Shift Details *@
+                                    <div class="pa-5">
+                                        <MudGrid Spacing="3">
+                                            <MudItem xs="6">
+                                                <div class="text-center pa-3" style="background: var(--mud-palette-background-grey); border-radius: 12px;">
+                                                    <MudIcon Icon="@Icons.Material.Filled.Login" Color="Color.Success" Class="mb-1" />
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary">وقت البدء</MudText>
+                                                    <MudText Typo="Typo.h5" Class="font-weight-bold">@CurrentShift.StartTimeDisplay</MudText>
+                                                </div>
+                                            </MudItem>
+                                            <MudItem xs="6">
+                                                <div class="text-center pa-3" style="background: var(--mud-palette-background-grey); border-radius: 12px;">
+                                                    <MudIcon Icon="@Icons.Material.Filled.Logout" Color="Color.Error" Class="mb-1" />
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary">وقت الانتهاء</MudText>
+                                                    <MudText Typo="Typo.h5" Class="font-weight-bold">@CurrentShift.EndTimeDisplay</MudText>
+                                                </div>
+                                            </MudItem>
+                                        </MudGrid>
+
+                                        @* Time Progress Bar *@
+                                        <MudPaper Class="pa-3 mt-4" Elevation="0" Style="background: var(--mud-palette-background-grey); border-radius: 12px;">
+                                            <div class="d-flex justify-space-between mb-2">
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">00:00</MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">12:00</MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">24:00</MudText>
+                                            </div>
+                                            <div style="position: relative; height: 16px; background: var(--mud-palette-grey-lighter); border-radius: 8px; overflow: hidden;">
+                                                <div style="@GetTimeBarStyle(CurrentShift)"></div>
+                                                @* Current Time Indicator *@
+                                                <div style="@GetCurrentTimeIndicatorStyle()"></div>
+                                            </div>
+                                            <div class="d-flex justify-center mt-2">
+                                                <MudText Typo="Typo.caption" Color="Color.Primary" Class="font-weight-medium">
+                                                    @GetCurrentTimeStatus(CurrentShift)
+                                                </MudText>
+                                            </div>
+                                        </MudPaper>
+
+                                        @* Shift Period *@
+                                        <MudDivider Class="my-4" />
+                                        <div class="d-flex align-center justify-space-between">
+                                            <div class="d-flex align-center gap-2">
+                                                <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="Size.Small" Color="Color.Primary" />
+                                                <MudText Typo="Typo.body2">من: <strong>@CurrentShift.EffectiveFromDisplay</strong></MudText>
+                                            </div>
+                                            <div class="d-flex align-center gap-2">
+                                                <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" Color="Color.Secondary" />
+                                                <MudText Typo="Typo.body2">إلى: <strong>@CurrentShift.EffectiveToDisplay</strong></MudText>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </MudPaper>
+                            }
+                            else
+                            {
+                                @* No Active Shift *@
+                                <MudPaper Class="pa-6 h-100 text-center d-flex flex-column justify-center" 
+                                          Elevation="2" Style="border-radius: 20px; background: var(--mud-palette-background-grey);">
+                                    <MudIcon Icon="@Icons.Material.Filled.EventBusy" 
+                                             Size="Size.Large" 
+                                             Style="font-size: 56px;" 
+                                             Color="Color.Secondary" Class="mb-3" />
+                                    <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mb-2">
+                                        لا يوجد شيفت نشط حالياً
+                                    </MudText>
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                        جميع شيفتاتك السابقة منتهية
+                                    </MudText>
+                                </MudPaper>
+                            }
+                        </MudItem>
+
+                        @* ═══════════════ SHIFTS HISTORY ═══════════════ *@
+                        <MudItem xs="12" md="7">
+                            <MudPaper Class="pa-5" Elevation="2" Style="border-radius: 20px;">
+                                <div class="d-flex align-center justify-space-between mb-4">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudIcon Icon="@Icons.Material.Filled.History" Color="Color.Primary" />
+                                        <MudText Typo="Typo.h6" Class="font-weight-bold">سجل الشيفتات</MudText>
+                                    </div>
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                                        @_shifts.Count شيفت
+                                    </MudChip>
+                                </div>
+
+                                @* Timeline View *@
+                                <MudTimeline TimelinePosition="TimelinePosition.Start" TimelineAlign="TimelineAlign.Default">
+                                    @foreach (var shift in _shifts.Take(10))
+                                    {
+                                        <MudTimelineItem Color="@(shift.IsActive ? Color.Success : Color.Default)"
+                                                         Variant="Variant.Filled"
+                                                         Size="Size.Medium">
+                                            <ItemOpposite>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                    @shift.EffectiveFromDisplay
+                                                </MudText>
+                                            </ItemOpposite>
+                                            <ItemContent>
+                                                <MudPaper Class="pa-3" Elevation="1" Style="border-radius: 12px;">
+                                                    <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                                                        <div class="d-flex align-center gap-2">
+                                                            <MudAvatar Size="Size.Small" Style="@GetShiftAvatarStyle(shift.ShiftType)">
+                                                                <MudIcon Icon="@GetShiftIcon(shift.ShiftType)" Size="Size.Small" />
+                                                            </MudAvatar>
+                                                            <div>
+                                                                <MudText Typo="Typo.subtitle2" Class="font-weight-bold">@shift.ShiftType</MudText>
+                                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                                    @shift.StartTimeDisplay - @shift.EndTimeDisplay
+                                                                </MudText>
+                                                            </div>
+                                                        </div>
+                                                        <div class="d-flex align-center gap-2">
+                                                            <MudChip T="string" Size="Size.Small" 
+                                                                     Variant="Variant.Outlined"
+                                                                     Color="Color.Default">
+                                                                @shift.DurationDisplay
+                                                            </MudChip>
+                                                            @if (shift.IsActive)
+                                                            {
+                                                                <MudChip T="string" Size="Size.Small" 
+                                                                         Variant="Variant.Filled"
+                                                                         Color="Color.Success">
+                                                                    نشط
+                                                                </MudChip>
+                                                            }
+                                                            else
+                                                            {
+                                                                <MudChip T="string" Size="Size.Small" 
+                                                                         Variant="Variant.Text"
+                                                                         Color="Color.Default">
+                                                                    انتهى @shift.EffectiveToDisplay
+                                                                </MudChip>
+                                                            }
+                                                        </div>
+                                                    </div>
+                                                </MudPaper>
+                                            </ItemContent>
+                                        </MudTimelineItem>
+                                    }
+                                </MudTimeline>
+
+                                @if (_shifts.Count > 10)
+                                {
+                                    <div class="text-center mt-3">
+                                        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small">
+                                            عرض الكل (@_shifts.Count)
+                                        </MudButton>
+                                    </div>
+                                }
+                            </MudPaper>
+                        </MudItem>
+                    </MudGrid>
+
+                    @* ═══════════════ TABLE VIEW (Alternative) ═══════════════ *@
+                    <MudPaper Class="pa-5 mt-4" Elevation="2" Style="border-radius: 20px;">
+                        <MudExpansionPanels Elevation="0">
+                            <MudExpansionPanel Text="عرض جدول الشيفتات الكامل" MaxHeight="500">
+                                <MudTable Items="_shifts" Hover="true" Elevation="0" Dense="false" Striped="true">
+                                    <HeaderContent>
+                                        <MudTh>نوع الشيفت</MudTh>
+                                        <MudTh>التوقيت</MudTh>
+                                        <MudTh>المدة</MudTh>
+                                        <MudTh>من تاريخ</MudTh>
+                                        <MudTh>إلى تاريخ</MudTh>
+                                        <MudTh>الحالة</MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate Context="shift">
+                                        <MudTd DataLabel="نوع الشيفت">
+                                            <div class="d-flex align-center gap-2">
+                                                <MudAvatar Size="Size.Small" Style="@GetShiftAvatarStyle(shift.ShiftType)">
+                                                    <MudIcon Icon="@GetShiftIcon(shift.ShiftType)" Size="Size.Small" />
+                                                </MudAvatar>
+                                                <MudText Typo="Typo.body1" Class="font-weight-bold">@shift.ShiftType</MudText>
+                                            </div>
+                                        </MudTd>
+                                        <MudTd DataLabel="التوقيت">
+                                            <MudText Typo="Typo.body1" Class="font-weight-bold">
+                                                @shift.StartTimeDisplay - @shift.EndTimeDisplay
+                                            </MudText>
+                                        </MudTd>
+                                        <MudTd DataLabel="المدة">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                                                @shift.DurationDisplay
+                                            </MudChip>
+                                        </MudTd>
+                                        <MudTd DataLabel="من تاريخ">
+                                            <MudText Typo="Typo.body1" Class="font-weight-medium">@shift.EffectiveFromDisplay</MudText>
+                                        </MudTd>
+                                        <MudTd DataLabel="إلى تاريخ">
+                                            <MudText Typo="Typo.body1">@shift.EffectiveToDisplay</MudText>
+                                        </MudTd>
+                                        <MudTd DataLabel="الحالة">
+                                            @if (shift.IsActive)
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Success">
+                                                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Class="ml-1" />
+                                                    نشط
+                                                </MudChip>
+                                            }
+                                            else
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Default">
+                                                    منتهي
+                                                </MudChip>
+                                            }
+                                        </MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+                            </MudExpansionPanel>
+                        </MudExpansionPanels>
+                    </MudPaper>
+                }
+            </MudContainer>
+        }
+    </Authorized>
+    
+    <NotAuthorized>
+        <MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+            <MudPaper Class="pa-8 text-center" Elevation="3" Style="border-radius: 20px;">
+                <MudIcon Icon="@Icons.Material.Filled.Login" Size="Size.Large" 
+                         Style="font-size: 64px; color: #FF9800;" Class="mb-4" />
+                <MudText Typo="Typo.h5" Color="Color.Warning" Class="mb-2">تسجيل الدخول مطلوب</MudText>
+                <MudText Typo="Typo.body1" Color="Color.Secondary">
+                    يرجى تسجيل الدخول أولاً لعرض شيفتاتك
+                </MudText>
+            </MudPaper>
+        </MudContainer>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private bool _isLoading = true;
+    private bool _hasPermission = false;
+    private string _userName = "";
+    private string? _currentEmployeeInfo;
+    private List<EmployeeShiftListDto> _shifts = new();
+    
+    private EmployeeShiftListDto? CurrentShift => _shifts.FirstOrDefault(s => s.IsActive);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        _userName = user.Identity?.Name ?? "مستخدم";
+        _hasPermission = user.IsInRole("Admin") || user.HasClaim("Permission", "frm_MySchedule:View");
+
+        if (_hasPermission)
+        {
+            _shifts = await ShiftService.GetMyShiftsAsync(_userName);
+            
+            if (_shifts.Any())
+            {
+                var first = _shifts.First();
+                _currentEmployeeInfo = first.Department;
+            }
+        }
+
+        _isLoading = false;
+    }
+
+    #region UI Helpers
+
+    private string GetShiftIcon(string shiftType) => shiftType switch
+    {
+        "صباحى" => Icons.Material.Filled.WbSunny,
+        "مسائى" => Icons.Material.Filled.NightsStay,
+        _ => Icons.Material.Filled.Schedule
+    };
+
+    private string GetShiftAvatarStyle(string shiftType) => shiftType switch
+    {
+        "صباحى" => "background: #FFF8E1; color: #F57C00;",
+        "مسائى" => "background: #F3E5F5; color: #7B1FA2;",
+        _ => "background: #EEEEEE; color: #616161;"
+    };
+
+    private string GetCurrentShiftHeaderStyle()
+    {
+        var color = CurrentShift?.ShiftType switch
+        {
+            "صباحى" => "linear-gradient(135deg, #FF8F00 0%, #FFA726 50%, #FFB74D 100%)",
+            "مسائى" => "linear-gradient(135deg, #6A1B9A 0%, #8E24AA 50%, #AB47BC 100%)",
+            _ => "linear-gradient(135deg, #37474F 0%, #546E7A 50%, #78909C 100%)"
+        };
+        return $"background: {color};";
+    }
+
+    private string GetTimeBarStyle(EmployeeShiftListDto shift)
+    {
+        var start = shift.StartTime.ToTimeSpan().TotalHours;
+        var end = shift.EndTime.ToTimeSpan().TotalHours;
+        
+        var left = (start / 24.0) * 100;
+        var width = end > start 
+            ? ((end - start) / 24.0) * 100 
+            : ((24 - start + end) / 24.0) * 100;
+
+        var color = shift.ShiftType switch
+        {
+            "صباحى" => "#FFC107",
+            "مسائى" => "#9C27B0",
+            _ => "#9E9E9E"
+        };
+
+        return $"position: absolute; top: 0; bottom: 0; left: {left:F1}%; width: {width:F1}%; background: {color}; border-radius: 8px; opacity: 0.7;";
+    }
+
+    private string GetCurrentTimeIndicatorStyle()
+    {
+        var now = DateTime.Now.TimeOfDay.TotalHours;
+        var left = (now / 24.0) * 100;
+        
+        return $"position: absolute; top: -4px; bottom: -4px; left: {left:F1}%; width: 3px; background: #F44336; border-radius: 2px; box-shadow: 0 0 4px rgba(244, 67, 54, 0.5);";
+    }
+
+    private string GetCurrentTimeStatus(EmployeeShiftListDto shift)
+    {
+        var now = DateTime.Now.TimeOfDay;
+        var start = shift.StartTime.ToTimeSpan();
+        var end = shift.EndTime.ToTimeSpan();
+
+        // Handle overnight shifts
+        bool isInShift;
+        if (end > start)
+        {
+            isInShift = now >= start && now <= end;
+        }
+        else
+        {
+            isInShift = now >= start || now <= end;
+        }
+
+        if (isInShift)
+        {
+            TimeSpan remaining;
+            if (end > start)
+            {
+                remaining = end - now;
+            }
+            else
+            {
+                remaining = now > start ? TimeSpan.FromHours(24) - now + end : end - now;
+            }
+
+            var hours = (int)remaining.TotalHours;
+            var minutes = remaining.Minutes;
+
+            if (hours > 0)
+                return $"⏰ أنت الآن في الشيفت • متبقي {hours} ساعة و {minutes} دقيقة";
+            else
+                return $"⏰ أنت الآن في الشيفت • متبقي {minutes} دقيقة";
+        }
+        else if (now < start)
+        {
+            var until = start - now;
+            var hours = (int)until.TotalHours;
+            var minutes = until.Minutes;
+
+            if (hours > 0)
+                return $"🕐 الشيفت يبدأ بعد {hours} ساعة و {minutes} دقيقة";
+            else
+                return $"🕐 الشيفت يبدأ بعد {minutes} دقيقة";
+        }
+        else
+        {
+            return "✅ انتهى شيفت اليوم";
+        }
+    }
+
+    #endregion
+}

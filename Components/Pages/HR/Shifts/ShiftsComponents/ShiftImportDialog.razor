@@ -1,0 +1,335 @@
+@namespace COCOBOLOERPNEW.Components.Pages.HR.Shifts.ShiftsComponents
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IEmployeeShiftService ShiftService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthState
+
+<MudDialog Visible="Visible" VisibleChanged="OnVisibleChanged" Options="@_dialogOptions">
+    <TitleContent>
+        <div class="d-flex align-center gap-3">
+            <MudAvatar Color="Color.Primary" Variant="Variant.Filled" Size="Size.Medium">
+                <MudIcon Icon="@Icons.Material.Filled.CloudUpload" />
+            </MudAvatar>
+            <div>
+                <MudText Typo="Typo.h6">استيراد شيفتات من Excel</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    قم برفع ملف Excel يحتوي على بيانات الشيفتات
+                </MudText>
+            </div>
+        </div>
+    </TitleContent>
+    
+    <DialogContent>
+
+        @if (!_isImporting && _importResult == null)
+        {
+            @* ✅ File Upload Area *@
+            <MudPaper Class="pa-6 text-center" Elevation="0" Style="@GetDropZoneStyle()">
+                @if (_fileBytes == null)
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.CloudUpload" 
+                             Size="Size.Large" 
+                             Style="font-size: 56px;"
+                             Color="Color.Secondary" />
+                    
+                    <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-3 mb-3">
+                        اختر ملف Excel للاستيراد
+                    </MudText>
+                    
+                    <MudFileUpload T="IBrowserFile" 
+                                   Accept=".xlsx,.xls"
+                                   FilesChanged="OnFileSelected"
+                                   MaximumFileCount="1">
+                        <ActivatorContent>
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.FolderOpen"
+                                       Style="border-radius: 12px;">
+                                اختر ملف Excel
+                            </MudButton>
+                        </ActivatorContent>
+                    </MudFileUpload>
+                    
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-3 d-block">
+                        الصيغ المدعومة: .xlsx, .xls (الحد الأقصى: 10 MB)
+                    </MudText>
+                }
+                else
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.Description" 
+                             Size="Size.Large" 
+                             Style="font-size: 48px;"
+                             Color="Color.Success" />
+                    
+                    <MudText Typo="Typo.h6" Class="mt-3 font-weight-bold">@_fileName</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                        @FormatFileSize(_fileSize)
+                    </MudText>
+                    
+                    <MudButton Variant="Variant.Text" 
+                               Color="Color.Error" 
+                               Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Close"
+                               OnClick="ClearFile"
+                               Class="mt-2">
+                        إزالة الملف
+                    </MudButton>
+                }
+            </MudPaper>
+        }
+
+        @* Import Progress *@
+        @if (_isImporting)
+        {
+            <MudPaper Class="pa-6 text-center" Elevation="0" Style="border: 2px dashed #1976D2; border-radius: 16px; background: #E3F2FD;">
+                <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" Class="mb-3" />
+                <MudText Typo="Typo.h6" Color="Color.Primary">جاري الاستيراد...</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">
+                    يرجى الانتظار وعدم إغلاق النافذة
+                </MudText>
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mt-4" />
+            </MudPaper>
+        }
+
+        @* Import Result *@
+        @if (_importResult != null)
+        {
+            <MudPaper Class="pa-4" Elevation="0" Style="border-radius: 12px;">
+                <MudText Typo="Typo.subtitle1" Class="font-weight-bold mb-3">
+                    <MudIcon Icon="@Icons.Material.Filled.Assessment" Class="ml-2" />
+                    نتيجة الاستيراد
+                </MudText>
+                
+                <MudGrid Spacing="2">
+                    <MudItem xs="4">
+                        <div class="text-center pa-3" style="background: #E3F2FD; border-radius: 8px;">
+                            <MudText Typo="Typo.h4" Color="Color.Primary" Class="font-weight-bold">@_importResult.TotalRows</MudText>
+                            <MudText Typo="Typo.caption">إجمالي الصفوف</MudText>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="4">
+                        <div class="text-center pa-3" style="background: #E8F5E9; border-radius: 8px;">
+                            <MudText Typo="Typo.h4" Style="color: #2E7D32;" Class="font-weight-bold">@_importResult.SuccessCount</MudText>
+                            <MudText Typo="Typo.caption">تم بنجاح</MudText>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="4">
+                        <div class="text-center pa-3" style="background: #FFEBEE; border-radius: 8px;">
+                            <MudText Typo="Typo.h4" Style="color: #C62828;" Class="font-weight-bold">@_importResult.ErrorCount</MudText>
+                            <MudText Typo="Typo.caption">أخطاء</MudText>
+                        </div>
+                    </MudItem>
+                </MudGrid>
+
+                @* Warnings *@
+                @if (_importResult.Warnings.Any())
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mt-3" Dense="true">
+                        <MudText Typo="Typo.subtitle2" Class="font-weight-bold mb-1">تنبيهات:</MudText>
+                        @foreach (var warning in _importResult.Warnings.Take(5))
+                        {
+                            <MudText Typo="Typo.body2">• @warning</MudText>
+                        }
+                    </MudAlert>
+                }
+
+                @* Errors *@
+                @if (_importResult.Errors.Any())
+                {
+                    <MudExpansionPanels Class="mt-3" Elevation="0">
+                        <MudExpansionPanel Text="@($"عرض الأخطاء ({_importResult.Errors.Count})")" 
+                                           Style="background: #FFEBEE; border-radius: 8px;">
+                            <MudList T="string" Dense="true">
+                                @foreach (var error in _importResult.Errors.Take(10))
+                                {
+                                    <MudListItem T="string" Icon="@Icons.Material.Filled.Error" IconColor="Color.Error">
+                                        <MudText Typo="Typo.body2">@error</MudText>
+                                    </MudListItem>
+                                }
+                                @if (_importResult.Errors.Count > 10)
+                                {
+                                    <MudListItem T="string">
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                            و @(_importResult.Errors.Count - 10) خطأ آخر...
+                                        </MudText>
+                                    </MudListItem>
+                                }
+                            </MudList>
+                        </MudExpansionPanel>
+                    </MudExpansionPanels>
+                }
+            </MudPaper>
+        }
+    </DialogContent>
+    
+    <DialogActions>
+        <MudButton Variant="Variant.Text" 
+                   Color="Color.Default" 
+                   OnClick="Close"
+                   Disabled="_isImporting">
+            @(_importResult != null ? "إغلاق" : "إلغاء")
+        </MudButton>
+        
+        @if (_importResult == null && !_isImporting)
+        {
+            <MudButton Variant="Variant.Filled" 
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.CloudUpload"
+                       OnClick="ExecuteImport"
+                       Disabled="@(_fileBytes == null)"
+                       Style="border-radius: 8px;">
+                استيراد
+            </MudButton>
+        }
+        else if (_importResult != null)
+        {
+            <MudButton Variant="Variant.Filled" 
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Refresh"
+                       OnClick="ImportMore"
+                       Style="border-radius: 8px;">
+                استيراد ملف آخر
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public EventCallback<bool> OnImportCompleted { get; set; }
+
+    // ✅ نخزن الملف كـ byte[] مباشرة بدل IBrowserFile
+    private byte[]? _fileBytes;
+    private string? _fileName;
+    private long _fileSize;
+    private ShiftImportResultDto? _importResult;
+    private bool _isImporting;
+
+    private DialogOptions _dialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Small,
+        FullWidth = true,
+        CloseButton = true,
+        CloseOnEscapeKey = true,
+        BackdropClick = false
+    };
+
+    private string GetDropZoneStyle()
+    {
+        var baseStyle = "border: 2px dashed; border-radius: 16px; transition: all 0.3s ease;";
+        
+        if (_fileBytes != null)
+            return $"{baseStyle} border-color: #4CAF50; background: #E8F5E9;";
+        
+        return $"{baseStyle} border-color: #E0E0E0; background: #FAFAFA;";
+    }
+
+    // ✅ قراءة الملف فوراً وتخزينه كـ byte[]
+    private async Task OnFileSelected(IBrowserFile file)
+    {
+        if (file == null) return;
+
+        try
+        {
+            _fileName = file.Name;
+            _fileSize = file.Size;
+
+            // ✅ قراءة الملف فوراً وتخزينه في الذاكرة
+            await using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            using var memStream = new MemoryStream();
+            await stream.CopyToAsync(memStream);
+            _fileBytes = memStream.ToArray();
+            
+            _importResult = null;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ في قراءة الملف: {ex.Message}", Severity.Error);
+            ClearFile();
+        }
+    }
+
+    private void ClearFile()
+    {
+        _fileBytes = null;
+        _fileName = null;
+        _fileSize = 0;
+        _importResult = null;
+    }
+
+    // ✅ الاستيراد من الـ byte[] المخزن
+    private async Task ExecuteImport()
+    {
+        if (_fileBytes == null) return;
+
+        _isImporting = true;
+        StateHasChanged();
+
+        try
+        {
+            using var memStream = new MemoryStream(_fileBytes);
+
+            var authState = await AuthState.GetAuthenticationStateAsync();
+            var userName = authState.User.Identity?.Name ?? "System";
+
+            _importResult = await ShiftService.ImportFromExcelAsync(memStream, userName);
+
+            if (_importResult.SuccessCount > 0)
+            {
+                Snackbar.Add($"تم استيراد {_importResult.SuccessCount} شيفت بنجاح", Severity.Success);
+                await OnImportCompleted.InvokeAsync(true);
+            }
+
+            if (_importResult.ErrorCount > 0)
+            {
+                Snackbar.Add($"يوجد {_importResult.ErrorCount} خطأ في الاستيراد", Severity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ في الاستيراد: {ex.Message}", Severity.Error);
+            _importResult = new ShiftImportResultDto
+            {
+                Errors = new List<string> { ex.Message }
+            };
+        }
+        finally
+        {
+            _isImporting = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ImportMore()
+    {
+        ClearFile();
+    }
+
+    private async Task Close()
+    {
+        ClearFile();
+        Visible = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    private async Task OnVisibleChanged(bool value)
+    {
+        if (!value)
+        {
+            ClearFile();
+        }
+        Visible = value;
+        await VisibleChanged.InvokeAsync(value);
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes / (1024.0 * 1024.0):F1} MB";
+    }
+}

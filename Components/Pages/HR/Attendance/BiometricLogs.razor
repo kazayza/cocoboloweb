@@ -1,0 +1,600 @@
+@page "/attendance/logs"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject IAttendanceService AttendanceService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthState
+
+<PageTitle>سجلات البصمة الخام</PageTitle>
+
+<AuthorizeView>
+    <Authorized>
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4">
+            
+            @* ═══════════════ HEADER ═══════════════ *@
+            <MudPaper Class="mb-4 overflow-hidden" Elevation="0" 
+                      Style="border-radius: 20px; background: linear-gradient(135deg, #37474F 0%, #546E7A 50%, #78909C 100%);">
+                <div class="pa-5">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-3">
+                        <div class="d-flex align-center gap-3">
+                            <MudAvatar Size="Size.Large" 
+                                       Style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px);">
+                                <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Medium" Color="Color.Surface" />
+                            </MudAvatar>
+                            <div>
+                                <MudText Typo="Typo.h5" Color="Color.Surface" Class="font-weight-bold">
+                                    سجلات البصمة الخام
+                                </MudText>
+                                <MudText Typo="Typo.body2" Style="color: rgba(255,255,255,0.7);">
+                                    جميع البصمات الواردة من أجهزة الموبايل
+                                </MudText>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex flex-wrap gap-2">
+                            @if (_hasProcessPermission)
+                            {
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Warning"
+                                           StartIcon="@Icons.Material.Filled.Sync"
+                                           OnClick="OpenProcessDialog"
+                                           Disabled="_isProcessing">
+                                    @(_isProcessing ? "جاري المعالجة..." : "معالجة البصمات")
+                                </MudButton>
+                            }
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Dark"
+                                       StartIcon="@Icons.Material.Filled.ArrowBack"
+                                       Href="/attendance">
+                                العودة
+                            </MudButton>
+                        </div>
+                    </div>
+                </div>
+
+                @* Quick Stats *@
+                <div style="background: rgba(0,0,0,0.1); padding: 12px 20px;">
+                    <div class="d-flex justify-center gap-6 flex-wrap">
+                        <div class="d-flex align-center gap-2">
+                            <MudAvatar Size="Size.Small" Style="background: rgba(255,255,255,0.2);">
+                                <MudIcon Icon="@Icons.Material.Filled.Fingerprint" Size="Size.Small" Color="Color.Surface" />
+                            </MudAvatar>
+                            <div>
+                                <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">إجمالي السجلات</MudText>
+                                <MudText Typo="Typo.subtitle1" Color="Color.Surface" Class="font-weight-bold">@_totalCount</MudText>
+                            </div>
+                        </div>
+                        <div class="d-flex align-center gap-2">
+                            <MudAvatar Size="Size.Small" Style="background: rgba(76, 175, 80, 0.3);">
+                                <MudIcon Icon="@Icons.Material.Filled.Today" Size="Size.Small" Style="color: #81C784;" />
+                            </MudAvatar>
+                            <div>
+                                <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">بصمات اليوم</MudText>
+                                <MudText Typo="Typo.subtitle1" Color="Color.Surface" Class="font-weight-bold">@_todayCount</MudText>
+                            </div>
+                        </div>
+                        <div class="d-flex align-center gap-2">
+                            <MudAvatar Size="Size.Small" Style="background: rgba(33, 150, 243, 0.3);">
+                                <MudIcon Icon="@Icons.Material.Filled.Groups" Size="Size.Small" Style="color: #64B5F6;" />
+                            </MudAvatar>
+                            <div>
+                                <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">عدد الموظفين</MudText>
+                                <MudText Typo="Typo.subtitle1" Color="Color.Surface" Class="font-weight-bold">@_employeeCount</MudText>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </MudPaper>
+
+            @* ═══════════════ FILTERS ═══════════════ *@
+            <MudPaper Class="pa-4 mb-4" Elevation="2" Style="border-radius: 16px;">
+                <MudGrid Spacing="3">
+                    <MudItem xs="6" md="2">
+                        <MudDatePicker Label="من تاريخ"
+                                       @bind-Date="_dateFrom"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       Editable="true"
+                                       Clearable="true"
+                                       DateFormat="yyyy/MM/dd" />
+                    </MudItem>
+                    <MudItem xs="6" md="2">
+                        <MudDatePicker Label="إلى تاريخ"
+                                       @bind-Date="_dateTo"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       Editable="true"
+                                       Clearable="true"
+                                       DateFormat="yyyy/MM/dd" />
+                    </MudItem>
+                    <MudItem xs="12" md="3">
+                        <MudTextField T="string"
+                                      Label="بحث (اسم الموظف)"
+                                      @bind-Value="_searchText"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true"
+                                      Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.Search"
+                                      Clearable="true"
+                                      OnKeyUp="HandleKeyUp"
+                                      Placeholder="ابحث..." />
+                    </MudItem>
+                    <MudItem xs="6" md="2">
+                        <MudNumericField T="int?"
+                                         Label="كود البصمة"
+                                         @bind-Value="_biometricCode"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Clearable="true"
+                                         Adornment="Adornment.Start"
+                                         AdornmentIcon="@Icons.Material.Filled.Fingerprint" />
+                    </MudItem>
+                    <MudItem xs="6" md="1" Class="d-flex align-end">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   FullWidth="true"
+                                   OnClick="ApplyFilter"
+                                   Style="border-radius: 8px; min-height: 40px;">
+                            <MudIcon Icon="@Icons.Material.Filled.Search" />
+                        </MudButton>
+                    </MudItem>
+                    <MudItem xs="12" md="2" Class="d-flex align-end">
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Secondary"
+                                   FullWidth="true"
+                                   StartIcon="@Icons.Material.Filled.ClearAll"
+                                   OnClick="ResetFilters"
+                                   Style="border-radius: 8px;">
+                            مسح الفلاتر
+                        </MudButton>
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+
+            @* ═══════════════ DATA TABLE ═══════════════ *@
+            <MudPaper Elevation="2" Style="border-radius: 16px; overflow: hidden;">
+                <div class="pa-3 d-flex align-center justify-space-between" style="background: var(--mud-palette-background-grey);">
+                    <div class="d-flex align-center gap-2">
+                        <MudIcon Icon="@Icons.Material.Filled.List" Color="Color.Primary" Size="Size.Small" />
+                        <MudText Typo="Typo.subtitle1" Class="font-weight-bold">سجلات البصمة</MudText>
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Primary">
+                            @_totalCount سجل
+                        </MudChip>
+                    </div>
+                </div>
+
+                <MudDivider />
+
+                @if (_isLoading)
+                {
+                    <div class="pa-4">
+                        @for (int i = 0; i < 8; i++)
+                        {
+                            <div class="d-flex gap-4 mb-3">
+                                <MudSkeleton Width="5%" Height="24px" />
+                                <MudSkeleton Width="20%" Height="24px" />
+                                <MudSkeleton Width="15%" Height="24px" />
+                                <MudSkeleton Width="15%" Height="24px" />
+                                <MudSkeleton Width="10%" Height="24px" />
+                                <MudSkeleton Width="15%" Height="24px" />
+                            </div>
+                        }
+                    </div>
+                }
+                else if (_logs.Count == 0)
+                {
+                    <div class="pa-8 text-center">
+                        <MudIcon Icon="@Icons.Material.Filled.SearchOff" 
+                                 Size="Size.Large" 
+                                 Style="font-size: 64px; color: #E0E0E0;" />
+                        <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-4">
+                            لا توجد سجلات بصمة
+                        </MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            جرب تغيير الفلاتر أو اختر فترة مختلفة
+                        </MudText>
+                    </div>
+                }
+                else
+                {
+                    <MudTable Items="@_logs" Hover="true" Elevation="0" Dense="false" Striped="true">
+                        <HeaderContent>
+                            <MudTh>الموظف</MudTh>
+                            <MudTh>كود البصمة</MudTh>
+                            <MudTh>التاريخ</MudTh>
+                            <MudTh>الوقت</MudTh>
+                            <MudTh>النوع المتوقع</MudTh>
+                        </HeaderContent>
+                        <RowTemplate Context="log">
+                            <MudTd DataLabel="الموظف">
+                                <div class="d-flex align-center gap-2">
+                                    <MudAvatar Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled">
+                                        @(log.EmployeeName?.Length > 0 ? log.EmployeeName[0] : '?')
+                                    </MudAvatar>
+                                    <div>
+                                        <MudText Typo="Typo.body1" Class="font-weight-bold">
+                                            @(log.EmployeeName ?? $"كود: {log.BiometricCode}")
+                                        </MudText>
+                                        @if (!string.IsNullOrEmpty(log.Department))
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">@log.Department</MudText>
+                                        }
+                                    </div>
+                                </div>
+                            </MudTd>
+                            <MudTd DataLabel="كود البصمة">
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                                    @log.BiometricCode
+                                </MudChip>
+                            </MudTd>
+                            <MudTd DataLabel="التاريخ">
+                                <MudText Typo="Typo.body1" Class="font-weight-medium">@log.LogDateDisplay</MudText>
+                            </MudTd>
+                            <MudTd DataLabel="الوقت">
+                                <MudText Typo="Typo.body1" Class="font-weight-bold" Color="Color.Primary">
+                                    @log.LogTimeDisplay
+                                </MudText>
+                            </MudTd>
+                            <MudTd DataLabel="النوع">
+                                @{
+                                    var logType = GetExpectedLogType(log);
+                                }
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled"
+                                         Style="@(logType == "حضور" ? "background: #E8F5E9; color: #2E7D32;" : "background: #E3F2FD; color: #1565C0;")">
+                                    <MudIcon Icon="@(logType == "حضور" ? Icons.Material.Filled.Login : Icons.Material.Filled.Logout)" 
+                                             Size="Size.Small" Class="ml-1" />
+                                    @logType
+                                </MudChip>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+
+                    @* Pagination *@
+                    <MudDivider />
+                    <div class="pa-3 d-flex flex-wrap align-center justify-space-between gap-3" style="background: var(--mud-palette-background-grey);">
+                        <div class="d-flex align-center gap-2">
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">عرض</MudText>
+                            <MudSelect T="int" 
+                                       Value="@_filter.PageSize"
+                                       ValueChanged="OnPageSizeChanged"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       Style="width: 80px;">
+                                <MudSelectItem T="int" Value="25">25</MudSelectItem>
+                                <MudSelectItem T="int" Value="50">50</MudSelectItem>
+                                <MudSelectItem T="int" Value="100">100</MudSelectItem>
+                            </MudSelect>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">سجل</MudText>
+                        </div>
+
+                        <div class="d-flex align-center gap-2">
+                            <MudIconButton Icon="@Icons.Material.Filled.FirstPage" 
+                                           Size="Size.Small"
+                                           Disabled="@(!_hasPrevious)"
+                                           OnClick="@(() => OnPageChanged(1))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" 
+                                           Size="Size.Small"
+                                           Disabled="@(!_hasPrevious)"
+                                           OnClick="@(() => OnPageChanged(_currentPage - 1))" />
+                            <MudText Typo="Typo.body2" Class="px-2 font-weight-bold">
+                                صفحة @_currentPage من @_totalPages
+                            </MudText>
+                            <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" 
+                                           Size="Size.Small"
+                                           Disabled="@(!_hasNext)"
+                                           OnClick="@(() => OnPageChanged(_currentPage + 1))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.LastPage" 
+                                           Size="Size.Small"
+                                           Disabled="@(!_hasNext)"
+                                           OnClick="@(() => OnPageChanged(_totalPages))" />
+                        </div>
+
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="font-weight-medium">
+                            إجمالي: <strong>@_totalCount</strong>
+                        </MudText>
+                    </div>
+                }
+            </MudPaper>
+        </MudContainer>
+
+        @* ═══════════════ PROCESS DIALOG ═══════════════ *@
+        <MudDialog Visible="_showProcessDialog" VisibleChanged="@(v => _showProcessDialog = v)" 
+                   Options="@_processDialogOptions">
+            <TitleContent>
+                <div class="d-flex align-center gap-3">
+                    <MudAvatar Color="Color.Warning" Variant="Variant.Filled" Size="Size.Medium">
+                        <MudIcon Icon="@Icons.Material.Filled.Sync" />
+                    </MudAvatar>
+                    <div>
+                        <MudText Typo="Typo.h6">معالجة سجلات البصمة</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            تحويل البصمات الخام إلى سجلات حضور
+                        </MudText>
+                    </div>
+                </div>
+            </TitleContent>
+            
+            <DialogContent>
+                <MudPaper Class="pa-4" Elevation="0" 
+                          Style="background: #FFF8E1; border-radius: 12px; border-right: 4px solid #FFC107;">
+                    <div class="d-flex align-center gap-2 mb-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Info" Color="Color.Warning" />
+                        <MudText Typo="Typo.subtitle2" Class="font-weight-bold">كيف تعمل المعالجة؟</MudText>
+                    </div>
+                    <MudText Typo="Typo.body2">
+                        • أول بصمة في اليوم = <strong>وقت الحضور</strong>
+                    </MudText>
+                    <MudText Typo="Typo.body2">
+                        • آخر بصمة في اليوم = <strong>وقت الانصراف</strong>
+                    </MudText>
+                    <MudText Typo="Typo.body2">
+                        • يتم حساب <strong>ساعات العمل والتأخير</strong> تلقائياً
+                    </MudText>
+                </MudPaper>
+
+                <MudDatePicker Label="اختر التاريخ المراد معالجته"
+                               @bind-Date="_processDate"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Editable="true"
+                               DateFormat="yyyy/MM/dd"
+                               Class="mt-4" />
+
+                @if (_processResult != null)
+                {
+                    <MudAlert Severity="@(_processResult.Value.Success ? Severity.Success : Severity.Error)" 
+                              Variant="Variant.Filled" Class="mt-4">
+                        @_processResult.Value.Message
+                    </MudAlert>
+                }
+            </DialogContent>
+            
+            <DialogActions>
+                <MudButton Variant="Variant.Text" 
+                           Color="Color.Default" 
+                           OnClick="@(() => _showProcessDialog = false)"
+                           Disabled="_isProcessing">
+                    إغلاق
+                </MudButton>
+                <MudButton Variant="Variant.Filled" 
+                           Color="Color.Warning"
+                           StartIcon="@(_isProcessing ? null : Icons.Material.Filled.Sync)"
+                           OnClick="ProcessLogs"
+                           Disabled="_isProcessing || !_processDate.HasValue">
+                    @if (_isProcessing)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="ml-2" />
+                        <span>جاري المعالجة...</span>
+                    }
+                    else
+                    {
+                        <span>بدء المعالجة</span>
+                    }
+                </MudButton>
+            </DialogActions>
+        </MudDialog>
+    </Authorized>
+    
+    <NotAuthorized>
+        <MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+            <MudPaper Class="pa-8 text-center" Elevation="3" Style="border-radius: 20px;">
+                <MudIcon Icon="@Icons.Material.Filled.Login" Size="Size.Large" 
+                         Style="font-size: 64px; color: #FF9800;" Class="mb-4" />
+                <MudText Typo="Typo.h5" Color="Color.Warning" Class="mb-2">تسجيل الدخول مطلوب</MudText>
+                <MudText Typo="Typo.body1" Color="Color.Secondary">
+                    يرجى تسجيل الدخول للوصول لهذه الصفحة
+                </MudText>
+            </MudPaper>
+        </MudContainer>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    // State
+    private bool _isLoading = true;
+    private bool _isProcessing;
+    private bool _hasProcessPermission;
+    
+    // Data
+    private List<BiometricLogDto> _logs = new();
+    private BiometricLogFilterDto _filter = new() { DateFrom = DateTime.Today, DateTo = DateTime.Today };
+    
+    // Filter fields
+    private DateTime? _dateFrom;
+    private DateTime? _dateTo;
+    private string? _searchText;
+    private int? _biometricCode;
+    
+    // Pagination
+    private int _currentPage = 1;
+    private int _totalPages;
+    private int _totalCount;
+    private bool _hasPrevious;
+    private bool _hasNext;
+    
+    // Stats
+    private int _todayCount;
+    private int _employeeCount;
+    
+    // Process Dialog
+    private bool _showProcessDialog;
+    private DateTime? _processDate = DateTime.Today;
+    private (bool Success, string Message)? _processResult;
+    
+    private DialogOptions _processDialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Small,
+        FullWidth = true,
+        CloseButton = true,
+        BackdropClick = false
+    };
+
+    // Track first log per employee per day for type detection
+    private Dictionary<string, TimeOnly> _firstLogPerEmployee = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        _hasProcessPermission = user.IsInRole("Admin") || 
+                                user.IsInRole("Accountant") ||
+                                user.IsInRole("AccountsManager");
+
+        _dateFrom = _filter.DateFrom;
+        _dateTo = _filter.DateTo;
+
+        await LoadData();
+        await LoadQuickStats();
+
+        _isLoading = false;
+    }
+
+    private async Task LoadData()
+    {
+        _filter.PageNumber = _currentPage;
+        _filter.DateFrom = _dateFrom;
+        _filter.DateTo = _dateTo;
+        _filter.BiometricCode = _biometricCode;
+
+        var result = await AttendanceService.GetBiometricLogsAsync(_filter);
+
+        _logs = result.Items;
+        _totalCount = result.TotalCount;
+        _totalPages = result.TotalPages;
+        _hasPrevious = result.HasPrevious;
+        _hasNext = result.HasNext;
+
+        // Build first-log lookup
+        _firstLogPerEmployee.Clear();
+        var grouped = _logs.GroupBy(l => $"{l.BiometricCode}_{l.LogDate:yyyyMMdd}");
+        foreach (var group in grouped)
+        {
+            var firstLog = group.OrderBy(l => l.LogTime).First();
+            _firstLogPerEmployee[group.Key] = firstLog.LogTime;
+        }
+    }
+
+    private async Task LoadQuickStats()
+    {
+        var todayFilter = new BiometricLogFilterDto
+        {
+            DateFrom = DateTime.Today,
+            DateTo = DateTime.Today,
+            PageSize = 1
+        };
+        var todayResult = await AttendanceService.GetBiometricLogsAsync(todayFilter);
+        _todayCount = todayResult.TotalCount;
+        
+        // عدد الموظفين الفريدين في الفترة المحددة
+        _employeeCount = _logs.Select(l => l.BiometricCode).Distinct().Count();
+    }
+
+        private async Task ApplyFilter()
+    {
+        _currentPage = 1;
+        _isLoading = true;
+        StateHasChanged();
+
+        // ✅ تمرير الـ SearchText للفلتر
+        _filter.DateFrom = _dateFrom;
+        _filter.DateTo = _dateTo;
+        _filter.BiometricCode = _biometricCode;
+        _filter.SearchText = _searchText;
+
+        await LoadData();
+        await LoadQuickStats();
+
+        _isLoading = false;
+        StateHasChanged();
+    }
+
+    private async Task ResetFilters()
+    {
+        _dateFrom = DateTime.Today;
+        _dateTo = DateTime.Today;
+        _searchText = null;
+        _biometricCode = null;
+        _filter = new BiometricLogFilterDto { DateFrom = DateTime.Today, DateTo = DateTime.Today };
+        
+        await ApplyFilter();
+    }
+
+    private async Task HandleKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await ApplyFilter();
+    }
+
+    private async Task OnPageChanged(int page)
+    {
+        _currentPage = page;
+        _isLoading = true;
+        StateHasChanged();
+
+        await LoadData();
+
+        _isLoading = false;
+        StateHasChanged();
+    }
+
+    private async Task OnPageSizeChanged(int size)
+    {
+        _filter.PageSize = size;
+        _currentPage = 1;
+        await ApplyFilter();
+    }
+
+    private void OpenProcessDialog()
+    {
+        _processDate = DateTime.Today;
+        _processResult = null;
+        _showProcessDialog = true;
+    }
+
+    private async Task ProcessLogs()
+    {
+        if (!_processDate.HasValue) return;
+
+        _isProcessing = true;
+        StateHasChanged();
+
+        try
+        {
+            var authState = await AuthState.GetAuthenticationStateAsync();
+            var userName = authState.User.Identity?.Name ?? "System";
+
+            _processResult = await AttendanceService.ProcessBiometricLogsAsync(_processDate.Value, userName);
+
+            if (_processResult.Value.Success)
+            {
+                Snackbar.Add(_processResult.Value.Message, Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(_processResult.Value.Message, Severity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+            _processResult = (false, ex.Message);
+        }
+
+        _isProcessing = false;
+        StateHasChanged();
+    }
+
+    private string GetExpectedLogType(BiometricLogDto log)
+    {
+        var key = $"{log.BiometricCode}_{log.LogDate:yyyyMMdd}";
+        if (_firstLogPerEmployee.TryGetValue(key, out var firstTime))
+        {
+            return log.LogTime == firstTime ? "حضور" : "انصراف";
+        }
+        return "حضور";
+    }
+}

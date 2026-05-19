@@ -78,6 +78,9 @@ builder.Services.AddScoped<IFinancialReportsService,  FinancialReportsService>()
 builder.Services.AddScoped<ICashFlowService,          CashFlowService>();
 builder.Services.AddScoped<IFinancialDashboardService,FinancialDashboardService>();
 builder.Services.AddScoped<IEmployeeLoanService, EmployeeLoanService>();
+builder.Services.AddScoped<IEmployeeService, EmployeeService>();
+builder.Services.AddScoped<IEmployeeShiftService, EmployeeShiftService>();
+builder.Services.AddScoped<IAttendanceService, AttendanceService>();
 
 var app = builder.Build();
 

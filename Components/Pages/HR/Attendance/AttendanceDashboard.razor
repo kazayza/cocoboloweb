@@ -1,0 +1,583 @@
+@page "/attendance/dashboard"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject IAttendanceService AttendanceService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthState
+@inject NavigationManager Nav
+
+<PageTitle>لوحة تحليل الحضور</PageTitle>
+
+<AuthorizeView>
+    <Authorized>
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4">
+            
+            @* ═══════════════ HEADER ═══════════════ *@
+            <MudPaper Class="mb-4 overflow-hidden" Elevation="0" 
+                      Style="border-radius: 20px; background: linear-gradient(135deg, #0D47A1 0%, #1565C0 50%, #1976D2 100%);">
+                <div class="pa-5">
+                    <div class="d-flex align-center justify-space-between flex-wrap gap-3">
+                        <div class="d-flex align-center gap-3">
+                            <MudAvatar Size="Size.Large" 
+                                       Style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px);">
+                                <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Medium" Color="Color.Surface" />
+                            </MudAvatar>
+                            <div>
+                                <MudText Typo="Typo.h5" Color="Color.Surface" Class="font-weight-bold">
+                                    لوحة تحليل الحضور والانصراف
+                                </MudText>
+                                <MudText Typo="Typo.body2" Style="color: rgba(255,255,255,0.7);">
+                                    @_selectedPeriod
+                                </MudText>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex flex-wrap gap-2">
+                            <MudSelect T="string" 
+                                       Value="_periodFilter"
+                                       ValueChanged="OnPeriodChanged"
+                                       Variant="Variant.Filled"
+                                       Margin="Margin.Dense"
+                                       Style="background: rgba(255,255,255,0.15); border-radius: 8px; min-width: 150px;"
+                                       Class="white-text">
+                                <MudSelectItem T="string" Value="@("today")">اليوم</MudSelectItem>
+                                <MudSelectItem T="string" Value="@("week")">هذا الأسبوع</MudSelectItem>
+                                <MudSelectItem T="string" Value="@("month")">هذا الشهر</MudSelectItem>
+                                <MudSelectItem T="string" Value="@("lastMonth")">الشهر الماضي</MudSelectItem>
+                            </MudSelect>
+                            
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Dark"
+                                       StartIcon="@Icons.Material.Filled.Refresh"
+                                       OnClick="LoadDashboard"
+                                       Disabled="_isLoading">
+                                تحديث
+                            </MudButton>
+                        </div>
+                    </div>
+                </div>
+
+                @* Quick Stats *@
+                <div style="background: rgba(0,0,0,0.15); padding: 20px;">
+                    <MudGrid Spacing="3">
+                        <MudItem xs="6" sm="3">
+                            <div class="text-center">
+                                <MudText Typo="Typo.h3" Color="Color.Surface" Class="font-weight-bold">
+                                    @(_isLoading ? "--" : _dashboard.Statistics.TotalEmployees.ToString())
+                                </MudText>
+                                <MudText Typo="Typo.body2" Style="color: rgba(255,255,255,0.7);">موظف</MudText>
+                            </div>
+                        </MudItem>
+                        <MudItem xs="6" sm="3">
+                            <div class="text-center">
+                                <MudText Typo="Typo.h3" Style="color: #81C784;" Class="font-weight-bold">
+                                    @(_isLoading ? "--" : $"{_dashboard.Statistics.AttendanceRate}%")
+                                </MudText>
+                                <MudText Typo="Typo.body2" Style="color: rgba(255,255,255,0.7);">نسبة الحضور</MudText>
+                            </div>
+                        </MudItem>
+                        <MudItem xs="6" sm="3">
+                            <div class="text-center">
+                                <MudText Typo="Typo.h3" Style="color: #FFB74D;" Class="font-weight-bold">
+                                    @(_isLoading ? "--" : $"{_dashboard.Statistics.LateRate}%")
+                                </MudText>
+                                <MudText Typo="Typo.body2" Style="color: rgba(255,255,255,0.7);">نسبة التأخير</MudText>
+                            </div>
+                        </MudItem>
+                        <MudItem xs="6" sm="3">
+                            <div class="text-center">
+                                <MudText Typo="Typo.h3" Style="color: #CE93D8;" Class="font-weight-bold">
+                                    @(_isLoading ? "--" : _dashboard.Statistics.AverageHours.ToString("F1"))
+                                </MudText>
+                                <MudText Typo="Typo.body2" Style="color: rgba(255,255,255,0.7);">متوسط الساعات</MudText>
+                            </div>
+                        </MudItem>
+                    </MudGrid>
+                </div>
+            </MudPaper>
+
+            @if (_isLoading)
+            {
+                <MudPaper Class="pa-8 text-center" Elevation="2" Style="border-radius: 16px;">
+                    <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+                    <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-4">جاري تحميل البيانات...</MudText>
+                </MudPaper>
+            }
+            else
+            {
+                <MudGrid Spacing="4">
+                    
+                    @* ═══════════════ ROW 1: Today Stats + Charts ═══════════════ *@
+                    
+                    @* إحصائيات اليوم *@
+                    <MudItem xs="12" md="4">
+                        <MudPaper Class="pa-5 h-100" Elevation="2" Style="border-radius: 16px;">
+                            <div class="d-flex align-center gap-2 mb-4">
+                                <MudIcon Icon="@Icons.Material.Filled.Today" Color="Color.Primary" />
+                                <MudText Typo="Typo.h6" Class="font-weight-bold">حالة اليوم</MudText>
+                            </div>
+
+                            <MudGrid Spacing="3">
+                                <MudItem xs="4">
+                                    <div class="text-center pa-3" style="background: #E8F5E9; border-radius: 12px;">
+                                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+                                        <MudText Typo="Typo.h4" Color="Color.Success" Class="font-weight-bold">
+                                            @_dashboard.Statistics.TodayPresent
+                                        </MudText>
+                                        <MudText Typo="Typo.caption">حاضر</MudText>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="4">
+                                    <div class="text-center pa-3" style="background: #FFEBEE; border-radius: 12px;">
+                                        <MudIcon Icon="@Icons.Material.Filled.Cancel" Color="Color.Error" />
+                                        <MudText Typo="Typo.h4" Color="Color.Error" Class="font-weight-bold">
+                                            @_dashboard.Statistics.TodayAbsent
+                                        </MudText>
+                                        <MudText Typo="Typo.caption">غائب</MudText>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="4">
+                                    <div class="text-center pa-3" style="background: #FFF3E0; border-radius: 12px;">
+                                        <MudIcon Icon="@Icons.Material.Filled.Schedule" Color="Color.Warning" />
+                                        <MudText Typo="Typo.h4" Color="Color.Warning" Class="font-weight-bold">
+                                            @_dashboard.Statistics.TodayLate
+                                        </MudText>
+                                        <MudText Typo="Typo.caption">متأخر</MudText>
+                                    </div>
+                                </MudItem>
+                            </MudGrid>
+
+                            @* Progress Bar *@
+                            <div class="mt-4">
+                                <div class="d-flex justify-space-between mb-1">
+                                    <MudText Typo="Typo.caption">نسبة الحضور اليوم</MudText>
+                                    <MudText Typo="Typo.caption" Class="font-weight-bold">
+                                        @GetTodayAttendanceRate()%
+                                    </MudText>
+                                </div>
+                                <MudProgressLinear Value="@GetTodayAttendanceRate()" 
+                                                   Color="@GetProgressColor(GetTodayAttendanceRate())"
+                                                   Rounded="true"
+                                                   Size="Size.Large" />
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+
+                    @* رسم بياني - توزيع الحضور *@
+                    <MudItem xs="12" md="4">
+                        <MudPaper Class="pa-5 h-100" Elevation="2" Style="border-radius: 16px;">
+                            <div class="d-flex align-center gap-2 mb-4">
+                                <MudIcon Icon="@Icons.Material.Filled.PieChart" Color="Color.Secondary" />
+                                <MudText Typo="Typo.h6" Class="font-weight-bold">توزيع الحالات</MudText>
+                            </div>
+
+                            <div class="d-flex flex-column gap-3">
+                                @* حاضر *@
+                                <div>
+                                    <div class="d-flex justify-space-between mb-1">
+                                        <div class="d-flex align-center gap-2">
+                                            <div style="width: 12px; height: 12px; background: #4CAF50; border-radius: 50%;"></div>
+                                            <MudText Typo="Typo.body2">حاضر</MudText>
+                                        </div>
+                                        <MudText Typo="Typo.body2" Class="font-weight-bold">
+                                            @_dashboard.Statistics.PresentCount (@_dashboard.Statistics.AttendanceRate%)
+                                        </MudText>
+                                    </div>
+                                    <MudProgressLinear Value="@((double)_dashboard.Statistics.AttendanceRate)" 
+                                                       Color="Color.Success" Rounded="true" />
+                                </div>
+
+                                @* غائب *@
+                                <div>
+                                    <div class="d-flex justify-space-between mb-1">
+                                        <div class="d-flex align-center gap-2">
+                                            <div style="width: 12px; height: 12px; background: #F44336; border-radius: 50%;"></div>
+                                            <MudText Typo="Typo.body2">غائب</MudText>
+                                        </div>
+                                        <MudText Typo="Typo.body2" Class="font-weight-bold">
+                                            @_dashboard.Statistics.AbsentCount (@_dashboard.Statistics.AbsenceRate%)
+                                        </MudText>
+                                    </div>
+                                    <MudProgressLinear Value="@((double)_dashboard.Statistics.AbsenceRate)" 
+                                                       Color="Color.Error" Rounded="true" />
+                                </div>
+
+                                @* متأخر *@
+                                <div>
+                                    <div class="d-flex justify-space-between mb-1">
+                                        <div class="d-flex align-center gap-2">
+                                            <div style="width: 12px; height: 12px; background: #FF9800; border-radius: 50%;"></div>
+                                            <MudText Typo="Typo.body2">متأخر</MudText>
+                                        </div>
+                                        <MudText Typo="Typo.body2" Class="font-weight-bold">
+                                            @_dashboard.Statistics.LateCount (@_dashboard.Statistics.LateRate%)
+                                        </MudText>
+                                    </div>
+                                    <MudProgressLinear Value="@((double)_dashboard.Statistics.LateRate)" 
+                                                       Color="Color.Warning" Rounded="true" />
+                                </div>
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+
+                    @* توزيع ساعات الحضور *@
+                    <MudItem xs="12" md="4">
+                        <MudPaper Class="pa-5 h-100" Elevation="2" Style="border-radius: 16px;">
+                            <div class="d-flex align-center gap-2 mb-4">
+                                <MudIcon Icon="@Icons.Material.Filled.AccessTime" Color="Color.Info" />
+                                <MudText Typo="Typo.h6" Class="font-weight-bold">توزيع الحضور (اليوم)</MudText>
+                            </div>
+
+                            <div class="d-flex align-end justify-space-between" style="height: 120px;">
+                                @foreach (var hour in _dashboard.TodayHourlyDistribution)
+                                {
+                                    var height = GetBarHeight(hour.Count);
+                                    <div class="text-center" style="flex: 1;">
+                                        <div style="height: @(height)px; background: linear-gradient(180deg, #1976D2, #42A5F5); border-radius: 4px 4px 0 0; margin: 0 2px;"></div>
+                                        <MudText Typo="Typo.caption" Style="font-size: 10px;">@hour.Hour</MudText>
+                                    </div>
+                                }
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+
+                    @* ═══════════════ ROW 2: Department & Rankings ═══════════════ *@
+
+                    @* الأقسام *@
+                    <MudItem xs="12" md="6">
+                        <MudPaper Class="pa-5" Elevation="2" Style="border-radius: 16px;">
+                            <div class="d-flex align-center gap-2 mb-4">
+                                <MudIcon Icon="@Icons.Material.Filled.Business" Color="Color.Primary" />
+                                <MudText Typo="Typo.h6" Class="font-weight-bold">الحضور حسب القسم</MudText>
+                            </div>
+
+                            @if (_dashboard.ByDepartment.Any())
+                            {
+                                <MudTable Items="_dashboard.ByDepartment" Hover="true" Elevation="0" Dense="true">
+                                    <HeaderContent>
+                                        <MudTh>القسم</MudTh>
+                                        <MudTh>الموظفين</MudTh>
+                                        <MudTh>نسبة الحضور</MudTh>
+                                        <MudTh>متوسط الساعات</MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate Context="dept">
+                                        <MudTd>
+                                            <MudText Typo="Typo.body2" Class="font-weight-bold">@dept.Department</MudText>
+                                        </MudTd>
+                                        <MudTd>@dept.EmployeeCount</MudTd>
+                                        <MudTd>
+                                            <MudChip T="string" Size="Size.Small" 
+                                                     Style="@GetPercentageStyle(dept.AttendanceRate)">
+                                                @dept.AttendanceRate%
+                                            </MudChip>
+                                        </MudTd>
+                                        <MudTd>@dept.AverageHours ساعة</MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+                            }
+                            else
+                            {
+                                <MudText Color="Color.Secondary" Class="text-center pa-4">لا توجد بيانات</MudText>
+                            }
+                        </MudPaper>
+                    </MudItem>
+
+                    @* أفضل وأسوأ الموظفين *@
+                    <MudItem xs="12" md="6">
+                        <MudGrid Spacing="3">
+                            @* أفضل الموظفين *@
+                            <MudItem xs="12">
+                                <MudPaper Class="pa-4" Elevation="2" Style="border-radius: 16px;">
+                                    <div class="d-flex align-center gap-2 mb-3">
+                                        <MudIcon Icon="@Icons.Material.Filled.EmojiEvents" Style="color: #FFD700;" />
+                                        <MudText Typo="Typo.subtitle1" Class="font-weight-bold">أفضل الموظفين حضوراً</MudText>
+                                    </div>
+
+                                    <div class="d-flex flex-column gap-2">
+                                        @foreach (var (emp, index) in _dashboard.TopEmployees.Select((e, i) => (e, i)))
+                                        {
+                                            <div class="d-flex align-center justify-space-between pa-2" 
+                                                 style="background: var(--mud-palette-background-grey); border-radius: 8px;">
+                                                <div class="d-flex align-center gap-2">
+                                                    <MudAvatar Size="Size.Small" 
+                                                               Style="@GetRankStyle(index)">
+                                                        @(index + 1)
+                                                    </MudAvatar>
+                                                    <div>
+                                                        <MudText Typo="Typo.body2" Class="font-weight-bold">@emp.EmployeeName</MudText>
+                                                        <MudText Typo="Typo.caption" Color="Color.Secondary">@emp.Department</MudText>
+                                                    </div>
+                                                </div>
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Success">
+                                                    @emp.AttendanceRate%
+                                                </MudChip>
+                                            </div>
+                                        }
+                                    </div>
+                                </MudPaper>
+                            </MudItem>
+
+                            @* يحتاجون متابعة *@
+                            <MudItem xs="12">
+                                <MudPaper Class="pa-4" Elevation="2" Style="border-radius: 16px;">
+                                    <div class="d-flex align-center gap-2 mb-3">
+                                        <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" />
+                                        <MudText Typo="Typo.subtitle1" Class="font-weight-bold">يحتاجون متابعة</MudText>
+                                    </div>
+
+                                    @if (_dashboard.BottomEmployees.Any())
+                                    {
+                                        <div class="d-flex flex-column gap-2">
+                                            @foreach (var emp in _dashboard.BottomEmployees)
+                                            {
+                                                <div class="d-flex align-center justify-space-between pa-2" 
+                                                     style="background: #FFF3E0; border-radius: 8px;">
+                                                    <div class="d-flex align-center gap-2">
+                                                        <MudAvatar Size="Size.Small" Color="Color.Warning">
+                                                            <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                                                        </MudAvatar>
+                                                        <div>
+                                                            <MudText Typo="Typo.body2" Class="font-weight-bold">@emp.EmployeeName</MudText>
+                                                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                                غياب: @emp.AbsentDays يوم | تأخير: @emp.LateDays يوم
+                                                            </MudText>
+                                                        </div>
+                                                    </div>
+                                                    <MudChip T="string" Size="Size.Small" Color="Color.Error">
+                                                        @emp.AttendanceRate%
+                                                    </MudChip>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <MudText Color="Color.Success" Class="text-center pa-2">
+                                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" /> جميع الموظفين ملتزمين
+                                        </MudText>
+                                    }
+                                </MudPaper>
+                            </MudItem>
+                        </MudGrid>
+                    </MudItem>
+
+                    @* ═══════════════ ROW 3: Recent Logs & Trend ═══════════════ *@
+
+                    @* آخر البصمات *@
+                    <MudItem xs="12" md="6">
+                        <MudPaper Class="pa-5" Elevation="2" Style="border-radius: 16px;">
+                            <div class="d-flex align-center justify-space-between mb-4">
+                                <div class="d-flex align-center gap-2">
+                                    <MudIcon Icon="@Icons.Material.Filled.Fingerprint" Color="Color.Secondary" />
+                                    <MudText Typo="Typo.h6" Class="font-weight-bold">آخر البصمات (اليوم)</MudText>
+                                </div>
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                                    مباشر
+                                </MudChip>
+                            </div>
+
+                            @if (_dashboard.RecentLogs.Any())
+                            {
+                                <div class="d-flex flex-column gap-2">
+                                    @foreach (var log in _dashboard.RecentLogs.Take(6))
+                                    {
+                                        <div class="d-flex align-center justify-space-between pa-2" 
+                                             style="background: var(--mud-palette-background-grey); border-radius: 8px;">
+                                            <div class="d-flex align-center gap-2">
+                                                <MudAvatar Size="Size.Small" 
+                                                           Color="@(log.LogType == "حضور" ? Color.Success : Color.Info)">
+                                                    <MudIcon Icon="@(log.LogType == "حضور" ? Icons.Material.Filled.Login : Icons.Material.Filled.Logout)" 
+                                                             Size="Size.Small" />
+                                                </MudAvatar>
+                                                <div>
+                                                    <MudText Typo="Typo.body2" Class="font-weight-bold">@log.EmployeeName</MudText>
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@log.Department</MudText>
+                                                </div>
+                                            </div>
+                                            <div class="text-left">
+                                                <MudText Typo="Typo.body2" Class="font-weight-bold">@log.LogTimeDisplay</MudText>
+                                                <div class="d-flex align-center gap-1">
+                                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                                                             Color="@(log.LogType == "حضور" ? Color.Success : Color.Info)">
+                                                        @log.LogType
+                                                    </MudChip>
+                                                    @if (log.IsLate)
+                                                    {
+                                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Warning">
+                                                            متأخر
+                                                        </MudChip>
+                                                    }
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            else
+                            {
+                                <MudText Color="Color.Secondary" Class="text-center pa-4">لا توجد بصمات اليوم بعد</MudText>
+                            }
+                        </MudPaper>
+                    </MudItem>
+
+                    @* الاتجاه اليومي *@
+                    <MudItem xs="12" md="6">
+                        <MudPaper Class="pa-5" Elevation="2" Style="border-radius: 16px;">
+                            <div class="d-flex align-center gap-2 mb-4">
+                                <MudIcon Icon="@Icons.Material.Filled.ShowChart" Color="Color.Primary" />
+                                <MudText Typo="Typo.h6" Class="font-weight-bold">اتجاه الحضور اليومي</MudText>
+                            </div>
+
+                            @if (_dashboard.DailyTrend.Any())
+                            {
+                                <div class="d-flex align-end justify-space-between" style="height: 150px;">
+                                    @foreach (var day in _dashboard.DailyTrend.TakeLast(14))
+                                    {
+                                        var height = GetTrendBarHeight(day.AttendanceRate);
+                                        <div class="text-center" style="flex: 1;">
+                                            <MudTooltip Text="@($"{day.Date:MM/dd} - {day.AttendanceRate}%")">
+                                                <div style="height: @(height)px; background: @GetTrendBarColor(day.AttendanceRate); border-radius: 4px 4px 0 0; margin: 0 1px; min-width: 10px;"></div>
+                                            </MudTooltip>
+                                            <MudText Typo="Typo.caption" Style="font-size: 8px;">@day.Date.Day</MudText>
+                                        </div>
+                                    }
+                                </div>
+                                
+                                <div class="d-flex justify-space-between mt-2">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        أقل: @_dashboard.DailyTrend.Min(d => d.AttendanceRate)%
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        أعلى: @_dashboard.DailyTrend.Max(d => d.AttendanceRate)%
+                                    </MudText>
+                                </div>
+                            }
+                            else
+                            {
+                                <MudText Color="Color.Secondary" Class="text-center pa-4">لا توجد بيانات</MudText>
+                            }
+                        </MudPaper>
+                    </MudItem>
+
+                </MudGrid>
+            }
+        </MudContainer>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private bool _isLoading = true;
+    private string _periodFilter = "month";
+    private string _selectedPeriod = "";
+    private AttendanceDashboardDto _dashboard = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDashboard();
+    }
+
+    private async Task LoadDashboard()
+    {
+        _isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var (from, to) = GetDateRange();
+            _dashboard = await AttendanceService.GetDashboardDataAsync(from, to);
+            _selectedPeriod = GetPeriodText();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ في تحميل البيانات: {ex.Message}", Severity.Error);
+        }
+
+        _isLoading = false;
+        StateHasChanged();
+    }
+
+    private async Task OnPeriodChanged(string value)
+    {
+        _periodFilter = value;
+        await LoadDashboard();
+    }
+
+    private (DateTime from, DateTime to) GetDateRange()
+    {
+        var today = DateTime.Today;
+        return _periodFilter switch
+        {
+            "today" => (today, today),
+            "week" => (today.AddDays(-(int)today.DayOfWeek + (int)DayOfWeek.Saturday), today),
+            "month" => (new DateTime(today.Year, today.Month, 1), today),
+            "lastMonth" => (new DateTime(today.Year, today.Month, 1).AddMonths(-1), 
+                           new DateTime(today.Year, today.Month, 1).AddDays(-1)),
+            _ => (new DateTime(today.Year, today.Month, 1), today)
+        };
+    }
+
+    private string GetPeriodText()
+    {
+        var (from, to) = GetDateRange();
+        return _periodFilter switch
+        {
+            "today" => "اليوم",
+            "week" => "هذا الأسبوع",
+            "month" => $"{from:MMMM yyyy}",
+            "lastMonth" => $"{from:MMMM yyyy}",
+            _ => $"{from:yyyy/MM/dd} - {to:yyyy/MM/dd}"
+        };
+    }
+
+    private double GetTodayAttendanceRate()
+    {
+        var total = _dashboard.Statistics.TodayPresent + _dashboard.Statistics.TodayAbsent;
+        return total > 0 ? Math.Round((double)_dashboard.Statistics.TodayPresent / total * 100, 1) : 0;
+    }
+
+    private Color GetProgressColor(double value)
+    {
+        if (value >= 90) return Color.Success;
+        if (value >= 70) return Color.Warning;
+        return Color.Error;
+    }
+
+    private string GetPercentageStyle(decimal percentage)
+    {
+        if (percentage >= 95) return "background: #E8F5E9; color: #2E7D32;";
+        if (percentage >= 80) return "background: #FFF3E0; color: #E65100;";
+        return "background: #FFEBEE; color: #C62828;";
+    }
+
+    private string GetRankStyle(int index)
+    {
+        return index switch
+        {
+            0 => "background: linear-gradient(135deg, #FFD700, #FFA500); color: white;",
+            1 => "background: linear-gradient(135deg, #C0C0C0, #A0A0A0); color: white;",
+            2 => "background: linear-gradient(135deg, #CD7F32, #8B4513); color: white;",
+            _ => "background: #E0E0E0; color: #616161;"
+        };
+    }
+
+    private int GetBarHeight(int count)
+    {
+        if (!_dashboard.TodayHourlyDistribution.Any()) return 0;
+        var max = _dashboard.TodayHourlyDistribution.Max(h => h.Count);
+        return max > 0 ? (int)((double)count / max * 100) : 0;
+    }
+
+    private int GetTrendBarHeight(decimal rate)
+    {
+        return (int)((double)rate * 1.5); // max 150px for 100%
+    }
+
+    private string GetTrendBarColor(decimal rate)
+    {
+        if (rate >= 90) return "linear-gradient(180deg, #4CAF50, #81C784)";
+        if (rate >= 70) return "linear-gradient(180deg, #FF9800, #FFB74D)";
+        return "linear-gradient(180deg, #F44336, #E57373)";
+    }
+}

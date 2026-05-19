@@ -1,0 +1,261 @@
+@page "/my-attendance"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject IAttendanceService AttendanceService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthState
+
+<PageTitle>بصمتي</PageTitle>
+
+<AuthorizeView>
+    <Authorized Context="authCtx">
+        @if (_isLoading)
+        {
+            <MudContainer MaxWidth="MaxWidth.Large" Class="mt-8">
+                <MudPaper Class="pa-8" Elevation="3" Style="border-radius: 20px;">
+                    <div class="d-flex flex-column align-center gap-4">
+                        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+                        <MudText Typo="Typo.h6" Color="Color.Secondary">جاري تحميل بصماتك...</MudText>
+                    </div>
+                </MudPaper>
+            </MudContainer>
+        }
+        else
+        {
+            <MudContainer MaxWidth="MaxWidth.Large" Class="py-4">
+                
+                @* ═══════════════ HEADER ═══════════════ *@
+                <MudPaper Class="mb-4 overflow-hidden" Elevation="0" 
+                          Style="border-radius: 20px; background: linear-gradient(135deg, #00796B 0%, #009688 50%, #26A69A 100%);">
+                    <div class="pa-5">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-3">
+                            <div class="d-flex align-center gap-3">
+                                <MudAvatar Size="Size.Large" 
+                                           Style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px);">
+                                    <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Medium" Color="Color.Surface" />
+                                </MudAvatar>
+                                <div>
+                                    <MudText Typo="Typo.h5" Color="Color.Surface" Class="font-weight-bold">
+                                        بصمتي
+                                    </MudText>
+                                    <MudText Typo="Typo.body2" Style="color: rgba(255,255,255,0.7);">
+                                        @_userName • @_selectedMonth.ToString("MMMM yyyy", new System.Globalization.CultureInfo("ar-EG"))
+                                    </MudText>
+                                </div>
+                            </div>
+                            
+                            @* اختيار الشهر *@
+                            <div class="d-flex align-center gap-2">
+                                <MudIconButton Icon="@Icons.Material.Filled.ChevronRight"
+                                               Color="Color.Surface"
+                                               OnClick="PreviousMonth" />
+                                <MudText Typo="Typo.subtitle1" Color="Color.Surface" Class="font-weight-bold px-2">
+                                    @_selectedMonth.ToString("MMM yyyy")
+                                </MudText>
+                                <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft"
+                                               Color="Color.Surface"
+                                               OnClick="NextMonth"
+                                               Disabled="@(_selectedMonth.Month >= DateTime.Today.Month && _selectedMonth.Year >= DateTime.Today.Year)" />
+                            </div>
+                        </div>
+                    </div>
+
+                    @* الإحصائيات *@
+                    <div style="background: rgba(0,0,0,0.1); padding: 16px 20px;">
+                        <div class="d-flex justify-center gap-6 flex-wrap">
+                            <div class="text-center">
+                                <MudText Typo="Typo.h4" Color="Color.Surface" Class="font-weight-bold">@_statistics.PresentCount</MudText>
+                                <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">أيام حضور</MudText>
+                            </div>
+                            <div class="text-center">
+                                <MudText Typo="Typo.h4" Color="Color.Surface" Class="font-weight-bold">@_statistics.AbsentCount</MudText>
+                                <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">أيام غياب</MudText>
+                            </div>
+                            <div class="text-center">
+                                <MudText Typo="Typo.h4" Color="Color.Surface" Class="font-weight-bold">@_statistics.LateCount</MudText>
+                                <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">أيام تأخير</MudText>
+                            </div>
+                            <div class="text-center">
+                                <MudText Typo="Typo.h4" Color="Color.Surface" Class="font-weight-bold">@_statistics.TotalHours.ToString("F1")</MudText>
+                                <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">إجمالي الساعات</MudText>
+                            </div>
+                            <div class="text-center">
+                                <MudText Typo="Typo.h4" Color="Color.Surface" Class="font-weight-bold">@_statistics.AverageHours.ToString("F1")</MudText>
+                                <MudText Typo="Typo.caption" Style="color: rgba(255,255,255,0.7);">متوسط يومي</MudText>
+                            </div>
+                        </div>
+                    </div>
+                </MudPaper>
+
+                @* ═══════════════ سجل البصمات ═══════════════ *@
+                <MudPaper Elevation="2" Style="border-radius: 16px; overflow: hidden;">
+                    <div class="pa-4" style="background: var(--mud-palette-background-grey);">
+                        <div class="d-flex align-center gap-2">
+                            <MudIcon Icon="@Icons.Material.Filled.History" Color="Color.Primary" />
+                            <MudText Typo="Typo.h6" Class="font-weight-bold">سجل البصمات</MudText>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Primary">
+                                @_attendance.Count يوم
+                            </MudChip>
+                        </div>
+                    </div>
+                    <MudDivider />
+
+                    @if (!_attendance.Any())
+                    {
+                        <div class="pa-8 text-center">
+                            <MudIcon Icon="@Icons.Material.Filled.EventBusy" 
+                                     Size="Size.Large" 
+                                     Style="font-size: 64px; color: #E0E0E0;" />
+                            <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-4">
+                                لا توجد سجلات لهذا الشهر
+                            </MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        <MudTable Items="_attendance" Hover="true" Elevation="0" Dense="false" Striped="true">
+                            <HeaderContent>
+                                <MudTh>التاريخ</MudTh>
+                                <MudTh>اليوم</MudTh>
+                                <MudTh>الحضور</MudTh>
+                                <MudTh>الانصراف</MudTh>
+                                <MudTh>الساعات</MudTh>
+                                <MudTh>التأخير</MudTh>
+                                <MudTh>الحالة</MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="item">
+                                <MudTd DataLabel="التاريخ">
+                                    <MudText Typo="Typo.body1" Class="font-weight-medium">@item.LogDateDisplay</MudText>
+                                </MudTd>
+                                <MudTd DataLabel="اليوم">
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                                             Color="@(item.IsWeekend ? Color.Secondary : Color.Default)">
+                                        @item.DayName
+                                    </MudChip>
+                                </MudTd>
+                                <MudTd DataLabel="الحضور">
+                                    <MudText Typo="Typo.body1" Class="font-weight-bold" 
+                                             Color="@(item.TimeIn.HasValue ? Color.Success : Color.Default)">
+                                        @item.TimeInDisplay
+                                    </MudText>
+                                </MudTd>
+                                <MudTd DataLabel="الانصراف">
+                                    <MudText Typo="Typo.body1" Class="font-weight-bold"
+                                             Color="@(item.TimeOut.HasValue ? Color.Error : Color.Default)">
+                                        @item.TimeOutDisplay
+                                    </MudText>
+                                </MudTd>
+                                <MudTd DataLabel="الساعات">
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                             Color="@(item.TotalHours >= 8 ? Color.Success : Color.Warning)">
+                                        @item.TotalHoursDisplay
+                                    </MudChip>
+                                </MudTd>
+                                <MudTd DataLabel="التأخير">
+                                    @if (item.IsLate)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Filled"
+                                                 Style="background: #FFF3E0; color: #E65100;">
+                                            @item.LateDisplay
+                                        </MudChip>
+                                    }
+                                    else
+                                    {
+                                        <MudText Color="Color.Secondary">--</MudText>
+                                    }
+                                </MudTd>
+                                <MudTd DataLabel="الحالة">
+                                    @if (item.IsAbsent)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Filled"
+                                                 Style="background: #FFEBEE; color: #C62828;">
+                                            <MudIcon Icon="@Icons.Material.Filled.Cancel" Size="Size.Small" Class="ml-1" />
+                                            غائب
+                                        </MudChip>
+                                    }
+                                    else if (item.IsLate)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Filled"
+                                                 Style="background: #FFF3E0; color: #E65100;">
+                                            <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" Class="ml-1" />
+                                            متأخر
+                                        </MudChip>
+                                    }
+                                    else
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Filled"
+                                                 Style="background: #E8F5E9; color: #2E7D32;">
+                                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Class="ml-1" />
+                                            حاضر
+                                        </MudChip>
+                                    }
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+                </MudPaper>
+            </MudContainer>
+        }
+    </Authorized>
+    <NotAuthorized>
+        <MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+            <MudPaper Class="pa-8 text-center" Elevation="3" Style="border-radius: 20px;">
+                <MudIcon Icon="@Icons.Material.Filled.Login" Size="Size.Large" 
+                         Style="font-size: 64px; color: #FF9800;" Class="mb-4" />
+                <MudText Typo="Typo.h5" Color="Color.Warning" Class="mb-2">تسجيل الدخول مطلوب</MudText>
+                <MudText Typo="Typo.body1" Color="Color.Secondary">
+                    يرجى تسجيل الدخول لعرض بصماتك
+                </MudText>
+            </MudPaper>
+        </MudContainer>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private bool _isLoading = true;
+    private string _userName = "";
+    private DateTime _selectedMonth = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private List<AttendanceListDto> _attendance = new();
+    private AttendanceStatisticsDto _statistics = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        _userName = authState.User.Identity?.Name ?? "مستخدم";
+
+        await LoadData();
+        _isLoading = false;
+    }
+
+    private async Task LoadData()
+    {
+        _attendance = await AttendanceService.GetMyAttendanceAsync(_userName, _selectedMonth);
+        _statistics = await AttendanceService.GetMyStatisticsAsync(_userName, _selectedMonth);
+    }
+
+    private async Task PreviousMonth()
+    {
+        _selectedMonth = _selectedMonth.AddMonths(-1);
+        _isLoading = true;
+        StateHasChanged();
+        
+        await LoadData();
+        
+        _isLoading = false;
+        StateHasChanged();
+    }
+
+    private async Task NextMonth()
+    {
+        _selectedMonth = _selectedMonth.AddMonths(1);
+        _isLoading = true;
+        StateHasChanged();
+        
+        await LoadData();
+        
+        _isLoading = false;
+        StateHasChanged();
+    }
+}
