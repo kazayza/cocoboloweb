@@ -56,26 +56,40 @@
                   Placeholder="بحث باسم الموظف..."
                   Adornment="Adornment.Start"
                   AdornmentIcon="@Icons.Material.Filled.Search"
-                  Style="max-width:200px" Variant="Variant.Outlined" Margin="Margin.Dense"
-                  Clearable="true" TextChanged="@(v => { _filter.SearchText = v; _ = LoadAsync(); })" />
+                  Style="max-width:200px"
+                  Variant="Variant.Outlined"
+                  Margin="Margin.Dense"
+                  Clearable="true"
+                  OnKeyUp="OnSearchKeyUp" />
 
     <MudTextField @bind-Value="_filter.PayrollMonth"
                   Placeholder="الشهر (2026-05)"
-                  Style="max-width:150px" Variant="Variant.Outlined" Margin="Margin.Dense"
-                  TextChanged="@(v => { _filter.PayrollMonth = v; _ = LoadAsync(); })" />
+                  Style="max-width:150px"
+                  Variant="Variant.Outlined"
+                  Margin="Margin.Dense"
+                  OnKeyUp="OnSearchKeyUp" />
 
     <MudSelect T="string"
-               Value="_filter.PaymentStatus"
-               ValueChanged="@(v => { _filter.PaymentStatus = v; _ = LoadAsync(); })"
+               @bind-Value="_selectedStatus"
                Placeholder="الحالة"
-               Style="max-width:140px" Variant="Variant.Outlined"
-               Margin="Margin.Dense" Clearable="true">
+               Style="max-width:140px"
+               Variant="Variant.Outlined"
+               Margin="Margin.Dense"
+               Clearable="true">
         <MudSelectItem T="string" Value="@("مدفوع")">مدفوع</MudSelectItem>
         <MudSelectItem T="string" Value="@("غير مدفوع")">غير مدفوع</MudSelectItem>
         <MudSelectItem T="string" Value="@("ملغي")">ملغي</MudSelectItem>
     </MudSelect>
 
-    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+    <MudButton Variant="Variant.Outlined"
+               Color="Color.Default"
+               StartIcon="@Icons.Material.Filled.Search"
+               OnClick="SearchAsync">
+        بحث
+    </MudButton>
+
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
                StartIcon="@Icons.Material.Filled.Add"
                OnClick="@(() => Nav.NavigateTo("/hr/payroll/processor"))">
         معالجة مرتبات
@@ -104,7 +118,9 @@
         <RowTemplate>
             <MudTd>
                 <MudText><b>@context.EmployeeName</b></MudText>
-                <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.Department ?? "—")</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @(context.Department ?? "—")
+                </MudText>
             </MudTd>
             <MudTd>@FormatMonth(context.PayrollMonth)</MudTd>
             <MudTd>@context.BasicSalary.ToString("N2") جـ</MudTd>
@@ -147,18 +163,22 @@
                 </MudChip>
                 @if (context.PaymentDate.HasValue)
                 {
-                    <MudText Typo="Typo.caption">@context.PaymentDate.Value.ToString("dd/MM")</MudText>
+                    <MudText Typo="Typo.caption">
+                        @context.PaymentDate.Value.ToString("dd/MM")
+                    </MudText>
                 }
             </MudTd>
             <MudTd>
                 <MudIconButton Icon="@Icons.Material.Filled.Receipt"
-                               Size="Size.Small" Color="Color.Primary"
+                               Size="Size.Small"
+                               Color="Color.Primary"
                                Title="قسيمة الراتب"
                                OnClick="@(() => OpenPayslipAsync(context.PayrollID))" />
                 @if (context.PaymentStatus == "غير مدفوع")
                 {
                     <MudIconButton Icon="@Icons.Material.Filled.Cancel"
-                                   Size="Size.Small" Color="Color.Error"
+                                   Size="Size.Small"
+                                   Color="Color.Error"
                                    Title="إلغاء"
                                    OnClick="@(() => CancelAsync(context))" />
                 }
@@ -187,19 +207,22 @@
 </MudPaper>
 
 @code {
-    private List<PayrollListDto> _payrolls  = new();
+    // ── State ───────────────────────────────────────────────
+    private List<PayrollListDto> _payrolls    = new();
     private PayrollStatsDto?     _stats;
-    private PayrollFilterDto     _filter    = new()
+    private PayrollFilterDto     _filter      = new()
     {
         PayrollMonth = DateTime.Today.ToString("yyyy-MM"),
         PageSize     = 20
     };
-    private bool    _loading    = true;
+    private string  _selectedStatus = "";   // منفصل عن الـ filter
+    private bool    _loading        = true;
     private int     _totalCount;
-    private int     _totalPages => (int)Math.Ceiling((double)_totalCount / _filter.PageSize);
-    private string  _currentUser = "system";
+    private int     _totalPages     => (int)Math.Ceiling((double)_totalCount / _filter.PageSize);
+    private string  _currentUser    = "system";
 
-   protected override async Task OnInitializedAsync()
+    // ── Init ────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
     {
         var auth     = await AuthProvider.GetAuthenticationStateAsync();
         _currentUser = auth.User.Identity?.Name ?? "system";
@@ -209,6 +232,7 @@
         await LoadStatsAsync();
     }
 
+    // ── Data ────────────────────────────────────────────────
     private async Task LoadAsync()
     {
         _loading = true;
@@ -218,7 +242,6 @@
             var result  = await PayrollService.GetPayrollsAsync(_filter);
             _payrolls   = result.Items;
             _totalCount = result.TotalCount;
-            // ✅ مفيش مرتبات = طبيعي - مش error
         }
         catch (Exception ex)
         {
@@ -231,7 +254,7 @@
         }
     }
 
-     private async Task LoadStatsAsync()
+    private async Task LoadStatsAsync()
     {
         try
         {
@@ -240,54 +263,77 @@
         }
         catch
         {
-            // ✅ لو مفيش مرتبات للشهر ده → Stats تبقى null بدون error
             _stats = null;
         }
     }
 
+    // ── Search ──────────────────────────────────────────────
+    private async Task OnSearchKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await SearchAsync();
+    }
+
+    private async Task SearchAsync()
+    {
+        // ✅ تطبيق الـ Status من المتغير المنفصل
+        _filter.PaymentStatus = string.IsNullOrWhiteSpace(_selectedStatus)
+            ? null : _selectedStatus;
+        _filter.PageNumber = 1;
+
+        // ✅ واحد ورا التاني
+        await LoadAsync();
+        await LoadStatsAsync();
+    }
+
+    // ── Pagination ───────────────────────────────────────────
     private async Task OnPageChangedAsync(int page)
     {
         _filter.PageNumber = page;
         await LoadAsync();
     }
 
+    // ── Dialogs ──────────────────────────────────────────────
     private async Task OpenPayslipAsync(int payrollId)
     {
         var parameters = new DialogParameters
         {
-            [nameof(PayslipDialog.PayrollId)]  = payrollId,
-            [nameof(PayslipDialog.CurrentUser)]= _currentUser
+            [nameof(PayslipDialog.PayrollId)]   = payrollId,
+            [nameof(PayslipDialog.CurrentUser)] = _currentUser
         };
         var options = new DialogOptions
         {
-            MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true
+            MaxWidth  = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = true
         };
         await DialogService.ShowAsync<PayslipDialog>("قسيمة الراتب", parameters, options);
     }
 
     private async Task CancelAsync(PayrollListDto p)
     {
-        // ✅ حطّه بدله
-var parameters = new DialogParameters<MudMessageBox>
-{
-    { x => x.Message,    $"هل تريد إلغاء راتب {p.EmployeeName} لشهر {p.PayrollMonth}؟" },
-    { x => x.YesText,    "إلغاء الراتب" },
-    { x => x.CancelText, "تراجع" }
-};
-var confirmDialog = await DialogService.ShowAsync<MudMessageBox>(
-    "تأكيد الإلغاء", parameters,
-    new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
-var confirmResult = await confirmDialog.Result;
-if (confirmResult is { Canceled: true }) return;
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Message,    $"هل تريد إلغاء راتب {p.EmployeeName} لشهر {p.PayrollMonth}؟" },
+            { x => x.YesText,    "إلغاء الراتب" },
+            { x => x.CancelText, "تراجع" }
+        };
+        var dialog = await DialogService.ShowAsync<MudMessageBox>(
+            "تأكيد الإلغاء", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+
+        if ((await dialog.Result) is { Canceled: true }) return;
 
         var (ok, msg) = await PayrollService.CancelAsync(p.PayrollID, _currentUser);
         Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
         if (ok) await LoadAsync();
     }
 
+    // ── Helpers ──────────────────────────────────────────────
     private static string FormatMonth(string? m) =>
         string.IsNullOrWhiteSpace(m) ? "—" :
         DateTime.TryParseExact(m + "-01", "yyyy-MM-dd",
             null, System.Globalization.DateTimeStyles.None, out var d)
-            ? d.ToString("MMMM yyyy", new System.Globalization.CultureInfo("ar-EG")) : m;
+            ? d.ToString("MMMM yyyy", new System.Globalization.CultureInfo("ar-EG"))
+            : m;
 }

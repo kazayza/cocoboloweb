@@ -244,7 +244,6 @@
     private List<PayrollCalculationDto> _calculations = new();
     private List<CashBoxListDto>        _cashBoxes    = new();
 
-    // Helpers
     private bool    HasSelected   => _calculations.Any(c => c.IsSelected && !c.HasExistingPayroll);
     private int     SelectedCount => _calculations.Count(c => c.IsSelected && !c.HasExistingPayroll);
     private decimal SelectedSum(Func<PayrollCalculationDto, decimal> selector) =>
@@ -255,12 +254,10 @@
         var auth     = await AuthProvider.GetAuthenticationStateAsync();
         _currentUser = auth.User.Identity?.Name ?? "system";
         _cashBoxes   = await CashBoxService.GetCashBoxesAsync(activeOnly: true);
-
         var def = _cashBoxes.FirstOrDefault(c => c.IsDefault) ?? _cashBoxes.FirstOrDefault();
         if (def != null) _selectedCashBoxId = def.CashBoxId;
     }
 
-    // ── حساب المرتبات ──────────────────────────────────────────
     private async Task CalculateAsync()
     {
         if (!ValidateMonth(_selectedMonth))
@@ -268,7 +265,6 @@
             Snackbar.Add("صيغة الشهر غير صحيحة (مثال: 2026-05)", Severity.Warning);
             return;
         }
-
         _calculating = true;
         StateHasChanged();
         try
@@ -289,40 +285,34 @@
         }
     }
 
-    // ── ✅ إزالة موظف من القائمة ────────────────────────────────
     private void RemoveEmployee(PayrollCalculationDto calc)
     {
         _calculations.Remove(calc);
         StateHasChanged();
-        Snackbar.Add($"تم إزالة {calc.EmployeeName} من القائمة", Severity.Info);
+        Snackbar.Add($"تم إزالة {calc.EmployeeName}", Severity.Info);
     }
 
-    // ── ✅ حفظ بدون صرف ────────────────────────────────────────
     private async Task SaveWithoutPayAsync()
     {
-        var count = SelectedCount;
-        if (count == 0) { Snackbar.Add("لم يتم اختيار أي موظف", Severity.Warning); return; }
+        if (!HasSelected) { Snackbar.Add("لم يتم اختيار أي موظف", Severity.Warning); return; }
 
         var parameters = new DialogParameters<MudMessageBox>
-{
-    { x => x.Message,    $"هل تريد حفظ مرتبات {count} موظف بدون صرف؟\nيمكنك صرفها لاحقاً من سجل المرتبات." },
-    { x => x.YesText,    "نعم، حفظ" },
-    { x => x.CancelText, "إلغاء" }
-};
-var confirmDialog = await DialogService.ShowAsync<MudMessageBox>(
-    "تأكيد الحفظ", parameters,
-    new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
-var confirmResult = await confirmDialog.Result;
-if (confirmResult is { Canceled: true }) return;
+        {
+            { x => x.Message,    $"حفظ {SelectedCount} راتب بدون صرف؟" },
+            { x => x.YesText,    "نعم، حفظ" },
+            { x => x.CancelText, "إلغاء" }
+        };
+        var dialog = await DialogService.ShowAsync<MudMessageBox>(
+            "تأكيد الحفظ", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+        if ((await dialog.Result) is { Canceled: true }) return;
 
         _processing = true;
         StateHasChanged();
         try
         {
-            // نمرر cashBoxId = 0 → الـ Service هيحفظ بدون حركة خزينة
             var (ok, msg, _) = await PayrollService.SaveOnlyAsync(
                 _selectedMonth, _calculations, _currentUser);
-
             Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
             if (ok) await CalculateAsync();
         }
@@ -333,7 +323,6 @@ if (confirmResult is { Canceled: true }) return;
         finally { _processing = false; }
     }
 
-    // ── صرف المرتبات ───────────────────────────────────────────
     private async Task ConfirmProcessAsync()
     {
         if (!_selectedCashBoxId.HasValue)
@@ -342,20 +331,16 @@ if (confirmResult is { Canceled: true }) return;
             return;
         }
 
-        var count = SelectedCount;
-        var total = SelectedSum(c => c.NetSalary);
-
         var parameters = new DialogParameters<MudMessageBox>
         {
-            { x => x.Message,    $"هل تريد صرف مرتبات {count} موظف؟\nإجمالي الصافي: {total:N2} جـ" },
-            { x => x.YesText,    "نعم، صرف المرتبات" },
+            { x => x.Message,    $"صرف مرتبات {SelectedCount} موظف؟\nالإجمالي: {SelectedSum(c => c.NetSalary):N2} جـ" },
+            { x => x.YesText,    "نعم، صرف" },
             { x => x.CancelText, "إلغاء" }
         };
         var dialog = await DialogService.ShowAsync<MudMessageBox>(
-            "تأكيد صرف المرتبات", parameters,
+            "تأكيد الصرف", parameters,
             new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
-        var result = await dialog.Result;
-        if (result is { Canceled: true }) return;
+        if ((await dialog.Result) is { Canceled: true }) return;
 
         _processing = true;
         StateHasChanged();
@@ -363,7 +348,6 @@ if (confirmResult is { Canceled: true }) return;
         {
             var (ok, msg, _) = await PayrollService.ProcessMonthAsync(
                 _selectedMonth, _calculations, _selectedCashBoxId!.Value, _currentUser);
-
             Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
             if (ok) await CalculateAsync();
         }
@@ -374,7 +358,6 @@ if (confirmResult is { Canceled: true }) return;
         finally { _processing = false; }
     }
 
-    // ── تعديل بنود موظف ────────────────────────────────────────
     private async Task OpenItemsDialogAsync(PayrollCalculationDto calc)
     {
         var parameters = new DialogParameters
@@ -389,7 +372,6 @@ if (confirmResult is { Canceled: true }) return;
             new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
     }
 
-    // ── اختيار الكل ────────────────────────────────────────────
     private void ToggleAll(bool val)
     {
         _allSelected = val;
