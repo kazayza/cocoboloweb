@@ -78,6 +78,9 @@ public partial class db24804Context : DbContext
     public virtual DbSet<Payroll> Payrolls { get; set; }
 
     public virtual DbSet<PayrollDetail> PayrollDetails { get; set; }
+    public virtual DbSet<PayrollRun>        PayrollRuns        { get; set; }
+public virtual DbSet<PayrollItem>       PayrollItems       { get; set; }
+public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
 
     public virtual DbSet<Permission> Permissions { get; set; }
 
@@ -1059,12 +1062,12 @@ modelBuilder.Entity<PartyContact>(entity =>
         {
             entity.ToTable("Payroll");
 
-            entity.Property(e => e.PayrollId).HasColumnName("PayrollID");
+            entity.Property(e => e.PayrollID).HasColumnName("PayrollID");
             entity.Property(e => e.Allowances)
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(18, 2)");
             entity.Property(e => e.BasicSalary).HasColumnType("decimal(18, 2)");
-            entity.Property(e => e.CashboxTransactionId).HasColumnName("CashboxTransactionID");
+            entity.Property(e => e.CashboxTransactionID).HasColumnName("CashboxTransactionID");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("(getdate())")
                 .HasColumnType("datetime");
@@ -1072,7 +1075,7 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.Deductions)
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(18, 2)");
-            entity.Property(e => e.EmployeeId).HasColumnName("EmployeeID");
+            entity.Property(e => e.EmployeeID).HasColumnName("EmployeeID");
             entity.Property(e => e.NetSalary)
                 .HasComputedColumnSql("(([BasicSalary]+[Allowances])-[Deductions])", true)
                 .HasColumnType("decimal(20, 2)");
@@ -1087,19 +1090,19 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .IsFixedLength();
 
             entity.HasOne(d => d.CashboxTransaction).WithMany(p => p.Payrolls)
-                .HasForeignKey(d => d.CashboxTransactionId)
+                .HasForeignKey(d => d.CashboxTransactionID)
                 .OnDelete(DeleteBehavior.SetNull)
                 .HasConstraintName("FK_Payroll_CashboxTransactions");
 
             entity.HasOne(d => d.Employee).WithMany(p => p.Payrolls)
-                .HasForeignKey(d => d.EmployeeId)
+                .HasForeignKey(d => d.EmployeeID)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_Payroll_Employees");
         });
 
         modelBuilder.Entity<PayrollDetail>(entity =>
         {
-            entity.Property(e => e.PayrollDetailId).HasColumnName("PayrollDetailID");
+            entity.Property(e => e.PayrollDetailID).HasColumnName("PayrollDetailID");
             entity.Property(e => e.Amount).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("(getdate())")
@@ -1107,10 +1110,10 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.CreatedBy).HasMaxLength(50);
             entity.Property(e => e.DetailDescription).HasMaxLength(255);
             entity.Property(e => e.DetailType).HasMaxLength(50);
-            entity.Property(e => e.PayrollId).HasColumnName("PayrollID");
+            entity.Property(e => e.PayrollID).HasColumnName("PayrollID");
 
             entity.HasOne(d => d.Payroll).WithMany(p => p.PayrollDetails)
-                .HasForeignKey(d => d.PayrollId)
+                .HasForeignKey(d => d.PayrollID)
                 .HasConstraintName("FK_PayrollDetails_Payroll");
         });
 

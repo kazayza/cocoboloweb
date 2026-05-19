@@ -81,6 +81,7 @@ builder.Services.AddScoped<IEmployeeLoanService, EmployeeLoanService>();
 builder.Services.AddScoped<IEmployeeService, EmployeeService>();
 builder.Services.AddScoped<IEmployeeShiftService, EmployeeShiftService>();
 builder.Services.AddScoped<IAttendanceService, AttendanceService>();
+builder.Services.AddScoped<IPayrollService, PayrollService>();
 
 var app = builder.Build();
 
