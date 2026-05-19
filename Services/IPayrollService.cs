@@ -25,6 +25,10 @@ public interface IPayrollService
     // ── الحضور اليدوي ────────────────────────────────────────
     Task<List<ManualAttendanceDto>>     GetManualAttendanceAsync(string month);
     Task<(bool Ok, string Msg)>         SaveManualAttendanceAsync(ManualAttendanceDto dto, string user);
+    Task<(bool Ok, string Msg, int? RunId)> SaveOnlyAsync(
+    string month,
+    List<PayrollCalculationDto> data,
+    string user);
 
     // ── Export ───────────────────────────────────────────────
     Task<byte[]> ExportMonthExcelAsync(string month);

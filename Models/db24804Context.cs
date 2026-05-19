@@ -1226,30 +1226,39 @@ modelBuilder.Entity<PartyContact>(entity =>
         });
 
         modelBuilder.Entity<AttendanceManual>(entity =>
-        {
-            entity.HasKey(e => e.ManualId);
+{
+    entity.HasKey(e => e.ManualId);
 
-            entity.Property(e => e.AttendanceMonth)
-                .HasMaxLength(7)
-                .IsFixedLength();
+    entity.ToTable("AttendanceManual");  // ✅ اسم الجدول الصح
 
-            entity.Property(e => e.Notes)
-                .HasMaxLength(300);
+    // ✅ mapping الأسماء زي ما هي في DB
+    entity.Property(e => e.ManualId)
+        .HasColumnName("ManualID");
 
-            entity.Property(e => e.CreatedAt)
-                .HasDefaultValueSql("(getdate())")
-                .HasColumnType("datetime");
+    entity.Property(e => e.EmployeeId)
+        .HasColumnName("EmployeeID");
 
-            entity.HasIndex(e => new { e.EmployeeId, e.AttendanceMonth })
-                .IsUnique()
-                .HasDatabaseName("UQ_AttendanceManual");
+    entity.Property(e => e.AttendanceMonth)
+        .HasMaxLength(7)
+        .IsFixedLength();
 
-            entity.HasOne(d => d.Employee)
-                .WithMany()
-                .HasForeignKey(d => d.EmployeeId)
-                .OnDelete(DeleteBehavior.ClientSetNull)
-                .HasConstraintName("FK_AttendanceManual_Employees");
-        });
+    entity.Property(e => e.Notes)
+        .HasMaxLength(300);
+
+    entity.Property(e => e.CreatedAt)
+        .HasDefaultValueSql("(getdate())")
+        .HasColumnType("datetime");
+
+    entity.HasIndex(e => new { e.EmployeeId, e.AttendanceMonth })
+        .IsUnique()
+        .HasDatabaseName("UQ_AttendanceManual");
+
+    entity.HasOne(d => d.Employee)
+        .WithMany()
+        .HasForeignKey(d => d.EmployeeId)
+        .OnDelete(DeleteBehavior.ClientSetNull)
+        .HasConstraintName("FK_AttendanceManual_Employees");
+});
 
         modelBuilder.Entity<Permission>(entity =>
         {

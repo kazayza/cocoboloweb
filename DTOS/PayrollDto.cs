@@ -260,6 +260,7 @@ public class ManualAttendanceDto
     public int     ManualID         { get; set; }
     public int     EmployeeID       { get; set; }
     public string  EmployeeName     { get; set; } = "";
+    public string? Department       { get; set; }
     public string  AttendanceMonth  { get; set; } = "";
     public int     PresentDays      { get; set; }
     public int     AbsenceDays      { get; set; }
