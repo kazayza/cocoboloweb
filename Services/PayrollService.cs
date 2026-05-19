@@ -21,7 +21,8 @@ public class PayrollService : IPayrollService
     public async Task<PagedResult<PayrollListDto>> GetPayrollsAsync(PayrollFilterDto filter)
     {
         var q = from p in _db.Payrolls.AsNoTracking()
-                join e in _db.Employees.AsNoTracking() on p.EmployeeId equals e.EmployeeId
+                join e in _db.Employees.AsNoTracking()
+                    on p.EmployeeId equals e.EmployeeId
                 select new { p, e };
 
         if (!string.IsNullOrWhiteSpace(filter.PayrollMonth))
@@ -33,10 +34,7 @@ public class PayrollService : IPayrollService
         if (!string.IsNullOrWhiteSpace(filter.PaymentStatus))
             q = q.Where(x => x.p.PaymentStatus == filter.PaymentStatus);
         if (!string.IsNullOrWhiteSpace(filter.SearchText))
-        {
-            var s = filter.SearchText.Trim();
-            q = q.Where(x => x.e.FullName.Contains(s));
-        }
+            q = q.Where(x => x.e.FullName.Contains(filter.SearchText.Trim()));
 
         var total = await q.CountAsync();
         var items = await q
@@ -52,18 +50,18 @@ public class PayrollService : IPayrollService
                 JobTitle           = x.e.JobTitle,
                 PayrollMonth       = x.p.PayrollMonth,
                 BasicSalary        = x.p.BasicSalary,
-                BonusInPayroll     = x.p.BonusInPayroll   ?? 0,
-                AbsenceDeduction   = x.p.AbsenceDeduction ?? 0,
-                LateDeduction      = x.p.LateDeduction    ?? 0,
-                LoanDeduction      = x.p.LoanDeduction    ?? 0,
-                PenaltyDeduction   = x.p.PenaltyDeduction ?? 0,
-                NetSalary          = x.p.NetSalary        ?? x.p.BasicSalary,
+                BonusInPayroll     = x.p.BonusInPayroll    ?? 0,
+                AbsenceDeduction   = x.p.AbsenceDeduction  ?? 0,
+                LateDeduction      = x.p.LateDeduction     ?? 0,
+                LoanDeduction      = x.p.LoanDeduction     ?? 0,
+                PenaltyDeduction   = x.p.PenaltyDeduction  ?? 0,
+                NetSalary          = x.p.NetSalary         ?? x.p.BasicSalary,
                 WorkingDaysInMonth = x.p.WorkingDaysInMonth ?? 0,
-                PresentDays        = x.p.PresentDays       ?? 0,
-                AbsenceDays        = x.p.AbsenceDays       ?? 0,
-                LateMinutesTotal   = x.p.LateMinutesTotal  ?? 0,
+                PresentDays        = x.p.PresentDays        ?? 0,
+                AbsenceDays        = x.p.AbsenceDays        ?? 0,
+                LateMinutesTotal   = x.p.LateMinutesTotal   ?? 0,
                 IsManualAttendance = x.p.IsManualAttendance ?? false,
-                PaymentStatus      = x.p.PaymentStatus ?? "غير مدفوع",
+                PaymentStatus      = x.p.PaymentStatus      ?? "غير مدفوع",
                 PaymentDate        = x.p.PaymentDate,
                 CreatedBy          = x.p.CreatedBy,
                 CreatedAt          = x.p.CreatedAt
@@ -78,7 +76,7 @@ public class PayrollService : IPayrollService
     }
 
     // ============================================================
-    // قسيمة الراتب الكاملة
+    // قسيمة الراتب
     // ============================================================
     public async Task<PayslipDto?> GetPayslipAsync(int payrollId)
     {
@@ -97,7 +95,7 @@ public class PayrollService : IPayrollService
 
         if (rec is null) return null;
 
-        // جلب كل البنود التفصيلية
+        // ✅ استخدام PayrollID uppercase زي الـ Model
         var details = await _db.PayrollDetails.AsNoTracking()
             .Where(d => d.PayrollID == payrollId)
             .Select(d => new PayrollDetailDto
@@ -107,10 +105,24 @@ public class PayrollService : IPayrollService
                 Description = d.DetailDescription ?? d.DetailType,
                 Amount      = d.Amount,
                 IsDeduction = d.IsDeduction,
-                PaymentType = d.PaymentType ?? "InPayroll",
-                Notes       = null
+                PaymentType = d.PaymentType ?? "InPayroll"
             })
             .ToListAsync();
+
+        var loans = await (
+            from li in _db.LoanInstallments.AsNoTracking()
+            join l  in _db.EmployeeLoans.AsNoTracking() on li.LoanId equals l.LoanId
+            where li.PayrollId == payrollId
+            select new PayrollDetailDto
+            {
+                DetailID    = li.InstallmentId,
+                DetailType  = "LoanDeduction",
+                Description = $"قسط سلفة #{li.InstallmentNumber}/{l.TotalInstallments}",
+                Amount      = li.Amount,
+                IsDeduction = true,
+                PaymentType = "InPayroll"
+            }
+        ).ToListAsync();
 
         return new PayslipDto
         {
@@ -132,7 +144,7 @@ public class PayrollService : IPayrollService
             LateDeduction      = rec.p.LateDeduction      ?? 0,
             LoanDeduction      = rec.p.LoanDeduction      ?? 0,
             Penalties          = details.Where(d => d.IsDeduction && d.DetailType == "Penalty").ToList(),
-            LoanItems          = details.Where(d => d.DetailType == "LoanDeduction").ToList(),
+            LoanItems          = loans,
             SeparateBonuses    = details.Where(d => d.PaymentType == "Separate").ToList(),
             NetSalary          = rec.p.NetSalary    ?? rec.p.BasicSalary,
             PaymentStatus      = rec.p.PaymentStatus ?? "غير مدفوع",
@@ -143,7 +155,7 @@ public class PayrollService : IPayrollService
     }
 
     // ============================================================
-    // ⭐ حساب راتب موظف واحد (بدون حفظ)
+    // حساب راتب موظف واحد
     // ============================================================
     public async Task<PayrollCalculationDto> CalculateOneAsync(int employeeId, string month)
     {
@@ -151,20 +163,17 @@ public class PayrollService : IPayrollService
             .FirstOrDefaultAsync(e => e.EmployeeId == employeeId)
             ?? throw new Exception($"الموظف {employeeId} غير موجود");
 
-        var basic       = emp.CurrentSalaryBase ?? 0;
-        var workingDays = GetWorkingDays(month);
-        var dailyRate   = workingDays > 0 ? basic / workingDays : 0;
-        var minuteRate  = workingDays > 0 ? basic / workingDays / 8m / 60m : 0;
+        var basic      = emp.CurrentSalaryBase ?? 0;
+        var workDays   = GetWorkingDays(month);
+        var dayRate    = workDays > 0 ? basic / workDays         : 0;
+        var minRate    = workDays > 0 ? basic / workDays / 8m / 60m : 0;
 
-        // ── الحضور ──────────────────────────────────────────
-        var att = await GetAttendanceAsync(employeeId, month);
+        var att        = await GetAttendanceAsync(employeeId, month);
+        var absDays    = Math.Max(0, workDays - att.PresentDays);
+        var absDed     = Math.Round(dayRate * absDays,      2);
+        var lateDed    = Math.Round(minRate * att.LateMinutes, 2);
 
-        var absenceDays      = Math.Max(0, workingDays - att.PresentDays);
-        var absenceDeduction = Math.Round(dailyRate  * absenceDays,  2);
-        var lateDeduction    = Math.Round(minuteRate * att.LateMinutes, 2);
-
-        // ── أقساط السلف ─────────────────────────────────────
-        var loanItems = await (
+        var loanItems  = await (
             from li in _db.LoanInstallments.AsNoTracking()
             join l  in _db.EmployeeLoans.AsNoTracking() on li.LoanId equals l.LoanId
             where li.EmployeeId    == employeeId
@@ -174,16 +183,13 @@ public class PayrollService : IPayrollService
             {
                 DetailID    = li.InstallmentId,
                 DetailType  = "LoanDeduction",
-                Description = $"قسط سلفة #{li.InstallmentNumber} / {l.TotalInstallments}",
+                Description = $"قسط سلفة #{li.InstallmentNumber}/{l.TotalInstallments}",
                 Amount      = li.Amount,
                 IsDeduction = true,
                 PaymentType = "InPayroll"
             }
         ).ToListAsync();
 
-        var loanDeduction = loanItems.Sum(i => i.Amount);
-
-        // ── تحقق من راتب موجود ──────────────────────────────
         var existing = await _db.Payrolls.AsNoTracking()
             .Where(p => p.EmployeeId == employeeId && p.PayrollMonth == month)
             .Select(p => new { p.PayrollId, p.PaymentStatus })
@@ -195,65 +201,57 @@ public class PayrollService : IPayrollService
             EmployeeName       = emp.FullName,
             Department         = emp.Department,
             BasicSalary        = basic,
-            WorkingDaysInMonth = workingDays,
+            WorkingDaysInMonth = workDays,
             PresentDays        = att.PresentDays,
-            AbsenceDays        = absenceDays,
+            AbsenceDays        = absDays,
             LateMinutesTotal   = att.LateMinutes,
             IsManualAttendance = att.IsManual,
-            AbsenceDeduction   = absenceDeduction,
-            LateDeduction      = lateDeduction,
-            LoanDeduction      = loanDeduction,
+            AbsenceDeduction   = absDed,
+            LateDeduction      = lateDed,
+            LoanDeduction      = loanItems.Sum(i => i.Amount),
             LoanItems          = loanItems,
-            Penalties          = new(),       // يضيفها المستخدم في الشاشة
-            BonusItems         = new(),       // يضيفها المستخدم في الشاشة
-            SeparateBonuses    = new(),       // يضيفها المستخدم في الشاشة
+            Penalties          = new(),
+            BonusItems         = new(),
+            SeparateBonuses    = new(),
             HasExistingPayroll = existing != null,
             ExistingPayrollID  = existing?.PayrollId,
             Warning            = existing != null
-                ? $"⚠️ راتب مسجل بالفعل ({existing.PaymentStatus})" : null
+                ? $"⚠️ راتب مسجل ({existing.PaymentStatus})" : null
         };
     }
 
     // ============================================================
-    // حساب مرتبات شهر كامل
+    // حساب شهر كامل
     // ============================================================
     public async Task<List<PayrollCalculationDto>> CalculateMonthAsync(string month)
     {
-        var empIds = await _db.Employees.AsNoTracking()
+        var ids = await _db.Employees.AsNoTracking()
             .Where(e => e.Status == "نشط" || e.Status == "Active")
             .OrderBy(e => e.Department).ThenBy(e => e.FullName)
             .Select(e => e.EmployeeId)
             .ToListAsync();
 
         var results = new List<PayrollCalculationDto>();
-        foreach (var id in empIds)
+        foreach (var id in ids)
         {
             try   { results.Add(await CalculateOneAsync(id, month)); }
             catch (Exception ex)
             {
                 results.Add(new PayrollCalculationDto
-                {
-                    EmployeeID = id, Warning = $"خطأ: {ex.Message}"
-                });
+                    { EmployeeID = id, Warning = $"خطأ: {ex.Message}" });
             }
         }
         return results;
     }
 
     // ============================================================
-    // ⭐ معالجة وصرف المرتبات الفعلي
+    // معالجة وصرف المرتبات
     // ============================================================
     public async Task<(bool Ok, string Msg, int? RunId)> ProcessMonthAsync(
-        string month,
-        List<PayrollCalculationDto> data,
-        int cashBoxId,
-        string user)
+        string month, List<PayrollCalculationDto> data, int cashBoxId, string user)
     {
-        if (!data.Any(d => d.IsSelected))
-            return (false, "لم يتم اختيار أي موظف", null);
-
-        var totalNet = data.Where(d => d.IsSelected && !d.HasExistingPayroll)
-                          .Sum(d => d.NetSalary);
+        var selected = data.Where(d => d.IsSelected && !d.HasExistingPayroll).ToList();
+        var totalNet = selected.Sum(d => d.NetSalary);
         var balance  = await GetCashBalanceAsync(cashBoxId);
 
         if (balance < totalNet)
@@ -264,14 +262,10 @@ public class PayrollService : IPayrollService
         using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
-            // 1. جلسة الصرف
             var run = new PayrollRun
             {
-                PayrollMonth = month,
-                Status       = "Draft",
-                CashBoxId    = cashBoxId,
-                CreatedBy    = user,
-                CreatedAt    = DateTime.Now
+                PayrollMonth = month, Status = "Draft",
+                CashBoxId = cashBoxId, CreatedBy = user, CreatedAt = DateTime.Now
             };
             _db.PayrollRuns.Add(run);
             await _db.SaveChangesAsync();
@@ -279,22 +273,21 @@ public class PayrollService : IPayrollService
             decimal sumGross = 0, sumDed = 0, sumNet = 0;
             int count = 0;
 
-            foreach (var calc in data.Where(d => d.IsSelected && !d.HasExistingPayroll))
+            foreach (var calc in selected)
             {
                 if (calc.BasicSalary == 0) continue;
 
-                var totalDeductions = calc.TotalDeductions;
-                var bonusInPayroll  = calc.TotalBonusInPayroll;
+                var bonusIn  = calc.TotalBonusInPayroll;
+                var totalDed = calc.TotalDeductions;
 
-                // 2. رأس الراتب
                 var payroll = new Payroll
                 {
                     EmployeeId         = calc.EmployeeID,
                     PayrollMonth       = month,
                     BasicSalary        = calc.BasicSalary,
-                    BonusInPayroll     = bonusInPayroll,
-                    Allowances         = bonusInPayroll,       // للتوافق
-                    Deductions         = totalDeductions,
+                    BonusInPayroll     = bonusIn,
+                    Allowances         = bonusIn,
+                    Deductions         = totalDed,
                     AbsenceDeduction   = calc.AbsenceDeduction,
                     LateDeduction      = calc.LateDeduction,
                     LoanDeduction      = calc.LoanDeduction,
@@ -311,45 +304,38 @@ public class PayrollService : IPayrollService
                 };
                 _db.Payrolls.Add(payroll);
                 await _db.SaveChangesAsync();
-                // NetSalary بتتحسب تلقائياً في DB
 
-                // 3. البنود التفصيلية
-                var allDetails = new List<PayrollDetail>();
-
-                // خصم غياب
+                // بنود تفصيلية - ✅ استخدام PayrollID uppercase
+                var details = new List<PayrollDetail>();
                 if (calc.AbsenceDeduction > 0)
-                    allDetails.Add(MakeDetail(payroll.PayrollId, "AbsenceDeduction",
+                    details.Add(MakeDetail(payroll.PayrollId, "AbsenceDeduction",
                         $"خصم غياب {calc.AbsenceDays} يوم",
-                        calc.AbsenceDeduction, isDeduction: true, user));
+                        calc.AbsenceDeduction, true, user));
 
-                // خصم تأخير
                 if (calc.LateDeduction > 0)
-                    allDetails.Add(MakeDetail(payroll.PayrollId, "LateDeduction",
+                    details.Add(MakeDetail(payroll.PayrollId, "LateDeduction",
                         $"خصم تأخير {calc.LateMinutesTotal} دقيقة",
-                        calc.LateDeduction, isDeduction: true, user));
+                        calc.LateDeduction, true, user));
 
-                // جزاءات
                 foreach (var p in calc.Penalties)
-                    allDetails.Add(MakeDetail(payroll.PayrollId, "Penalty",
-                        p.Description, p.Amount, isDeduction: true, user, p.Notes));
+                    details.Add(MakeDetail(payroll.PayrollId, "Penalty",
+                        p.Description, p.Amount, true, user));
 
-                // مكافآت داخل الراتب
                 foreach (var b in calc.BonusItems.Where(b => b.PaymentType == "InPayroll"))
-                    allDetails.Add(MakeDetail(payroll.PayrollId, b.DetailType,
-                        b.Description, b.Amount, isDeduction: false, user,
-                        paymentType: "InPayroll"));
+                    details.Add(MakeDetail(payroll.PayrollId, b.DetailType,
+                        b.Description, b.Amount, false, user, paymentType: "InPayroll"));
 
-                _db.PayrollDetails.AddRange(allDetails);
+                _db.PayrollDetails.AddRange(details);
                 await _db.SaveChangesAsync();
 
-                // 4. حركة خزينة للراتب
-                var payrollNet = payroll.NetSalary ?? calc.NetSalary;
+                // حركة الخزينة
+                var netVal = payroll.NetSalary ?? calc.NetSalary;
                 var cashTx = new CashboxTransaction
                 {
                     CashBoxId       = cashBoxId,
                     TransactionType = "صرف",
                     ReferenceType   = "Payroll",
-                    Amount          = payrollNet,
+                    Amount          = netVal,
                     TransactionDate = DateTime.Now,
                     Notes           = $"راتب {calc.EmployeeName} - {month}",
                     CreatedBy       = user,
@@ -359,10 +345,10 @@ public class PayrollService : IPayrollService
                 await _db.SaveChangesAsync();
 
                 payroll.CashboxTransactionId = cashTx.CashboxTransactionId;
-                payroll.PaymentStatus        = "مدفوع";
-                payroll.PaymentDate          = DateTime.Now;
+                payroll.PaymentStatus         = "مدفوع";
+                payroll.PaymentDate           = DateTime.Now;
 
-                // 5. مكافآت منفصلة (حركة خزينة مستقلة)
+                // مكافآت منفصلة
                 foreach (var sb in calc.SeparateBonuses)
                 {
                     var sepTx = new CashboxTransaction
@@ -379,85 +365,72 @@ public class PayrollService : IPayrollService
                     _db.CashboxTransactions.Add(sepTx);
                     await _db.SaveChangesAsync();
 
-                    // بند في PayrollDetails مع رقم الحركة المنفصلة
                     _db.PayrollDetails.Add(new PayrollDetail
                     {
-                        PayrollID            = payroll.PayrollId,
+                        PayrollID            = payroll.PayrollId,   // ✅ uppercase
                         DetailType           = sb.DetailType,
                         DetailDescription    = sb.Description,
                         Amount               = sb.Amount,
                         IsDeduction          = false,
                         PaymentType          = "Separate",
-                        CashboxTransactionID = sepTx.CashboxTransactionId,
+                        CashboxTransactionID = sepTx.CashboxTransactionId,  // ✅ uppercase
                         CreatedBy            = user,
                         CreatedAt            = DateTime.Now
                     });
                     await _db.SaveChangesAsync();
                 }
 
-                // 6. ⭐ خصم أقساط السلف تلقائياً
+                // خصم السلف تلقائياً
                 foreach (var loanItem in calc.LoanItems)
                 {
                     var inst = await _db.LoanInstallments
                         .Include(i => i.Loan)
                         .FirstOrDefaultAsync(i => i.InstallmentId == loanItem.DetailID);
 
-                    if (inst?.Status == "Pending")
+                    if (inst?.Status != "Pending") continue;
+
+                    var loanDetail = new PayrollDetail
                     {
-                        // بند السلفة في الراتب
-                        var loanDetail = new PayrollDetail
-                        {
-                            PayrollID         = payroll.PayrollId,
-                            DetailType        = "LoanDeduction",
-                            DetailDescription = loanItem.Description,
-                            Amount            = loanItem.Amount,
-                            IsDeduction       = true,
-                            PaymentType       = "InPayroll",
-                            CreatedBy         = user,
-                            CreatedAt         = DateTime.Now
-                        };
-                        _db.PayrollDetails.Add(loanDetail);
-                        await _db.SaveChangesAsync();
+                        PayrollID         = payroll.PayrollId,   // ✅ uppercase
+                        DetailType        = "LoanDeduction",
+                        DetailDescription = loanItem.Description,
+                        Amount            = loanItem.Amount,
+                        IsDeduction       = true,
+                        PaymentType       = "InPayroll",
+                        CreatedBy         = user,
+                        CreatedAt         = DateTime.Now
+                    };
+                    _db.PayrollDetails.Add(loanDetail);
+                    await _db.SaveChangesAsync();
 
-                        // تحديث حالة القسط
-                        inst.Status          = "Deducted";
-                        inst.PayrollId       = payroll.PayrollId;
-                        inst.PayrollDetailId = loanDetail.PayrollDetailID;
-                        inst.DeductionDate   = DateTime.Now;
+                    inst.Status          = "Deducted";
+                    inst.PayrollId       = payroll.PayrollId;
+                    inst.PayrollDetailId = loanDetail.PayrollDetailID;  // ✅ uppercase
+                    inst.DeductionDate   = DateTime.Now;
 
-                        // تحديث السلفة
-                        var loan = inst.Loan;
-                        loan.PaidInstallments++;
-                        loan.RemainingAmount -= inst.Amount;
-                        loan.LastUpdatedAt    = DateTime.Now;
-
-                        if (loan.RemainingAmount <= 0 || loan.PaidInstallments >= loan.TotalInstallments)
-                        {
-                            loan.Status          = "Completed";
-                            loan.RemainingAmount = 0;
-                        }
-                        await _db.SaveChangesAsync();
-                    }
+                    var loan = inst.Loan;
+                    loan.PaidInstallments++;
+                    loan.RemainingAmount -= inst.Amount;
+                    loan.LastUpdatedAt    = DateTime.Now;
+                    if (loan.RemainingAmount <= 0 || loan.PaidInstallments >= loan.TotalInstallments)
+                    { loan.Status = "Completed"; loan.RemainingAmount = 0; }
+                    await _db.SaveChangesAsync();
                 }
 
                 sumGross += calc.GrossSalary;
-                sumDed   += totalDeductions;
-                sumNet   += payrollNet;
+                sumDed   += totalDed;
+                sumNet   += netVal;
                 count++;
             }
 
-            // 7. تحديث جلسة الصرف
-            run.Status          = "Completed";
-            run.TotalEmployees  = count;
-            run.TotalGross      = sumGross;
-            run.TotalDeductions = sumDed;
-            run.TotalNet        = sumNet;
-            run.ProcessedBy     = user;
-            run.ProcessedAt     = DateTime.Now;
+            run.Status = "Completed"; run.TotalEmployees = count;
+            run.TotalGross = sumGross; run.TotalDeductions = sumDed;
+            run.TotalNet = sumNet; run.ProcessedBy = user;
+            run.ProcessedAt = DateTime.Now;
             await _db.SaveChangesAsync();
 
             await tx.CommitAsync();
-            return (true, $"✅ تم صرف مرتبات {count} موظف - الإجمالي: {sumNet:N2} جـ", run.RunId);
+            return (true, $"✅ تم صرف مرتبات {count} موظف | الإجمالي: {sumNet:N2} جـ", run.RunId);
         }
         catch (Exception ex)
         {
@@ -467,32 +440,29 @@ public class PayrollService : IPayrollService
     }
 
     // ============================================================
-    // صرف راتب موظف واحد
+    // صرف راتب واحد
     // ============================================================
     public async Task<(bool Ok, string Msg)> PayOneAsync(int payrollId, int cashBoxId, string user)
     {
         var p = await _db.Payrolls.Include(x => x.Employee)
             .FirstOrDefaultAsync(x => x.PayrollId == payrollId);
-        if (p is null)                       return (false, "الراتب غير موجود");
-        if (p.PaymentStatus == "مدفوع")      return (false, "الراتب تم صرفه بالفعل");
+        if (p is null)                  return (false, "الراتب غير موجود");
+        if (p.PaymentStatus == "مدفوع") return (false, "الراتب تم صرفه بالفعل");
 
         var ct = new CashboxTransaction
         {
-            CashBoxId       = cashBoxId,
-            TransactionType = "صرف",
-            ReferenceType   = "Payroll",
-            Amount          = p.NetSalary ?? p.BasicSalary,
+            CashBoxId = cashBoxId, TransactionType = "صرف",
+            ReferenceType = "Payroll", Amount = p.NetSalary ?? p.BasicSalary,
             TransactionDate = DateTime.Now,
-            Notes           = $"راتب {p.Employee.FullName} - {p.PayrollMonth}",
-            CreatedBy       = user,
-            CreatedAt       = DateTime.Now
+            Notes = $"راتب {p.Employee.FullName} - {p.PayrollMonth}",
+            CreatedBy = user, CreatedAt = DateTime.Now
         };
         _db.CashboxTransactions.Add(ct);
         await _db.SaveChangesAsync();
 
         p.CashboxTransactionId = ct.CashboxTransactionId;
-        p.PaymentStatus        = "مدفوع";
-        p.PaymentDate          = DateTime.Now;
+        p.PaymentStatus = "مدفوع";
+        p.PaymentDate   = DateTime.Now;
         await _db.SaveChangesAsync();
 
         return (true, $"✅ تم صرف راتب {p.Employee.FullName}");
@@ -508,7 +478,7 @@ public class PayrollService : IPayrollService
         if (p.PaymentStatus == "مدفوع") return (false, "لا يمكن إلغاء راتب مدفوع");
         p.PaymentStatus = "ملغي";
         await _db.SaveChangesAsync();
-        return (true, "تم إلغاء الراتب");
+        return (true, "تم الإلغاء");
     }
 
     // ============================================================
@@ -518,45 +488,36 @@ public class PayrollService : IPayrollService
     {
         var list = await _db.Payrolls.AsNoTracking()
             .Where(p => p.PayrollMonth == month)
-            .Select(p => new { p.BonusInPayroll, p.NetSalary, p.LoanDeduction,
-                               p.PenaltyDeduction, p.PaymentStatus,
-                               Gross = p.BasicSalary + (p.BonusInPayroll ?? 0) })
+            .Select(p => new
+            {
+                p.NetSalary, p.LoanDeduction, p.PenaltyDeduction, p.PaymentStatus,
+                Gross = p.BasicSalary + (p.BonusInPayroll ?? 0)
+            })
             .ToListAsync();
-
-        var sepBonuses = await _db.PayrollDetails.AsNoTracking()
-            .Where(d => _db.Payrolls
-                .Where(p => p.PayrollMonth == month)
-                .Select(p => p.PayrollId)
-                .Contains(d.PayrollID)
-                && d.PaymentType == "Separate")
-            .SumAsync(d => (decimal?)d.Amount) ?? 0;
 
         return new PayrollStatsDto
         {
-            TotalNetThisMonth    = list.Sum(p => p.NetSalary    ?? 0),
-            TotalGrossThisMonth  = list.Sum(p => p.Gross),
-            TotalLoanDeductions  = list.Sum(p => p.LoanDeduction    ?? 0),
-            TotalPenalties       = list.Sum(p => p.PenaltyDeduction ?? 0),
-            TotalSeparateBonuses = sepBonuses,
-            PaidCount            = list.Count(p => p.PaymentStatus == "مدفوع"),
-            PendingCount         = list.Count(p => p.PaymentStatus == "غير مدفوع"),
-            AverageNetSalary     = list.Any() ? Math.Round(list.Average(p => p.NetSalary ?? 0), 2) : 0
+            TotalNetThisMonth   = list.Sum(p => p.NetSalary        ?? 0),
+            TotalGrossThisMonth = list.Sum(p => p.Gross),
+            TotalLoanDeductions = list.Sum(p => p.LoanDeduction    ?? 0),
+            TotalPenalties      = list.Sum(p => p.PenaltyDeduction ?? 0),
+            PaidCount           = list.Count(p => p.PaymentStatus == "مدفوع"),
+            PendingCount        = list.Count(p => p.PaymentStatus == "غير مدفوع"),
+            AverageNetSalary    = list.Any()
+                ? Math.Round(list.Average(p => p.NetSalary ?? 0), 2) : 0
         };
     }
 
-    // ── GetRunsAsync ────────────────────────────────────────────
     public async Task<List<PayrollRunDto>> GetRunsAsync(string? month = null)
     {
         var q = _db.PayrollRuns.AsNoTracking().AsQueryable();
-        if (!string.IsNullOrWhiteSpace(month))
-            q = q.Where(r => r.PayrollMonth == month);
+        if (!string.IsNullOrWhiteSpace(month)) q = q.Where(r => r.PayrollMonth == month);
 
         return await q.OrderByDescending(r => r.CreatedAt)
             .Select(r => new PayrollRunDto
             {
-                RunID          = r.RunId,
-                PayrollMonth   = r.PayrollMonth,
-                Status         = r.Status,
+                RunID = r.RunId, PayrollMonth = r.PayrollMonth,
+                Status = r.Status,
                 TotalEmployees = r.TotalEmployees ?? 0,
                 TotalGross     = r.TotalGross     ?? 0,
                 TotalDeductions= r.TotalDeductions?? 0,
@@ -576,14 +537,10 @@ public class PayrollService : IPayrollService
             where a.AttendanceMonth == month
             select new ManualAttendanceDto
             {
-                ManualID        = a.ManualId,
-                EmployeeID      = a.EmployeeId,
-                EmployeeName    = e.FullName,
-                AttendanceMonth = a.AttendanceMonth,
-                PresentDays     = a.PresentDays,
-                AbsenceDays     = a.AbsenceDays,
-                LateMinutes     = a.LateMinutes,
-                Notes           = a.Notes
+                ManualID = a.ManualId, EmployeeID = a.EmployeeId,
+                EmployeeName = e.FullName, AttendanceMonth = a.AttendanceMonth,
+                PresentDays = a.PresentDays, AbsenceDays = a.AbsenceDays,
+                LateMinutes = a.LateMinutes, Notes = a.Notes
             }
         ).ToListAsync();
     }
@@ -595,19 +552,13 @@ public class PayrollService : IPayrollService
             a => a.EmployeeId == dto.EmployeeID && a.AttendanceMonth == dto.AttendanceMonth);
 
         if (rec is null)
-        {
             _db.AttendanceManuals.Add(new AttendanceManual
             {
-                EmployeeId      = dto.EmployeeID,
-                AttendanceMonth = dto.AttendanceMonth,
-                PresentDays     = dto.PresentDays,
-                AbsenceDays     = dto.AbsenceDays,
-                LateMinutes     = dto.LateMinutes,
-                Notes           = dto.Notes,
-                CreatedBy       = user,
-                CreatedAt       = DateTime.Now
+                EmployeeId = dto.EmployeeID, AttendanceMonth = dto.AttendanceMonth,
+                PresentDays = dto.PresentDays, AbsenceDays = dto.AbsenceDays,
+                LateMinutes = dto.LateMinutes, Notes = dto.Notes,
+                CreatedBy = user, CreatedAt = DateTime.Now
             });
-        }
         else
         {
             rec.PresentDays = dto.PresentDays;
@@ -619,17 +570,16 @@ public class PayrollService : IPayrollService
         return (true, "تم حفظ بيانات الحضور");
     }
 
-    public Task<byte[]> ExportMonthExcelAsync(string month) => Task.FromResult(Array.Empty<byte>());
+    public Task<byte[]> ExportMonthExcelAsync(string month)
+        => Task.FromResult(Array.Empty<byte>());
 
-    // ============================================================
-    // Helpers
-    // ============================================================
+    // ── Helpers ──────────────────────────────────────────────────
     private static PayrollDetail MakeDetail(
-        int payrollId, string type, string desc,
-        decimal amount, bool isDeduction, string user,
-        string? notes = null, string paymentType = "InPayroll") => new()
+        int payrollId, string type, string desc, decimal amount,
+        bool isDeduction, string user, string? notes = null,
+        string paymentType = "InPayroll") => new()
     {
-        PayrollID         = payrollId,
+        PayrollID         = payrollId,   // ✅ uppercase
         DetailType        = type,
         DetailDescription = desc,
         Amount            = amount,
@@ -656,18 +606,14 @@ public class PayrollService : IPayrollService
     private async Task<(int PresentDays, int LateMinutes, bool IsManual)>
         GetAttendanceAsync(int employeeId, string month)
     {
-        // أولاً: الحضور اليدوي
         var manual = await _db.AttendanceManuals.AsNoTracking()
             .FirstOrDefaultAsync(a => a.EmployeeId == employeeId
                                    && a.AttendanceMonth == month);
-        if (manual != null)
-            return (manual.PresentDays, manual.LateMinutes, true);
+        if (manual != null) return (manual.PresentDays, manual.LateMinutes, true);
 
-        // ثانياً: البصمة
         var bio = await _db.EmployeeShifts.AsNoTracking()
             .Where(s => s.EmployeeId == employeeId && s.BiometricCode != null)
-            .Select(s => s.BiometricCode)
-            .FirstOrDefaultAsync();
+            .Select(s => s.BiometricCode).FirstOrDefaultAsync();
         if (!bio.HasValue) return (0, 0, false);
 
         if (!DateTime.TryParseExact(month + "-01", "yyyy-MM-dd",
@@ -677,8 +623,7 @@ public class PayrollService : IPayrollService
         var end  = start.AddMonths(1).AddDays(-1);
         var recs = await _db.Attendances.AsNoTracking()
             .Where(a => a.BiometricCode == bio.Value
-                     && a.LogDate >= start && a.LogDate <= end
-                     && a.TimeIn != null)
+                     && a.LogDate >= start && a.LogDate <= end && a.TimeIn != null)
             .Select(a => new { a.LateMinutes })
             .ToListAsync();
 
@@ -689,8 +634,7 @@ public class PayrollService : IPayrollService
     {
         var box = await _db.CashBoxes.AsNoTracking()
             .Where(c => c.CashBoxId == cashBoxId)
-            .Select(c => new { c.OpeningBalance })
-            .FirstOrDefaultAsync();
+            .Select(c => new { c.OpeningBalance }).FirstOrDefaultAsync();
         if (box is null) return 0;
 
         var inflow  = await _db.CashboxTransactions.AsNoTracking()

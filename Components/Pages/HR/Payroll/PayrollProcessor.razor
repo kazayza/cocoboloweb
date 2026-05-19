@@ -1,0 +1,341 @@
+@page "/hr/payroll/processor"
+@attribute [Authorize]
+
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+@inject IPayrollService              PayrollService
+@inject ICashBoxService              CashBoxService
+@inject ISnackbar                    Snackbar
+@inject IDialogService               DialogService
+@inject AuthenticationStateProvider  AuthProvider
+
+<PageTitle>معالجة المرتبات</PageTitle>
+
+@* ══ Header ══ *@
+<MudPaper Class="pa-4 mb-4 rounded-xl d-flex align-center gap-3 flex-wrap">
+    <div>
+        <MudText Typo="Typo.h5">💰 معالجة المرتبات الشهرية</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary">
+            احسب واصرف مرتبات الموظفين
+        </MudText>
+    </div>
+    <MudSpacer />
+
+    @* اختيار الشهر *@
+    <MudTextField @bind-Value="_selectedMonth"
+                  Label="الشهر"
+                  Placeholder="مثال: 2026-05"
+                  Variant="Variant.Outlined"
+                  Style="max-width:160px"
+                  Margin="Margin.Dense"
+                  Adornment="Adornment.Start"
+                  AdornmentIcon="@Icons.Material.Filled.CalendarMonth" />
+
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Calculate"
+               OnClick="CalculateAsync"
+               Disabled="_calculating || string.IsNullOrWhiteSpace(_selectedMonth)">
+        @(_calculating ? "جاري الحساب..." : "احسب المرتبات")
+    </MudButton>
+</MudPaper>
+
+@* ══ Stats (بعد الحساب) ══ *@
+@if (_calculations.Any())
+{
+    <MudGrid Class="mb-4">
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-3 rounded-xl text-center" Style="border:2px solid #10b981">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">الموظفين المختارين</MudText>
+                <MudText Typo="Typo.h5" Color="Color.Success">
+                    <b>@_calculations.Count(c => c.IsSelected && !c.HasExistingPayroll)</b>
+                </MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-3 rounded-xl text-center" Style="border:2px solid #3b82f6">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">إجمالي المستحقات</MudText>
+                <MudText Typo="Typo.h6" Color="Color.Info">
+                    <b>@_calculations.Where(c => c.IsSelected && !c.HasExistingPayroll).Sum(c => c.GrossSalary).ToString("N0")</b> جـ
+                </MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-3 rounded-xl text-center" Style="border:2px solid #ef4444">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">إجمالي الخصومات</MudText>
+                <MudText Typo="Typo.h6" Color="Color.Error">
+                    <b>@_calculations.Where(c => c.IsSelected && !c.HasExistingPayroll).Sum(c => c.TotalDeductions).ToString("N0")</b> جـ
+                </MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-3 rounded-xl text-center" Style="border:2px solid #f59e0b">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">إجمالي الصافي</MudText>
+                <MudText Typo="Typo.h5" Color="Color.Warning">
+                    <b>@_calculations.Where(c => c.IsSelected && !c.HasExistingPayroll).Sum(c => c.NetSalary).ToString("N0")</b> جـ
+                </MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @* ══ Toolbar الصرف ══ *@
+    <MudPaper Class="pa-3 mb-3 rounded-xl d-flex align-center gap-3 flex-wrap">
+        <MudSelect T="int?"
+                   @bind-Value="_selectedCashBoxId"
+                   Label="الخزينة *"
+                   Variant="Variant.Outlined"
+                   Style="max-width:250px"
+                   Margin="Margin.Dense">
+            @foreach (var cb in _cashBoxes)
+            {
+                <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">
+                    @cb.CashBoxName (@cb.CurrentBalance.ToString("N0") جـ)
+                </MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Success"
+                   Size="Size.Large"
+                   StartIcon="@Icons.Material.Filled.Payment"
+                   OnClick="ConfirmProcessAsync"
+                   Disabled="_processing || !_selectedCashBoxId.HasValue || !_calculations.Any(c => c.IsSelected && !c.HasExistingPayroll)">
+            @(_processing ? "جاري الصرف..." : $"صرف المرتبات ({_calculations.Count(c => c.IsSelected && !c.HasExistingPayroll)} موظف)")
+        </MudButton>
+
+        <MudText Typo="Typo.caption" Color="Color.Secondary">
+            اختر كل ✓ أو اختر موظفين محددين
+        </MudText>
+    </MudPaper>
+
+    @* ══ Table ══ *@
+    <MudPaper Class="rounded-xl overflow-hidden">
+        @if (_calculating)
+        {
+            <MudProgressLinear Indeterminate Color="Color.Primary" />
+        }
+
+        <MudTable Items="_calculations" Dense Hover Elevation="0"
+                  @bind-SelectedItems="_selectedItems" MultiSelection="true">
+            <HeaderContent>
+                <MudTh><MudCheckBox T="bool" Value="_allSelected" ValueChanged="ToggleAll" /></MudTh>
+                <MudTh>الموظف</MudTh>
+                <MudTh>الراتب الأساسي</MudTh>
+                <MudTh>الحضور</MudTh>
+                <MudTh>خصم غياب</MudTh>
+                <MudTh>خصم تأخير</MudTh>
+                <MudTh>خصم سلف</MudTh>
+                <MudTh>مكافآت</MudTh>
+                <MudTh>جزاءات</MudTh>
+                <MudTh>الصافي</MudTh>
+                <MudTh>إجراءات</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    <MudCheckBox T="bool"
+                                 Value="@context.IsSelected"
+                                 ValueChanged="@(v => context.IsSelected = v)"
+                                 Disabled="context.HasExistingPayroll" />
+                </MudTd>
+                <MudTd>
+                    <div>
+                        <MudText Typo="Typo.body2"><b>@context.EmployeeName</b></MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @(context.Department ?? "—")
+                        </MudText>
+                        @if (context.HasExistingPayroll)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">
+                                مصروف مسبقاً
+                            </MudChip>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(context.Warning) && !context.HasExistingPayroll)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error">
+                                @context.Warning
+                            </MudChip>
+                        }
+                    </div>
+                </MudTd>
+                <MudTd>@context.BasicSalary.ToString("N2") جـ</MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2">
+                        @context.PresentDays / @context.WorkingDaysInMonth يوم
+                    </MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @(context.IsManualAttendance ? "يدوي" : "بصمة")
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Color="@(context.AbsenceDeduction > 0 ? Color.Error : Color.Default)">
+                        @(context.AbsenceDeduction > 0 ? $"- {context.AbsenceDeduction:N2}" : "—")
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Color="@(context.LateDeduction > 0 ? Color.Error : Color.Default)">
+                        @(context.LateDeduction > 0 ? $"- {context.LateDeduction:N2}" : "—")
+                        @if (context.LateMinutesTotal > 0)
+                        {
+                            <MudText Typo="Typo.caption">(@context.LateDisplay)</MudText>
+                        }
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Color="@(context.LoanDeduction > 0 ? Color.Error : Color.Default)">
+                        @(context.LoanDeduction > 0 ? $"- {context.LoanDeduction:N2}" : "—")
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Color="Color.Success">
+                        @(context.TotalBonusInPayroll > 0 ? $"+ {context.TotalBonusInPayroll:N2}" : "—")
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Color="@(context.TotalPenalties > 0 ? Color.Error : Color.Default)">
+                        @(context.TotalPenalties > 0 ? $"- {context.TotalPenalties:N2}" : "—")
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText><b>@context.NetSalary.ToString("N2") جـ</b></MudText>
+                </MudTd>
+                <MudTd>
+                    @if (!context.HasExistingPayroll)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Size="Size.Small"
+                                       Color="Color.Primary"
+                                       Title="إضافة بنود"
+                                       OnClick="@(() => OpenItemsDialogAsync(context))" />
+                    }
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Class="pa-4" Color="Color.Secondary" Align="Align.Center">
+                    اضغط "احسب المرتبات" أولاً
+                </MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudPaper>
+}
+
+@code {
+    private string  _selectedMonth   = DateTime.Today.ToString("yyyy-MM");
+    private int?    _selectedCashBoxId;
+    private bool    _calculating;
+    private bool    _processing;
+    private bool    _allSelected     = true;
+    private string  _currentUser     = "system";
+
+    private List<PayrollCalculationDto>  _calculations = new();
+    private HashSet<PayrollCalculationDto> _selectedItems = new();
+    private List<CashBoxListDto>         _cashBoxes    = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth     = await AuthProvider.GetAuthenticationStateAsync();
+        _currentUser = auth.User.Identity?.Name ?? "system";
+        _cashBoxes   = await CashBoxService.GetCashBoxesAsync(activeOnly: true);
+
+        var def = _cashBoxes.FirstOrDefault(c => c.IsDefault) ?? _cashBoxes.FirstOrDefault();
+        if (def != null) _selectedCashBoxId = def.CashBoxId;
+    }
+
+    private async Task CalculateAsync()
+    {
+        if (!ValidateMonth(_selectedMonth))
+        {
+            Snackbar.Add("صيغة الشهر غير صحيحة (مثال: 2026-05)", Severity.Warning);
+            return;
+        }
+
+        _calculating = true;
+        StateHasChanged();
+        try
+        {
+            _calculations = await PayrollService.CalculateMonthAsync(_selectedMonth);
+            foreach (var c in _calculations) c.IsSelected = !c.HasExistingPayroll;
+            _allSelected  = true;
+            Snackbar.Add($"تم حساب {_calculations.Count} موظف", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _calculating = false;
+        }
+    }
+
+    private async Task ConfirmProcessAsync()
+    {
+        var count = _calculations.Count(c => c.IsSelected && !c.HasExistingPayroll);
+        var total = _calculations.Where(c => c.IsSelected && !c.HasExistingPayroll)
+                                 .Sum(c => c.NetSalary);
+
+        // ✅ حطّه بدله
+var parameters = new DialogParameters<MudMessageBox>
+{
+    { x => x.Message,    $"هل تريد صرف مرتبات {count} موظف؟ إجمالي الصافي: {total:N2} جـ" },
+    { x => x.YesText,    "نعم، صرف المرتبات" },
+    { x => x.CancelText, "إلغاء" }
+};
+var confirmDialog = await DialogService.ShowAsync<MudMessageBox>(
+    "تأكيد صرف المرتبات", parameters,
+    new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+var confirmResult = await confirmDialog.Result;
+if (confirmResult is { Canceled: true }) return;
+
+        _processing = true;
+        StateHasChanged();
+        try
+        {
+            var (ok, msg, runId) = await PayrollService.ProcessMonthAsync(
+                _selectedMonth, _calculations, _selectedCashBoxId!.Value, _currentUser);
+
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok) await CalculateAsync(); // إعادة تحميل
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _processing = false;
+        }
+    }
+
+    private async Task OpenItemsDialogAsync(PayrollCalculationDto calc)
+    {
+        var parameters = new DialogParameters
+        {
+            [nameof(PayrollItemsDialog.Calc)] = calc,
+            [nameof(PayrollItemsDialog.OnSaved)] =
+                EventCallback.Factory.Create(this, StateHasChanged)
+        };
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true
+        };
+        await DialogService.ShowAsync<PayrollItemsDialog>(
+            $"بنود راتب {calc.EmployeeName}", parameters, options);
+    }
+
+    private void ToggleAll(bool val)
+    {
+        _allSelected = val;
+        foreach (var c in _calculations.Where(c => !c.HasExistingPayroll))
+            c.IsSelected = val;
+    }
+
+    private static bool ValidateMonth(string? m) =>
+        !string.IsNullOrWhiteSpace(m) &&
+        DateTime.TryParseExact(m + "-01", "yyyy-MM-dd",
+            null, System.Globalization.DateTimeStyles.None, out _);
+}

@@ -1,14 +1,11 @@
 using System;
 namespace COCOBOLOERPNEW.Models;
 
-/// <summary>
-/// الحضور اليدوي للموظفين اللي مش عندهم بصمة
-/// </summary>
 public partial class AttendanceManual
 {
     public int      ManualId        { get; set; }
     public int      EmployeeId      { get; set; }
-    public string   AttendanceMonth { get; set; } = null!; // 2026-05
+    public string   AttendanceMonth { get; set; } = null!;
     public int      PresentDays     { get; set; }
     public int      AbsenceDays     { get; set; }
     public int      LateMinutes     { get; set; }

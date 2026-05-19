@@ -1,0 +1,243 @@
+@* قسيمة الراتب - Dialog *@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+@inject IPayrollService PayrollService
+@inject ISnackbar       Snackbar
+@inject IJSRuntime      JS
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Receipt" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">قسيمة الراتب</MudText>
+            <MudSpacer />
+            <MudIconButton Icon="@Icons.Material.Filled.Print"
+                           Size="Size.Small" Title="طباعة"
+                           OnClick="PrintAsync" />
+        </div>
+    </TitleContent>
+    <DialogContent>
+        @if (_loading)
+        {
+            <div class="d-flex justify-center pa-8">
+                <MudProgressCircular Indeterminate Color="Color.Primary" />
+            </div>
+        }
+        else if (_slip is null)
+        {
+            <MudAlert Severity="Severity.Error">قسيمة الراتب غير موجودة</MudAlert>
+        }
+        else
+        {
+            <div id="payslip-content">
+                @* ── Header ── *@
+                <MudPaper Class="pa-4 mb-3 rounded-xl" Style="background:#1e293b;color:white">
+                    <div class="d-flex align-center justify-space-between">
+                        <div>
+                            <MudText Typo="Typo.h6"><b>@_slip.EmployeeName</b></MudText>
+                            <MudText Typo="Typo.body2" Style="opacity:.8">
+                                @(_slip.Department ?? "—") | @(_slip.JobTitle ?? "—")
+                            </MudText>
+                            <MudText Typo="Typo.caption" Style="opacity:.6">
+                                الرقم القومي: @(_slip.NationalId ?? "—")
+                            </MudText>
+                        </div>
+                        <div class="text-end">
+                            <MudText Typo="Typo.h6">@_slip.MonthDisplay</MudText>
+                            <MudChip T="string" Size="Size.Small"
+                                     Style="@($"background:{(_slip.PaymentStatus == "مدفوع" ? "#10b981" : "#f59e0b")};color:white")">
+                                @_slip.PaymentStatus
+                            </MudChip>
+                            @if (_slip.PaymentDate.HasValue)
+                            {
+                                <MudText Typo="Typo.caption" Style="opacity:.8">
+                                    تاريخ الصرف: @_slip.PaymentDate.Value.ToString("dd/MM/yyyy")
+                                </MudText>
+                            }
+                        </div>
+                    </div>
+                </MudPaper>
+
+                <MudGrid>
+                    @* ── المستحقات ── *@
+                    <MudItem xs="12" md="6">
+                        <MudPaper Class="pa-3 rounded-xl h-100" Style="border:2px solid #10b981">
+                            <MudText Typo="Typo.subtitle1" Color="Color.Success" Class="mb-2">
+                                <b>المستحقات</b>
+                            </MudText>
+                            <div class="d-flex justify-space-between mb-1">
+                                <MudText>الراتب الأساسي</MudText>
+                                <MudText><b>@_slip.BasicSalary.ToString("N2") جـ</b></MudText>
+                            </div>
+                            @foreach (var b in _slip.BonusItems)
+                            {
+                                <div class="d-flex justify-space-between mb-1">
+                                    <MudText Color="Color.Success">@b.Description</MudText>
+                                    <MudText Color="Color.Success"><b>+ @b.Amount.ToString("N2") جـ</b></MudText>
+                                </div>
+                            }
+                            <MudDivider Class="my-2" />
+                            <div class="d-flex justify-space-between">
+                                <MudText><b>الإجمالي</b></MudText>
+                                <MudText Color="Color.Success">
+                                    <b>@_slip.GrossSalary.ToString("N2") جـ</b>
+                                </MudText>
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+
+                    @* ── الخصومات ── *@
+                    <MudItem xs="12" md="6">
+                        <MudPaper Class="pa-3 rounded-xl h-100" Style="border:2px solid #ef4444">
+                            <MudText Typo="Typo.subtitle1" Color="Color.Error" Class="mb-2">
+                                <b>الخصومات</b>
+                            </MudText>
+                            @if (_slip.AbsenceDeduction > 0)
+                            {
+                                <div class="d-flex justify-space-between mb-1">
+                                    <MudText>خصم غياب (@_slip.AbsenceDays يوم)</MudText>
+                                    <MudText Color="Color.Error">- @_slip.AbsenceDeduction.ToString("N2") جـ</MudText>
+                                </div>
+                            }
+                            @if (_slip.LateDeduction > 0)
+                            {
+                                <div class="d-flex justify-space-between mb-1">
+                                    <MudText>خصم تأخير (@_slip.LateDisplay)</MudText>
+                                    <MudText Color="Color.Error">- @_slip.LateDeduction.ToString("N2") جـ</MudText>
+                                </div>
+                            }
+                            @foreach (var inst in _slip.LoanItems)
+                            {
+                                <div class="d-flex justify-space-between mb-1">
+                                    <MudText>@inst.Description</MudText>
+                                    <MudText Color="Color.Error">- @inst.Amount.ToString("N2") جـ</MudText>
+                                </div>
+                            }
+                            @foreach (var p in _slip.Penalties)
+                            {
+                                <div class="d-flex justify-space-between mb-1">
+                                    <MudText>جزاء: @p.Description</MudText>
+                                    <MudText Color="Color.Error">- @p.Amount.ToString("N2") جـ</MudText>
+                                </div>
+                            }
+                            @if (_slip.TotalDeductions == 0)
+                            {
+                                <MudText Color="Color.Secondary">لا توجد خصومات</MudText>
+                            }
+                            <MudDivider Class="my-2" />
+                            <div class="d-flex justify-space-between">
+                                <MudText><b>الإجمالي</b></MudText>
+                                <MudText Color="Color.Error">
+                                    <b>@_slip.TotalDeductions.ToString("N2") جـ</b>
+                                </MudText>
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+
+                    @* ── الحضور ── *@
+                    <MudItem xs="12">
+                        <MudPaper Class="pa-3 rounded-xl">
+                            <MudText Typo="Typo.subtitle2" Class="mb-2">الحضور والغياب</MudText>
+                            <MudGrid Spacing="1">
+                                <MudItem xs="3">
+                                    <MudText Typo="Typo.caption">أيام العمل</MudText>
+                                    <MudText><b>@_slip.WorkingDaysInMonth</b></MudText>
+                                </MudItem>
+                                <MudItem xs="3">
+                                    <MudText Typo="Typo.caption">أيام الحضور</MudText>
+                                    <MudText Color="Color.Success"><b>@_slip.PresentDays</b></MudText>
+                                </MudItem>
+                                <MudItem xs="3">
+                                    <MudText Typo="Typo.caption">أيام الغياب</MudText>
+                                    <MudText Color="@(_slip.AbsenceDays > 0 ? Color.Error : Color.Default)">
+                                        <b>@_slip.AbsenceDays</b>
+                                    </MudText>
+                                </MudItem>
+                                <MudItem xs="3">
+                                    <MudText Typo="Typo.caption">التأخير</MudText>
+                                    <MudText Color="@(_slip.LateMinutesTotal > 0 ? Color.Warning : Color.Default)">
+                                        <b>@_slip.LateDisplay</b>
+                                    </MudText>
+                                </MudItem>
+                            </MudGrid>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                مصدر الحضور: @_slip.AttendanceSource
+                            </MudText>
+                        </MudPaper>
+                    </MudItem>
+
+                    @* ── صافي الراتب ── *@
+                    <MudItem xs="12">
+                        <MudPaper Class="pa-4 rounded-xl text-center"
+                                  Style="background:linear-gradient(135deg,#1e293b,#334155);color:white">
+                            <MudText Typo="Typo.body1" Style="opacity:.8">صافي الراتب</MudText>
+                            <MudText Typo="Typo.h4"><b>@_slip.NetSalary.ToString("N2") جـ</b></MudText>
+                            @if (!string.IsNullOrWhiteSpace(_slip.CashBoxName))
+                            {
+                                <MudText Typo="Typo.caption" Style="opacity:.7">
+                                    الخزينة: @_slip.CashBoxName
+                                </MudText>
+                            }
+                        </MudPaper>
+                    </MudItem>
+
+                    @* ── مكافآت منفصلة ── *@
+                    @if (_slip.SeparateBonuses.Any())
+                    {
+                        <MudItem xs="12">
+                            <MudPaper Class="pa-3 rounded-xl" Style="border:2px solid #3b82f6">
+                                <MudText Typo="Typo.subtitle2" Color="Color.Info" Class="mb-2">
+                                    مكافآت منفصلة (خارج الراتب)
+                                </MudText>
+                                @foreach (var b in _slip.SeparateBonuses)
+                                {
+                                    <div class="d-flex justify-space-between">
+                                        <MudText>@b.Description</MudText>
+                                        <MudText Color="Color.Info"><b>@b.Amount.ToString("N2") جـ</b></MudText>
+                                    </div>
+                                }
+                            </MudPaper>
+                        </MudItem>
+                    }
+                </MudGrid>
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close" Variant="Variant.Text">إغلاق</MudButton>
+        @if (_slip is not null)
+        {
+            <MudButton OnClick="PrintAsync"
+                       Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Print">
+                طباعة
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter]          public int               PayrollId  { get; set; }
+    [Parameter]          public string            CurrentUser{ get; set; } = "system";
+
+    private PayslipDto? _slip;
+    private bool        _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try   { _slip = await PayrollService.GetPayslipAsync(PayrollId); }
+        catch (Exception ex) { Snackbar.Add($"خطأ: {ex.Message}", Severity.Error); }
+        finally { _loading = false; }
+    }
+
+    private async Task PrintAsync()
+    {
+        await JS.InvokeVoidAsync("window.print");
+    }
+
+    private void Close() => MudDialog.Close();
+}

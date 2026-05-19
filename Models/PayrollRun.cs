@@ -18,6 +18,6 @@ public partial class PayrollRun
     public string?   CreatedBy       { get; set; }
     public DateTime  CreatedAt       { get; set; }
 
-    public virtual CashBox?              CashBox  { get; set; }
-    public virtual ICollection<Payroll>  Payrolls { get; set; } = new List<Payroll>();
+    public virtual CashBox?             CashBox  { get; set; }
+    public virtual ICollection<Payroll> Payrolls { get; set; } = new List<Payroll>();
 }

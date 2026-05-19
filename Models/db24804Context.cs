@@ -79,7 +79,7 @@ public partial class db24804Context : DbContext
 
     public virtual DbSet<PayrollDetail> PayrollDetails { get; set; }
     public virtual DbSet<PayrollRun>        PayrollRuns        { get; set; }
-public virtual DbSet<PayrollItem>       PayrollItems       { get; set; }
+
 public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
 
     public virtual DbSet<Permission> Permissions { get; set; }
@@ -1062,59 +1062,193 @@ modelBuilder.Entity<PartyContact>(entity =>
         {
             entity.ToTable("Payroll");
 
-            entity.Property(e => e.PayrollID).HasColumnName("PayrollID");
+            entity.Property(e => e.PayrollId)
+                .HasColumnName("PayrollID");
+
+            entity.Property(e => e.EmployeeId)
+                .HasColumnName("EmployeeID");
+
+            entity.Property(e => e.CashboxTransactionId)
+                .HasColumnName("CashboxTransactionID");
+
             entity.Property(e => e.Allowances)
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(18, 2)");
-            entity.Property(e => e.BasicSalary).HasColumnType("decimal(18, 2)");
-            entity.Property(e => e.CashboxTransactionID).HasColumnName("CashboxTransactionID");
-            entity.Property(e => e.CreatedAt)
-                .HasDefaultValueSql("(getdate())")
-                .HasColumnType("datetime");
-            entity.Property(e => e.CreatedBy).HasMaxLength(50);
+
+            entity.Property(e => e.BasicSalary)
+                .HasColumnType("decimal(18, 2)");
+
             entity.Property(e => e.Deductions)
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(18, 2)");
-            entity.Property(e => e.EmployeeID).HasColumnName("EmployeeID");
+
             entity.Property(e => e.NetSalary)
-                .HasComputedColumnSql("(([BasicSalary]+[Allowances])-[Deductions])", true)
+                .HasComputedColumnSql("(([BasicSalary]+ISNULL([BonusInPayroll],0))-ISNULL([Deductions],0))", true)
                 .HasColumnType("decimal(20, 2)");
-            entity.Property(e => e.Notes).HasMaxLength(255);
-            entity.Property(e => e.PaymentDate).HasColumnType("datetime");
+
+            entity.Property(e => e.Notes)
+                .HasMaxLength(255);
+
+            entity.Property(e => e.PaymentDate)
+                .HasColumnType("datetime");
+
             entity.Property(e => e.PaymentStatus)
                 .HasMaxLength(20)
                 .HasDefaultValue("غير مدفوع");
+
             entity.Property(e => e.PayrollMonth)
                 .HasMaxLength(7)
                 .IsUnicode(false)
                 .IsFixedLength();
 
-            entity.HasOne(d => d.CashboxTransaction).WithMany(p => p.Payrolls)
-                .HasForeignKey(d => d.CashboxTransactionID)
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnType("datetime");
+
+            entity.Property(e => e.CreatedBy)
+                .HasMaxLength(50);
+
+            // ── حقول جديدة ──────────────────────────────────
+            entity.Property(e => e.BonusInPayroll)
+                .HasColumnType("decimal(18, 2)");
+
+            entity.Property(e => e.AbsenceDeduction)
+                .HasColumnType("decimal(18, 2)");
+
+            entity.Property(e => e.LateDeduction)
+                .HasColumnType("decimal(18, 2)");
+
+            entity.Property(e => e.LoanDeduction)
+                .HasColumnType("decimal(18, 2)");
+
+            entity.Property(e => e.PenaltyDeduction)
+                .HasColumnType("decimal(18, 2)");
+
+            entity.Property(e => e.PayrollRunId)
+                .HasColumnName("PayrollRunID");
+
+            // ── العلاقات ─────────────────────────────────────
+            entity.HasOne(d => d.CashboxTransaction)
+                .WithMany(p => p.Payrolls)
+                .HasForeignKey(d => d.CashboxTransactionId)
                 .OnDelete(DeleteBehavior.SetNull)
                 .HasConstraintName("FK_Payroll_CashboxTransactions");
 
-            entity.HasOne(d => d.Employee).WithMany(p => p.Payrolls)
-                .HasForeignKey(d => d.EmployeeID)
+            entity.HasOne(d => d.Employee)
+                .WithMany(p => p.Payrolls)
+                .HasForeignKey(d => d.EmployeeId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_Payroll_Employees");
+
+            entity.HasOne(d => d.PayrollRun)
+                .WithMany(p => p.Payrolls)
+                .HasForeignKey(d => d.PayrollRunId)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("FK_Payroll_PayrollRuns");
         });
 
         modelBuilder.Entity<PayrollDetail>(entity =>
         {
-            entity.Property(e => e.PayrollDetailID).HasColumnName("PayrollDetailID");
-            entity.Property(e => e.Amount).HasColumnType("decimal(18, 2)");
+            entity.Property(e => e.PayrollDetailID)
+                .HasColumnName("PayrollDetailID");
+
+            entity.Property(e => e.PayrollID)
+                .HasColumnName("PayrollID");
+
+            entity.Property(e => e.Amount)
+                .HasColumnType("decimal(18, 2)");
+
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("(getdate())")
                 .HasColumnType("datetime");
-            entity.Property(e => e.CreatedBy).HasMaxLength(50);
-            entity.Property(e => e.DetailDescription).HasMaxLength(255);
-            entity.Property(e => e.DetailType).HasMaxLength(50);
-            entity.Property(e => e.PayrollID).HasColumnName("PayrollID");
 
-            entity.HasOne(d => d.Payroll).WithMany(p => p.PayrollDetails)
+            entity.Property(e => e.CreatedBy)
+                .HasMaxLength(50);
+
+            entity.Property(e => e.DetailDescription)
+                .HasMaxLength(255);
+
+            entity.Property(e => e.DetailType)
+                .HasMaxLength(50);
+
+            // ── حقول جديدة ──────────────────────────────────
+            entity.Property(e => e.IsDeduction)
+                .HasDefaultValue(true);
+
+            entity.Property(e => e.PaymentType)
+                .HasMaxLength(20)
+                .HasDefaultValue("InPayroll");
+
+            entity.Property(e => e.CashboxTransactionID)
+                .HasColumnName("CashboxTransactionID");
+
+            // ── العلاقات ─────────────────────────────────────
+            entity.HasOne(d => d.Payroll)
+                .WithMany(p => p.PayrollDetails)
                 .HasForeignKey(d => d.PayrollID)
                 .HasConstraintName("FK_PayrollDetails_Payroll");
+        });
+
+        // ── جداول جديدة ─────────────────────────────────────
+        modelBuilder.Entity<PayrollRun>(entity =>
+        {
+            entity.HasKey(e => e.RunId);
+
+            entity.Property(e => e.PayrollMonth)
+                .HasMaxLength(7)
+                .IsFixedLength();
+
+            entity.Property(e => e.Status)
+                .HasMaxLength(20)
+                .HasDefaultValue("Draft");
+
+            entity.Property(e => e.TotalGross)
+                .HasColumnType("decimal(18, 2)");
+
+            entity.Property(e => e.TotalDeductions)
+                .HasColumnType("decimal(18, 2)");
+
+            entity.Property(e => e.TotalNet)
+                .HasColumnType("decimal(18, 2)");
+
+            entity.Property(e => e.ProcessedAt)
+                .HasColumnType("datetime");
+
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnType("datetime");
+
+            entity.HasOne(d => d.CashBox)
+                .WithMany()
+                .HasForeignKey(d => d.CashBoxId)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("FK_PayrollRuns_CashBoxes");
+        });
+
+        modelBuilder.Entity<AttendanceManual>(entity =>
+        {
+            entity.HasKey(e => e.ManualId);
+
+            entity.Property(e => e.AttendanceMonth)
+                .HasMaxLength(7)
+                .IsFixedLength();
+
+            entity.Property(e => e.Notes)
+                .HasMaxLength(300);
+
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnType("datetime");
+
+            entity.HasIndex(e => new { e.EmployeeId, e.AttendanceMonth })
+                .IsUnique()
+                .HasDatabaseName("UQ_AttendanceManual");
+
+            entity.HasOne(d => d.Employee)
+                .WithMany()
+                .HasForeignKey(d => d.EmployeeId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_AttendanceManual_Employees");
         });
 
         modelBuilder.Entity<Permission>(entity =>

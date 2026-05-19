@@ -1,0 +1,274 @@
+@page "/hr/payroll"
+@attribute [Authorize]
+
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+@inject IPayrollService              PayrollService
+@inject ISnackbar                    Snackbar
+@inject IDialogService               DialogService
+@inject NavigationManager            Nav
+@inject AuthenticationStateProvider  AuthProvider
+
+<PageTitle>المرتبات</PageTitle>
+
+@* ══ Stats ══ *@
+@if (_stats is not null)
+{
+    <MudGrid Class="mb-4">
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4 rounded-xl" Style="background:#10b981;color:white">
+                <MudText Typo="Typo.caption" Style="opacity:.8">إجمالي الصافي</MudText>
+                <MudText Typo="Typo.h5"><b>@_stats.TotalNetThisMonth.ToString("N0")</b> جـ</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4 rounded-xl" Style="background:#3b82f6;color:white">
+                <MudText Typo="Typo.caption" Style="opacity:.8">تم الصرف</MudText>
+                <MudText Typo="Typo.h4"><b>@_stats.PaidCount</b></MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4 rounded-xl" Style="background:#f59e0b;color:white">
+                <MudText Typo="Typo.caption" Style="opacity:.8">لم يُصرف</MudText>
+                <MudText Typo="Typo.h4"><b>@_stats.PendingCount</b></MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Class="pa-4 rounded-xl" Style="background:#ef4444;color:white">
+                <MudText Typo="Typo.caption" Style="opacity:.8">خصومات سلف</MudText>
+                <MudText Typo="Typo.h6"><b>@_stats.TotalLoanDeductions.ToString("N0")</b> جـ</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@* ══ Toolbar ══ *@
+<MudPaper Class="pa-3 mb-3 rounded-xl d-flex align-center gap-3 flex-wrap">
+    <MudText Typo="Typo.h6">📋 سجل المرتبات</MudText>
+    <MudSpacer />
+
+    <MudTextField @bind-Value="_filter.SearchText"
+                  Placeholder="بحث باسم الموظف..."
+                  Adornment="Adornment.Start"
+                  AdornmentIcon="@Icons.Material.Filled.Search"
+                  Style="max-width:200px" Variant="Variant.Outlined" Margin="Margin.Dense"
+                  Clearable="true" TextChanged="@(v => { _filter.SearchText = v; _ = LoadAsync(); })" />
+
+    <MudTextField @bind-Value="_filter.PayrollMonth"
+                  Placeholder="الشهر (2026-05)"
+                  Style="max-width:150px" Variant="Variant.Outlined" Margin="Margin.Dense"
+                  TextChanged="@(v => { _filter.PayrollMonth = v; _ = LoadAsync(); })" />
+
+    <MudSelect T="string"
+               Value="_filter.PaymentStatus"
+               ValueChanged="@(v => { _filter.PaymentStatus = v; _ = LoadAsync(); })"
+               Placeholder="الحالة"
+               Style="max-width:140px" Variant="Variant.Outlined"
+               Margin="Margin.Dense" Clearable="true">
+        <MudSelectItem T="string" Value="@("مدفوع")">مدفوع</MudSelectItem>
+        <MudSelectItem T="string" Value="@("غير مدفوع")">غير مدفوع</MudSelectItem>
+        <MudSelectItem T="string" Value="@("ملغي")">ملغي</MudSelectItem>
+    </MudSelect>
+
+    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Add"
+               OnClick="@(() => Nav.NavigateTo("/hr/payroll/processor"))">
+        معالجة مرتبات
+    </MudButton>
+</MudPaper>
+
+@* ══ Table ══ *@
+<MudPaper Class="rounded-xl overflow-hidden">
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate Color="Color.Primary" />
+    }
+
+    <MudTable Items="_payrolls" Dense Hover Striped Elevation="0" Loading="_loading">
+        <HeaderContent>
+            <MudTh>الموظف</MudTh>
+            <MudTh>الشهر</MudTh>
+            <MudTh>الأساسي</MudTh>
+            <MudTh>المستحقات</MudTh>
+            <MudTh>الخصومات</MudTh>
+            <MudTh>الصافي</MudTh>
+            <MudTh>الحضور</MudTh>
+            <MudTh>الحالة</MudTh>
+            <MudTh>إجراءات</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>
+                <MudText><b>@context.EmployeeName</b></MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.Department ?? "—")</MudText>
+            </MudTd>
+            <MudTd>@FormatMonth(context.PayrollMonth)</MudTd>
+            <MudTd>@context.BasicSalary.ToString("N2") جـ</MudTd>
+            <MudTd>
+                <MudText Color="Color.Success">
+                    @context.GrossSalary.ToString("N2") جـ
+                </MudText>
+                @if (context.BonusInPayroll > 0)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Success">
+                        (+@context.BonusInPayroll.ToString("N2") مكافأة)
+                    </MudText>
+                }
+            </MudTd>
+            <MudTd>
+                <MudText Color="@(context.TotalDeductions > 0 ? Color.Error : Color.Default)">
+                    @context.TotalDeductions.ToString("N2") جـ
+                </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @(context.AbsenceDays > 0 ? $"غياب:{context.AbsenceDays}د " : "")
+                    @(context.LoanDeduction > 0 ? $"سلف:{context.LoanDeduction:N0}" : "")
+                </MudText>
+            </MudTd>
+            <MudTd>
+                <MudText><b>@context.NetSalary.ToString("N2") جـ</b></MudText>
+            </MudTd>
+            <MudTd>
+                <MudText Typo="Typo.body2">
+                    @context.PresentDays / @context.WorkingDaysInMonth
+                </MudText>
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(context.IsManualAttendance ? Color.Warning : Color.Default)">
+                    @(context.IsManualAttendance ? "يدوي" : "بصمة")
+                </MudChip>
+            </MudTd>
+            <MudTd>
+                <MudChip T="string" Size="Size.Small"
+                         Style="@($"background:{context.StatusColor};color:white")">
+                    @context.PaymentStatus
+                </MudChip>
+                @if (context.PaymentDate.HasValue)
+                {
+                    <MudText Typo="Typo.caption">@context.PaymentDate.Value.ToString("dd/MM")</MudText>
+                }
+            </MudTd>
+            <MudTd>
+                <MudIconButton Icon="@Icons.Material.Filled.Receipt"
+                               Size="Size.Small" Color="Color.Primary"
+                               Title="قسيمة الراتب"
+                               OnClick="@(() => OpenPayslipAsync(context.PayrollID))" />
+                @if (context.PaymentStatus == "غير مدفوع")
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Cancel"
+                                   Size="Size.Small" Color="Color.Error"
+                                   Title="إلغاء"
+                                   OnClick="@(() => CancelAsync(context))" />
+                }
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Class="pa-4" Color="Color.Secondary" Align="Align.Center">
+                لا توجد مرتبات - اختر شهراً أو اضغط "معالجة مرتبات"
+            </MudText>
+        </NoRecordsContent>
+    </MudTable>
+
+    @* Pagination *@
+    @if (_totalPages > 1)
+    {
+        <div class="d-flex align-center justify-space-between pa-3">
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                إجمالي @_totalCount مرتب
+            </MudText>
+            <MudPagination Count="_totalPages"
+                           Selected="_filter.PageNumber"
+                           SelectedChanged="OnPageChangedAsync"
+                           Color="Color.Primary" />
+        </div>
+    }
+</MudPaper>
+
+@code {
+    private List<PayrollListDto> _payrolls  = new();
+    private PayrollStatsDto?     _stats;
+    private PayrollFilterDto     _filter    = new()
+    {
+        PayrollMonth = DateTime.Today.ToString("yyyy-MM"),
+        PageSize     = 20
+    };
+    private bool    _loading    = true;
+    private int     _totalCount;
+    private int     _totalPages => (int)Math.Ceiling((double)_totalCount / _filter.PageSize);
+    private string  _currentUser = "system";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth     = await AuthProvider.GetAuthenticationStateAsync();
+        _currentUser = auth.User.Identity?.Name ?? "system";
+        await Task.WhenAll(LoadAsync(), LoadStatsAsync());
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result  = await PayrollService.GetPayrollsAsync(_filter);
+            _payrolls   = result.Items;
+            _totalCount = result.TotalCount;
+        }
+        catch (Exception ex) { Snackbar.Add($"خطأ: {ex.Message}", Severity.Error); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private async Task LoadStatsAsync()
+    {
+        try { _stats = await PayrollService.GetStatsAsync(_filter.PayrollMonth ?? DateTime.Today.ToString("yyyy-MM")); }
+        catch { /* silent */ }
+    }
+
+    private async Task OnPageChangedAsync(int page)
+    {
+        _filter.PageNumber = page;
+        await LoadAsync();
+    }
+
+    private async Task OpenPayslipAsync(int payrollId)
+    {
+        var parameters = new DialogParameters
+        {
+            [nameof(PayslipDialog.PayrollId)]  = payrollId,
+            [nameof(PayslipDialog.CurrentUser)]= _currentUser
+        };
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true
+        };
+        await DialogService.ShowAsync<PayslipDialog>("قسيمة الراتب", parameters, options);
+    }
+
+    private async Task CancelAsync(PayrollListDto p)
+    {
+        // ✅ حطّه بدله
+var parameters = new DialogParameters<MudMessageBox>
+{
+    { x => x.Message,    $"هل تريد إلغاء راتب {p.EmployeeName} لشهر {p.PayrollMonth}؟" },
+    { x => x.YesText,    "إلغاء الراتب" },
+    { x => x.CancelText, "تراجع" }
+};
+var confirmDialog = await DialogService.ShowAsync<MudMessageBox>(
+    "تأكيد الإلغاء", parameters,
+    new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+var confirmResult = await confirmDialog.Result;
+if (confirmResult is { Canceled: true }) return;
+
+        var (ok, msg) = await PayrollService.CancelAsync(p.PayrollID, _currentUser);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadAsync();
+    }
+
+    private static string FormatMonth(string? m) =>
+        string.IsNullOrWhiteSpace(m) ? "—" :
+        DateTime.TryParseExact(m + "-01", "yyyy-MM-dd",
+            null, System.Globalization.DateTimeStyles.None, out var d)
+            ? d.ToString("MMMM yyyy", new System.Globalization.CultureInfo("ar-EG")) : m;
+}
