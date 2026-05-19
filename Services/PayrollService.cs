@@ -775,11 +775,8 @@ public class PayrollService : IPayrollService
     {
         var run = new PayrollRun
         {
-            PayrollMonth = month,
-            Status       = "Draft",
-            CashBoxId    = null,
-            CreatedBy    = user,
-            CreatedAt    = DateTime.Now
+            PayrollMonth = month, Status = "Draft",
+            CashBoxId = null, CreatedBy = user, CreatedAt = DateTime.Now
         };
         _db.PayrollRuns.Add(run);
         await _db.SaveChangesAsync();
@@ -790,36 +787,55 @@ public class PayrollService : IPayrollService
         {
             if (calc.BasicSalary == 0) continue;
 
+            var bonusIn  = calc.TotalBonusInPayroll;
+            var totalDed = calc.TotalDeductions;
+
             var payroll = new Payroll
             {
-                EmployeeId         = calc.EmployeeID,
-                PayrollMonth       = month,
-                BasicSalary        = calc.BasicSalary,
-                BonusInPayroll     = calc.TotalBonusInPayroll,
-                Allowances         = calc.TotalBonusInPayroll,
-                Deductions         = calc.TotalDeductions,
-                AbsenceDeduction   = calc.AbsenceDeduction,
-                LateDeduction      = calc.LateDeduction,
-                LoanDeduction      = calc.LoanDeduction,
-                PenaltyDeduction   = calc.TotalPenalties,
+                EmployeeId = calc.EmployeeID, PayrollMonth = month,
+                BasicSalary = calc.BasicSalary, BonusInPayroll = bonusIn,
+                Allowances = bonusIn, Deductions = totalDed,
+                AbsenceDeduction = calc.AbsenceDeduction,
+                LateDeduction = calc.LateDeduction,
+                LoanDeduction = calc.LoanDeduction,
+                PenaltyDeduction = calc.TotalPenalties,
                 WorkingDaysInMonth = calc.WorkingDaysInMonth,
-                PresentDays        = calc.PresentDays,
-                AbsenceDays        = calc.AbsenceDays,
-                LateMinutesTotal   = calc.LateMinutesTotal,
+                PresentDays = calc.PresentDays, AbsenceDays = calc.AbsenceDays,
+                LateMinutesTotal = calc.LateMinutesTotal,
                 IsManualAttendance = calc.IsManualAttendance,
-                PaymentStatus      = "غير مدفوع",
-                PayrollRunId       = run.RunId,
-                CreatedBy          = user,
-                CreatedAt          = DateTime.Now
+                PaymentStatus = "غير مدفوع", PayrollRunId = run.RunId,
+                CreatedBy = user, CreatedAt = DateTime.Now
             };
             _db.Payrolls.Add(payroll);
             await _db.SaveChangesAsync();
+
+            // ✅ حفظ PayrollDetails
+            var details = new List<PayrollDetail>();
+            if (calc.AbsenceDeduction > 0)
+                details.Add(MakeDetail(payroll.PayrollId, "AbsenceDeduction",
+                    $"خصم غياب {calc.AbsenceDays} يوم", calc.AbsenceDeduction, true, user));
+            if (calc.LateDeduction > 0)
+                details.Add(MakeDetail(payroll.PayrollId, "LateDeduction",
+                    $"خصم تأخير {calc.LateMinutesTotal} دقيقة", calc.LateDeduction, true, user));
+            foreach (var pen in calc.Penalties)
+                details.Add(MakeDetail(payroll.PayrollId, "Penalty",
+                    pen.Description, pen.Amount, true, user));
+            foreach (var bon in calc.BonusItems.Where(b => b.PaymentType == "InPayroll"))
+                details.Add(MakeDetail(payroll.PayrollId, bon.DetailType,
+                    bon.Description, bon.Amount, false, user, paymentType: "InPayroll"));
+
+            if (details.Any())
+            {
+                _db.PayrollDetails.AddRange(details);
+                await _db.SaveChangesAsync();
+            }
+
             count++;
         }
 
         run.TotalEmployees = count;
-        run.ProcessedBy    = user;
-        run.ProcessedAt    = DateTime.Now;
+        run.ProcessedBy = user;
+        run.ProcessedAt = DateTime.Now;
         await _db.SaveChangesAsync();
 
         await tx.CommitAsync();
