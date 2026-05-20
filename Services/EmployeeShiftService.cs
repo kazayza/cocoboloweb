@@ -128,7 +128,9 @@ public class EmployeeShiftService : IEmployeeShiftService
             StartTime = shift.StartTime,
             EndTime = shift.EndTime,
             EffectiveFrom = shift.EffectiveFrom,
-            EffectiveTo = shift.EffectiveTo
+            EffectiveTo = shift.EffectiveTo,
+            OffDay1         = shift.OffDay1,   
+            OffDay2         = shift.OffDay2
         };
     }
 
@@ -208,8 +210,11 @@ public class EmployeeShiftService : IEmployeeShiftService
             EndTime = s.EndTime,
             EffectiveFrom = s.EffectiveFrom,
             EffectiveTo = s.EffectiveTo,
+            OffDay1         = s.OffDay1,   // ✅ الجديد
+            OffDay2         = s.OffDay2, 
             CreatedBy = s.CreatedBy,
             CreatedAt = s.CreatedAt
+
         })
         .ToListAsync();
 }
@@ -245,6 +250,8 @@ public class EmployeeShiftService : IEmployeeShiftService
                 EndTime = dto.EndTime,
                 EffectiveFrom = dto.EffectiveFrom,
                 EffectiveTo = dto.EffectiveTo,
+                OffDay1       = dto.OffDay1,   // ✅ الجديد
+                OffDay2       = dto.OffDay2,
                 CreatedBy = currentUserName,
                 CreatedAt = DateTime.Now
             };

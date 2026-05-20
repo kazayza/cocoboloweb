@@ -74,6 +74,26 @@ public class EmployeeShiftListDto
     public string? CreatedBy { get; set; }
     public DateTime? CreatedAt { get; set; }
     public bool IsActive => !EffectiveTo.HasValue || EffectiveTo.Value >= DateTime.Today;
+    public byte? OffDay1 { get; set; }
+    public byte? OffDay2 { get; set; }
+
+    public string OffDaysDisplay
+    {
+        get
+        {
+            var days = new List<string>();
+            if (OffDay1.HasValue) days.Add(GetDayName(OffDay1.Value));
+            if (OffDay2.HasValue) days.Add(GetDayName(OffDay2.Value));
+            return days.Any() ? string.Join(" و ", days) : "غير محدد";
+        }
+    }
+
+    private static string GetDayName(byte d) => d switch
+    {
+        0 => "الأحد", 1 => "الاثنين", 2 => "الثلاثاء",
+        3 => "الأربعاء", 4 => "الخميس",
+        5 => "الجمعة",  6 => "السبت",  _ => "؟"
+    };
 }
 
 // ============================
@@ -89,6 +109,8 @@ public class EmployeeShiftFormDto
     public TimeOnly EndTime { get; set; } = new(16, 0);
     public DateTime EffectiveFrom { get; set; } = DateTime.Today;
     public DateTime? EffectiveTo { get; set; }
+    public byte? OffDay1 { get; set; }
+    public byte? OffDay2 { get; set; }
 }
 
 // ============================
@@ -103,6 +125,8 @@ public class AddEmployeeShiftDto
     public TimeOnly EndTime { get; set; } = new(16, 0);
     public DateTime EffectiveFrom { get; set; } = DateTime.Today;
     public DateTime? EffectiveTo { get; set; }
+    public byte? OffDay1 { get; set; }
+    public byte? OffDay2 { get; set; }
 }
 
 // ============================

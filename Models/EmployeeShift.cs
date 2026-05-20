@@ -24,4 +24,6 @@ public partial class EmployeeShift
     public DateTime? CreatedAt { get; set; }
 
     public string? CreatedBy { get; set; }
+    public byte? OffDay1 { get; set; }
+    public byte? OffDay2 { get; set; }
 }

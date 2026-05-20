@@ -804,88 +804,129 @@ public class AttendanceService : IAttendanceService
     // ════════════════════════════════════════════════════════════
     //  معالجة سجلات البصمة (تحويل الخام إلى حضور)
     // ════════════════════════════════════════════════════════════
-    public async Task<(bool Success, string Message)> ProcessBiometricLogsAsync(DateTime date, string currentUserName)
+    public async Task<(bool Success, string Message)>
+    ProcessBiometricLogsAsync(DateTime date, string currentUserName)
+{
+    try
     {
-        try
-        {
-            var logs = await _db.BiometricLogs.AsNoTracking()
-                .Where(b => b.LogDate.Date == date.Date)
-                .OrderBy(b => b.BiometricCode)
-                .ThenBy(b => b.LogTime)
-                .ToListAsync();
+        // ── 1. جيب سجلات البصمة الخام لليوم ──────────────────
+        var logs = await _db.BiometricLogs.AsNoTracking()
+            .Where(b => b.LogDate.Date == date.Date)
+            .OrderBy(b => b.BiometricCode)
+            .ThenBy(b => b.LogTime)
+            .ToListAsync();
 
-            if (!logs.Any())
-                return (false, "لا توجد سجلات بصمة لهذا اليوم.");
+        if (!logs.Any())
+            return (false, "لا توجد سجلات بصمة لهذا اليوم.");
 
-            var groupedLogs = logs.GroupBy(l => l.BiometricCode);
-            var processedCount = 0;
-
-            foreach (var group in groupedLogs)
+        // ── 2. جيب الشيفتات الفعالة دفعة واحدة ───────────────
+        // بدل ما نجيب شيفت كل موظف لوحده
+        var shifts = await _db.EmployeeShifts.AsNoTracking()
+            .Where(s => s.BiometricCode.HasValue
+                     && s.EffectiveFrom <= date
+                     && (s.EffectiveTo == null || s.EffectiveTo >= date))
+            .Select(s => new
             {
-                var biometricCode = group.Key;
-                var dayLogs = group.OrderBy(l => l.LogTime).ToList();
+                s.BiometricCode,
+                s.StartTime    // ✅ لحساب التأخير الصح
+            })
+            .ToListAsync();
 
-                // أول بصمة = حضور، آخر بصمة = انصراف
-                var timeIn = dayLogs.First().LogTime;
-                var timeOut = dayLogs.Count > 1 ? dayLogs.Last().LogTime : (TimeOnly?)null;
+        // ── 3. جيب الإعفاءات اليومية دفعة واحدة ──────────────
+        var exemptedCodes = await _db.DailyExemptions.AsNoTracking()
+            .Where(x => x.ExemptionDate.Date == date.Date)
+            .Select(x => x.BioEmployeeId)
+            .ToListAsync();
 
-                // حساب الساعات
-                decimal? totalHours = null;
-                if (timeOut.HasValue)
-                {
-                    var start = timeIn.ToTimeSpan();
-                    var end = timeOut.Value.ToTimeSpan();
-                    var duration = end > start ? end - start : TimeSpan.FromHours(24) - start + end;
-                    totalHours = (decimal)duration.TotalHours;
-                }
+        // ── 4. جيب السجلات الموجودة دفعة واحدة للـ Upsert ────
+        var bioCodes = logs.Select(l => l.BiometricCode).Distinct().ToList();
+        var existingRecords = await _db.Attendances
+            .Where(a => a.LogDate.Date == date.Date
+                     && bioCodes.Contains(a.BiometricCode))
+            .ToListAsync();
 
-                // حساب التأخير (افتراضي الدوام 8 صباحاً)
-                var expectedIn = new TimeOnly(8, 0);
-                int? lateMinutes = timeIn > expectedIn ? (int)(timeIn - expectedIn).TotalMinutes : null;
+        // ── 5. المعالجة ───────────────────────────────────────
+        var toAdd    = new List<Attendance>();
+        int processed = 0;
 
-                // التحقق من وجود سجل سابق
-                var existingAttendance = await _db.Attendances
-                    .FirstOrDefaultAsync(a => a.BiometricCode == biometricCode && a.LogDate.Date == date.Date);
+        foreach (var group in logs.GroupBy(l => l.BiometricCode))
+        {
+            var bioCode = group.Key;
 
-                if (existingAttendance != null)
-                {
-                    existingAttendance.TimeIn = timeIn;
-                    existingAttendance.TimeOut = timeOut;
-                    existingAttendance.TotalHours = totalHours;
-                    existingAttendance.LateMinutes = lateMinutes;
-                    existingAttendance.Status = timeIn != null ? AttendanceStatus.Present : AttendanceStatus.Absent;
-                }
-                else
-                {
-                    _db.Attendances.Add(new Attendance
-                    {
-                        BiometricCode = biometricCode,
-                        LogDate = date.Date,
-                        TimeIn = timeIn,
-                        TimeOut = timeOut,
-                        TotalHours = totalHours,
-                        LateMinutes = lateMinutes,
-                        Status = AttendanceStatus.Present
-                    });
-                }
+            // تخطى المعفيين
+            if (exemptedCodes.Contains(bioCode)) continue;
 
-                processedCount++;
+            var dayLogs = group.OrderBy(l => l.LogTime).ToList();
+            var timeIn  = dayLogs.First().LogTime;
+            var timeOut = dayLogs.Count > 1
+                ? dayLogs.Last().LogTime
+                : (TimeOnly?)null;
+
+            // ── حساب الساعات ─────────────────────────────────
+            decimal? totalHours = null;
+            if (timeOut.HasValue)
+            {
+                var dur = timeOut.Value.ToTimeSpan() - timeIn.ToTimeSpan();
+                if (dur < TimeSpan.Zero) dur += TimeSpan.FromHours(24);
+                totalHours = (decimal)dur.TotalHours;
             }
 
-            await _db.SaveChangesAsync();
+            // ✅ التأخير من وقت الشيفت الفعلي مش ثابت 8 صباحاً
+            var shift      = shifts.FirstOrDefault(s => s.BiometricCode == bioCode);
+            var expectedIn = shift?.StartTime ?? new TimeOnly(8, 0);
+            int lateMinutes = timeIn > expectedIn
+                ? (int)(timeIn - expectedIn).TotalMinutes
+                : 0;
 
-            await _audit.LogAsync<object?>("Attendance", "Process",
-                date.ToString("yyyy-MM-dd"), null,
-                new { ProcessedCount = processedCount, Date = date },
-                currentUserName);
+            var status = lateMinutes > 0
+                ? AttendanceStatus.Late
+                : AttendanceStatus.Present;
 
-            return (true, $"تمت معالجة {processedCount} سجل بنجاح.");
+            // ── Upsert بدون SaveChanges داخل الـ loop ─────────
+            var existing = existingRecords
+                .FirstOrDefault(a => a.BiometricCode == bioCode);
+
+            if (existing != null)
+            {
+                existing.TimeIn      = timeIn;
+                existing.TimeOut     = timeOut;
+                existing.TotalHours  = totalHours;
+                existing.LateMinutes = lateMinutes;
+                existing.Status      = status;
+            }
+            else
+            {
+                toAdd.Add(new Attendance
+                {
+                    BiometricCode = bioCode,
+                    LogDate       = date.Date,
+                    TimeIn        = timeIn,
+                    TimeOut       = timeOut,
+                    TotalHours    = totalHours,
+                    LateMinutes   = lateMinutes,
+                    Status        = status
+                });
+            }
+
+            processed++;
         }
-        catch (Exception ex)
-        {
-            return (false, $"حدث خطأ: {ex.Message}");
-        }
+
+        // ✅ Save مرة واحدة بعد الـ loop كله (أسرع بكتير)
+        if (toAdd.Any()) _db.Attendances.AddRange(toAdd);
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync("Attendance", "Process",
+            date.ToString("yyyy-MM-dd"), null,
+            new { ProcessedCount = processed, Date = date },
+            currentUserName);
+
+        return (true, $"✅ تمت معالجة {processed} سجل بنجاح.");
     }
+    catch (Exception ex)
+    {
+        return (false, $"حدث خطأ: {ex.Message}");
+    }
+}
 
     // ════════════════════════════════════════════════════════════
     //  بصمتي الشخصية

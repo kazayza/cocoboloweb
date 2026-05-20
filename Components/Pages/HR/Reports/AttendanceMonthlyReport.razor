@@ -1,0 +1,321 @@
+@page "/hr/reports/attendance"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+@inject IAttendanceService  AttendanceService
+@inject IJSRuntime          JS
+@inject ISnackbar           Snackbar
+
+<PageTitle>تقرير الحضور الشهري</PageTitle>
+
+@* ══ Header ══ *@
+<MudPaper Elevation="0" Class="pa-4 mb-4 no-print"
+          Style="background:linear-gradient(135deg,#1E293B,#334155);border-radius:12px;">
+    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Rounded.CalendarMonth"
+                     Style="color:#D4AF37;font-size:2rem;" />
+            <div>
+                <MudText Typo="Typo.h5" Style="color:white;font-weight:700;">
+                    تقرير الحضور الشهري
+                </MudText>
+                <MudText Typo="Typo.body2" Style="color:#94A3B8;">
+                    ملخص حضور وغياب الموظفين
+                </MudText>
+            </div>
+        </MudStack>
+        <MudStack Row Spacing="2">
+            <MudButton Variant="Variant.Filled"
+                       StartIcon="@Icons.Material.Rounded.TableChart"
+                       Style="background:#10B981;color:white;"
+                       OnClick="ExportExcelAsync"
+                       Disabled="@(!_data.Any() || _exporting)">
+                @(_exporting ? "جاري..." : "تصدير Excel")
+            </MudButton>
+            <MudButton Variant="Variant.Filled"
+                       StartIcon="@Icons.Material.Rounded.Print"
+                       Style="background:#3B82F6;color:white;"
+                       OnClick="@(() => JS.InvokeVoidAsync("printPage"))"
+                       Disabled="@(!_data.Any())">
+                طباعة
+            </MudButton>
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+@* ══ فلاتر ══ *@
+<MudPaper Elevation="2" Class="pa-4 mb-4 no-print" Style="border-radius:12px;">
+    <MudGrid>
+        <MudItem xs="12" md="4">
+            <MudTextField T="string"
+                          @bind-Value="_month"
+                          Label="الشهر"
+                          InputType="InputType.Month"
+                          Variant="Variant.Outlined"
+                          FullWidth />
+        </MudItem>
+        <MudItem xs="12" md="4">
+            <MudTextField T="string"
+                          @bind-Value="_department"
+                          Label="القسم (اختياري)"
+                          Variant="Variant.Outlined"
+                          Clearable
+                          FullWidth />
+        </MudItem>
+        <MudItem xs="12" md="4" Class="d-flex align-center">
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Rounded.Search"
+                       OnClick="LoadAsync"
+                       Disabled="@_loading"
+                       FullWidth>
+                @(_loading ? "جاري التحميل..." : "عرض التقرير")
+            </MudButton>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+@* ══ بطاقات الإجمالي ══ *@
+@if (_data.Any())
+{
+    <MudGrid Class="mb-4 no-print">
+        <MudItem xs="6" md="3">
+            <MudPaper Class="pa-3 text-center" Elevation="2"
+                      Style="border-radius:10px;border-right:4px solid #3B82F6;">
+                <MudText Typo="Typo.h5" Style="color:#3B82F6;font-weight:800;">
+                    @_data.Count
+                </MudText>
+                <MudText Typo="Typo.caption">إجمالي الموظفين</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="3">
+            <MudPaper Class="pa-3 text-center" Elevation="2"
+                      Style="border-radius:10px;border-right:4px solid #10B981;">
+                <MudText Typo="Typo.h5" Style="color:#10B981;font-weight:800;">
+                    @(_data.Any() ? Math.Round(_data.Average(d => d.AttendancePercentage), 1) : 0)%
+                </MudText>
+                <MudText Typo="Typo.caption">متوسط نسبة الحضور</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="3">
+            <MudPaper Class="pa-3 text-center" Elevation="2"
+                      Style="border-radius:10px;border-right:4px solid #EF4444;">
+                <MudText Typo="Typo.h5" Style="color:#EF4444;font-weight:800;">
+                    @_data.Sum(d => d.AbsentDays)
+                </MudText>
+                <MudText Typo="Typo.caption">إجمالي أيام الغياب</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="3">
+            <MudPaper Class="pa-3 text-center" Elevation="2"
+                      Style="border-radius:10px;border-right:4px solid #F59E0B;">
+                <MudText Typo="Typo.h5" Style="color:#F59E0B;font-weight:800;">
+                    @_data.Sum(d => d.TotalLateMinutes) د
+                </MudText>
+                <MudText Typo="Typo.caption">إجمالي دقائق التأخير</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@* عنوان الطباعة *@
+<div class="print-only print-header">
+    <h2>تقرير الحضور والغياب الشهري</h2>
+    <p>الشهر: @_month | تاريخ الطباعة: @DateTime.Now.ToString("yyyy-MM-dd")</p>
+</div>
+
+@* ══ الجدول ══ *@
+@if (_loading)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate />
+}
+else if (_data.Any())
+{
+    <MudPaper Elevation="2" Style="border-radius:12px;overflow:hidden;">
+        <MudTable Items="@_data" Dense Hover Striped FixedHeader
+                  Height="calc(100vh - 400px)">
+            <HeaderContent>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;">م</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;">اسم الموظف</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;">القسم</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;text-align:center;">أيام العمل</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:#10B981;font-weight:700;margin:-8px;padding:8px;text-align:center;">الحضور</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:#EF4444;font-weight:700;margin:-8px;padding:8px;text-align:center;">الغياب</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:#F59E0B;font-weight:700;margin:-8px;padding:8px;text-align:center;">أيام التأخير</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:#F59E0B;font-weight:700;margin:-8px;padding:8px;text-align:center;">دقائق التأخير</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;text-align:center;">نسبة الحضور</div></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@(_data.IndexOf(context) + 1)</MudTd>
+                <MudTd>
+                    <MudText Style="font-weight:600;">@context.EmployeeName</MudText>
+                </MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                        @(context.Department ?? "—")
+                    </MudChip>
+                </MudTd>
+                <MudTd DataLabel="أيام العمل">
+                    <MudText Align="Align.Center" Style="font-weight:600;">
+                        @context.WorkingDays
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="الحضور">
+                    <MudText Align="Align.Center" Style="color:#10B981;font-weight:700;">
+                        @context.PresentDays
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="الغياب">
+                    @if (context.AbsentDays > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Error">
+                            @context.AbsentDays
+                        </MudChip>
+                    }
+                    else
+                    {
+                        <MudText Style="color:#10B981;">✓</MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="أيام التأخير">
+                    @if (context.LateDays > 0)
+                    {
+                        <MudText Align="Align.Center" Style="color:#F59E0B;font-weight:600;">
+                            @context.LateDays
+                        </MudText>
+                    }
+                    else { <MudText Align="Align.Center">—</MudText> }
+                </MudTd>
+                <MudTd DataLabel="دقائق التأخير">
+                    @if (context.TotalLateMinutes > 0)
+                    {
+                        <MudText Align="Align.Center" Style="color:#F59E0B;">
+                            @context.TotalLateMinutes د
+                        </MudText>
+                    }
+                    else { <MudText Align="Align.Center">—</MudText> }
+                </MudTd>
+                <MudTd DataLabel="نسبة الحضور">
+                    <MudText Align="Align.Center" Style="@GetRateStyle(context.AttendancePercentage)">
+                        @context.AttendancePercentage%
+                    </MudText>
+                </MudTd>
+            </RowTemplate>
+            <FooterContent>
+                <MudTd colspan="3">
+                    <strong>الإجمالي (@_data.Count موظف)</strong>
+                </MudTd>
+                <MudTd><strong>—</strong></MudTd>
+                <MudTd>
+                    <MudText Style="color:#10B981;font-weight:700;">
+                        @_data.Sum(d => d.PresentDays)
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Style="color:#EF4444;font-weight:700;">
+                        @_data.Sum(d => d.AbsentDays)
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Style="color:#F59E0B;font-weight:700;">
+                        @_data.Sum(d => d.LateDays)
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Style="color:#F59E0B;font-weight:700;">
+                        @_data.Sum(d => d.TotalLateMinutes) د
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Style="font-weight:700;">
+                        @(_data.Any() ? Math.Round(_data.Average(d => d.AttendancePercentage), 1) : 0)%
+                    </MudText>
+                </MudTd>
+            </FooterContent>
+        </MudTable>
+    </MudPaper>
+}
+else if (_searched)
+{
+    <MudAlert Severity="Severity.Info">لا توجد بيانات للشهر المحدد</MudAlert>
+}
+
+<div class="print-footer print-only">
+    طُبع بواسطة نظام COCOBOLOERP | @DateTime.Now.ToString("yyyy-MM-dd HH:mm")
+</div>
+
+@code {
+    private string  _month      = DateTime.Today.ToString("yyyy-MM");
+    private string? _department;
+    private bool    _loading;
+    private bool    _searched;
+    private bool    _exporting;
+
+    private List<AttendanceReportDto> _data = new();
+
+    private async Task LoadAsync()
+    {
+        _loading  = true;
+        _searched = true;
+        StateHasChanged();
+        try
+        {
+            if (!DateTime.TryParseExact(_month + "-01", "yyyy-MM-dd",
+                null, System.Globalization.DateTimeStyles.None, out var from))
+            {
+                Snackbar.Add("صيغة الشهر غير صحيحة", Severity.Warning);
+                return;
+            }
+            var filter = new AttendanceReportFilterDto
+            {
+                DateFrom   = from,
+                DateTo     = from.AddMonths(1).AddDays(-1),
+                Department = _department
+            };
+            _data = await AttendanceService.GetAttendanceReportAsync(filter);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task ExportExcelAsync()
+    {
+        _exporting = true;
+        StateHasChanged();
+        try
+        {
+            if (!DateTime.TryParseExact(_month + "-01", "yyyy-MM-dd",
+                null, System.Globalization.DateTimeStyles.None, out var from))
+                return;
+
+            var filter = new AttendanceReportFilterDto
+            {
+                DateFrom   = from,
+                DateTo     = from.AddMonths(1).AddDays(-1),
+                Department = _department
+            };
+            var bytes  = await AttendanceService.ExportReportToExcelAsync(filter);
+            var base64 = Convert.ToBase64String(bytes);
+            await JS.InvokeVoidAsync("downloadFileFromBase64", base64,
+                $"تقرير_الحضور_{_month}.xlsx");
+            Snackbar.Add("✅ تم التصدير بنجاح", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally { _exporting = false; }
+    }
+
+    private static string GetRateStyle(decimal rate) =>
+        rate >= 90 ? "color:#10B981;font-weight:700;" :
+        rate >= 70 ? "color:#F59E0B;font-weight:700;" :
+                     "color:#EF4444;font-weight:700;";
+}

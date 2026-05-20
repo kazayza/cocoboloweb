@@ -1,0 +1,316 @@
+@page "/hr/reports/payroll"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+@inject IPayrollService PayrollService
+@inject IJSRuntime      JS
+@inject ISnackbar       Snackbar
+
+<PageTitle>تقرير مسير الرواتب</PageTitle>
+
+@* ══ Header ══ *@
+<MudPaper Elevation="0" Class="pa-4 mb-4 no-print"
+          Style="background:linear-gradient(135deg,#1E293B,#334155);border-radius:12px;">
+    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Rounded.Payments"
+                     Style="color:#D4AF37;font-size:2rem;" />
+            <div>
+                <MudText Typo="Typo.h5" Style="color:white;font-weight:700;">
+                    تقرير مسير الرواتب
+                </MudText>
+                <MudText Typo="Typo.body2" Style="color:#94A3B8;">
+                    ملخص رواتب الموظفين الشهري
+                </MudText>
+            </div>
+        </MudStack>
+        <MudStack Row Spacing="2">
+            <MudButton Variant="Variant.Filled"
+                       StartIcon="@Icons.Material.Rounded.TableChart"
+                       Style="background:#10B981;color:white;"
+                       OnClick="ExportExcelAsync"
+                       Disabled="@(!_data.Any() || _exporting)">
+                @(_exporting ? "جاري..." : "تصدير Excel")
+            </MudButton>
+            <MudButton Variant="Variant.Filled"
+                       StartIcon="@Icons.Material.Rounded.Print"
+                       Style="background:#3B82F6;color:white;"
+                       OnClick="@(() => JS.InvokeVoidAsync("printPage"))"
+                       Disabled="@(!_data.Any())">
+                طباعة
+            </MudButton>
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+@* ══ فلاتر ══ *@
+<MudPaper Elevation="2" Class="pa-4 mb-4 no-print" Style="border-radius:12px;">
+    <MudGrid>
+        <MudItem xs="12" md="4">
+            <MudTextField T="string"
+                          @bind-Value="_month"
+                          Label="الشهر"
+                          InputType="InputType.Month"
+                          Variant="Variant.Outlined"
+                          FullWidth />
+        </MudItem>
+        <MudItem xs="12" md="4">
+            <MudSelect T="string"
+                       @bind-Value="_statusFilter"
+                       Label="الحالة"
+                       Variant="Variant.Outlined"
+                       Clearable FullWidth>
+                <MudSelectItem T="string" Value="@("مدفوع")">مدفوع</MudSelectItem>
+                <MudSelectItem T="string" Value="@("غير مدفوع")">غير مدفوع</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="4" Class="d-flex align-center">
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Rounded.Search"
+                       OnClick="LoadAsync"
+                       Disabled="@_loading"
+                       FullWidth>
+                @(_loading ? "جاري التحميل..." : "عرض التقرير")
+            </MudButton>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+@* ══ بطاقات الإجمالي ══ *@
+@if (_data.Any())
+{
+    <MudGrid Class="mb-4 no-print">
+        <MudItem xs="6" md="2">
+            <MudPaper Class="pa-3 text-center" Elevation="2"
+                      Style="border-radius:10px;border-right:4px solid #3B82F6;">
+                <MudText Typo="Typo.h5" Style="color:#3B82F6;font-weight:800;">@_data.Count</MudText>
+                <MudText Typo="Typo.caption">الموظفين</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="2">
+            <MudPaper Class="pa-3 text-center" Elevation="2"
+                      Style="border-radius:10px;border-right:4px solid #10B981;">
+                <MudText Typo="Typo.h6" Style="color:#10B981;font-weight:800;">
+                    @_data.Sum(d => d.NetSalary).ToString("N0")
+                </MudText>
+                <MudText Typo="Typo.caption">صافي الإجمالي</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="2">
+            <MudPaper Class="pa-3 text-center" Elevation="2"
+                      Style="border-radius:10px;border-right:4px solid #EF4444;">
+                <MudText Typo="Typo.h6" Style="color:#EF4444;font-weight:800;">
+                    @_data.Sum(d => d.TotalDeductions).ToString("N0")
+                </MudText>
+                <MudText Typo="Typo.caption">إجمالي الخصومات</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="2">
+            <MudPaper Class="pa-3 text-center" Elevation="2"
+                      Style="border-radius:10px;border-right:4px solid #10B981;">
+                <MudText Typo="Typo.h5" Style="color:#10B981;font-weight:800;">
+                    @_data.Count(d => d.PaymentStatus == "مدفوع")
+                </MudText>
+                <MudText Typo="Typo.caption">مدفوع</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="2">
+            <MudPaper Class="pa-3 text-center" Elevation="2"
+                      Style="border-radius:10px;border-right:4px solid #F59E0B;">
+                <MudText Typo="Typo.h5" Style="color:#F59E0B;font-weight:800;">
+                    @_data.Count(d => d.PaymentStatus != "مدفوع")
+                </MudText>
+                <MudText Typo="Typo.caption">غير مدفوع</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@* عنوان الطباعة *@
+<div class="print-only print-header">
+    <h2>مسير الرواتب الشهري</h2>
+    <p>الشهر: @_month | تاريخ الطباعة: @DateTime.Now.ToString("yyyy-MM-dd")</p>
+</div>
+
+@* ══ الجدول ══ *@
+@if (_loading)
+{
+    <MudProgressLinear Color="Color.Primary" Indeterminate />
+}
+else if (_filteredData.Any())
+{
+    <MudPaper Elevation="2" Style="border-radius:12px;overflow:hidden;">
+        <MudTable Items="@_filteredData" Dense Hover Striped FixedHeader
+                  Height="calc(100vh - 420px)">
+            <HeaderContent>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;">م</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;">اسم الموظف</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;">القسم</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;text-align:center;">أيام العمل</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;text-align:center;">الحضور</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;text-align:center;">الغياب</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;text-align:right;">الأساسي</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:#EF4444;font-weight:700;margin:-8px;padding:8px;text-align:right;">خصم غياب</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:#EF4444;font-weight:700;margin:-8px;padding:8px;text-align:right;">خصم تأخير</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:#EF4444;font-weight:700;margin:-8px;padding:8px;text-align:right;">خصم سلفة</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:#D4AF37;font-weight:700;margin:-8px;padding:8px;text-align:right;">الصافي</div></MudTh>
+                <MudTh><div style="background:#1E293B;color:white;font-weight:700;margin:-8px;padding:8px;text-align:center;">الحالة</div></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@(_filteredData.ToList().IndexOf(context) + 1)</MudTd>
+                <MudTd>
+                    <MudText Style="font-weight:600;font-size:0.85rem;">@context.EmployeeName</MudText>
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;">@context.JobTitle</MudText>
+                </MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                        @(context.Department ?? "—")
+                    </MudChip>
+                </MudTd>
+                <MudTd DataLabel="أيام العمل">
+                    <MudText Align="Align.Center" Style="font-weight:600;">@context.WorkingDaysInMonth</MudText>
+                </MudTd>
+                <MudTd DataLabel="الحضور">
+                    <MudText Align="Align.Center" Style="color:#10B981;font-weight:700;">@context.PresentDays</MudText>
+                </MudTd>
+                <MudTd DataLabel="الغياب">
+                    @if (context.AbsenceDays > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Error">@context.AbsenceDays</MudChip>
+                    }
+                    else { <span style="color:#10B981;">✓</span> }
+                </MudTd>
+                <MudTd DataLabel="الأساسي">
+                    <MudText Align="Align.Right">@context.BasicSalary.ToString("N2")</MudText>
+                </MudTd>
+                <MudTd DataLabel="خصم غياب">
+                    <MudText Align="Align.Right" Style="color:#EF4444;">
+                        @(context.AbsenceDeduction > 0 ? $"-{context.AbsenceDeduction:N2}" : "—")
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="خصم تأخير">
+                    <MudText Align="Align.Right" Style="color:#EF4444;">
+                        @(context.LateDeduction > 0 ? $"-{context.LateDeduction:N2}" : "—")
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="خصم سلفة">
+                    <MudText Align="Align.Right" Style="color:#EF4444;">
+                        @(context.LoanDeduction > 0 ? $"-{context.LoanDeduction:N2}" : "—")
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="الصافي">
+                    <MudText Align="Align.Right" Style="font-weight:800;color:#D4AF37;">
+                        @context.NetSalary.ToString("N2") جـ
+                    </MudText>
+                </MudTd>
+                <MudTd DataLabel="الحالة">
+                    <MudChip T="string" Size="Size.Small"
+                             Color="@(context.PaymentStatus == "مدفوع" ? Color.Success : Color.Warning)">
+                        @context.PaymentStatus
+                    </MudChip>
+                </MudTd>
+            </RowTemplate>
+            <FooterContent>
+                <MudTd colspan="6">
+                    <strong>الإجمالي (@_filteredData.Count() موظف)</strong>
+                </MudTd>
+                <MudTd>
+                    <MudText Align="Align.Right" Style="font-weight:700;">
+                        @_filteredData.Sum(d => d.BasicSalary).ToString("N2")
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Align="Align.Right" Style="color:#EF4444;font-weight:700;">
+                        @_filteredData.Sum(d => d.AbsenceDeduction).ToString("N2")
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Align="Align.Right" Style="color:#EF4444;font-weight:700;">
+                        @_filteredData.Sum(d => d.LateDeduction).ToString("N2")
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Align="Align.Right" Style="color:#EF4444;font-weight:700;">
+                        @_filteredData.Sum(d => d.LoanDeduction).ToString("N2")
+                    </MudText>
+                </MudTd>
+                <MudTd>
+                    <MudText Align="Align.Right" Style="color:#D4AF37;font-weight:700;">
+                        @_filteredData.Sum(d => d.NetSalary).ToString("N2") جـ
+                    </MudText>
+                </MudTd>
+                <MudTd />
+            </FooterContent>
+        </MudTable>
+    </MudPaper>
+}
+else if (_searched)
+{
+    <MudAlert Severity="Severity.Info">لا توجد بيانات رواتب للشهر المحدد</MudAlert>
+}
+
+<div class="print-footer print-only">
+    طُبع بواسطة نظام COCOBOLOERP | @DateTime.Now.ToString("yyyy-MM-dd HH:mm")
+</div>
+
+@code {
+    private string  _month        = DateTime.Today.ToString("yyyy-MM");
+    private string? _statusFilter;
+    private bool    _loading;
+    private bool    _searched;
+    private bool    _exporting;
+
+    private List<PayrollListDto> _data = new();
+
+    private IEnumerable<PayrollListDto> _filteredData =>
+        string.IsNullOrWhiteSpace(_statusFilter)
+            ? _data
+            : _data.Where(d => d.PaymentStatus == _statusFilter);
+
+    private async Task LoadAsync()
+    {
+        _loading  = true;
+        _searched = true;
+        StateHasChanged();
+        try
+        {
+            var filter = new PayrollFilterDto
+            {
+                PayrollMonth = _month,
+                PageNumber   = 1,
+                PageSize     = 1000
+            };
+            var result = await PayrollService.GetPayrollsAsync(filter);
+            _data = result.Items;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task ExportExcelAsync()
+    {
+        _exporting = true;
+        StateHasChanged();
+        try
+        {
+            var bytes  = await PayrollService.ExportMonthExcelAsync(_month);
+            var base64 = Convert.ToBase64String(bytes);
+            await JS.InvokeVoidAsync("downloadFileFromBase64", base64,
+                $"مسير_الرواتب_{_month}.xlsx");
+            Snackbar.Add("✅ تم التصدير بنجاح", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally { _exporting = false; }
+    }
+}

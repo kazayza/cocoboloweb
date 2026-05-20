@@ -767,6 +767,8 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
                 .HasMaxLength(20)
                 .IsUnicode(false);
             entity.Property(e => e.StartTime).HasPrecision(0);
+            entity.Property(e => e.OffDay1) .HasColumnName("OffDay1");
+            entity.Property(e => e.OffDay2).HasColumnName("OffDay2");
         });
 
         modelBuilder.Entity<Expense>(entity =>

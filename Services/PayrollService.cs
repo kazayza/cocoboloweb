@@ -5,6 +5,7 @@
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
 using Microsoft.EntityFrameworkCore;
+using ClosedXML.Excel;
 
 namespace COCOBOLOERPNEW.Services;
 
@@ -168,15 +169,13 @@ public class PayrollService : IPayrollService
             ?? throw new Exception($"الموظف {employeeId} غير موجود");
 
         var basic    = emp.CurrentSalaryBase ?? 0;
-        var workDays = GetWorkingDays(month);
-        var dayRate  = workDays > 0 ? basic / workDays          : 0;
-        var minRate  = workDays > 0 ? basic / workDays / 8m / 60m : 0;
-
-        // ✅ الحضور من البصمة أو اليدوي
-        var att      = await GetAttendanceAsync(employeeId, month);
-        var absDays  = Math.Max(0, workDays - att.PresentDays);
-        var absDed   = Math.Round(dayRate * absDays,      2);
-        var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
+        var att = await GetAttendanceAsync(employeeId, month);
+var workDays = att.WorkDays > 0 ? att.WorkDays : await GetWorkingDaysAsync(employeeId, month);
+var dayRate  = workDays > 0 ? basic / workDays : 0;
+var minRate  = workDays > 0 ? basic / workDays / 8m / 60m : 0;
+var absDays  = Math.Max(0, workDays - att.PresentDays);
+var absDed   = Math.Round(dayRate * absDays, 2);
+var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
 
         // ✅ أقساط السلف المستحقة في الشهر
         var loanItems = await (
@@ -580,7 +579,7 @@ public class PayrollService : IPayrollService
     public async Task<List<ManualAttendanceDto>> GetManualAttendanceAsync(string month)
 {
     // أيام العمل في الشهر
-    var workingDays = GetWorkingDays(month);
+    var workingDays = 26; // سيتم حسابها per-employee في GetAttendanceAsync
 
     // ── الموظفين المعفيين من البصمة (IsPermanentlyExempt = true) ──
     // هؤلاء دايماً يظهرون في الحضور اليدوي
@@ -669,49 +668,267 @@ public class PayrollService : IPayrollService
         return (true, "تم حفظ بيانات الحضور");
     }
 
-    public Task<byte[]> ExportMonthExcelAsync(string month)
-        => Task.FromResult(Array.Empty<byte>());
+    public async Task<byte[]> ExportMonthExcelAsync(string month)
+{
+    // ── جيب البيانات من DB ───────────────────────────────────
+    var data = await (
+        from p in _db.Payrolls.AsNoTracking()
+        join e in _db.Employees.AsNoTracking() on p.EmployeeId equals e.EmployeeId
+        where p.PayrollMonth == month
+        orderby e.Department, e.FullName
+        select new
+        {
+            EmployeeName     = e.FullName,
+            Department       = e.Department ?? "—",
+            JobTitle         = e.JobTitle ?? "—",
+            BasicSalary      = p.BasicSalary,
+            BonusInPayroll   = p.BonusInPayroll ?? 0,
+            AbsenceDeduction = p.AbsenceDeduction ?? 0,
+            LateDeduction    = p.LateDeduction ?? 0,
+            LoanDeduction    = p.LoanDeduction ?? 0,
+            PenaltyDeduction = p.PenaltyDeduction ?? 0,
+            NetSalary        = p.NetSalary ?? p.BasicSalary,
+            WorkingDays      = p.WorkingDaysInMonth ?? 0,
+            PresentDays      = p.PresentDays ?? 0,
+            AbsenceDays      = p.AbsenceDays ?? 0,
+            LateMinutes      = p.LateMinutesTotal ?? 0,
+            PaymentStatus    = p.PaymentStatus ?? "غير مدفوع",
+            PaymentDate      = p.PaymentDate
+        }
+    ).ToListAsync();
+
+    // ── إنشاء ملف Excel ──────────────────────────────────────
+    using var wb = new XLWorkbook();
+    var ws = wb.Worksheets.Add("مسير الرواتب");
+    ws.RightToLeft = true;
+
+    // ── السطر 1: العنوان الرئيسي ─────────────────────────────
+    var titleCell = ws.Cell(1, 1);
+    titleCell.Value = $"مسير الرواتب الشهري — {month}";
+    ws.Range(1, 1, 1, 15).Merge();
+    titleCell.Style
+        .Font.SetBold(true)
+        .Font.SetFontSize(15)
+        .Font.SetFontColor(XLColor.White)
+        .Fill.SetBackgroundColor(XLColor.FromHtml("#1E293B"))
+        .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center)
+        .Alignment.SetVertical(XLAlignmentVerticalValues.Center);
+    ws.Row(1).Height = 30;
+
+    // ── السطر 2: تاريخ الطباعة ───────────────────────────────
+    ws.Cell(2, 1).Value = $"تاريخ الطباعة: {DateTime.Now:yyyy-MM-dd HH:mm}";
+    ws.Range(2, 1, 2, 15).Merge();
+    ws.Cell(2, 1).Style
+        .Font.SetFontSize(9)
+        .Font.SetItalic(true)
+        .Font.SetFontColor(XLColor.Gray)
+        .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
+    ws.Row(2).Height = 16;
+
+    // ── السطر 3: رؤوس الأعمدة ────────────────────────────────
+    var headers = new[]
+    {
+        "م", "اسم الموظف", "القسم", "الوظيفة",
+        "أيام العمل", "أيام الحضور", "أيام الغياب", "دقائق التأخير",
+        "الراتب الأساسي", "المكافآت",
+        "خصم غياب", "خصم تأخير", "خصم سلفة", "خصم جزاء",
+        "صافي الراتب", "الحالة"
+    };
+
+    for (int i = 0; i < headers.Length; i++)
+    {
+        var cell = ws.Cell(3, i + 1);
+        cell.Value = headers[i];
+        cell.Style
+            .Font.SetBold(true)
+            .Font.SetFontColor(XLColor.White)
+            .Fill.SetBackgroundColor(XLColor.FromHtml("#334155"))
+            .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center)
+            .Alignment.SetVertical(XLAlignmentVerticalValues.Center)
+            .Border.SetOutsideBorder(XLBorderStyleValues.Thin)
+            .Border.SetOutsideBorderColor(XLColor.FromHtml("#1E293B"));
+    }
+    ws.Row(3).Height = 22;
+
+    // ── السطر 4+: البيانات ────────────────────────────────────
+    int row = 4, serial = 1;
+    decimal totalBasic = 0, totalBonus = 0, totalAbsDed = 0,
+            totalLateDed = 0, totalLoanDed = 0, totalPenDed = 0, totalNet = 0;
+
+    foreach (var item in data)
+    {
+        bool isEven = row % 2 == 0;
+        var rowBg = isEven
+            ? XLColor.FromHtml("#F8FAFC")
+            : XLColor.White;
+
+        ws.Cell(row, 1).Value  = serial++;
+        ws.Cell(row, 2).Value  = item.EmployeeName;
+        ws.Cell(row, 3).Value  = item.Department;
+        ws.Cell(row, 4).Value  = item.JobTitle;
+        ws.Cell(row, 5).Value  = item.WorkingDays;
+        ws.Cell(row, 6).Value  = item.PresentDays;
+        ws.Cell(row, 7).Value  = item.AbsenceDays;
+        ws.Cell(row, 8).Value  = item.LateMinutes;
+        ws.Cell(row, 9).Value  = (double)item.BasicSalary;
+        ws.Cell(row, 10).Value = (double)item.BonusInPayroll;
+        ws.Cell(row, 11).Value = (double)item.AbsenceDeduction;
+        ws.Cell(row, 12).Value = (double)item.LateDeduction;
+        ws.Cell(row, 13).Value = (double)item.LoanDeduction;
+        ws.Cell(row, 14).Value = (double)item.PenaltyDeduction;
+        ws.Cell(row, 15).Value = (double)item.NetSalary;
+        ws.Cell(row, 16).Value = item.PaymentStatus;
+
+        // تجميع للإجماليات
+        totalBasic   += item.BasicSalary;
+        totalBonus   += item.BonusInPayroll;
+        totalAbsDed  += item.AbsenceDeduction;
+        totalLateDed += item.LateDeduction;
+        totalLoanDed += item.LoanDeduction;
+        totalPenDed  += item.PenaltyDeduction;
+        totalNet     += item.NetSalary;
+
+        // تنسيق الصف
+        var rowRange = ws.Range(row, 1, row, 16);
+        rowRange.Style
+            .Fill.SetBackgroundColor(rowBg)
+            .Border.SetOutsideBorder(XLBorderStyleValues.Hair)
+            .Border.SetOutsideBorderColor(XLColor.FromHtml("#E2E8F0"));
+
+        // تنسيق الأرقام (الأعمدة 9 → 15)
+        for (int c = 9; c <= 15; c++)
+            ws.Cell(row, c).Style.NumberFormat.Format = "#,##0.00";
+
+        // تلوين أيام الغياب لو أكبر من صفر
+        if (item.AbsenceDays > 0)
+            ws.Cell(row, 7).Style.Font.SetFontColor(XLColor.Red);
+
+        // تلوين خلية الحالة
+        var statusCell = ws.Cell(row, 16);
+        statusCell.Style
+            .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center)
+            .Font.SetBold(true);
+        statusCell.Style.Font.SetFontColor(
+            item.PaymentStatus == "مدفوع" ? XLColor.Green : XLColor.OrangeRed);
+
+        // تلوين الصافي
+        ws.Cell(row, 15).Style.Font.SetBold(true);
+
+        row++;
+    }
+
+    // ── صف الإجماليات ────────────────────────────────────────
+    ws.Cell(row, 1).Value  = "الإجمالي";
+    ws.Cell(row, 9).Value  = (double)totalBasic;
+    ws.Cell(row, 10).Value = (double)totalBonus;
+    ws.Cell(row, 11).Value = (double)totalAbsDed;
+    ws.Cell(row, 12).Value = (double)totalLateDed;
+    ws.Cell(row, 13).Value = (double)totalLoanDed;
+    ws.Cell(row, 14).Value = (double)totalPenDed;
+    ws.Cell(row, 15).Value = (double)totalNet;
+
+    var totalRange = ws.Range(row, 1, row, 16);
+    totalRange.Style
+        .Font.SetBold(true)
+        .Fill.SetBackgroundColor(XLColor.FromHtml("#1E293B"))
+        .Font.SetFontColor(XLColor.White)
+        .Border.SetOutsideBorder(XLBorderStyleValues.Medium);
+
+    for (int c = 9; c <= 15; c++)
+        ws.Cell(row, c).Style.NumberFormat.Format = "#,##0.00";
+
+    // ── تجميد الرؤوس ─────────────────────────────────────────
+    ws.SheetView.FreezeRows(3);
+
+    // ── AutoFit الأعمدة ───────────────────────────────────────
+    ws.Columns().AdjustToContents();
+    ws.Column(2).Width = Math.Max(ws.Column(2).Width, 25); // اسم الموظف
+    ws.Column(3).Width = Math.Max(ws.Column(3).Width, 15); // القسم
+
+    // ── حفظ وإرجاع ───────────────────────────────────────────
+    using var ms = new MemoryStream();
+    wb.SaveAs(ms);
+    return ms.ToArray();
+}
 
     // ============================================================
     // ⭐ Helper: الحضور من البصمة أو اليدوي - مُصلَح
     // ============================================================
-    private async Task<(int PresentDays, int LateMinutes, bool IsManual)>
-        GetAttendanceAsync(int employeeId, string month)
+    private async Task<(int WorkDays, int PresentDays, int LateMinutes, bool IsManual)>
+    GetAttendanceAsync(int employeeId, string month)
+{
+    // ── أولوية للحضور اليدوي (المعفيين من البصمة) ───────────
+    var manual = await _db.AttendanceManuals.AsNoTracking()
+        .FirstOrDefaultAsync(a => a.EmployeeId == employeeId
+                               && a.AttendanceMonth == month);
+    if (manual != null)
     {
-        // أولاً: الحضور اليدوي (أولوية)
-        var manual = await _db.AttendanceManuals.AsNoTracking()
-            .FirstOrDefaultAsync(a => a.EmployeeId == employeeId
-                                   && a.AttendanceMonth == month);
-        if (manual != null)
-            return (manual.PresentDays, manual.LateMinutes, true);
-
-        // ثانياً: من البصمة
-        // ✅ إصلاح: نجيب BiometricCode الأحدث بس (لو عنده أكتر من Shift)
-        var bioCode = await _db.EmployeeShifts.AsNoTracking()
-            .Where(s => s.EmployeeId == employeeId && s.BiometricCode != null)
-            .OrderByDescending(s => s.EffectiveFrom)   // ✅ الأحدث
-            .Select(s => s.BiometricCode)
-            .FirstOrDefaultAsync();
-
-        if (!bioCode.HasValue) return (0, 0, false);
-
-        // ✅ إصلاح: نحسب بداية ونهاية الشهر بشكل صح
-        if (!DateTime.TryParseExact(month + "-01", "yyyy-MM-dd",
-            null, System.Globalization.DateTimeStyles.None, out var monthStart))
-            return (0, 0, false);
-
-        var monthEnd = monthStart.AddMonths(1); // ✅ بداية الشهر التالي (مش نهاية الشهر الحالي)
-
-        var records = await _db.Attendances.AsNoTracking()
-            .Where(a => a.BiometricCode == bioCode.Value
-                     && a.LogDate >= monthStart
-                     && a.LogDate <  monthEnd    // ✅ أقل من (مش أقل من أو يساوي)
-                     && a.TimeIn != null)
-            .Select(a => new { a.LateMinutes })
-            .ToListAsync();
-
-        return (records.Count, records.Sum(r => r.LateMinutes ?? 0), false);
+        var manualWorkDays = await GetWorkingDaysAsync(employeeId, month);
+        return (manualWorkDays, manual.PresentDays, manual.LateMinutes, true);
     }
+
+    // ── جيب الشيفت الفعال للموظف ─────────────────────────────
+    if (!DateTime.TryParseExact(month + "-01", "yyyy-MM-dd",
+        null, System.Globalization.DateTimeStyles.None, out var monthStart))
+        return (0, 0, 0, false);
+    var monthEnd = monthStart.AddMonths(1);
+
+    var shift = await _db.EmployeeShifts.AsNoTracking()
+        .Where(s => s.EmployeeId == employeeId
+                 && s.EffectiveFrom <= monthStart
+                 && (s.EffectiveTo == null || s.EffectiveTo >= monthStart))
+        .OrderByDescending(s => s.EffectiveFrom)
+        .Select(s => new { s.BiometricCode, s.OffDay1, s.OffDay2 })
+        .FirstOrDefaultAsync();
+
+    if (shift?.BiometricCode == null) return (0, 0, 0, false);
+
+    // ── أيام الراحة ──────────────────────────────────────────
+    var offDays = new List<DayOfWeek>();
+    if (shift.OffDay1 != null) offDays.Add((DayOfWeek)shift.OffDay1.Value);
+    if (shift.OffDay2 != null) offDays.Add((DayOfWeek)shift.OffDay2.Value);
+    if (!offDays.Any())
+        offDays = new List<DayOfWeek> { DayOfWeek.Friday, DayOfWeek.Saturday };
+
+    // ── الإجازات الرسمية ─────────────────────────────────────
+    var holidays = await _db.Calendars.AsNoTracking()
+        .Where(c => c.CalendarDate >= monthStart
+                 && c.CalendarDate < monthEnd
+                 && c.IsHoliday == true)
+        .Select(c => c.CalendarDate.Date)
+        .ToListAsync();
+
+    // ── أيام العمل الفعلية ───────────────────────────────────
+    int workDays = 0;
+    int totalDays = DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
+    for (int i = 1; i <= totalDays; i++)
+    {
+        var day = new DateTime(monthStart.Year, monthStart.Month, i);
+        if (!offDays.Contains(day.DayOfWeek) && !holidays.Contains(day.Date))
+            workDays++;
+    }
+
+    // ── الحضور الفعلي من Attendance ──────────────────────────
+    // نجيب فقط أيام الشغل (مش أيام الراحة والإجازات)
+    var attRecords = await _db.Attendances.AsNoTracking()
+        .Where(a => a.BiometricCode == shift.BiometricCode.Value
+                 && a.LogDate >= monthStart
+                 && a.LogDate < monthEnd
+                 && a.TimeIn != null)
+        .Select(a => new { a.LogDate, a.LateMinutes })
+        .ToListAsync();
+
+    // شيل أيام الراحة والإجازات من الحضور
+    var validAtt = attRecords
+        .Where(a => !offDays.Contains(a.LogDate.DayOfWeek)
+                 && !holidays.Contains(a.LogDate.Date))
+        .ToList();
+
+    int presentDays = validAtt.Count;
+    int lateMinutes = validAtt.Sum(a => a.LateMinutes ?? 0);
+
+    return (workDays, presentDays, lateMinutes, false);
+}
 
     // ============================================================
     // Helpers
@@ -731,20 +948,51 @@ public class PayrollService : IPayrollService
         CreatedAt         = DateTime.Now
     };
 
-    private static int GetWorkingDays(string month)
-    {
-        if (!DateTime.TryParseExact(month + "-01", "yyyy-MM-dd",
-            null, System.Globalization.DateTimeStyles.None, out var d))
-            return 26;
+    private async Task<int> GetWorkingDaysAsync(int employeeId, string month)
+{
+    if (!DateTime.TryParseExact(month + "-01", "yyyy-MM-dd",
+        null, System.Globalization.DateTimeStyles.None, out var monthStart))
+        return 26;
 
-        int total = DateTime.DaysInMonth(d.Year, d.Month), count = 0;
-        for (int i = 1; i <= total; i++)
-        {
-            var dow = new DateTime(d.Year, d.Month, i).DayOfWeek;
-            if (dow != DayOfWeek.Friday && dow != DayOfWeek.Saturday) count++;
-        }
-        return count;
+    var monthEnd = monthStart.AddMonths(1);
+
+    // ── جيب أيام الراحة من شيفت الموظف ──────────────────────
+    var shift = await _db.EmployeeShifts.AsNoTracking()
+        .Where(s => s.EmployeeId == employeeId
+                 && s.EffectiveFrom <= monthStart
+                 && (s.EffectiveTo == null || s.EffectiveTo >= monthStart))
+        .OrderByDescending(s => s.EffectiveFrom)
+        .Select(s => new { s.OffDay1, s.OffDay2 })
+        .FirstOrDefaultAsync();
+
+    // أيام الراحة الخاصة بالموظف
+    var offDays = new List<DayOfWeek>();
+    if (shift?.OffDay1 != null) offDays.Add((DayOfWeek)shift.OffDay1.Value);
+    if (shift?.OffDay2 != null) offDays.Add((DayOfWeek)shift.OffDay2.Value);
+
+    // لو مفيش شيفت محدد → افتراضي جمعة وسبت
+    if (!offDays.Any())
+        offDays = new List<DayOfWeek> { DayOfWeek.Friday, DayOfWeek.Saturday };
+
+    // ── جيب الإجازات الرسمية من Calendar ─────────────────────
+    var holidays = await _db.Calendars.AsNoTracking()
+        .Where(c => c.CalendarDate >= monthStart
+                 && c.CalendarDate < monthEnd
+                 && c.IsHoliday == true)
+        .Select(c => c.CalendarDate.Date)
+        .ToListAsync();
+
+    // ── احسب أيام العمل الفعلية ──────────────────────────────
+    int count = 0;
+    int totalDays = DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
+    for (int i = 1; i <= totalDays; i++)
+    {
+        var day = new DateTime(monthStart.Year, monthStart.Month, i);
+        if (!offDays.Contains(day.DayOfWeek) && !holidays.Contains(day.Date))
+            count++;
     }
+    return count;
+}
 
     private async Task<decimal> GetCashBalanceAsync(int cashBoxId)
     {

@@ -13,6 +13,7 @@
 @inject IDialogService               DialogService
 @inject NavigationManager            Nav
 @inject AuthenticationStateProvider  AuthProvider
+@inject IJSRuntime                   JS
 
 <PageTitle>المرتبات</PageTitle>
 
@@ -86,6 +87,16 @@
                StartIcon="@Icons.Material.Filled.Search"
                OnClick="SearchAsync">
         بحث
+    </MudButton>
+
+    @* ✅ زرار التصدير *@
+    <MudButton Variant="Variant.Outlined"
+               StartIcon="@Icons.Material.Rounded.TableChart"
+               Style="color:#10B981; border-color:#10B981;"
+               OnClick="ExportExcelAsync"
+               Disabled="@_exporting"
+               Class="no-print">
+        @(_exporting ? "جاري..." : "تصدير Excel")
     </MudButton>
 
     <MudButton Variant="Variant.Filled"
@@ -215,8 +226,9 @@
         PayrollMonth = DateTime.Today.ToString("yyyy-MM"),
         PageSize     = 20
     };
-    private string  _selectedStatus = "";   // منفصل عن الـ filter
+    private string  _selectedStatus = "";
     private bool    _loading        = true;
+    private bool    _exporting      = false;        // ✅ الجديد
     private int     _totalCount;
     private int     _totalPages     => (int)Math.Ceiling((double)_totalCount / _filter.PageSize);
     private string  _currentUser    = "system";
@@ -226,8 +238,6 @@
     {
         var auth     = await AuthProvider.GetAuthenticationStateAsync();
         _currentUser = auth.User.Identity?.Name ?? "system";
-
-        // ✅ واحد ورا التاني - مش Task.WhenAll
         await LoadAsync();
         await LoadStatsAsync();
     }
@@ -261,27 +271,20 @@
             _stats = await PayrollService.GetStatsAsync(
                 _filter.PayrollMonth ?? DateTime.Today.ToString("yyyy-MM"));
         }
-        catch
-        {
-            _stats = null;
-        }
+        catch { _stats = null; }
     }
 
     // ── Search ──────────────────────────────────────────────
     private async Task OnSearchKeyUp(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter")
-            await SearchAsync();
+        if (e.Key == "Enter") await SearchAsync();
     }
 
     private async Task SearchAsync()
     {
-        // ✅ تطبيق الـ Status من المتغير المنفصل
         _filter.PaymentStatus = string.IsNullOrWhiteSpace(_selectedStatus)
             ? null : _selectedStatus;
         _filter.PageNumber = 1;
-
-        // ✅ واحد ورا التاني
         await LoadAsync();
         await LoadStatsAsync();
     }
@@ -291,6 +294,34 @@
     {
         _filter.PageNumber = page;
         await LoadAsync();
+    }
+
+    // ── Export ✅ الجديد ─────────────────────────────────────
+    private async Task ExportExcelAsync()
+    {
+        _exporting = true;
+        StateHasChanged();
+        try
+        {
+            var bytes = await PayrollService.ExportMonthExcelAsync(
+                _filter.PayrollMonth ?? DateTime.Today.ToString("yyyy-MM"));
+
+            var base64 = Convert.ToBase64String(bytes);
+            await JS.InvokeVoidAsync(
+                "downloadFileFromBase64",
+                base64,
+                $"مسير_الرواتب_{_filter.PayrollMonth}.xlsx");
+
+            Snackbar.Add("✅ تم التصدير بنجاح", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _exporting = false;
+        }
     }
 
     // ── Dialogs ──────────────────────────────────────────────
@@ -303,8 +334,8 @@
         };
         var options = new DialogOptions
         {
-            MaxWidth  = MaxWidth.Medium,
-            FullWidth = true,
+            MaxWidth    = MaxWidth.Medium,
+            FullWidth   = true,
             CloseButton = true
         };
         await DialogService.ShowAsync<PayslipDialog>("قسيمة الراتب", parameters, options);

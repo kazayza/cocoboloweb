@@ -17,3 +17,4 @@ window.downloadFile = function (fileName, contentType, base64) {
     link.click();
     document.body.removeChild(link);
 };
+window.printPage = function () { window.print(); };
