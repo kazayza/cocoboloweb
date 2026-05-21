@@ -16,6 +16,7 @@ public partial class ProductImage
     public string? ImageNote { get; set; }
 
     public DateTime? CreatedAt { get; set; }
+    public bool IsPrimary { get; set; }
 
     public virtual Product Product { get; set; } = null!;
 }

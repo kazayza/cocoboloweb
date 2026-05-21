@@ -222,10 +222,7 @@ public class InvoiceService : IInvoiceService
                                ProductId = d.ProductId,
                                ProductName = p.ProductName,
                                ProductDescription = p.ProductDescription,
-                               ProductImagePath = _db.ProductImages
-                                   .Where(im => im.ProductId == p.ProductId)
-                                   .Select(im => im.ImagePath)
-                                   .FirstOrDefault(),
+                               ProductImagePath = null,
                                Quantity = d.Quantity,
                                UnitPrice = d.UnitPrice,
                                Notes = d.Notes,
@@ -963,10 +960,7 @@ public class InvoiceService : IInvoiceService
                 ProductId = p.ProductId,
                 ProductName = p.ProductName,
                 ProductDescription = p.ProductDescription,
-                ImagePath = _db.ProductImages
-                    .Where(im => im.ProductId == p.ProductId)
-                    .Select(im => im.ImagePath)
-                    .FirstOrDefault(),
+                ImagePath = null,
                 SuggestedSalePrice = p.SuggestedSalePrice,
                 SuggestedSalePriceElite = p.SuggestedSalePriceElite,
                 PurchasePrice = p.PurchasePrice,

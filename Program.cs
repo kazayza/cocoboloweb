@@ -212,6 +212,145 @@ app.MapGet("/auth/current-user", (ClaimsPrincipal user) => Results.Ok(new
                       .Select(c => c.Value)
                       .ToList()
 })).RequireAuthorization();
+// ============================================================
+// 🖼️ Product Image API
+// ============================================================
+app.MapGet("/api/product-images/{productId:int}", async (
+    int productId,
+    db24804Context db,
+    IWebHostEnvironment env) =>
+{
+    // 1) جيب الصورة الرئيسية أولاً، وإلا الأحدث
+    var image = await db.ProductImages
+        .AsNoTracking()
+        .Where(im => im.ProductId == productId)
+        .OrderByDescending(im => im.IsPrimary)
+        .ThenByDescending(im => im.CreatedAt)
+        .ThenByDescending(im => im.ProductImagesId)
+        .FirstOrDefaultAsync();
+
+    if (image == null)
+        return Results.NotFound();
+
+    // 2) لو فيه ImagePath والملف موجود فعلاً
+    if (!string.IsNullOrEmpty(image.ImagePath))
+    {
+        var relativePath = image.ImagePath.TrimStart('/');
+        var fullPath = Path.Combine(env.WebRootPath, relativePath);
+
+        if (File.Exists(fullPath))
+        {
+            var mimeType = GetMimeTypeFromExtension(fullPath);
+            var fileBytes = await File.ReadAllBytesAsync(fullPath);
+            return Results.File(fileBytes, mimeType, enableRangeProcessing: true);
+        }
+    }
+
+    // 3) لو فيه ImageProduct (صورة قديمة من الداتابيز)
+    if (image.ImageProduct != null && image.ImageProduct.Length > 0)
+    {
+        var mimeType = DetectMimeType(image.ImageProduct);
+        return Results.File(image.ImageProduct, mimeType);
+    }
+
+    // 4) مفيش صورة صالحة
+    return Results.NotFound();
+});
+// ============================================================
+// 🖼️ Product Image By ID (للحصول على صورة معينة)
+// ============================================================
+app.MapGet("/api/product-image-by-id/{productImagesId:int}", async (
+    int productImagesId,
+    db24804Context db,
+    IWebHostEnvironment env) =>
+{
+    // جيب الصورة بالـ ID
+    var image = await db.ProductImages
+        .AsNoTracking()
+        .Where(im => im.ProductImagesId == productImagesId)
+        .FirstOrDefaultAsync();
+
+    if (image == null)
+        return Results.NotFound();
+
+    // 1) لو فيه ImagePath والملف موجود
+    if (!string.IsNullOrEmpty(image.ImagePath))
+    {
+        var relativePath = image.ImagePath.TrimStart('/');
+        var fullPath = Path.Combine(env.WebRootPath, relativePath);
+
+        if (File.Exists(fullPath))
+        {
+            var mimeType = GetMimeTypeFromExtension(fullPath);
+            var fileBytes = await File.ReadAllBytesAsync(fullPath);
+            return Results.File(fileBytes, mimeType, enableRangeProcessing: true);
+        }
+    }
+
+    // 2) لو فيه ImageProduct (صورة قديمة من الداتابيز)
+    if (image.ImageProduct != null && image.ImageProduct.Length > 0)
+    {
+        var mimeType = DetectMimeType(image.ImageProduct);
+        return Results.File(image.ImageProduct, mimeType);
+    }
+
+    // 3) مفيش صورة صالحة
+    return Results.NotFound();
+});
+
+app.Run();
+
+// ============================================================
+// 🖼️ Image Helper Methods
+// ============================================================
+static string GetMimeTypeFromExtension(string filePath)
+{
+    var ext = Path.GetExtension(filePath)?.ToLowerInvariant();
+    return ext switch
+    {
+        ".png"  => "image/png",
+        ".jpg"  => "image/jpeg",
+        ".jpeg" => "image/jpeg",
+        ".gif"  => "image/gif",
+        ".webp" => "image/webp",
+        ".bmp"  => "image/bmp",
+        ".svg"  => "image/svg+xml",
+        _       => "image/png"
+    };
+}
+
+static string DetectMimeType(byte[] imageBytes)
+{
+    if (imageBytes.Length < 4) return "image/png";
+
+    // PNG
+    if (imageBytes[0] == 0x89 && imageBytes[1] == 0x50 &&
+        imageBytes[2] == 0x4E && imageBytes[3] == 0x47)
+        return "image/png";
+
+    // JPEG
+    if (imageBytes[0] == 0xFF && imageBytes[1] == 0xD8)
+        return "image/jpeg";
+
+    // GIF
+    if (imageBytes[0] == 0x47 && imageBytes[1] == 0x49 &&
+        imageBytes[2] == 0x46)
+        return "image/gif";
+
+    // WebP
+    if (imageBytes.Length > 11 &&
+        imageBytes[0] == 0x52 && imageBytes[1] == 0x49 &&
+        imageBytes[2] == 0x46 && imageBytes[3] == 0x46 &&
+        imageBytes[8] == 0x57 && imageBytes[9] == 0x45 &&
+        imageBytes[10] == 0x42 && imageBytes[11] == 0x50)
+        return "image/webp";
+
+    // BMP
+    if (imageBytes[0] == 0x42 && imageBytes[1] == 0x4D)
+        return "image/bmp";
+
+    return "image/png";
+}
 
 app.Run();
 
