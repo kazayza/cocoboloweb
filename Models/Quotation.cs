@@ -17,11 +17,19 @@ public partial class Quotation
 
     public decimal TotalAmount { get; set; }
 
+    public decimal? DiscountAmount { get; set; }  // ⭐ جديد
+
     public decimal? GrandTotal { get; set; }
 
     public int? InvoiceId { get; set; }
 
     public string? Notes { get; set; }
+
+    public string Status { get; set; } = "Draft";  // ⭐ جديد
+
+    public DateTime? ValidUntil { get; set; }  // ⭐ جديد
+
+    public int? EmpId { get; set; }  // ⭐ جديد
 
     public string? CreatedBy { get; set; }
 

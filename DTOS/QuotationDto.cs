@@ -13,15 +13,19 @@ public class QuotationListDto
     public string? PartyPhone { get; set; }
     public int? WarehouseId { get; set; }
     public string? WarehouseName { get; set; }
+    public int? EmpId { get; set; }
+    public string? EmpName { get; set; }
     public string? PricingType { get; set; }
     public decimal TotalAmount { get; set; }
+    public decimal? DiscountAmount { get; set; }
     public decimal GrandTotal { get; set; }
     public int ItemsCount { get; set; }
     public string Status { get; set; } = QuotationStatuses.Draft;
     public int? InvoiceId { get; set; }
     public string? InvoiceReference { get; set; }
     public DateTime? ValidUntil { get; set; }
-    public bool IsExpired => ValidUntil.HasValue && ValidUntil.Value.Date < DateTime.Today && InvoiceId == null;
+    public bool IsExpired => ValidUntil.HasValue && ValidUntil.Value.Date < DateTime.Today && Status != QuotationStatuses.Converted;
+    public int? DaysUntilExpiry => ValidUntil.HasValue ? (int)(ValidUntil.Value.Date - DateTime.Today).TotalDays : null;
     public string CreatedBy { get; set; } = "";
     public DateTime CreatedAt { get; set; }
 }
@@ -38,11 +42,12 @@ public class QuotationFormDto
 
     public int? PartyId { get; set; }
     public string? PartyName { get; set; }
+    public string? PartyPhone { get; set; }
     public int? WarehouseId { get; set; }
     public int? EmpId { get; set; }
     public string? EmpName { get; set; }
 
-    public string PricingType { get; set; } = PricingTiers.Premium; // Premium / Elite
+    public string PricingType { get; set; } = PricingTiers.Premium;
 
     public decimal TotalAmount { get; set; }
     public decimal? DiscountPercentage { get; set; }
@@ -51,13 +56,20 @@ public class QuotationFormDto
     public decimal GrandTotal { get; set; }
 
     public string? Notes { get; set; }
-    public string? Terms { get; set; }   // الشروط والأحكام
     public string Status { get; set; } = QuotationStatuses.Draft;
 
     public int? InvoiceId { get; set; }
     public string? InvoiceReference { get; set; }
 
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+
     public List<QuotationItemDto> Items { get; set; } = new();
+
+    // Helper Properties
+    public bool IsConverted => InvoiceId.HasValue;
+    public bool IsExpired => ValidUntil.HasValue && ValidUntil.Value.Date < DateTime.Today && !IsConverted;
+    public int? DaysUntilExpiry => ValidUntil.HasValue ? (int)(ValidUntil.Value.Date - DateTime.Today).TotalDays : null;
 }
 
 public class QuotationItemDto
@@ -66,15 +78,20 @@ public class QuotationItemDto
     public int ProductId { get; set; }
     public string? ProductName { get; set; }
     public string? ProductDescription { get; set; }
-    public string? ProductImagePath { get; set; }
     public decimal Quantity { get; set; } = 1;
     public decimal UnitPrice { get; set; }
     public decimal TotalAmount => Math.Round(Quantity * UnitPrice, 2);
     public string? Notes { get; set; }
+    public int? AvailableStock { get; set; }
 
     public string PricingTier { get; set; } = PricingTiers.Premium;
+
+    // ⭐ أسعار البيع والشراء للباقتين (للمرآة)
     public decimal? SalePricePremium { get; set; }
     public decimal? SalePriceElite { get; set; }
+    public decimal? PurchasePricePremium { get; set; }
+    public decimal? PurchasePriceElite { get; set; }
+    public int? Period { get; set; }
 }
 
 // ============================
@@ -88,6 +105,7 @@ public class QuotationFilterDto
     public DateTime? DateTo { get; set; }
     public string? Status { get; set; }
     public bool? IsConverted { get; set; }
+    public bool? IsExpired { get; set; }
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 25;
     public string SortBy { get; set; } = "QuotationDate";
@@ -101,13 +119,15 @@ public class QuotationStatsDto
 {
     public int TotalCount { get; set; }
     public decimal TotalValue { get; set; }
-    public int PendingCount { get; set; }
+    public int DraftCount { get; set; }
+    public int SentCount { get; set; }
     public int AcceptedCount { get; set; }
+    public int RejectedCount { get; set; }
     public int ConvertedCount { get; set; }
     public int ExpiredCount { get; set; }
-    public int RejectedCount { get; set; }
     public decimal ConvertedValue { get; set; }
-    public decimal ConversionRate { get; set; } // %
+    public decimal ConversionRate { get; set; }
+     public int PendingCount => DraftCount + SentCount;
 }
 
 // ============================
@@ -122,6 +142,7 @@ public class QuotationPrintDto
     public string? CompanyPhone { get; set; }
     public string? CompanyAddress { get; set; }
     public string? CompanyTaxNumber { get; set; }
+    public string? CompanyLogo { get; set; }
 
     // بيانات العميل الكاملة
     public string? CustomerAddress { get; set; }

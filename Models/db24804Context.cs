@@ -1514,6 +1514,16 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .HasColumnType("datetime");
             entity.Property(e => e.TotalAmount).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.WarehouseId).HasColumnName("WarehouseID");
+            entity.Property(e => e.Status)
+        .IsRequired()
+        .HasMaxLength(50)
+        .HasDefaultValue("Draft");
+
+    entity.Property(e => e.DiscountAmount)
+        .HasColumnType("decimal(18, 2)")
+        .HasDefaultValue(null);
+
+    entity.HasIndex(e => e.Status);
         });
 
         modelBuilder.Entity<QuotationDetail>(entity =>
