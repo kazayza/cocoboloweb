@@ -90,6 +90,7 @@ builder.Services.AddScoped<IQuotationService, QuotationService>();
 builder.Services.AddSingleton<ShareTokenService>();
 builder.Services.AddScoped<IQuotationExportService, QuotationExportService>();
 
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
@@ -357,6 +358,26 @@ static string DetectMimeType(byte[] imageBytes)
 
     return "image/png";
 }
+// قبل app.Run()
+
+// ============ PDF + Excel Endpoints ============
+app.MapGet("/api/quotations/{id:int}/pdf", async (
+    int id, IQuotationExportService export) =>
+{
+    var (ok, error, pdf, fileName) = await export.GeneratePdfAsync(id);
+    if (!ok || pdf == null) return Results.NotFound(new { error });
+    return Results.File(pdf, "application/pdf", fileName);
+}); // ⚠️ مش .RequireAuthorization() عشان الـ Public Page تشتغل
+
+app.MapGet("/api/quotations/{id:int}/excel", async (
+    int id, IQuotationExportService export) =>
+{
+    var (ok, error, xlsx, fileName) = await export.GenerateExcelAsync(id);
+    if (!ok || xlsx == null) return Results.NotFound(new { error });
+    return Results.File(xlsx,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        fileName);
+});
 
 app.MapQuotationExports();
 app.Run();

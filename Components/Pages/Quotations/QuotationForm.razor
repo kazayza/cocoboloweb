@@ -4,6 +4,7 @@
 
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Helpers
 
 @inject IQuotationService QuotationService
 @inject IInvoiceService InvoiceService
@@ -1210,6 +1211,8 @@ else
     private bool _showWhatsAppDialog;
     private string _whatsappPhone = "";
     private string _whatsappMessage = "";
+    private string _shareLink = "";
+private string _whatsappCountryCode = "20";
 
     // Change status dialog
     private bool _showStatusDialog, _isChangingStatus;
@@ -1217,6 +1220,7 @@ else
 
     private string? _currentUserName;
     private bool _canEdit;
+
 
     protected override async Task OnInitializedAsync()
     {
@@ -1675,13 +1679,32 @@ else
     // WhatsApp
     // ============================================================
     private void OpenWhatsAppDialog()
+{
+    if (_form.QuotationId == 0)
     {
-        _whatsappPhone = NormalizePhone(_form.PartyPhone);
-        _whatsappMessage = $"عرض سعر رقم: {_form.ReferenceNumber}\n" +
-                          $"التاريخ: {_form.QuotationDate:yyyy/MM/dd}\n" +
-                          $"الإجمالي: {FormatMoney(_form.GrandTotal)} ج";
-        _showWhatsAppDialog = true;
+        Snackbar.Add("احفظ عرض السعر أولاً قبل المشاركة.", Severity.Warning);
+        return;
     }
+
+    // 1) جهّز رقم العميل
+    _whatsappPhone = _form.PartyPhone ?? "";
+    _whatsappCountryCode = "20"; // مصر افتراضيًا
+
+    // 2) ⭐ ابني رابط المشاركة العام
+    var baseUrl = Navigation.BaseUri.TrimEnd('/');
+    _shareLink = $"{baseUrl}/q/quotation/{_form.QuotationId}";
+
+    // 3) ⭐ الرسالة فيها الرابط
+    _whatsappMessage = $"السلام عليكم،\n\n" +
+                       $"📋 عرض سعر رقم: {_form.ReferenceNumber}\n" +
+                       $"📅 التاريخ: {_form.QuotationDate:yyyy/MM/dd}\n" +
+                       $"💰 الإجمالي: {FormatMoney(_form.GrandTotal)} ج\n\n" +
+                       $"👇 لعرض / تحميل / طباعة عرض السعر، اضغط الرابط:\n" +
+                       $"{_shareLink}\n\n" +
+                       $"شركة COCOBOLO";
+
+    _showWhatsAppDialog = true;
+}
 
     private async Task DownloadPdf()
     {
@@ -1696,41 +1719,31 @@ else
     }
 
     private async Task OpenWhatsApp()
+{
+    var normalizedPhone = PhoneNormalizer.ToWhatsAppFormat(_whatsappPhone, _whatsappCountryCode);
+    
+    if (string.IsNullOrEmpty(normalizedPhone))
     {
-        if (string.IsNullOrWhiteSpace(_whatsappPhone))
-        {
-            Snackbar.Add("يرجى إدخال رقم الواتساب", Severity.Warning);
-            return;
-        }
-
-        var phone = NormalizePhone(_whatsappPhone);
-        if (phone.Length < 8)
-        {
-            Snackbar.Add("رقم الواتساب غير صحيح", Severity.Warning);
-            return;
-        }
-
-        try
-        {
-            var url = $"https://wa.me/{phone}?text={Uri.EscapeDataString(_whatsappMessage)}";
-            await JS.InvokeVoidAsync("open", url, "_blank");
-            _showWhatsAppDialog = false;
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"تعذّر فتح واتساب: {ex.Message}", Severity.Error);
-        }
+        Snackbar.Add("رقم الواتساب غير صحيح. مثال صحيح: 01001234567", Severity.Warning);
+        return;
     }
+
+    var encodedMsg = Uri.EscapeDataString(_whatsappMessage);
+    var url = $"https://api.whatsapp.com/send?phone={normalizedPhone}&text={encodedMsg}";
+    
+    await JS.InvokeVoidAsync("open", url, "_blank");
+    _showWhatsAppDialog = false;
+}
 
     /// <summary>
     /// تنظيف رقم الواتساب من المسافات والأقواس والشرطات.
     /// </summary>
-    private static string NormalizePhone(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return "";
-        var digits = new string(raw.Where(c => char.IsDigit(c) || c == '+').ToArray());
-        return digits.TrimStart('+');
-    }
+    //private static string NormalizePhone(string? raw)
+    //{
+      //  if (string.IsNullOrWhiteSpace(raw)) return "";
+        //var digits = new string(raw.Where(c => char.IsDigit(c) || c == '+').ToArray());
+        //return digits.TrimStart('+');
+    //}
 
     // ============================================================
     // Change Status
