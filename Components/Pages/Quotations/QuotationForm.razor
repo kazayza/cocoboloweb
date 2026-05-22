@@ -1,0 +1,1380 @@
+@page "/quotations/new"
+@page "/quotations/{Id:int}"
+@page "/quotations/{Id:int}/edit"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+
+@inject IQuotationService QuotationService
+@inject IInvoiceService InvoiceService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <div class="loading-card">
+            <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+            <MudText Typo="Typo.h6" Class="mt-4" Style="color: var(--gold);">جاري تحميل البيانات...</MudText>
+        </div>
+    </div>
+}
+else
+{
+    var isOverdue = _form.ValidUntil.HasValue && _form.ValidUntil.Value.Date < DateTime.Today && !_form.IsConverted;
+    var daysLeft = _form.DaysUntilExpiry;
+
+    <div class="quotation-form-page" dir="rtl">
+
+        <!-- ============= HEADER ============= -->
+        <div class="form-header">
+            <div class="header-top">
+                <div class="header-left">
+                    <MudIconButton Icon="@Icons.Material.Filled.ArrowForward"
+                                   Color="Color.Inherit" OnClick="GoBack" />
+                    <div>
+                        <h1>
+                            <MudIcon Icon="@Icons.Material.Filled.RequestQuote" />
+                            @(IsEdit ? (_isReadOnly ? "عرض سعر" : "تعديل عرض السعر") : "عرض سعر جديد")
+                        </h1>
+                        <p>
+                            <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(_form.Status)">
+                                @GetStatusText(_form.Status)
+                            </MudChip>
+                            @if (isOverdue)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Error"
+                                         Icon="@Icons.Material.Filled.Warning">منتهي الصلاحية</MudChip>
+                            }
+                            @if (!string.IsNullOrEmpty(_form.ReferenceNumber))
+                            {
+                                <span> • @_form.ReferenceNumber</span>
+                            }
+                            @if (!string.IsNullOrEmpty(_form.EmpName))
+                            {
+                                <span> • الموظف: @_form.EmpName</span>
+                            }
+                        </p>
+                    </div>
+                </div>
+                <div class="header-right">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Inherit" OnClick="GoBack"
+                               StartIcon="@Icons.Material.Filled.Close">إلغاء</MudButton>
+
+                    @if (IsEdit)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="OpenPrintPage"
+                                   StartIcon="@Icons.Material.Filled.Print">طباعة</MudButton>
+
+                        @if (!_form.IsConverted)
+                        {
+                            <MudButton Variant="Variant.Filled" Color="Color.Success"
+                                       OnClick="OpenWhatsAppDialog"
+                                       StartIcon="@Icons.Material.Filled.Send"
+                                       Style="background: #25D366 !important;">
+                                إرسال واتساب
+                            </MudButton>
+                        }
+
+                        @if (_isReadOnly && _canEdit && !_form.IsConverted)
+                        {
+                            <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                                       OnClick="@(() => _isReadOnly = false)"
+                                       StartIcon="@Icons.Material.Filled.Edit">تعديل</MudButton>
+                        }
+
+                        @if (!_form.IsConverted && _canEdit)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                                       OnClick="OpenChangeStatusDialog"
+                                       StartIcon="@Icons.Material.Filled.Flag">تغيير الحالة</MudButton>
+                        }
+
+                        @if (!_form.IsConverted)
+                        {
+                            <MudButton Variant="Variant.Filled" Color="Color.Success"
+                                       OnClick="OpenConvertDialog"
+                                       StartIcon="@Icons.Material.Filled.SwapHoriz">
+                                تحويل لفاتورة
+                            </MudButton>
+                        }
+                    }
+
+                    @if (!_isReadOnly && !_form.IsConverted)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                   OnClick="SaveQuotation"
+                                   Disabled="@_isSaving"
+                                   StartIcon="@Icons.Material.Filled.Save"
+                                   Class="save-btn">
+                            @if (_isSaving)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                            }
+                            حفظ
+                        </MudButton>
+                    }
+                </div>
+            </div>
+
+            <!-- ⭐ Quick Summary -->
+            @if (IsEdit)
+            {
+                <div class="header-summary">
+                    <div class="summary-pill">
+                        <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                        <div>
+                            <span>العميل</span>
+                            <strong>@(_form.PartyName ?? "-")</strong>
+                        </div>
+                    </div>
+                    <div class="summary-pill">
+                        <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="Size.Small" />
+                        <div>
+                            <span>التاريخ</span>
+                            <strong>@_form.QuotationDate.ToString("yyyy/MM/dd")</strong>
+                        </div>
+                    </div>
+                    <div class="summary-pill pill-total">
+                        <MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" Size="Size.Small" />
+                        <div>
+                            <span>الإجمالي</span>
+                            <strong>@FormatMoney(_form.GrandTotal) ج</strong>
+                        </div>
+                    </div>
+                    <div class="summary-pill">
+                        <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Small" />
+                        <div>
+                            <span>الأصناف</span>
+                            <strong>@_form.Items.Count</strong>
+                        </div>
+                    </div>
+                    @if (_form.ValidUntil.HasValue)
+                    {
+                        <div class="summary-pill @(isOverdue ? "pill-overdue" : (daysLeft <= 7 ? "pill-warning" : ""))">
+                            <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
+                            <div>
+                                <span>الصلاحية</span>
+                                <strong>
+                                    @_form.ValidUntil.Value.ToString("yyyy/MM/dd")
+                                    @if (daysLeft.HasValue && daysLeft.Value >= 0 && !_form.IsConverted)
+                                    {
+                                        <span style="font-size:0.7rem; opacity:0.85;"> (@daysLeft يوم)</span>
+                                    }
+                                </strong>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- ⭐ تنبيهات -->
+        @if (_form.IsConverted)
+        {
+            <MudAlert Severity="Severity.Success" Class="mb-3" Icon="@Icons.Material.Filled.CheckCircle"
+                      Variant="Variant.Filled" Dense="true">
+                ✅ تم تحويل عرض السعر إلى الفاتورة
+                <a href="/sales/invoices/@_form.InvoiceId" style="color: white; text-decoration: underline; font-weight: 800;">
+                    @_form.InvoiceReference
+                </a>
+                ولا يمكن تعديله.
+            </MudAlert>
+        }
+
+        @if (isOverdue && !_form.IsConverted)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-3" Icon="@Icons.Material.Filled.Warning"
+                      Variant="Variant.Filled" Dense="true">
+                ⚠️ عرض السعر منتهي الصلاحية منذ <strong>@(Math.Abs((DateTime.Today - _form.ValidUntil!.Value.Date).Days)) يوم</strong>
+            </MudAlert>
+        }
+        else if (daysLeft.HasValue && daysLeft.Value <= 7 && daysLeft.Value >= 0 && !_form.IsConverted)
+        {
+            <MudAlert Severity="Severity.Info" Class="mb-3" Icon="@Icons.Material.Filled.AccessTime" Dense="true">
+                ℹ️ عرض السعر ينتهي خلال <strong>@daysLeft يوم</strong>
+            </MudAlert>
+        }
+
+        <div class="form-grid">
+            <!-- ============= Main Column ============= -->
+            <div class="main-col">
+
+                <!-- بيانات عرض السعر -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Description" />
+                        <h3>بيانات عرض السعر</h3>
+                    </div>
+                    <div class="grid-2">
+                        <MudTextField Value="@_form.ReferenceNumber" Label="الرقم"
+                                      Variant="Variant.Outlined" ReadOnly="true"
+                                      HelperText="يتم توليده تلقائياً" />
+
+                        <MudDatePicker Date="_form.QuotationDate"
+                                       DateChanged="@(d => _form.QuotationDate = d ?? DateTime.Now)"
+                                       Label="تاريخ العرض" Variant="Variant.Outlined"
+                                       ReadOnly="@_isReadOnly" />
+
+                        <MudDatePicker Date="_form.ValidUntil"
+                                       DateChanged="@(d => _form.ValidUntil = d)"
+                                       Label="ساري لحد تاريخ"
+                                       Variant="Variant.Outlined"
+                                       Clearable="true"
+                                       ReadOnly="@_isReadOnly" />
+
+                        <MudSelect T="int?" @bind-Value="_form.WarehouseId"
+                                   Label="المخزن (اختياري)"
+                                   Variant="Variant.Outlined"
+                                   Clearable="true"
+                                   Disabled="@_isReadOnly">
+                            @foreach (var w in _warehouses)
+                            {
+                                <MudSelectItem T="int?" Value="@((int?)w.WarehouseId)">@w.WarehouseName</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudTextField Value="@(_form.EmpName ?? "غير محدد")"
+                                      Label="الموظف" Variant="Variant.Outlined" ReadOnly="true"
+                                      Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.Person" />
+
+                        <MudSelect T="string" Value="_form.PricingType"
+                                   ValueChanged="@((string v) => OnPricingTypeChanged(v))"
+                                   Label="نوع التسعير الافتراضي"
+                                   Variant="Variant.Outlined"
+                                   Disabled="@_isReadOnly">
+                            @foreach (var tier in PricingTiers.All)
+                            {
+                                <MudSelectItem T="string" Value="@tier.Key">@tier.Value</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </div>
+                </MudPaper>
+
+                <!-- العميل -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Person" />
+                        <h3>العميل</h3>
+                    </div>
+
+                    <MudAutocomplete T="PartyLookupDto"
+                                     Label="ابحث عن العميل بالاسم أو الهاتف *"
+                                     Value="_selectedParty"
+                                     ValueChanged="OnPartySelected"
+                                     SearchFunc="SearchParties"
+                                     ToStringFunc="@(p => p == null ? "" : p.PartyName)"
+                                     Variant="Variant.Outlined"
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.Search"
+                                     Clearable="true"
+                                     ResetValueOnEmptyText="true"
+                                     CoerceText="true"
+                                     Disabled="@_isReadOnly"
+                                     MinCharacters="1">
+                        <ItemTemplate Context="party">
+                            <div style="display:flex; flex-direction:column; gap:0.25rem;">
+                                <strong>@party.PartyName</strong>
+                                <span style="font-size:0.78rem; color:var(--mud-palette-text-secondary);">
+                                    @if (!string.IsNullOrEmpty(party.Phone))
+                                    {
+                                        <span>📞 @party.Phone</span>
+                                    }
+                                    @if (!string.IsNullOrEmpty(party.City))
+                                    {
+                                        <span> • @party.City</span>
+                                    }
+                                </span>
+                            </div>
+                        </ItemTemplate>
+                    </MudAutocomplete>
+
+                    @if (_form.PartyId.HasValue && !string.IsNullOrEmpty(_form.PartyPhone))
+                    {
+                        <div class="party-phone-info mt-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Phone" Size="Size.Small" />
+                            <span>الهاتف: <strong>@_form.PartyPhone</strong></span>
+                        </div>
+                    }
+                </MudPaper>
+
+                <!-- ⭐ الأصناف (Cards زي الفواتير) -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Inventory2" />
+                        <h3>الأصناف (@_form.Items.Count)</h3>
+                    </div>
+
+                    @if (!_isReadOnly && _form.PartyId.HasValue && !_availableProducts.Any())
+                    {
+                        <div class="empty-items">
+                            <MudIcon Icon="@Icons.Material.Filled.Inventory" Size="Size.Large" />
+                            <p>لا توجد منتجات متاحة لهذا العميل</p>
+                        </div>
+                    }
+                    else if (!_isReadOnly && !_form.PartyId.HasValue)
+                    {
+                        <div class="empty-items">
+                            <MudIcon Icon="@Icons.Material.Filled.PersonSearch" Size="Size.Large" />
+                            <p>اختر العميل أولاً لعرض المنتجات المتاحة</p>
+                        </div>
+                    }
+
+                    <!-- شبكة المنتجات المتاحة -->
+                    @if (!_isReadOnly && _availableProducts.Any())
+                    {
+                        <div class="products-grid">
+                            @foreach (var prod in _availableProducts)
+                            {
+                                var isAdded = _form.Items.Any(i => i.ProductId == prod.ProductId);
+                                <div class="product-card @(isAdded ? "product-added" : "")">
+                                    <div class="product-card-img">
+                                        <img src="/api/product-images/@prod.ProductId"
+                                             alt="@prod.ProductName"
+                                             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+                                        <div class="img-placeholder-sm" style="display:none">📦</div>
+                                    </div>
+                                    <div class="product-card-info">
+                                        <strong class="product-card-name">@prod.ProductName</strong>
+                                        @if (!string.IsNullOrEmpty(prod.ProductDescription))
+                                        {
+                                            <span class="product-card-desc">@prod.ProductDescription</span>
+                                        }
+                                        <div class="product-card-pricing">
+                                            @if (_form.PricingType == PricingTiers.Elite)
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Dense="true">Elite</MudChip>
+                                                <span class="product-card-price">@($"{(prod.SuggestedSalePriceElite ?? prod.SuggestedSalePrice ?? 0):N2}") ج</span>
+                                            }
+                                            else
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Dense="true">Premium</MudChip>
+                                                <span class="product-card-price">@($"{(prod.SuggestedSalePrice ?? 0):N2}") ج</span>
+                                            }
+                                        </div>
+                                    </div>
+                                    <div class="product-card-action">
+                                        @if (isAdded)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                                                     Icon="@Icons.Material.Filled.Check">تمت الإضافة</MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                                       Size="Size.Small" FullWidth="true"
+                                                       StartIcon="@Icons.Material.Filled.Add"
+                                                       OnClick="@(() => AddProductToQuotation(prod))">
+                                                إضافة
+                                            </MudButton>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <!-- جدول الأصناف المضافة -->
+                    @if (_form.Items.Any())
+                    {
+                        <div class="items-table mt-4">
+                            <div class="items-header">
+                                <div class="col-img">صورة</div>
+                                <div class="col-product">الصنف</div>
+                                <div class="col-tier">الباقة</div>
+                                <div class="col-qty">الكمية</div>
+                                <div class="col-price">السعر</div>
+                                <div class="col-total">الإجمالي</div>
+                                <div class="col-action"></div>
+                            </div>
+
+                            @for (int i = 0; i < _form.Items.Count; i++)
+                            {
+                                var item = _form.Items[i];
+                                var index = i;
+                                <div class="item-row">
+                                    <div class="col-img">
+                                        <img src="/api/product-images/@item.ProductId"
+                                             alt="@item.ProductName"
+                                             class="item-thumb"
+                                             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+                                        <div class="item-thumb-placeholder" style="display:none">📦</div>
+                                    </div>
+                                    <div class="col-product">
+                                        <strong>@item.ProductName</strong>
+                                        @if (!string.IsNullOrEmpty(item.ProductDescription))
+                                        {
+                                            <div class="item-name-display">@item.ProductDescription</div>
+                                        }
+                                    </div>
+                                    <div class="col-tier">
+                                        <MudSelect T="string" Value="item.PricingTier"
+                                                   ValueChanged="@((string v) => OnTierChanged(index, v))"
+                                                   Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                   Dense="true" Disabled="@_isReadOnly">
+                                            @foreach (var tier in PricingTiers.All)
+                                            {
+                                                <MudSelectItem T="string" Value="@tier.Key">@tier.Value</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                    </div>
+                                    <div class="col-qty">
+                                        <MudNumericField Value="item.Quantity"
+                                                         ValueChanged="@((decimal v) => { item.Quantity = v; RecalculateTotals(); })"
+                                                         T="decimal" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Min="0.01m" Step="1m" Disabled="@_isReadOnly" />
+                                    </div>
+                                    <div class="col-price">
+                                        <MudNumericField Value="item.UnitPrice"
+                                                         ValueChanged="@((decimal v) => { item.UnitPrice = v; RecalculateTotals(); })"
+                                                         T="decimal" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Min="0m" Disabled="@_isReadOnly" />
+                                    </div>
+                                    <div class="col-total"><strong>@FormatMoney(item.TotalAmount) ج</strong></div>
+                                    <div class="col-action">
+                                        @if (!_isReadOnly)
+                                        {
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                           Color="Color.Error" Size="Size.Small"
+                                                           OnClick="@(() => RemoveItem(index))" />
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </MudPaper>
+
+                <!-- ملاحظات -->
+                <MudPaper Class="form-section" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.Notes" />
+                        <h3>الملاحظات والشروط</h3>
+                    </div>
+                    <MudTextField @bind-Value="_form.Notes"
+                                  Placeholder="ملاحظات على عرض السعر..."
+                                  Label="ملاحظات" Variant="Variant.Outlined" Lines="3"
+                                  ReadOnly="@_isReadOnly" />
+                </MudPaper>
+            </div>
+
+            <!-- ============= Sidebar ============= -->
+            <div class="sidebar-col">
+                <MudPaper Class="summary-card" Elevation="0">
+                    <div class="summary-header">
+                        <MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" />
+                        <h3>الملخص المالي</h3>
+                    </div>
+
+                    <div class="summary-row">
+                        <span>إجمالي الأصناف:</span>
+                        <strong>@FormatMoney(_form.TotalAmount) ج</strong>
+                    </div>
+
+                    <div class="summary-row">
+                        <span>خصم %:</span>
+                        <MudNumericField Value="_form.DiscountPercentage"
+                                         ValueChanged="@((decimal? v) => { _form.DiscountPercentage = v; RecalculateTotals(); })"
+                                         T="decimal?"
+                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                         Min="0m" Max="100m" Step="1m"
+                                         Style="max-width:100px;"
+                                         Disabled="@_isReadOnly" />
+                    </div>
+
+                    @if ((_form.DiscountAmount ?? 0) > 0)
+                    {
+                        <div class="summary-row discount-row">
+                            <span>قيمة الخصم:</span>
+                            <strong>-@FormatMoney(_form.DiscountAmount ?? 0) ج</strong>
+                        </div>
+                    }
+
+                    <div class="summary-divider"></div>
+
+                    <div class="summary-row total-row">
+                        <span>الإجمالي النهائي:</span>
+                        <strong>@FormatMoney(_form.GrandTotal) ج</strong>
+                    </div>
+
+                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3" Icon="@Icons.Material.Filled.Info">
+                        <small>عرض السعر <strong>لا يؤثر على المخزون</strong>. يمكنك تحويله لفاتورة لاحقاً.</small>
+                    </MudAlert>
+                </MudPaper>
+            </div>
+        </div>
+    </div>
+}
+<!-- ============= Convert to Invoice Dialog ============= -->
+<MudDialog @bind-Visible="_showConvertDialog">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.SwapHoriz" Color="Color.Success" />
+            <MudText Typo="Typo.h6">تحويل عرض السعر لفاتورة</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Info" Class="mb-3" Icon="@Icons.Material.Filled.Info">
+            سيتم إنشاء <strong>فاتورة مبيعات</strong> + <strong>فاتورة مشتريات مرتبطة</strong> تلقائياً
+        </MudAlert>
+
+        <MudText Class="mb-3">
+            <strong>العميل:</strong> @_form.PartyName <br />
+            <strong>الإجمالي:</strong> <span style="color: var(--mud-palette-success); font-weight: 700;">@FormatMoney(_form.GrandTotal) ج</span>
+        </MudText>
+
+        <div class="quick-pay-row mb-3">
+            <span style="font-size:0.85rem; font-weight:600;">دفعة فورية:</span>
+            @foreach (var pct in SystemConstants.QuickPayPercentages)
+            {
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                           OnClick="@(() => _convertPaidAmount = Math.Round(_form.GrandTotal * pct / 100m, 2))">
+                    @pct%
+                </MudButton>
+            }
+            <MudButton Variant="Variant.Filled" Size="Size.Small" Color="Color.Success"
+                       OnClick="@(() => _convertPaidAmount = _form.GrandTotal)">
+                كامل
+            </MudButton>
+            <MudButton Variant="Variant.Text" Size="Size.Small"
+                       OnClick="@(() => _convertPaidAmount = 0)">
+                بدون
+            </MudButton>
+        </div>
+
+        <MudNumericField @bind-Value="_convertPaidAmount" Label="المبلغ المدفوع"
+                         Variant="Variant.Outlined" Min="0m" Max="@_form.GrandTotal" Class="mb-3" />
+
+        @if (_convertPaidAmount > 0)
+        {
+            <MudSelect T="string" @bind-Value="_convertPaymentMethod"
+                       Label="طريقة الدفع" Variant="Variant.Outlined" Class="mb-3">
+                @foreach (var pm in PaymentMethods.All)
+                {
+                    <MudSelectItem T="string" Value="@pm.Key">@pm.Value</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSelect T="int?" @bind-Value="_convertCashBoxId"
+                       Label="الخزينة" Variant="Variant.Outlined" Class="mb-3">
+                @foreach (var cb in _cashBoxes)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName</MudSelectItem>
+                }
+            </MudSelect>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showConvertDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled"
+                   OnClick="ExecuteConvert" Disabled="@_isConverting">
+            @if (_isConverting)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            تحويل
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- ============= WhatsApp Dialog ============= -->
+<MudDialog @bind-Visible="_showWhatsAppDialog">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.Send" Style="color: #25D366;" />
+            <MudText Typo="Typo.h6">إرسال عرض السعر عبر واتساب</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Info" Class="mb-3" Dense="true">
+            <strong>الخطوات:</strong><br />
+            1. <strong>أولاً</strong>: اضغط "تحميل PDF" واحفظ الملف على جهازك<br />
+            2. <strong>ثانياً</strong>: اضغط "فتح واتساب" - هيفتح المحادثة مع العميل<br />
+            3. <strong>ثالثاً</strong>: ارفق الـ PDF في المحادثة وأرسله
+        </MudAlert>
+
+        <MudTextField @bind-Value="_whatsappPhone"
+                      Label="رقم الواتساب (مع كود الدولة)"
+                      Variant="Variant.Outlined"
+                      Placeholder="201234567890"
+                      HelperText="مثال: 201234567890 (بدون +)"
+                      Class="mb-3" />
+
+        <MudTextField @bind-Value="_whatsappMessage"
+                      Label="نص الرسالة"
+                      Variant="Variant.Outlined"
+                      Lines="6"
+                      Class="mb-3" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showWhatsAppDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Download"
+                   OnClick="DownloadPdf">
+            تحميل PDF
+        </MudButton>
+        <MudButton Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.Send"
+                   OnClick="OpenWhatsApp"
+                   Style="background: #25D366 !important; color: white !important;">
+            فتح واتساب
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- ============= Change Status Dialog ============= -->
+<MudDialog @bind-Visible="_showStatusDialog">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.Flag" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">تغيير حالة عرض السعر</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText Class="mb-3">
+            <strong>الحالة الحالية:</strong>
+            <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(_form.Status)">
+                @GetStatusText(_form.Status)
+            </MudChip>
+        </MudText>
+
+        <MudSelect T="string" @bind-Value="_newStatus"
+                   Label="الحالة الجديدة *"
+                   Variant="Variant.Outlined">
+            @foreach (var s in QuotationStatuses.All.Where(x => x.Key != QuotationStatuses.Converted))
+            {
+                <MudSelectItem T="string" Value="@s.Key">@s.Value</MudSelectItem>
+            }
+        </MudSelect>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showStatusDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   OnClick="ExecuteChangeStatus" Disabled="@_isChangingStatus">
+            @if (_isChangingStatus)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            تغيير
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    /* ============================================ */
+    /*  PAGE LAYOUT                                  */
+    /* ============================================ */
+    .quotation-form-page {
+        padding: 1rem;
+        max-width: 1800px;
+        margin: 0 auto;
+        direction: rtl;
+    }
+
+    /* ============================================ */
+    /*  HEADER                                       */
+    /* ============================================ */
+    .form-header {
+        background: linear-gradient(135deg, var(--gold), var(--gold-dark));
+        border-radius: 16px;
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 1.5rem;
+        color: white;
+    }
+
+    .header-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .header-left { display: flex; align-items: center; gap: 1rem; }
+    .header-left h1 {
+        margin: 0; font-size: 1.4rem; font-weight: 800;
+        display: flex; align-items: center; gap: 0.5rem;
+    }
+    .header-left p { margin: 0; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .header-right { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+    .save-btn {
+        background: rgba(255,255,255,0.95) !important;
+        color: var(--navy-dark) !important;
+        font-weight: 700 !important;
+    }
+
+    /* Summary Pills */
+    .header-summary {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        padding-top: 0.75rem;
+        border-top: 1px solid rgba(255,255,255,0.25);
+    }
+
+    .summary-pill {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        background: rgba(255,255,255,0.15);
+        backdrop-filter: blur(4px);
+        padding: 0.5rem 0.85rem;
+        border-radius: 10px;
+        flex: 1;
+        min-width: 140px;
+    }
+    .summary-pill span { font-size: 0.72rem; opacity: 0.85; display: block; }
+    .summary-pill strong { font-size: 0.88rem; display: block; }
+
+    .pill-total { background: rgba(255,255,255,0.25); }
+    .pill-warning { background: rgba(245,158,11,0.3); }
+    .pill-overdue {
+        background: rgba(239,68,68,0.4);
+        animation: pulse-bg 2s infinite;
+    }
+
+    @@keyframes pulse-bg {
+        0%, 100% { background: rgba(239,68,68,0.3); }
+        50% { background: rgba(239,68,68,0.5); }
+    }
+
+    /* ============================================ */
+    /*  GRID LAYOUT                                  */
+    /* ============================================ */
+    .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 350px;
+        gap: 1.5rem;
+    }
+    .main-col, .sidebar-col { display: flex; flex-direction: column; gap: 1rem; }
+
+    /* ============================================ */
+    /*  SECTIONS                                     */
+    /* ============================================ */
+    .form-section {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px;
+        padding: 1.25rem;
+    }
+
+    .section-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+    .section-header h3 { margin: 0; font-size: 1.05rem; font-weight: 700; }
+
+    .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.75rem;
+    }
+
+    /* ============================================ */
+    /*  PARTY                                        */
+    /* ============================================ */
+    .party-phone-info {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.6rem 0.85rem;
+        background: var(--gold-subtle);
+        border-radius: 8px;
+        font-size: 0.88rem;
+    }
+
+    /* ============================================ */
+    /*  PRODUCTS GRID                                */
+    /* ============================================ */
+    .empty-items {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+        padding: 2rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .products-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 0.75rem;
+        max-height: 400px;
+        overflow-y: auto;
+        padding: 0.25rem;
+    }
+
+    .product-card {
+        background: var(--mud-palette-background);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 10px;
+        padding: 0.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        transition: all 0.2s ease;
+    }
+    .product-card:hover {
+        border-color: var(--gold);
+        box-shadow: 0 2px 8px rgba(212,175,55,0.15);
+    }
+    .product-card.product-added {
+        opacity: 0.5;
+        border-color: var(--mud-palette-success);
+    }
+
+    .product-card-img img {
+        width: 100%;
+        height: 100px;
+        object-fit: cover;
+        border-radius: 6px;
+    }
+    .img-placeholder-sm {
+        width: 100%;
+        height: 100px;
+        background: var(--mud-palette-surface);
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 2.5rem;
+    }
+
+    .product-card-info {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+    .product-card-name { font-size: 0.85rem; color: var(--mud-palette-text-primary); }
+    .product-card-desc {
+        font-size: 0.7rem;
+        color: var(--mud-palette-text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .product-card-pricing { display: flex; align-items: center; gap: 0.4rem; }
+    .product-card-price { font-weight: 700; font-size: 0.85rem; color: var(--gold-dark); }
+    .product-card-action { margin-top: auto; }
+
+    /* ============================================ */
+    /*  ITEMS TABLE                                  */
+    /* ============================================ */
+    .items-table { display: flex; flex-direction: column; gap: 0.5rem; }
+    .items-header {
+        display: grid;
+        grid-template-columns: 60px 2.5fr 1fr 0.8fr 1fr 1fr 50px;
+        gap: 0.5rem;
+        padding: 0.5rem;
+        background: var(--mud-palette-background);
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 0.85rem;
+    }
+    .item-row {
+        display: grid;
+        grid-template-columns: 60px 2.5fr 1fr 0.8fr 1fr 1fr 50px;
+        gap: 0.5rem;
+        align-items: center;
+    }
+    .col-total { font-weight: 600; color: var(--gold-dark); }
+    .item-name-display {
+        font-size: 0.78rem;
+        color: var(--mud-palette-text-secondary);
+        margin-top: 0.25rem;
+    }
+
+    .item-thumb {
+        width: 50px;
+        height: 50px;
+        object-fit: cover;
+        border-radius: 6px;
+        border: 1px solid var(--mud-palette-divider);
+    }
+    .item-thumb-placeholder {
+        width: 50px;
+        height: 50px;
+        background: var(--mud-palette-background);
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+    }
+
+    /* ============================================ */
+    /*  SIDEBAR SUMMARY                              */
+    /* ============================================ */
+    .summary-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px;
+        padding: 1.25rem;
+        position: sticky;
+        top: 1rem;
+    }
+
+    .summary-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid var(--gold);
+    }
+    .summary-header h3 { margin: 0; font-size: 1.1rem; font-weight: 800; }
+
+    .summary-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.4rem 0;
+        font-size: 0.9rem;
+    }
+    .summary-divider { height: 1px; background: var(--mud-palette-divider); margin: 0.5rem 0; }
+    .total-row {
+        font-size: 1.05rem;
+        background: var(--gold-subtle);
+        padding: 0.6rem 0.75rem;
+        border-radius: 8px;
+        font-weight: 700;
+    }
+    .discount-row strong { color: var(--mud-palette-error); }
+
+    /* ============================================ */
+    /*  QUICK PAY                                    */
+    /* ============================================ */
+    .quick-pay-row {
+        display: flex;
+        gap: 0.25rem;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 0.5rem;
+        background: rgba(16,185,129,0.08);
+        border-radius: 6px;
+    }
+
+    /* ============================================ */
+    /*  LOADING                                      */
+    /* ============================================ */
+    .loading-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 60vh;
+    }
+    .loading-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 3rem;
+        background: var(--mud-palette-surface);
+        border-radius: 16px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+
+    /* ============================================ */
+    /*  RESPONSIVE                                   */
+    /* ============================================ */
+    @@media (max-width: 1100px) {
+        .form-grid { grid-template-columns: 1fr; }
+        .summary-card { position: static; }
+        .header-summary { flex-direction: column; }
+        .summary-pill { min-width: auto; }
+    }
+
+    @@media (max-width: 700px) {
+        .grid-2 { grid-template-columns: 1fr; }
+        .items-header, .item-row { grid-template-columns: 1fr; }
+        .header-top { flex-direction: column; align-items: flex-start; }
+    }
+</style>
+@code {
+    [Parameter] public int? Id { get; set; }
+    private bool IsEdit => Id.HasValue && Id.Value > 0;
+    private bool _isReadOnly = false;
+
+    private bool _isLoading = true;
+    private bool _isSaving = false;
+
+    private QuotationFormDto _form = new()
+    {
+        QuotationDate = DateTime.Today,
+        ValidUntil = DateTime.Today.AddDays(15),
+        Items = new List<QuotationItemDto>(),
+        PricingType = PricingTiers.Premium
+    };
+    private PartyLookupDto? _selectedParty;
+
+    private List<Models.Warehouse> _warehouses = new();
+    private List<Models.CashBox> _cashBoxes = new();
+    private List<ProductLookupDto> _availableProducts = new();
+
+    // Convert dialog
+    private bool _showConvertDialog, _isConverting;
+    private decimal _convertPaidAmount;
+    private string _convertPaymentMethod = PaymentMethods.Cash;
+    private int? _convertCashBoxId;
+
+    // WhatsApp dialog
+    private bool _showWhatsAppDialog;
+    private string _whatsappPhone = "";
+    private string _whatsappMessage = "";
+
+    // Change status dialog
+    private bool _showStatusDialog, _isChangingStatus;
+    private string _newStatus = QuotationStatuses.Draft;
+
+    private string? _currentUserName;
+    private bool _canEdit;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _isLoading = true;
+
+            var authState = await AuthProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+            _currentUserName = user.Identity?.Name ?? "System";
+
+            _canEdit = user.HasClaim("Permission", "frmQuotations:Edit") || user.IsInRole("Admin");
+
+            _warehouses = await InvoiceService.GetWarehousesAsync() ?? new();
+            _cashBoxes = await InvoiceService.GetCashBoxesAsync() ?? new();
+
+            if (IsEdit)
+            {
+                var loaded = await QuotationService.GetQuotationForEditAsync(Id!.Value);
+                if (loaded == null)
+                {
+                    Snackbar.Add("عرض السعر غير موجود", Severity.Error);
+                    Navigation.NavigateTo("/quotations");
+                    return;
+                }
+
+                _form = loaded;
+                _isReadOnly = _form.IsConverted;
+
+                if (_form.PartyId.HasValue)
+                {
+                    _selectedParty = new PartyLookupDto
+                    {
+                        PartyId = _form.PartyId.Value,
+                        PartyName = _form.PartyName ?? "",
+                        Phone = _form.PartyPhone
+                    };
+                    await LoadProducts(_form.PartyId.Value);
+                }
+            }
+            else
+            {
+                _isReadOnly = false;
+                _form.ReferenceNumber = await QuotationService.GenerateNextQuotationNumberAsync();
+
+                if (_warehouses.Any())
+                    _form.WarehouseId = _warehouses.First().WarehouseId;
+
+                var empId = await InvoiceService.GetEmployeeIdByUserNameAsync(_currentUserName!);
+                if (empId.HasValue)
+                {
+                    _form.EmpId = empId.Value;
+                    _form.EmpName = await InvoiceService.GetEmployeeNameByIdAsync(empId.Value);
+                }
+            }
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    // ============================================================
+    // Party
+    // ============================================================
+    private async Task<IEnumerable<PartyLookupDto>> SearchParties(string value, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length < 1)
+            return Enumerable.Empty<PartyLookupDto>();
+
+        return await InvoiceService.SearchPartiesAsync(value);
+    }
+
+    private async Task OnPartySelected(PartyLookupDto? party)
+    {
+        _selectedParty = party;
+        _form.PartyId = party?.PartyId;
+        _form.PartyName = party?.PartyName;
+        _form.PartyPhone = party?.Phone;
+        _form.Items.Clear();
+
+        if (party != null)
+        {
+            await LoadProducts(party.PartyId);
+        }
+        else
+        {
+            _availableProducts = new();
+        }
+
+        RecalculateTotals();
+    }
+
+    private async Task LoadProducts(int partyId)
+    {
+        _availableProducts = await InvoiceService.SearchProductsForPartyAsync(partyId, null, 200) ?? new();
+    }
+
+    // ============================================================
+    // Pricing
+    // ============================================================
+    private void OnPricingTypeChanged(string newType)
+    {
+        _form.PricingType = newType;
+        foreach (var item in _form.Items)
+        {
+            item.PricingTier = newType;
+            if (item.ProductId > 0)
+                item.UnitPrice = GetPriceByTier(item, newType);
+        }
+        RecalculateTotals();
+    }
+
+    private void OnTierChanged(int index, string newTier)
+    {
+        if (index < 0 || index >= _form.Items.Count) return;
+        var item = _form.Items[index];
+        item.PricingTier = newTier;
+        if (item.ProductId > 0)
+            item.UnitPrice = GetPriceByTier(item, newTier);
+        RecalculateTotals();
+    }
+
+    private decimal GetPriceByTier(QuotationItemDto item, string tier)
+    {
+        if (tier == PricingTiers.Elite)
+            return item.SalePriceElite ?? item.SalePricePremium ?? 0;
+        return item.SalePricePremium ?? 0;
+    }
+
+    // ============================================================
+    // Products (Cards)
+    // ============================================================
+    private void AddProductToQuotation(ProductLookupDto product)
+    {
+        if (_form.Items.Any(i => i.ProductId == product.ProductId))
+            return;
+
+        var newItem = new QuotationItemDto
+        {
+            ProductId = product.ProductId,
+            ProductName = product.ProductName,
+            ProductDescription = product.ProductDescription,
+            Quantity = 1,
+            PricingTier = _form.PricingType,
+            SalePricePremium = product.SuggestedSalePrice,
+            SalePriceElite = product.SuggestedSalePriceElite,
+            PurchasePricePremium = product.PurchasePrice,
+            PurchasePriceElite = product.PurchasePriceElite,
+            Period = product.Period
+        };
+
+        newItem.UnitPrice = GetPriceByTier(newItem, _form.PricingType);
+        _form.Items.Add(newItem);
+        RecalculateTotals();
+    }
+
+    private void RemoveItem(int index)
+    {
+        _form.Items.RemoveAt(index);
+        RecalculateTotals();
+    }
+
+    // ============================================================
+    // Calculations
+    // ============================================================
+    private void RecalculateTotals()
+    {
+        _form.TotalAmount = Math.Round(_form.Items.Sum(i => i.TotalAmount), 2);
+
+        if (_form.DiscountPercentage.HasValue && _form.DiscountPercentage.Value > 0)
+            _form.DiscountAmount = Math.Round(_form.TotalAmount * (_form.DiscountPercentage.Value / 100m), 2);
+        else
+            _form.DiscountAmount = 0;
+
+        _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
+        _form.GrandTotal = _form.NetTotalAmount ?? 0;
+
+        StateHasChanged();
+    }
+
+    private string FormatMoney(decimal v) => $"{v:N2}";
+
+    // ============================================================
+    // Save
+    // ============================================================
+    private async Task SaveQuotation()
+    {
+        if (_form.PartyId == null)
+        {
+            Snackbar.Add("يرجى اختيار العميل", Severity.Warning);
+            return;
+        }
+        if (!_form.Items.Any())
+        {
+            Snackbar.Add("يجب إضافة صنف واحد على الأقل", Severity.Warning);
+            return;
+        }
+
+        RecalculateTotals();
+        _isSaving = true;
+
+        try
+        {
+            if (IsEdit)
+            {
+                var (ok, msg) = await QuotationService.UpdateQuotationAsync(_form, _currentUserName!);
+                Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+                if (ok) _isReadOnly = true;
+            }
+            else
+            {
+                var (ok, msg, id) = await QuotationService.CreateQuotationAsync(_form, _currentUserName!);
+                Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+                if (ok && id.HasValue)
+                    Navigation.NavigateTo($"/quotations/{id.Value}");
+            }
+        }
+        finally { _isSaving = false; }
+    }
+
+    // ============================================================
+    // Convert to Invoice
+    // ============================================================
+    private void OpenConvertDialog()
+    {
+        _convertPaidAmount = 0;
+        _convertPaymentMethod = PaymentMethods.Cash;
+        _convertCashBoxId = _cashBoxes.FirstOrDefault()?.CashBoxId;
+        _showConvertDialog = true;
+    }
+
+    private async Task ExecuteConvert()
+    {
+        if (_convertPaidAmount > 0)
+        {
+            if (_convertCashBoxId == null || _convertCashBoxId == 0)
+            {
+                Snackbar.Add("يرجى اختيار الخزينة", Severity.Warning);
+                return;
+            }
+        }
+
+        _isConverting = true;
+        var (ok, msg, invId) = await QuotationService.ConvertToInvoiceAsync(
+            _form.QuotationId, _convertPaidAmount,
+            _convertCashBoxId, _convertPaymentMethod, _currentUserName!);
+
+        _isConverting = false;
+        _showConvertDialog = false;
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+        if (ok && invId.HasValue)
+            Navigation.NavigateTo($"/sales/invoices/{invId.Value}");
+    }
+
+    // ============================================================
+    // WhatsApp
+    // ============================================================
+    private void OpenWhatsAppDialog()
+    {
+        _whatsappPhone = _form.PartyPhone ?? "";
+        _whatsappMessage = $"عرض سعر رقم: {_form.ReferenceNumber}\n" +
+                          $"التاريخ: {_form.QuotationDate:yyyy/MM/dd}\n" +
+                          $"الإجمالي: {FormatMoney(_form.GrandTotal)} ج";
+        _showWhatsAppDialog = true;
+    }
+
+    private async Task DownloadPdf()
+    {
+        await JS.InvokeVoidAsync("open", $"/api/quotations/{_form.QuotationId}/pdf", "_blank");
+    }
+
+    private async Task OpenWhatsApp()
+    {
+        if (string.IsNullOrEmpty(_whatsappPhone))
+        {
+            Snackbar.Add("يرجى إدخال رقم الواتساب", Severity.Warning);
+            return;
+        }
+        var url = $"https://wa.me/{_whatsappPhone}?text={Uri.EscapeDataString(_whatsappMessage)}";
+        await JS.InvokeVoidAsync("open", url, "_blank");
+        _showWhatsAppDialog = false;
+    }
+
+    // ============================================================
+    // Change Status
+    // ============================================================
+    private void OpenChangeStatusDialog()
+    {
+        _newStatus = _form.Status;
+        _showStatusDialog = true;
+    }
+
+    private async Task ExecuteChangeStatus()
+    {
+        if (_newStatus == _form.Status)
+        {
+            _showStatusDialog = false;
+            return;
+        }
+
+        _isChangingStatus = true;
+        var (ok, msg) = await QuotationService.ChangeStatusAsync(
+            _form.QuotationId, _newStatus, _currentUserName!);
+
+        _isChangingStatus = false;
+        _showStatusDialog = false;
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+        if (ok)
+        {
+            _form.Status = _newStatus;
+            StateHasChanged();
+        }
+    }
+
+    // ============================================================
+    // Helpers
+    // ============================================================
+    private Color GetStatusColor(string status)
+    {
+        return status switch
+        {
+            QuotationStatuses.Draft => Color.Default,
+            QuotationStatuses.Sent => Color.Info,
+            QuotationStatuses.Accepted => Color.Success,
+            QuotationStatuses.Rejected => Color.Error,
+            QuotationStatuses.Converted => Color.Success,
+            QuotationStatuses.Expired => Color.Warning,
+            _ => Color.Default
+        };
+    }
+
+    private string GetStatusText(string status)
+    {
+        return QuotationStatuses.All.TryGetValue(status, out var text) ? text : status;
+    }
+
+    private void OpenPrintPage() => Navigation.NavigateTo($"/quotations/{Id}/print");
+    private void GoBack() => Navigation.NavigateTo("/quotations");
+}

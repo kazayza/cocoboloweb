@@ -1,0 +1,502 @@
+@page "/quotations"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+
+@inject IQuotationService QuotationService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject AuthenticationStateProvider AuthProvider
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else
+{
+    <div class="quotations-page" dir="rtl">
+
+        <div class="page-header">
+            <div class="header-content">
+                <div class="header-info">
+                    <h1>
+                        <MudIcon Icon="@Icons.Material.Filled.RequestQuote" Class="header-icon" />
+                        عروض الأسعار
+                    </h1>
+                    <p>إدارة وتحويل عروض الأسعار لفواتير</p>
+                </div>
+                <div class="header-actions">
+                    @if (_canAdd)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Add"
+                                   OnClick="GoToAdd"
+                                   Size="Size.Large"
+                                   Class="add-btn">
+                            عرض سعر جديد
+                        </MudButton>
+                    }
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-icon total"><MudIcon Icon="@Icons.Material.Filled.Description" /></div>
+                    <div class="stat-info">
+                        <span class="stat-value">@_stats.TotalCount</span>
+                        <span class="stat-label">إجمالي العروض</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon value"><MudIcon Icon="@Icons.Material.Filled.AttachMoney" /></div>
+                    <div class="stat-info">
+                        <span class="stat-value">@FormatMoney(_stats.TotalValue)</span>
+                        <span class="stat-label">القيمة الإجمالية</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon converted"><MudIcon Icon="@Icons.Material.Filled.SwapHoriz" /></div>
+                    <div class="stat-info">
+                        <span class="stat-value">@_stats.ConvertedCount</span>
+                        <span class="stat-label">تحوّلت لفواتير</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon pending"><MudIcon Icon="@Icons.Material.Filled.HourglassEmpty" /></div>
+                    <div class="stat-info">
+                        <span class="stat-value">@_stats.PendingCount</span>
+                        <span class="stat-label">في الانتظار</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon rate"><MudIcon Icon="@Icons.Material.Filled.TrendingUp" /></div>
+                    <div class="stat-info">
+                        <span class="stat-value">@_stats.ConversionRate%</span>
+                        <span class="stat-label">معدل التحويل</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <MudPaper Class="filters-container" Elevation="0">
+            <div class="filters-row">
+                <div class="search-field">
+                    <MudTextField T="string"
+                                  Value="_filter.SearchText"
+                                  ValueChanged="@(async (string v) => { _filter.SearchText = v; await OnSearchChanged(); })"
+                                  Placeholder="بحث باسم العميل أو الملاحظات..."
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Immediate="true" DebounceInterval="400" Clearable="true" />
+                </div>
+
+                <MudDatePicker Date="_dateFrom" DateChanged="OnDateFromChanged"
+                               Label="من تاريخ" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Class="filter-select" Clearable="true" />
+
+                <MudDatePicker Date="_dateTo" DateChanged="OnDateToChanged"
+                               Label="إلى تاريخ" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Class="filter-select" Clearable="true" />
+
+                <MudSelect T="bool?"
+                           Value="_filter.IsConverted"
+                           ValueChanged="@(async (bool? v) => { _filter.IsConverted = v; await OnFilterChanged(); })"
+                           Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Placeholder="حالة التحويل" Clearable="true" Class="filter-select">
+                    <MudSelectItem T="bool?" Value="@((bool?)true)">تحوّلت لفاتورة</MudSelectItem>
+                    <MudSelectItem T="bool?" Value="@((bool?)false)">لم تتحول بعد</MudSelectItem>
+                </MudSelect>
+
+                <MudIconButton Icon="@Icons.Material.Filled.FilterAltOff"
+                               Color="Color.Default" Variant="Variant.Outlined"
+                               OnClick="ResetFilters" Title="إعادة تعيين" />
+            </div>
+        </MudPaper>
+
+        <MudPaper Elevation="0" Class="table-container">
+            <MudTable Items="@_pagedResult.Items" Hover="true" Striped="true"
+                      OnRowClick="@((TableRowClickEventArgs<QuotationListDto> args) => GoToView(args.Item.QuotationId))"
+                      Class="quotations-table">
+                <HeaderContent>
+                    <MudTh>الرقم</MudTh>
+                    <MudTh>التاريخ</MudTh>
+                    <MudTh>العميل</MudTh>
+                    <MudTh>الباقة</MudTh>
+                    <MudTh>الإجمالي</MudTh>
+                    <MudTh>الأصناف</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh>الفاتورة</MudTh>
+                    <MudTh>إجراءات</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd><span class="quote-number">@context.ReferenceNumber</span></MudTd>
+                    <MudTd>@context.QuotationDate.ToString("yyyy/MM/dd")</MudTd>
+                    <MudTd>
+                        <strong>@(context.PartyName ?? "-")</strong>
+                        @if (!string.IsNullOrEmpty(context.PartyPhone))
+                        {
+                            <div style="font-size:0.78rem; color:var(--mud-palette-text-secondary);">
+                                @context.PartyPhone
+                            </div>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(context.PricingType == PricingTiers.Elite ? Color.Warning : Color.Info)">
+                            @PricingTiers.All.GetValueOrDefault(context.PricingType ?? "Premium", "بريميوم")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd><strong>@FormatMoney(context.GrandTotal)</strong></MudTd>
+                    <MudTd>@context.ItemsCount</MudTd>
+                    <MudTd>
+                        @if (context.InvoiceId != null)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                                     Icon="@Icons.Material.Filled.CheckCircle">
+                                تحوّل لفاتورة
+                            </MudChip>
+                        }
+                        else if (context.IsExpired)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error">منتهي</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info">قيد المراجعة</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        @if (!string.IsNullOrEmpty(context.InvoiceReference))
+                        {
+                            <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                                       OnClick="@(() => Navigation.NavigateTo($"/sales/invoices/{context.InvoiceId}"))">
+                                @context.InvoiceReference
+                            </MudButton>
+                        }
+                        else
+                        {
+                            <span class="text-muted">-</span>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <div class="table-actions" @onclick:stopPropagation="true">
+                            <MudIconButton Icon="@Icons.Material.Filled.Visibility"
+                                           Size="Size.Small" Color="Color.Info"
+                                           OnClick="() => GoToView(context.QuotationId)"
+                                           Title="عرض" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Print"
+                                           Size="Size.Small" Color="Color.Default"
+                                           OnClick="@(() => Navigation.NavigateTo($"/quotations/{context.QuotationId}/print"))"
+Title="طباعة" />
+                            @if (context.InvoiceId == null && _canAdd)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.SwapHoriz"
+                                               Size="Size.Small" Color="Color.Success"
+                                               OnClick="() => OpenConvertDialog(context)"
+                                               Title="تحويل لفاتورة" />
+                            }
+                            @if (context.InvoiceId == null && _canDelete)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                               Size="Size.Small" Color="Color.Error"
+                                               OnClick="() => ConfirmDelete(context)"
+                                               Title="حذف" />
+                            }
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
+
+        @if (_pagedResult.TotalPages > 1)
+        {
+            <div class="pagination-container">
+                <MudPagination Count="@_pagedResult.TotalPages"
+                               Selected="@_filter.PageNumber"
+                               SelectedChanged="OnPageChanged"
+                               Color="Color.Primary"
+                               ShowFirstButton="true" ShowLastButton="true" />
+            </div>
+        }
+    </div>
+}
+
+<!-- Convert Dialog -->
+<MudDialog @bind-Visible="_showConvertDialog">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.SwapHoriz" Color="Color.Success" />
+            <MudText Typo="Typo.h6">تحويل عرض السعر إلى فاتورة</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Info" Class="mb-3">
+            <strong>عرض السعر:</strong> @(_selected?.ReferenceNumber)<br />
+            <strong>العميل:</strong> @(_selected?.PartyName)<br />
+            <strong>الإجمالي:</strong> @FormatMoney(_selected?.GrandTotal ?? 0) ج
+        </MudAlert>
+
+        <MudText Typo="Typo.body2" Class="mb-2">
+            هل تريد تسجيل دفعة فورية مع إنشاء الفاتورة؟
+        </MudText>
+
+        @if (_selected != null && _selected.GrandTotal > 0)
+        {
+            <div class="quick-pay-row mb-3">
+                @foreach (var pct in SystemConstants.QuickPayPercentages)
+                {
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                               OnClick="@(() => _convertPaidAmount = Math.Round(_selected.GrandTotal * pct / 100m, 2))">
+                        @pct%
+                    </MudButton>
+                }
+                <MudButton Variant="Variant.Filled" Size="Size.Small" Color="Color.Success"
+                           OnClick="@(() => _convertPaidAmount = _selected.GrandTotal)">
+                    كامل
+                </MudButton>
+                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default"
+                           OnClick="@(() => _convertPaidAmount = 0)">
+                    بدون دفع
+                </MudButton>
+            </div>
+        }
+
+        <MudNumericField @bind-Value="_convertPaidAmount" Label="المبلغ المدفوع"
+                         Variant="Variant.Outlined" Min="0m"
+                         Max="@(_selected?.GrandTotal ?? 0)" Class="mb-3" />
+
+        @if (_convertPaidAmount > 0)
+        {
+            <MudSelect T="string" @bind-Value="_convertPaymentMethod"
+                       Label="طريقة الدفع" Variant="Variant.Outlined" Class="mb-3">
+                @foreach (var pm in PaymentMethods.All)
+                {
+                    <MudSelectItem T="string" Value="@pm.Key">@pm.Value</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSelect T="int?" @bind-Value="_convertCashBoxId"
+                       Label="الخزينة" Variant="Variant.Outlined" Class="mb-3">
+                @foreach (var cb in _cashBoxes)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName</MudSelectItem>
+                }
+            </MudSelect>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showConvertDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled"
+                   OnClick="ExecuteConvert" Disabled="@_isConverting">
+            @if (_isConverting)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            تحويل لفاتورة
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- Delete Dialog -->
+<MudDialog @bind-Visible="_showDeleteDialog">
+    <TitleContent>
+        <MudText Typo="Typo.h6">حذف عرض السعر</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText>هل تريد حذف عرض السعر <strong>@(_selected?.ReferenceNumber)</strong>؟</MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showDeleteDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled"
+                   OnClick="ExecuteDelete" Disabled="@_isDeleting">
+            حذف
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .quotations-page { padding: 1rem; max-width: 1800px; margin: 0 auto; direction: rtl; }
+
+    .page-header {
+        background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dark) 100%);
+        border-radius: 20px; padding: 2rem; margin-bottom: 1.5rem;
+        box-shadow: 0 10px 40px var(--gold-border);
+    }
+    .header-content {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;
+    }
+    .header-info h1 {
+        color: white; font-size: 2rem; font-weight: 800; margin: 0;
+        display: flex; align-items: center; gap: 0.75rem;
+    }
+    .header-icon { font-size: 2rem !important; }
+    .header-info p { color: rgba(255,255,255,0.85); margin: 0.25rem 0 0 0; }
+
+    .add-btn {
+        background: rgba(255,255,255,0.95) !important;
+        color: var(--navy-dark) !important;
+        font-weight: 700 !important;
+    }
+
+    .stats-row { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .stat-card {
+        background: rgba(255,255,255,0.15);
+        border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 14px; padding: 1rem 1.5rem;
+        display: flex; align-items: center; gap: 1rem;
+        flex: 1; min-width: 160px;
+    }
+    .stat-icon {
+        width: 44px; height: 44px; border-radius: 12px;
+        display: flex; align-items: center; justify-content: center; color: white;
+    }
+    .stat-icon.total { background: rgba(255,255,255,0.2); }
+    .stat-icon.value { background: rgba(16,185,129,0.4); }
+    .stat-icon.converted { background: rgba(59,130,246,0.4); }
+    .stat-icon.pending { background: rgba(245,158,11,0.4); }
+    .stat-icon.rate { background: rgba(139,92,246,0.4); }
+    .stat-info { display: flex; flex-direction: column; }
+    .stat-value { font-size: 1.5rem; font-weight: 800; color: white; line-height: 1; }
+    .stat-label { font-size: 0.78rem; color: rgba(255,255,255,0.85); margin-top: 0.25rem; }
+
+    .filters-container {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; padding: 1.25rem; margin-bottom: 1.5rem;
+    }
+    .filters-row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+    .search-field { flex: 2; min-width: 250px; }
+    .filter-select { flex: 1; min-width: 150px; }
+
+    .table-container {
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px; overflow: hidden; margin-bottom: 1.5rem;
+    }
+
+    .quote-number {
+        background: var(--gold-subtle); color: var(--gold-dark);
+        font-weight: 700; padding: 0.3rem 0.75rem;
+        border-radius: 8px; font-size: 0.85rem;
+    }
+
+    .table-actions { display: flex; gap: 0.25rem; }
+    .text-muted { color: var(--mud-palette-text-secondary); }
+
+    .quick-pay-row {
+        display: flex; gap: 0.25rem; align-items: center; flex-wrap: wrap;
+        padding: 0.5rem; background: rgba(16,185,129,0.08); border-radius: 6px;
+    }
+
+    .pagination-container { display: flex; justify-content: center; padding: 1rem 0; }
+    .loading-container { display:flex; align-items:center; justify-content:center; min-height: 60vh; }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private QuotationFilterDto _filter = new();
+    private PagedResult<QuotationListDto> _pagedResult = new();
+    private QuotationStatsDto _stats = new();
+    private DateTime? _dateFrom, _dateTo;
+
+    private QuotationListDto? _selected;
+
+    private bool _showConvertDialog, _isConverting;
+    private bool _showDeleteDialog, _isDeleting;
+
+    private decimal _convertPaidAmount = 0;
+    private string _convertPaymentMethod = PaymentMethods.Cash;
+    private int? _convertCashBoxId;
+    private List<Models.CashBox> _cashBoxes = new();
+
+    [Inject] private IInvoiceService InvoiceService { get; set; } = null!;
+
+    private string? _currentUserName;
+    private bool _canView, _canAdd, _canDelete;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _currentUserName = user.Identity?.Name ?? "System";
+
+        _canView = user.HasClaim("Permission", "frmQuotations:View") || user.IsInRole("Admin");
+        _canAdd = user.HasClaim("Permission", "frmQuotations:Add") || user.IsInRole("Admin");
+        _canDelete = user.HasClaim("Permission", "frmQuotations:Delete") || user.IsInRole("Admin");
+
+        if (!_canView) { Navigation.NavigateTo("/"); return; }
+
+        _cashBoxes = await InvoiceService.GetCashBoxesAsync();
+        await LoadData();
+        _stats = await QuotationService.GetStatsAsync();
+        _isLoading = false;
+    }
+
+    private async Task LoadData() => _pagedResult = await QuotationService.GetQuotationsAsync(_filter);
+
+    private async Task OnSearchChanged() { _filter.PageNumber = 1; await LoadData(); }
+    private async Task OnFilterChanged()
+    {
+        _filter.PageNumber = 1;
+        await LoadData();
+        _stats = await QuotationService.GetStatsAsync(_filter.DateFrom, _filter.DateTo);
+    }
+    private async Task OnDateFromChanged(DateTime? d) { _dateFrom = d; _filter.DateFrom = d; await OnFilterChanged(); }
+    private async Task OnDateToChanged(DateTime? d) { _dateTo = d; _filter.DateTo = d; await OnFilterChanged(); }
+    private async Task OnPageChanged(int p) { _filter.PageNumber = p; await LoadData(); }
+    private async Task ResetFilters() { _filter = new(); _dateFrom = null; _dateTo = null; await LoadData(); }
+
+    private void GoToAdd() => Navigation.NavigateTo("/quotations/new");
+    private void GoToView(int id) => Navigation.NavigateTo($"/quotations/{id}");
+
+    // Convert
+    private void OpenConvertDialog(QuotationListDto q)
+    {
+        _selected = q;
+        _convertPaidAmount = 0;
+        _convertPaymentMethod = PaymentMethods.Cash;
+        _convertCashBoxId = _cashBoxes.FirstOrDefault()?.CashBoxId;
+        _showConvertDialog = true;
+    }
+
+    private async Task ExecuteConvert()
+    {
+        if (_selected == null) return;
+        _isConverting = true;
+        var (ok, msg, invId) = await QuotationService.ConvertToInvoiceAsync(
+            _selected.QuotationId, _convertPaidAmount,
+            _convertCashBoxId, _convertPaymentMethod, _currentUserName!);
+        _isConverting = false;
+        _showConvertDialog = false;
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok && invId.HasValue)
+        {
+            await LoadData();
+            _stats = await QuotationService.GetStatsAsync();
+            // افتح الفاتورة الجديدة
+            Navigation.NavigateTo($"/sales/invoices/{invId.Value}");
+        }
+    }
+
+    // Delete
+    private void ConfirmDelete(QuotationListDto q) { _selected = q; _showDeleteDialog = true; }
+
+    private async Task ExecuteDelete()
+    {
+        if (_selected == null) return;
+        _isDeleting = true;
+        var (ok, msg) = await QuotationService.DeleteQuotationAsync(_selected.QuotationId, _currentUserName!);
+        _isDeleting = false;
+        _showDeleteDialog = false;
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) { await LoadData(); _stats = await QuotationService.GetStatsAsync(); }
+    }
+
+    private string FormatMoney(decimal v) => $"{v:N2} ج";
+}
