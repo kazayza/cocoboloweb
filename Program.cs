@@ -7,6 +7,10 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 using MudBlazor.Services;
+using COCOBOLOERPNEW.Helpers;
+using COCOBOLOERPNEW.Endpoints;
+using QuestPDF.Infrastructure;
+QuestPDF.Settings.License = LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -83,6 +87,8 @@ builder.Services.AddScoped<IEmployeeShiftService, EmployeeShiftService>();
 builder.Services.AddScoped<IAttendanceService, AttendanceService>();
 builder.Services.AddScoped<IPayrollService, PayrollService>();
 builder.Services.AddScoped<IQuotationService, QuotationService>();
+builder.Services.AddSingleton<ShareTokenService>();
+builder.Services.AddScoped<IQuotationExportService, QuotationExportService>();
 
 var app = builder.Build();
 
@@ -298,7 +304,7 @@ app.MapGet("/api/product-image-by-id/{productImagesId:int}", async (
     return Results.NotFound();
 });
 
-app.Run();
+
 
 // ============================================================
 // 🖼️ Image Helper Methods
@@ -352,6 +358,7 @@ static string DetectMimeType(byte[] imageBytes)
     return "image/png";
 }
 
+app.MapQuotationExports();
 app.Run();
 
 // ============================================================

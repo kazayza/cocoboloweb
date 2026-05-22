@@ -1,0 +1,336 @@
+@page "/q/{Token}"
+@layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
+
+@using System.Net.Http.Json
+@inject IHttpClientFactory HttpClientFactory
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+
+<PageTitle>عرض سعر - COCOBOLO</PageTitle>
+
+<HeadContent>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</HeadContent>
+
+<div class="public-quote-page" dir="rtl">
+
+    @if (_isLoading)
+    {
+        <div class="loading-state">
+            <div class="spinner"></div>
+            <p>جاري التحميل...</p>
+        </div>
+    }
+    else if (_error != null)
+    {
+        <div class="error-state">
+            <div class="error-icon">⚠️</div>
+            <h2>تعذّر فتح عرض السعر</h2>
+            <p>@_error</p>
+            <p class="hint">قد يكون الرابط منتهي الصلاحية أو غير صحيح.<br />
+            يرجى التواصل مع المسؤول للحصول على رابط جديد.</p>
+        </div>
+    }
+    else if (_info != null)
+    {
+        <div class="quote-card">
+            <div class="header">
+                <div class="logo">COCOBOLO</div>
+                <div class="title">📋 عرض سعر</div>
+                <div class="ref">@_info.ReferenceNumber</div>
+            </div>
+
+            <div class="info-grid">
+                <div class="info-row">
+                    <span class="label">العميل:</span>
+                    <span class="value">@_info.PartyName</span>
+                </div>
+                <div class="info-row">
+                    <span class="label">التاريخ:</span>
+                    <span class="value">@_info.Date.ToString("yyyy/MM/dd")</span>
+                </div>
+                @if (_info.ValidUntil.HasValue)
+                {
+                    <div class="info-row @(_info.IsExpired ? "expired" : "")">
+                        <span class="label">صالح حتى:</span>
+                        <span class="value">@_info.ValidUntil.Value.ToString("yyyy/MM/dd")</span>
+                    </div>
+                }
+                <div class="info-row">
+                    <span class="label">عدد الأصناف:</span>
+                    <span class="value">@_info.ItemsCount</span>
+                </div>
+                <div class="info-row total">
+                    <span class="label">الإجمالي:</span>
+                    <span class="value">@_info.GrandTotal.ToString("N2") ج</span>
+                </div>
+            </div>
+
+            @if (_info.IsExpired)
+            {
+                <div class="badge expired-badge">⚠️ منتهي الصلاحية</div>
+            }
+            else if (_info.IsConverted)
+            {
+                <div class="badge converted-badge">✅ تم التحويل لفاتورة</div>
+            }
+
+            <div class="actions">
+                <a href="@_pdfUrl" target="_blank" class="btn btn-primary">
+                    📄 عرض / تنزيل PDF
+                </a>
+                <a href="@_excelUrl" download class="btn btn-secondary">
+                    📊 تنزيل Excel
+                </a>
+                <button @onclick="PrintPdf" class="btn btn-outline">
+                    🖨️ طباعة
+                </button>
+                <button @onclick="ShareLink" class="btn btn-outline">
+                    🔗 نسخ الرابط
+                </button>
+            </div>
+
+            <!-- معاينة PDF مدمجة -->
+            <div class="pdf-preview">
+                <iframe src="@_pdfUrl" frameborder="0"></iframe>
+            </div>
+
+            <div class="footer">
+                <p>هذا عرض سعر رسمي صادر من <strong>COCOBOLO</strong></p>
+                <p class="small">للاستفسار تواصل معنا.</p>
+            </div>
+        </div>
+    }
+</div>
+
+<style>
+    /* Reset for public page */
+    body { margin: 0; padding: 0; background: #f5f5f7; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+
+    .public-quote-page {
+        min-height: 100vh;
+        padding: 20px;
+        display: flex;
+        justify-content: center;
+        background: linear-gradient(135deg, #f5f5f7 0%, #e8e8eb 100%);
+    }
+
+    .loading-state, .error-state {
+        text-align: center;
+        padding: 60px 20px;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        max-width: 500px;
+        width: 100%;
+    }
+
+    .spinner {
+        width: 50px; height: 50px;
+        border: 4px solid #f0f0f0;
+        border-top-color: #B8860B;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 20px;
+    }
+    @@keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-icon { font-size: 64px; margin-bottom: 16px; }
+    .error-state h2 { color: #d32f2f; margin: 12px 0; }
+    .error-state .hint { color: #666; font-size: 14px; line-height: 1.6; }
+
+    .quote-card {
+        background: white;
+        border-radius: 16px;
+        max-width: 900px;
+        width: 100%;
+        overflow: hidden;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+    }
+
+    .header {
+        background: linear-gradient(135deg, #B8860B 0%, #DAA520 100%);
+        color: white;
+        padding: 30px 24px;
+        text-align: center;
+    }
+    .header .logo { font-size: 28px; font-weight: 700; letter-spacing: 2px; }
+    .header .title { font-size: 18px; margin-top: 6px; opacity: 0.95; }
+    .header .ref { font-size: 22px; font-weight: 600; margin-top: 8px;
+                   background: rgba(255,255,255,0.2); display: inline-block;
+                   padding: 6px 18px; border-radius: 20px; }
+
+    .info-grid { padding: 24px; }
+    .info-row {
+        display: flex; justify-content: space-between;
+        padding: 12px 0;
+        border-bottom: 1px solid #f0f0f0;
+        font-size: 15px;
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-row .label { color: #666; }
+    .info-row .value { font-weight: 600; color: #333; }
+    .info-row.total { background: #fff8dc; margin: 8px -24px -8px; padding: 16px 24px;
+                       border-top: 2px solid #B8860B; border-bottom: none; }
+    .info-row.total .value { color: #B8860B; font-size: 20px; }
+    .info-row.expired .value { color: #d32f2f; }
+
+    .badge {
+        margin: 16px 24px; padding: 12px; border-radius: 8px;
+        text-align: center; font-weight: 600;
+    }
+    .expired-badge { background: #ffebee; color: #c62828; }
+    .converted-badge { background: #e8f5e9; color: #2e7d32; }
+
+    .actions {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 10px;
+        padding: 20px 24px;
+        background: #fafafa;
+    }
+
+    .btn {
+        padding: 12px 18px;
+        border-radius: 8px;
+        font-size: 15px;
+        font-weight: 600;
+        text-decoration: none;
+        text-align: center;
+        cursor: pointer;
+        border: none;
+        transition: all 0.2s;
+        font-family: inherit;
+    }
+    .btn-primary { background: #B8860B; color: white; }
+    .btn-primary:hover { background: #9a7008; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(184,134,11,0.3); }
+
+    .btn-secondary { background: #2e7d32; color: white; }
+    .btn-secondary:hover { background: #1b5e20; }
+
+    .btn-outline { background: white; color: #B8860B; border: 2px solid #B8860B; }
+    .btn-outline:hover { background: #fff8dc; }
+
+    .pdf-preview {
+        background: #525659;
+        padding: 8px;
+        margin-top: 8px;
+    }
+    .pdf-preview iframe {
+        width: 100%;
+        height: 70vh;
+        min-height: 500px;
+        border: none;
+        background: white;
+    }
+
+    .footer {
+        padding: 20px;
+        text-align: center;
+        background: #f8f8fa;
+        border-top: 1px solid #eee;
+        font-size: 13px;
+        color: #666;
+    }
+    .footer .small { font-size: 11px; opacity: 0.7; margin-top: 4px; }
+
+    /* موبايل */
+    @@media (max-width: 600px) {
+        .public-quote-page { padding: 0; }
+        .quote-card { border-radius: 0; min-height: 100vh; }
+        .header { padding: 20px 16px; }
+        .header .logo { font-size: 24px; }
+        .header .ref { font-size: 18px; }
+        .info-grid { padding: 16px; }
+        .actions { padding: 14px 16px; grid-template-columns: 1fr 1fr; }
+        .pdf-preview iframe { height: 60vh; }
+    }
+</style>
+
+@code {
+    [Parameter] public string Token { get; set; } = "";
+
+    private bool _isLoading = true;
+    private string? _error;
+    private QuoteInfoDto? _info;
+    private string _pdfUrl = "";
+    private string _excelUrl = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _pdfUrl = $"/api/public/quotations/{Token}/pdf";
+        _excelUrl = $"/api/public/quotations/{Token}/excel";
+
+        try
+        {
+            var http = HttpClientFactory.CreateClient();
+            var baseUri = new Uri(Navigation.BaseUri);
+            http.BaseAddress = baseUri;
+
+            var response = await http.GetAsync($"/api/public/quotations/{Token}/info");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = response.StatusCode == System.Net.HttpStatusCode.NotFound
+                    ? "الرابط غير صحيح أو منتهي الصلاحية."
+                    : "تعذّر تحميل عرض السعر.";
+                return;
+            }
+
+            _info = await response.Content.ReadFromJsonAsync<QuoteInfoDto>();
+        }
+        catch (Exception ex)
+        {
+            _error = $"خطأ في الاتصال: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task PrintPdf()
+    {
+        // افتح الـ PDF في تاب جديد وتلقائيًا اطبعه
+        await JS.InvokeVoidAsync("eval", $@"
+            var w = window.open('{_pdfUrl}', '_blank');
+            if (w) w.addEventListener('load', function() {{ setTimeout(function() {{ w.print(); }}, 500); }});
+        ");
+    }
+
+    private async Task ShareLink()
+    {
+        var currentUrl = Navigation.Uri;
+        try
+        {
+            // Web Share API على الموبايل + clipboard كـ fallback
+            await JS.InvokeVoidAsync("eval", $@"
+                (async function() {{
+                    var url = '{currentUrl}';
+                    if (navigator.share) {{
+                        try {{ await navigator.share({{ title: 'عرض سعر COCOBOLO', url: url }}); }}
+                        catch(e) {{ }}
+                    }} else if (navigator.clipboard) {{
+                        await navigator.clipboard.writeText(url);
+                        alert('تم نسخ الرابط ✅');
+                    }} else {{
+                        prompt('انسخ الرابط:', url);
+                    }}
+                }})();
+            ");
+        }
+        catch { /* ignore */ }
+    }
+
+    private class QuoteInfoDto
+    {
+        public string ReferenceNumber { get; set; } = "";
+        public DateTime Date { get; set; }
+        public DateTime? ValidUntil { get; set; }
+        public string PartyName { get; set; } = "";
+        public decimal GrandTotal { get; set; }
+        public int ItemsCount { get; set; }
+        public bool IsExpired { get; set; }
+        public bool IsConverted { get; set; }
+    }
+}

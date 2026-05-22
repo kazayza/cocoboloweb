@@ -24,8 +24,18 @@ public class QuotationListDto
     public int? InvoiceId { get; set; }
     public string? InvoiceReference { get; set; }
     public DateTime? ValidUntil { get; set; }
-    public bool IsExpired => ValidUntil.HasValue && ValidUntil.Value.Date < DateTime.Today && Status != QuotationStatuses.Converted;
-    public int? DaysUntilExpiry => ValidUntil.HasValue ? (int)(ValidUntil.Value.Date - DateTime.Today).TotalDays : null;
+
+    public bool IsExpired =>
+        ValidUntil.HasValue
+        && ValidUntil.Value.Date < DateTime.Today
+        && Status != QuotationStatuses.Converted;
+
+    // ✅ إصلاح: cast صريح لـ int? بدلاً من الاعتماد على الـ ternary
+    public int? DaysUntilExpiry =>
+        ValidUntil.HasValue
+            ? (int?)(ValidUntil.Value.Date - DateTime.Today).TotalDays
+            : null;
+
     public string CreatedBy { get; set; } = "";
     public DateTime CreatedAt { get; set; }
 }
@@ -68,8 +78,16 @@ public class QuotationFormDto
 
     // Helper Properties
     public bool IsConverted => InvoiceId.HasValue;
-    public bool IsExpired => ValidUntil.HasValue && ValidUntil.Value.Date < DateTime.Today && !IsConverted;
-    public int? DaysUntilExpiry => ValidUntil.HasValue ? (int)(ValidUntil.Value.Date - DateTime.Today).TotalDays : null;
+
+    public bool IsExpired =>
+        ValidUntil.HasValue
+        && ValidUntil.Value.Date < DateTime.Today
+        && !IsConverted;
+
+    public int? DaysUntilExpiry =>
+        ValidUntil.HasValue
+            ? (int?)(ValidUntil.Value.Date - DateTime.Today).TotalDays
+            : null;
 }
 
 public class QuotationItemDto
@@ -86,7 +104,7 @@ public class QuotationItemDto
 
     public string PricingTier { get; set; } = PricingTiers.Premium;
 
-    // ⭐ أسعار البيع والشراء للباقتين (للمرآة)
+    // أسعار البيع والشراء للباقتين (للمرآة)
     public decimal? SalePricePremium { get; set; }
     public decimal? SalePriceElite { get; set; }
     public decimal? PurchasePricePremium { get; set; }
@@ -127,7 +145,7 @@ public class QuotationStatsDto
     public int ExpiredCount { get; set; }
     public decimal ConvertedValue { get; set; }
     public decimal ConversionRate { get; set; }
-     public int PendingCount => DraftCount + SentCount;
+    public int PendingCount => DraftCount + SentCount;
 }
 
 // ============================

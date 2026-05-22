@@ -343,33 +343,65 @@ else
                                         {
                                             <span class="product-card-desc">@prod.ProductDescription</span>
                                         }
-                                        <div class="product-card-pricing">
-                                            @if (_form.PricingType == PricingTiers.Elite)
+
+                                        @{
+                                            var hasElite = (prod.SuggestedSalePriceElite ?? 0) > 0;
+                                            var premiumPrice = prod.SuggestedSalePrice ?? 0;
+                                            var elitePrice = prod.SuggestedSalePriceElite ?? premiumPrice;
+                                            var addedPremium = _form.Items.Any(i => i.ProductId == prod.ProductId && i.PricingTier == PricingTiers.Premium);
+                                            var addedElite = _form.Items.Any(i => i.ProductId == prod.ProductId && i.PricingTier == PricingTiers.Elite);
+                                        }
+
+                                        <div class="product-card-pricing-list">
+                                            <!-- خط البريميم -->
+                                            <div class="price-line price-premium">
+                                                <span class="price-tag">
+                                                    <MudChip T="string" Size="Size.Small" Color="Color.Info" Dense="true">Premium</MudChip>
+                                                </span>
+                                                <span class="price-value">@($"{premiumPrice:N2}") ج</span>
+                                            </div>
+
+                                            <!-- خط الإيليت (لو فيه) -->
+                                            @if (hasElite)
                                             {
-                                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Dense="true">Elite</MudChip>
-                                                <span class="product-card-price">@($"{(prod.SuggestedSalePriceElite ?? prod.SuggestedSalePrice ?? 0):N2}") ج</span>
-                                            }
-                                            else
-                                            {
-                                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Dense="true">Premium</MudChip>
-                                                <span class="product-card-price">@($"{(prod.SuggestedSalePrice ?? 0):N2}") ج</span>
+                                                <div class="price-line price-elite">
+                                                    <span class="price-tag">
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Dense="true">Elite</MudChip>
+                                                    </span>
+                                                    <span class="price-value">@($"{elitePrice:N2}") ج</span>
+                                                </div>
                                             }
                                         </div>
                                     </div>
                                     <div class="product-card-action">
-                                        @if (isAdded)
+                                        @if (!_isReadOnly)
                                         {
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Success"
-                                                     Icon="@Icons.Material.Filled.Check">تمت الإضافة</MudChip>
-                                        }
-                                        else
-                                        {
-                                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                                                       Size="Size.Small" FullWidth="true"
-                                                       StartIcon="@Icons.Material.Filled.Add"
-                                                       OnClick="@(() => AddProductToQuotation(prod))">
-                                                إضافة
-                                            </MudButton>
+                                            <div class="tier-buttons-row">
+                                                <!-- زرار Premium -->
+                                                <MudButton Variant="@(addedPremium ? Variant.Outlined : Variant.Filled)"
+                                                           Color="Color.Info"
+                                                           Size="Size.Small"
+                                                           StartIcon="@(addedPremium ? Icons.Material.Filled.Check : Icons.Material.Filled.Add)"
+                                                           OnClick="@(() => AddProductWithTier(prod, PricingTiers.Premium))"
+                                                           Disabled="@addedPremium"
+                                                           Class="tier-btn">
+                                                    @(addedPremium ? "مضاف" : "Premium")
+                                                </MudButton>
+
+                                                <!-- زرار Elite (لو متاح) -->
+                                                @if (hasElite)
+                                                {
+                                                    <MudButton Variant="@(addedElite ? Variant.Outlined : Variant.Filled)"
+                                                               Color="Color.Warning"
+                                                               Size="Size.Small"
+                                                               StartIcon="@(addedElite ? Icons.Material.Filled.Check : Icons.Material.Filled.Add)"
+                                                               OnClick="@(() => AddProductWithTier(prod, PricingTiers.Elite))"
+                                                               Disabled="@addedElite"
+                                                               Class="tier-btn">
+                                                        @(addedElite ? "مضاف" : "Elite")
+                                                    </MudButton>
+                                                }
+                                            </div>
                                         }
                                     </div>
                                 </div>
@@ -474,22 +506,66 @@ else
                         <strong>@FormatMoney(_form.TotalAmount) ج</strong>
                     </div>
 
-                    <div class="summary-row">
-                        <span>خصم %:</span>
-                        <MudNumericField Value="_form.DiscountPercentage"
-                                         ValueChanged="@((decimal? v) => { _form.DiscountPercentage = v; RecalculateTotals(); })"
-                                         T="decimal?"
-                                         Variant="Variant.Outlined" Margin="Margin.Dense"
-                                         Min="0m" Max="100m" Step="1m"
-                                         Style="max-width:100px;"
-                                         Disabled="@_isReadOnly" />
+                    <!-- ✅ خصم مرن: نسبة أو قيمة -->
+                    <div class="discount-section">
+                        <div class="discount-label">
+                            <MudIcon Icon="@Icons.Material.Filled.LocalOffer" Size="Size.Small" />
+                            <span>الخصم:</span>
+                        </div>
+
+                        <div class="discount-inputs">
+                            <!-- خصم بالنسبة -->
+                            <div class="discount-input-group">
+                                <MudNumericField Value="_form.DiscountPercentage"
+                                                 ValueChanged="@((decimal? v) => OnDiscountPercentageChanged(v))"
+                                                 T="decimal?"
+                                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                 Min="0m" Max="100m" Step="1m"
+                                                 Placeholder="0"
+                                                 HideSpinButtons="false"
+                                                 Disabled="@_isReadOnly"
+                                                 Adornment="Adornment.End" AdornmentText="%"
+                                                 Class="discount-field" />
+                            </div>
+
+                            <span class="discount-or">أو</span>
+
+                            <!-- خصم بالقيمة -->
+                            <div class="discount-input-group">
+                                <MudNumericField Value="_form.DiscountAmount"
+                                                 ValueChanged="@((decimal? v) => OnDiscountAmountChanged(v))"
+                                                 T="decimal?"
+                                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                 Min="0m" Step="10m"
+                                                 Placeholder="0"
+                                                 HideSpinButtons="false"
+                                                 Disabled="@_isReadOnly"
+                                                 Adornment="Adornment.End" AdornmentText="ج"
+                                                 Class="discount-field" />
+                            </div>
+
+                            @if ((_form.DiscountAmount ?? 0) > 0 || (_form.DiscountPercentage ?? 0) > 0)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                               Size="Size.Small" Color="Color.Error"
+                                               OnClick="ClearDiscount"
+                                               Disabled="@_isReadOnly"
+                                               Title="إلغاء الخصم" />
+                            }
+                        </div>
                     </div>
 
                     @if ((_form.DiscountAmount ?? 0) > 0)
                     {
                         <div class="summary-row discount-row">
-                            <span>قيمة الخصم:</span>
-                            <strong>-@FormatMoney(_form.DiscountAmount ?? 0) ج</strong>
+                            <span>إجمالي الخصم:</span>
+                            <strong>
+                                -@FormatMoney(_form.DiscountAmount ?? 0) ج
+                                @if ((_form.DiscountPercentage ?? 0) > 0)
+                                {
+                                    <small style="opacity:0.7; margin-right:8px;">(@(_form.DiscountPercentage)%)</small>
+                                }
+                            </strong>
                         </div>
                     }
 
@@ -997,6 +1073,111 @@ else
         .items-header, .item-row { grid-template-columns: 1fr; }
         .header-top { flex-direction: column; align-items: flex-start; }
     }
+
+    /* ============ بطاقة المنتج المحسّنة ============ */
+    .product-card-pricing-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+        margin-top: 0.3rem;
+    }
+
+    .price-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.25rem 0.4rem;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.025);
+    }
+
+    .price-line.price-elite {
+        background: rgba(255, 152, 0, 0.08);
+        border-right: 3px solid var(--mud-palette-warning, #FF9800);
+    }
+
+    .price-line.price-premium {
+        background: rgba(33, 150, 243, 0.06);
+        border-right: 3px solid var(--mud-palette-info, #2196F3);
+    }
+
+    .price-value {
+        font-weight: 700;
+        font-size: 0.85rem;
+        color: var(--gold-dark, #B8860B);
+    }
+
+    .tier-buttons-row {
+        display: flex;
+        gap: 0.35rem;
+        width: 100%;
+    }
+
+    .tier-btn {
+        flex: 1;
+        min-width: 0;
+        font-size: 0.72rem;
+        padding: 0.3rem 0.4rem !important;
+    }
+
+    /* ============ قسم الخصم المرن ============ */
+    .discount-section {
+        background: rgba(184, 134, 11, 0.04);
+        border: 1px dashed rgba(184, 134, 11, 0.3);
+        border-radius: 10px;
+        padding: 0.8rem;
+        margin: 0.5rem 0;
+    }
+
+    .discount-label {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-weight: 600;
+        color: var(--gold-dark, #B8860B);
+        margin-bottom: 0.5rem;
+        font-size: 0.9rem;
+    }
+
+    .discount-inputs {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .discount-input-group {
+        flex: 1;
+        min-width: 110px;
+    }
+
+    .discount-field {
+        max-width: 100%;
+    }
+
+    .discount-or {
+        font-size: 0.8rem;
+        color: var(--mud-palette-text-secondary, #888);
+        font-weight: 600;
+        padding: 0 0.3rem;
+    }
+
+    /* Responsive */
+    @@media (max-width: 600px) {
+        .discount-inputs {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .discount-or {
+            text-align: center;
+            padding: 0.2rem 0;
+        }
+        .tier-buttons-row {
+            flex-direction: column;
+        }
+    }
+
 </style>
 @code {
     [Parameter] public int? Id { get; set; }
@@ -1063,7 +1244,8 @@ else
                 }
 
                 _form = loaded;
-                _isReadOnly = _form.IsConverted;
+                // ✅ الفورم تكون readonly لو محول لفاتورة أو اليوزر مش عنده Edit
+                _isReadOnly = _form.IsConverted || !_canEdit;
 
                 if (_form.PartyId.HasValue)
                 {
@@ -1092,6 +1274,10 @@ else
                 }
             }
         }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر تحميل البيانات: {ex.Message}", Severity.Error);
+        }
         finally
         {
             _isLoading = false;
@@ -1106,7 +1292,14 @@ else
         if (string.IsNullOrWhiteSpace(value) || value.Length < 1)
             return Enumerable.Empty<PartyLookupDto>();
 
-        return await InvoiceService.SearchPartiesAsync(value);
+        try
+        {
+            return await InvoiceService.SearchPartiesAsync(value);
+        }
+        catch
+        {
+            return Enumerable.Empty<PartyLookupDto>();
+        }
     }
 
     private async Task OnPartySelected(PartyLookupDto? party)
@@ -1131,7 +1324,26 @@ else
 
     private async Task LoadProducts(int partyId)
     {
-        _availableProducts = await InvoiceService.SearchProductsForPartyAsync(partyId, null, 200) ?? new();
+        try
+        {
+            _availableProducts = await InvoiceService.SearchProductsForPartyAsync(partyId, null, 200) ?? new();
+
+            if (_availableProducts.Count == 0)
+            {
+                Snackbar.Add(
+                    "لا توجد منتجات مرتبطة بهذا العميل. " +
+                    "تحقّق من إضافة منتجات للعميل في شاشة المنتجات (حقل العميل في تعريف المنتج).",
+                    Severity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            _availableProducts = new();
+            Snackbar.Add(
+                $"تعذّر تحميل المنتجات: {ex.Message}",
+                Severity.Error);
+            Console.WriteLine($"[QuotationForm.LoadProducts] {ex}");
+        }
     }
 
     // ============================================================
@@ -1159,7 +1371,7 @@ else
         RecalculateTotals();
     }
 
-    private decimal GetPriceByTier(QuotationItemDto item, string tier)
+    private static decimal GetPriceByTier(QuotationItemDto item, string tier)
     {
         if (tier == PricingTiers.Elite)
             return item.SalePriceElite ?? item.SalePricePremium ?? 0;
@@ -1171,8 +1383,41 @@ else
     // ============================================================
     private void AddProductToQuotation(ProductLookupDto product)
     {
-        if (_form.Items.Any(i => i.ProductId == product.ProductId))
+        // الطريقة القديمة - استدعاء بالـ tier الافتراضي
+        AddProductWithTier(product, _form.PricingType);
+    }
+
+    /// <summary>
+    /// ✅ إضافة منتج بتسعير محدد (Premium أو Elite).
+    /// لو المنتج مفيش له سعر Elite، بنرجّعه Premium تلقائيًا.
+    /// لو المنتج مضاف بنفس الـ tier → نزوّد كميته بدل ما نمنع الإضافة.
+    /// </summary>
+    private void AddProductWithTier(ProductLookupDto product, string tier)
+    {
+        if (product is null) return;
+
+        // لو الـ tier طلب Elite بس مفيش سعر → نزّله لـ Premium
+        var hasEliteOrSamePrice = (product.SuggestedSalePriceElite ?? 0) > 0;
+        if (tier == PricingTiers.Elite && !hasEliteOrSamePrice)
+        {
+            tier = PricingTiers.Premium;
+            Snackbar.Add(
+                $"المنتج '{product.ProductName}' ليس له سعر Elite، تمت الإضافة بسعر Premium.",
+                Severity.Info);
+        }
+
+        // هل المنتج مضاف بنفس الـ tier؟
+        var existing = _form.Items.FirstOrDefault(i =>
+            i.ProductId == product.ProductId && i.PricingTier == tier);
+
+        if (existing != null)
+        {
+            // زود الكمية بدل ما تمنع الإضافة
+            existing.Quantity += 1;
+            RecalculateTotals();
+            Snackbar.Add($"تم زيادة الكمية للمنتج '{product.ProductName}' ({tier}).", Severity.Success);
             return;
+        }
 
         var newItem = new QuotationItemDto
         {
@@ -1180,7 +1425,7 @@ else
             ProductName = product.ProductName,
             ProductDescription = product.ProductDescription,
             Quantity = 1,
-            PricingTier = _form.PricingType,
+            PricingTier = tier,
             SalePricePremium = product.SuggestedSalePrice,
             SalePriceElite = product.SuggestedSalePriceElite,
             PurchasePricePremium = product.PurchasePrice,
@@ -1188,32 +1433,111 @@ else
             Period = product.Period
         };
 
-        newItem.UnitPrice = GetPriceByTier(newItem, _form.PricingType);
+        newItem.UnitPrice = GetPriceByTier(newItem, tier);
         _form.Items.Add(newItem);
         RecalculateTotals();
     }
 
     private void RemoveItem(int index)
     {
+        if (index < 0 || index >= _form.Items.Count) return;
         _form.Items.RemoveAt(index);
         RecalculateTotals();
     }
 
     // ============================================================
-    // Calculations
+    // ✅ Calculations - بدون لمس الخصم (الخصم ليه handlers خاصة)
     // ============================================================
     private void RecalculateTotals()
     {
         _form.TotalAmount = Math.Round(_form.Items.Sum(i => i.TotalAmount), 2);
 
+        // ✅ لو الإجمالي اتغير وكان فيه نسبة خصم → نعيد حساب القيمة بناءً على الإجمالي الجديد
         if (_form.DiscountPercentage.HasValue && _form.DiscountPercentage.Value > 0)
-            _form.DiscountAmount = Math.Round(_form.TotalAmount * (_form.DiscountPercentage.Value / 100m), 2);
+        {
+            _form.DiscountAmount = Math.Round(
+                _form.TotalAmount * (_form.DiscountPercentage.Value / 100m), 2);
+        }
+        // لو فيه قيمة بدون نسبة، نتأكد إنها مش أكبر من الإجمالي
+        else if (_form.DiscountAmount.HasValue && _form.DiscountAmount.Value > 0)
+        {
+            if (_form.DiscountAmount.Value > _form.TotalAmount)
+                _form.DiscountAmount = _form.TotalAmount;
+        }
         else
+        {
             _form.DiscountAmount = 0;
+        }
 
         _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
         _form.GrandTotal = _form.NetTotalAmount ?? 0;
 
+        StateHasChanged();
+    }
+
+    // ============================================================
+    // ✅ معالجات الخصم المرن
+    // ============================================================
+    /// <summary>المستخدم غيّر نسبة الخصم → احسب القيمة منها</summary>
+    private void OnDiscountPercentageChanged(decimal? newPercentage)
+    {
+        _form.DiscountPercentage = newPercentage;
+
+        if (newPercentage.HasValue && newPercentage.Value > 0)
+        {
+            // حدد القيمة بناءً على النسبة
+            _form.DiscountAmount = Math.Round(
+                _form.TotalAmount * (newPercentage.Value / 100m), 2);
+        }
+        else
+        {
+            // النسبة 0 → القيمة 0
+            _form.DiscountAmount = 0;
+        }
+
+        UpdateGrandTotal();
+    }
+
+    /// <summary>المستخدم غيّر قيمة الخصم → احسب النسبة منها</summary>
+    private void OnDiscountAmountChanged(decimal? newAmount)
+    {
+        _form.DiscountAmount = newAmount;
+
+        if (newAmount.HasValue && newAmount.Value > 0)
+        {
+            // حد أقصى = الإجمالي
+            if (newAmount.Value > _form.TotalAmount)
+            {
+                _form.DiscountAmount = _form.TotalAmount;
+                newAmount = _form.TotalAmount;
+            }
+
+            // احسب النسبة المقابلة
+            _form.DiscountPercentage = _form.TotalAmount > 0
+                ? Math.Round((newAmount.Value / _form.TotalAmount) * 100, 2)
+                : 0;
+        }
+        else
+        {
+            _form.DiscountPercentage = 0;
+        }
+
+        UpdateGrandTotal();
+    }
+
+    /// <summary>إلغاء الخصم تمامًا</summary>
+    private void ClearDiscount()
+    {
+        _form.DiscountAmount = 0;
+        _form.DiscountPercentage = 0;
+        UpdateGrandTotal();
+    }
+
+    /// <summary>تحديث الإجمالي النهائي فقط (بدون لمس الخصم)</summary>
+    private void UpdateGrandTotal()
+    {
+        _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
+        _form.GrandTotal = _form.NetTotalAmount ?? 0;
         StateHasChanged();
     }
 
@@ -1224,7 +1548,9 @@ else
     // ============================================================
     private async Task SaveQuotation()
     {
-        if (_form.PartyId == null)
+        if (_isSaving) return;
+
+        if (_form.PartyId is null or 0)
         {
             Snackbar.Add("يرجى اختيار العميل", Severity.Warning);
             return;
@@ -1232,6 +1558,21 @@ else
         if (!_form.Items.Any())
         {
             Snackbar.Add("يجب إضافة صنف واحد على الأقل", Severity.Warning);
+            return;
+        }
+        if (_form.Items.Any(i => i.Quantity <= 0))
+        {
+            Snackbar.Add("يجب أن تكون الكمية أكبر من صفر لكل صنف", Severity.Warning);
+            return;
+        }
+        if (_form.Items.Any(i => i.UnitPrice < 0))
+        {
+            Snackbar.Add("السعر لا يمكن أن يكون سالباً", Severity.Warning);
+            return;
+        }
+        if (_form.ValidUntil.HasValue && _form.ValidUntil.Value.Date < _form.QuotationDate.Date)
+        {
+            Snackbar.Add("تاريخ انتهاء الصلاحية يجب أن يكون بعد تاريخ العرض", Severity.Warning);
             return;
         }
 
@@ -1244,7 +1585,12 @@ else
             {
                 var (ok, msg) = await QuotationService.UpdateQuotationAsync(_form, _currentUserName!);
                 Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-                if (ok) _isReadOnly = true;
+                if (ok)
+                {
+                    // أعد القراءة عشان الـ IDs الجديدة بتاعة الـ Items
+                    var refreshed = await QuotationService.GetQuotationForEditAsync(_form.QuotationId);
+                    if (refreshed != null) _form = refreshed;
+                }
             }
             else
             {
@@ -1254,7 +1600,14 @@ else
                     Navigation.NavigateTo($"/quotations/{id.Value}");
             }
         }
-        finally { _isSaving = false; }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر الحفظ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
     }
 
     // ============================================================
@@ -1262,6 +1615,11 @@ else
     // ============================================================
     private void OpenConvertDialog()
     {
+        if (_form.IsConverted)
+        {
+            Snackbar.Add("هذا العرض تم تحويله لفاتورة بالفعل.", Severity.Warning);
+            return;
+        }
         _convertPaidAmount = 0;
         _convertPaymentMethod = PaymentMethods.Cash;
         _convertCashBoxId = _cashBoxes.FirstOrDefault()?.CashBoxId;
@@ -1270,26 +1628,47 @@ else
 
     private async Task ExecuteConvert()
     {
-        if (_convertPaidAmount > 0)
+        if (_isConverting) return;
+
+        if (_convertPaidAmount > 0 && (_convertCashBoxId is null or 0))
         {
-            if (_convertCashBoxId == null || _convertCashBoxId == 0)
-            {
-                Snackbar.Add("يرجى اختيار الخزينة", Severity.Warning);
-                return;
-            }
+            Snackbar.Add("يرجى اختيار الخزينة", Severity.Warning);
+            return;
+        }
+        if (_convertPaidAmount < 0)
+        {
+            Snackbar.Add("الدفعة لا يمكن أن تكون سالبة", Severity.Warning);
+            return;
+        }
+        if (_convertPaidAmount > _form.GrandTotal)
+        {
+            Snackbar.Add("الدفعة أكبر من إجمالي العرض", Severity.Warning);
+            return;
         }
 
         _isConverting = true;
-        var (ok, msg, invId) = await QuotationService.ConvertToInvoiceAsync(
-            _form.QuotationId, _convertPaidAmount,
-            _convertCashBoxId, _convertPaymentMethod, _currentUserName!);
+        try
+        {
+            var (ok, msg, invId) = await QuotationService.ConvertToInvoiceAsync(
+                _form.QuotationId, _convertPaidAmount,
+                _convertCashBoxId, _convertPaymentMethod, _currentUserName!);
 
-        _isConverting = false;
-        _showConvertDialog = false;
-        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
 
-        if (ok && invId.HasValue)
-            Navigation.NavigateTo($"/sales/invoices/{invId.Value}");
+            if (ok && invId.HasValue)
+            {
+                _showConvertDialog = false;
+                Navigation.NavigateTo($"/sales/invoices/{invId.Value}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر التحويل: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isConverting = false;
+        }
     }
 
     // ============================================================
@@ -1297,7 +1676,7 @@ else
     // ============================================================
     private void OpenWhatsAppDialog()
     {
-        _whatsappPhone = _form.PartyPhone ?? "";
+        _whatsappPhone = NormalizePhone(_form.PartyPhone);
         _whatsappMessage = $"عرض سعر رقم: {_form.ReferenceNumber}\n" +
                           $"التاريخ: {_form.QuotationDate:yyyy/MM/dd}\n" +
                           $"الإجمالي: {FormatMoney(_form.GrandTotal)} ج";
@@ -1306,19 +1685,51 @@ else
 
     private async Task DownloadPdf()
     {
-        await JS.InvokeVoidAsync("open", $"/api/quotations/{_form.QuotationId}/pdf", "_blank");
+        try
+        {
+            await JS.InvokeVoidAsync("open", $"/api/quotations/{_form.QuotationId}/pdf", "_blank");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر فتح الـ PDF: {ex.Message}", Severity.Error);
+        }
     }
 
     private async Task OpenWhatsApp()
     {
-        if (string.IsNullOrEmpty(_whatsappPhone))
+        if (string.IsNullOrWhiteSpace(_whatsappPhone))
         {
             Snackbar.Add("يرجى إدخال رقم الواتساب", Severity.Warning);
             return;
         }
-        var url = $"https://wa.me/{_whatsappPhone}?text={Uri.EscapeDataString(_whatsappMessage)}";
-        await JS.InvokeVoidAsync("open", url, "_blank");
-        _showWhatsAppDialog = false;
+
+        var phone = NormalizePhone(_whatsappPhone);
+        if (phone.Length < 8)
+        {
+            Snackbar.Add("رقم الواتساب غير صحيح", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var url = $"https://wa.me/{phone}?text={Uri.EscapeDataString(_whatsappMessage)}";
+            await JS.InvokeVoidAsync("open", url, "_blank");
+            _showWhatsAppDialog = false;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر فتح واتساب: {ex.Message}", Severity.Error);
+        }
+    }
+
+    /// <summary>
+    /// تنظيف رقم الواتساب من المسافات والأقواس والشرطات.
+    /// </summary>
+    private static string NormalizePhone(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        var digits = new string(raw.Where(c => char.IsDigit(c) || c == '+').ToArray());
+        return digits.TrimStart('+');
     }
 
     // ============================================================
@@ -1326,12 +1737,19 @@ else
     // ============================================================
     private void OpenChangeStatusDialog()
     {
+        if (_form.IsConverted)
+        {
+            Snackbar.Add("لا يمكن تغيير حالة عرض سعر تم تحويله لفاتورة.", Severity.Warning);
+            return;
+        }
         _newStatus = _form.Status;
         _showStatusDialog = true;
     }
 
     private async Task ExecuteChangeStatus()
     {
+        if (_isChangingStatus) return;
+
         if (_newStatus == _form.Status)
         {
             _showStatusDialog = false;
@@ -1339,24 +1757,34 @@ else
         }
 
         _isChangingStatus = true;
-        var (ok, msg) = await QuotationService.ChangeStatusAsync(
-            _form.QuotationId, _newStatus, _currentUserName!);
-
-        _isChangingStatus = false;
-        _showStatusDialog = false;
-        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-
-        if (ok)
+        try
         {
-            _form.Status = _newStatus;
-            StateHasChanged();
+            var (ok, msg) = await QuotationService.ChangeStatusAsync(
+                _form.QuotationId, _newStatus, _currentUserName!);
+
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+            if (ok)
+            {
+                _form.Status = _newStatus;
+                _showStatusDialog = false;
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر تغيير الحالة: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isChangingStatus = false;
         }
     }
 
     // ============================================================
     // Helpers
     // ============================================================
-    private Color GetStatusColor(string status)
+    private static Color GetStatusColor(string status)
     {
         return status switch
         {
@@ -1370,11 +1798,16 @@ else
         };
     }
 
-    private string GetStatusText(string status)
+    private static string GetStatusText(string status)
     {
         return QuotationStatuses.All.TryGetValue(status, out var text) ? text : status;
     }
 
-    private void OpenPrintPage() => Navigation.NavigateTo($"/quotations/{Id}/print");
+    private void OpenPrintPage()
+    {
+        if (Id is null or 0) return;
+        Navigation.NavigateTo($"/quotations/{Id}/print");
+    }
+
     private void GoBack() => Navigation.NavigateTo("/quotations");
 }

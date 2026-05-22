@@ -431,32 +431,99 @@ Title="طباعة" />
 
         if (!_canView) { Navigation.NavigateTo("/"); return; }
 
-        _cashBoxes = await InvoiceService.GetCashBoxesAsync();
-        await LoadData();
-        _stats = await QuotationService.GetStatsAsync();
-        _isLoading = false;
+        try
+        {
+            _cashBoxes = await InvoiceService.GetCashBoxesAsync() ?? new();
+            await LoadData();
+            _stats = await QuotationService.GetStatsAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر تحميل البيانات: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
     }
 
-    private async Task LoadData() => _pagedResult = await QuotationService.GetQuotationsAsync(_filter);
+    private async Task LoadData()
+    {
+        try
+        {
+            _pagedResult = await QuotationService.GetQuotationsAsync(_filter);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر تحميل القائمة: {ex.Message}", Severity.Error);
+            _pagedResult = new PagedResult<QuotationListDto>();
+        }
+    }
 
-    private async Task OnSearchChanged() { _filter.PageNumber = 1; await LoadData(); }
+    private async Task RefreshStats()
+    {
+        try
+        {
+            _stats = await QuotationService.GetStatsAsync(_filter.DateFrom, _filter.DateTo);
+        }
+        catch { /* لا نوقف التطبيق لو الإحصائيات فشلت */ }
+    }
+
+    private async Task OnSearchChanged()
+    {
+        _filter.PageNumber = 1;
+        await LoadData();
+    }
+
     private async Task OnFilterChanged()
     {
         _filter.PageNumber = 1;
         await LoadData();
-        _stats = await QuotationService.GetStatsAsync(_filter.DateFrom, _filter.DateTo);
+        await RefreshStats();
     }
-    private async Task OnDateFromChanged(DateTime? d) { _dateFrom = d; _filter.DateFrom = d; await OnFilterChanged(); }
-    private async Task OnDateToChanged(DateTime? d) { _dateTo = d; _filter.DateTo = d; await OnFilterChanged(); }
-    private async Task OnPageChanged(int p) { _filter.PageNumber = p; await LoadData(); }
-    private async Task ResetFilters() { _filter = new(); _dateFrom = null; _dateTo = null; await LoadData(); }
+
+    private async Task OnDateFromChanged(DateTime? d)
+    {
+        _dateFrom = d;
+        _filter.DateFrom = d;
+        await OnFilterChanged();
+    }
+
+    private async Task OnDateToChanged(DateTime? d)
+    {
+        _dateTo = d;
+        _filter.DateTo = d;
+        await OnFilterChanged();
+    }
+
+    private async Task OnPageChanged(int p)
+    {
+        _filter.PageNumber = p;
+        await LoadData();
+    }
+
+    private async Task ResetFilters()
+    {
+        _filter = new();
+        _dateFrom = null;
+        _dateTo = null;
+        await LoadData();
+        await RefreshStats();
+    }
 
     private void GoToAdd() => Navigation.NavigateTo("/quotations/new");
     private void GoToView(int id) => Navigation.NavigateTo($"/quotations/{id}");
 
+    // ============================================================
     // Convert
+    // ============================================================
     private void OpenConvertDialog(QuotationListDto q)
     {
+        if (q.InvoiceId != null)
+        {
+            Snackbar.Add("هذا العرض تم تحويله لفاتورة من قبل.", Severity.Warning);
+            return;
+        }
         _selected = q;
         _convertPaidAmount = 0;
         _convertPaymentMethod = PaymentMethods.Cash;
@@ -466,36 +533,95 @@ Title="طباعة" />
 
     private async Task ExecuteConvert()
     {
-        if (_selected == null) return;
-        _isConverting = true;
-        var (ok, msg, invId) = await QuotationService.ConvertToInvoiceAsync(
-            _selected.QuotationId, _convertPaidAmount,
-            _convertCashBoxId, _convertPaymentMethod, _currentUserName!);
-        _isConverting = false;
-        _showConvertDialog = false;
+        if (_selected == null || _isConverting) return;
 
-        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-        if (ok && invId.HasValue)
+        // ✅ Validation قبل الإرسال
+        if (_convertPaidAmount > 0 && (_convertCashBoxId is null or 0))
         {
-            await LoadData();
-            _stats = await QuotationService.GetStatsAsync();
-            // افتح الفاتورة الجديدة
-            Navigation.NavigateTo($"/sales/invoices/{invId.Value}");
+            Snackbar.Add("يرجى اختيار الخزينة لتسجيل الدفعة.", Severity.Warning);
+            return;
+        }
+
+        if (_convertPaidAmount < 0)
+        {
+            Snackbar.Add("الدفعة لا يمكن أن تكون سالبة.", Severity.Warning);
+            return;
+        }
+
+        if (_convertPaidAmount > _selected.GrandTotal)
+        {
+            Snackbar.Add("الدفعة أكبر من إجمالي عرض السعر.", Severity.Warning);
+            return;
+        }
+
+        _isConverting = true;
+        try
+        {
+            var (ok, msg, invId) = await QuotationService.ConvertToInvoiceAsync(
+                _selected.QuotationId, _convertPaidAmount,
+                _convertCashBoxId, _convertPaymentMethod, _currentUserName!);
+
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+            if (ok && invId.HasValue)
+            {
+                _showConvertDialog = false;
+                await LoadData();
+                await RefreshStats();
+                Navigation.NavigateTo($"/sales/invoices/{invId.Value}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ غير متوقع: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isConverting = false;
         }
     }
 
+    // ============================================================
     // Delete
-    private void ConfirmDelete(QuotationListDto q) { _selected = q; _showDeleteDialog = true; }
+    // ============================================================
+    private void ConfirmDelete(QuotationListDto q)
+    {
+        if (q.InvoiceId != null)
+        {
+            Snackbar.Add("لا يمكن حذف عرض سعر تم تحويله لفاتورة.", Severity.Warning);
+            return;
+        }
+        _selected = q;
+        _showDeleteDialog = true;
+    }
 
     private async Task ExecuteDelete()
     {
-        if (_selected == null) return;
+        if (_selected == null || _isDeleting) return;
+
         _isDeleting = true;
-        var (ok, msg) = await QuotationService.DeleteQuotationAsync(_selected.QuotationId, _currentUserName!);
-        _isDeleting = false;
-        _showDeleteDialog = false;
-        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-        if (ok) { await LoadData(); _stats = await QuotationService.GetStatsAsync(); }
+        try
+        {
+            var (ok, msg) = await QuotationService.DeleteQuotationAsync(
+                _selected.QuotationId, _currentUserName!);
+
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+            if (ok)
+            {
+                _showDeleteDialog = false;
+                await LoadData();
+                await RefreshStats();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر الحذف: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isDeleting = false;
+        }
     }
 
     private string FormatMoney(decimal v) => $"{v:N2} ج";

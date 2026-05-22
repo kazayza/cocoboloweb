@@ -24,7 +24,7 @@ public interface IQuotationService
     Task<(bool Success, string Message)> DeleteQuotationAsync(
         int quotationId, string currentUserName);
 
-    // ⭐ التحويل لفاتورة (مع المرآة)
+    // التحويل لفاتورة (مع المرآة)
     Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
         int quotationId, decimal initialPaidAmount, int? cashBoxId,
         string paymentMethod, string currentUserName);
