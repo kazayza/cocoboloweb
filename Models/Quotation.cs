@@ -6,6 +6,7 @@ namespace COCOBOLOERPNEW.Models;
 public partial class Quotation
 {
     public int QuotationId { get; set; }
+    public string? ReferenceNumber { get; set; } 
 
     public DateTime QuotationDate { get; set; }
 

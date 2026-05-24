@@ -444,4 +444,236 @@ public class QuotationExportService : IQuotationExportService
         // Cairo لو متحمّل، ولو لأ نستخدم Arial كـ fallback (مدعوم في Windows)
         return _arabicFont != null ? "Cairo" : "Arial";
     }
+    // ============================================================
+// ⭐ Export List to Excel (مع الفلاتر)
+// ============================================================
+public async Task<(bool Success, string? Error, byte[]? Excel, string FileName)> ExportQuotationsToExcelAsync(
+    QuotationFilterDto filter)
+{
+    try
+    {
+        // نجيب القائمة بالفلاتر بتاعتها (بدون pagination)
+        var bigFilter = new QuotationFilterDto
+        {
+            SearchText = filter.SearchText,
+            PartyId = filter.PartyId,
+            DateFrom = filter.DateFrom,
+            DateTo = filter.DateTo,
+            Status = filter.Status,
+            IsConverted = filter.IsConverted,
+            IsExpired = filter.IsExpired,
+            SortBy = filter.SortBy,
+            SortDescending = filter.SortDescending,
+            PageNumber = 1,
+            PageSize = 10000  // ⭐ نجيب كل النتائج
+        };
+
+        var result = await _quotations.GetQuotationsAsync(bigFilter);
+        var items = result.Items;
+
+        var fileName = $"Quotations-{DateTime.Now:yyyy-MM-dd-HHmm}.xlsx";
+
+        using var wb = new XLWorkbook();
+        var ws = wb.Worksheets.Add("عروض الأسعار");
+        ws.RightToLeft = true;
+
+        // ============ Header ============
+        ws.Cell("A1").Value = "COCOBOLO - قائمة عروض الأسعار";
+        ws.Cell("A1").Style.Font.FontSize = 16;
+        ws.Cell("A1").Style.Font.Bold = true;
+        ws.Cell("A1").Style.Font.FontColor = XLColor.FromHtml("#B8860B");
+        ws.Range("A1:K1").Merge();
+        ws.Range("A1:K1").Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+
+        ws.Cell("A2").Value = $"تاريخ التصدير: {DateTime.Now:yyyy/MM/dd HH:mm}";
+        ws.Range("A2:K2").Merge();
+
+        if (filter.DateFrom.HasValue || filter.DateTo.HasValue)
+        {
+            var fromStr = filter.DateFrom?.ToString("yyyy/MM/dd") ?? "البداية";
+            var toStr = filter.DateTo?.ToString("yyyy/MM/dd") ?? "اليوم";
+            ws.Cell("A3").Value = $"الفترة: من {fromStr} إلى {toStr}";
+            ws.Range("A3:K3").Merge();
+        }
+
+        // ============ Table Headers ============
+        var headerRow = 5;
+        var headers = new[]
+        {
+            "م", "رقم العرض", "التاريخ", "العميل", "التليفون",
+            "الموظف", "الباقة", "الإجمالي", "الخصم", "الصافي", "الحالة"
+        };
+
+        for (int i = 0; i < headers.Length; i++)
+        {
+            ws.Cell(headerRow, i + 1).Value = headers[i];
+        }
+
+        var headerRange = ws.Range(headerRow, 1, headerRow, headers.Length);
+        headerRange.Style.Fill.BackgroundColor = XLColor.FromHtml("#B8860B");
+        headerRange.Style.Font.FontColor = XLColor.White;
+        headerRange.Style.Font.Bold = true;
+        headerRange.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+        headerRange.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
+        ws.Row(headerRow).Height = 25;
+
+        // ============ Data Rows ============
+        var row = headerRow + 1;
+        int idx = 1;
+        decimal totalSum = 0, discountSum = 0, netSum = 0;
+
+        foreach (var q in items)
+        {
+            ws.Cell(row, 1).Value = idx++;
+            ws.Cell(row, 2).Value = q.ReferenceNumber;
+            ws.Cell(row, 3).Value = q.QuotationDate;
+            ws.Cell(row, 3).Style.DateFormat.Format = "yyyy/MM/dd";
+            ws.Cell(row, 4).Value = q.PartyName;
+            ws.Cell(row, 5).Value = q.PartyPhone ?? "";
+            ws.Cell(row, 6).Value = q.EmpName ?? "";
+            ws.Cell(row, 7).Value = q.PricingType == "Elite" ? "إيليت" : "بريميم";
+            ws.Cell(row, 8).Value = q.TotalAmount;
+            ws.Cell(row, 9).Value = q.DiscountAmount ?? 0;
+            ws.Cell(row, 10).Value = q.GrandTotal;
+            ws.Cell(row, 11).Value = GetStatusText(q.Status);
+
+            // تنسيق الأرقام
+            ws.Cell(row, 8).Style.NumberFormat.Format = "#,##0.00";
+            ws.Cell(row, 9).Style.NumberFormat.Format = "#,##0.00";
+            ws.Cell(row, 10).Style.NumberFormat.Format = "#,##0.00";
+            ws.Cell(row, 10).Style.Font.Bold = true;
+
+            // ألوان للحالة
+            var statusCell = ws.Cell(row, 11);
+            switch (q.Status)
+            {
+                case "Converted":
+                    statusCell.Style.Fill.BackgroundColor = XLColor.FromHtml("#E8F5E9");
+                    statusCell.Style.Font.FontColor = XLColor.FromHtml("#2E7D32");
+                    break;
+                case "Accepted":
+                    statusCell.Style.Fill.BackgroundColor = XLColor.FromHtml("#E3F2FD");
+                    statusCell.Style.Font.FontColor = XLColor.FromHtml("#1565C0");
+                    break;
+                case "Rejected":
+                    statusCell.Style.Fill.BackgroundColor = XLColor.FromHtml("#FFEBEE");
+                    statusCell.Style.Font.FontColor = XLColor.FromHtml("#C62828");
+                    break;
+                case "Expired":
+                    statusCell.Style.Fill.BackgroundColor = XLColor.FromHtml("#FFF8E1");
+                    statusCell.Style.Font.FontColor = XLColor.FromHtml("#EF6C00");
+                    break;
+            }
+            statusCell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+
+            // صف مزدوج (Zebra)
+            if (idx % 2 == 0)
+            {
+                for (int c = 1; c <= 11; c++)
+                {
+                    if (c != 11) // متفرشش لو الحالة عليها لون
+                        ws.Cell(row, c).Style.Fill.BackgroundColor = XLColor.FromHtml("#FAFAFA");
+                }
+            }
+
+            totalSum += q.TotalAmount;
+            discountSum += q.DiscountAmount ?? 0;
+            netSum += q.GrandTotal;
+
+            row++;
+        }
+
+        // ============ Totals Row ============
+        var totalsRow = row;
+        ws.Cell(totalsRow, 1).Value = "الإجمالي";
+        ws.Range(totalsRow, 1, totalsRow, 7).Merge();
+        ws.Cell(totalsRow, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+
+        ws.Cell(totalsRow, 8).Value = totalSum;
+        ws.Cell(totalsRow, 9).Value = discountSum;
+        ws.Cell(totalsRow, 10).Value = netSum;
+
+        ws.Cell(totalsRow, 8).Style.NumberFormat.Format = "#,##0.00";
+        ws.Cell(totalsRow, 9).Style.NumberFormat.Format = "#,##0.00";
+        ws.Cell(totalsRow, 10).Style.NumberFormat.Format = "#,##0.00";
+
+        var totalsRange = ws.Range(totalsRow, 1, totalsRow, 11);
+        totalsRange.Style.Fill.BackgroundColor = XLColor.FromHtml("#FFF8DC");
+        totalsRange.Style.Font.Bold = true;
+        totalsRange.Style.Font.FontSize = 12;
+        totalsRange.Style.Border.TopBorder = XLBorderStyleValues.Double;
+        totalsRange.Style.Border.TopBorderColor = XLColor.FromHtml("#B8860B");
+
+        // ============ Stats Box (تحت الجدول) ============
+        var statsRow = totalsRow + 2;
+        ws.Cell(statsRow, 1).Value = "📊 ملخص إحصائي";
+        ws.Cell(statsRow, 1).Style.Font.Bold = true;
+        ws.Cell(statsRow, 1).Style.Font.FontSize = 13;
+        ws.Cell(statsRow, 1).Style.Font.FontColor = XLColor.FromHtml("#B8860B");
+        ws.Range(statsRow, 1, statsRow, 4).Merge();
+
+        ws.Cell(statsRow + 1, 1).Value = "إجمالي عدد العروض:";
+        ws.Cell(statsRow + 1, 2).Value = items.Count;
+
+        ws.Cell(statsRow + 2, 1).Value = "تحوّلت لفواتير:";
+        ws.Cell(statsRow + 2, 2).Value = items.Count(x => x.InvoiceId != null);
+
+        ws.Cell(statsRow + 3, 1).Value = "مقبولة:";
+        ws.Cell(statsRow + 3, 2).Value = items.Count(x => x.Status == "Accepted");
+
+        ws.Cell(statsRow + 4, 1).Value = "مرفوضة:";
+        ws.Cell(statsRow + 4, 2).Value = items.Count(x => x.Status == "Rejected");
+
+        ws.Cell(statsRow + 5, 1).Value = "قيد المراجعة:";
+        ws.Cell(statsRow + 5, 2).Value = items.Count(x =>
+            x.Status == "Draft" || x.Status == "Sent");
+
+        ws.Cell(statsRow + 6, 1).Value = "معدل التحويل:";
+        var convertedCount = items.Count(x => x.InvoiceId != null);
+        var rate = items.Count == 0 ? 0 : Math.Round(((decimal)convertedCount / items.Count) * 100, 1);
+        ws.Cell(statsRow + 6, 2).Value = $"{rate}%";
+
+        for (int r = statsRow + 1; r <= statsRow + 6; r++)
+        {
+            ws.Cell(r, 1).Style.Font.Bold = true;
+            ws.Cell(r, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
+            ws.Cell(r, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
+        }
+
+        // ============ Borders & Auto-fit ============
+        var dataRange = ws.Range(headerRow, 1, totalsRow, 11);
+        dataRange.Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
+        dataRange.Style.Border.InsideBorder = XLBorderStyleValues.Thin;
+        dataRange.Style.Border.OutsideBorderColor = XLColor.FromHtml("#B8860B");
+
+        ws.Columns().AdjustToContents();
+
+        // Freeze header
+        ws.SheetView.FreezeRows(headerRow);
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return (true, null, ms.ToArray(), fileName);
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Failed to export quotations list to Excel");
+        return (false, "تعذّر تصدير القائمة لـ Excel.", null, "");
+    }
+}
+
+// Helper للحالة
+private static string GetStatusText(string status)
+{
+    return status switch
+    {
+        "Draft" => "مسودة",
+        "Sent" => "تم الإرسال",
+        "Accepted" => "مقبول",
+        "Rejected" => "مرفوض",
+        "Converted" => "تحوّل لفاتورة",
+        "Expired" => "منتهي الصلاحية",
+        _ => status
+    };
+}
 }

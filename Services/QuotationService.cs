@@ -583,72 +583,76 @@ public class QuotationService : IQuotationService
     //  إنشاء عرض سعر
     // ============================================================
     public async Task<(bool Success, string Message, int? QuotationId)> CreateQuotationAsync(
-        QuotationFormDto dto, string currentUserName)
+    QuotationFormDto dto, string currentUserName)
+{
+    if (!HasPermission("Add"))
+        return (false, "ليس لديك صلاحية إنشاء عروض الأسعار.", null);
+
+    var validation = ValidateQuotation(dto);
+    if (!validation.IsValid) return (false, validation.Message, null);
+
+    await using var tx = await _db.Database.BeginTransactionAsync();
+    try
     {
-        if (!HasPermission("Add"))
-            return (false, "ليس لديك صلاحية إنشاء عروض الأسعار.", null);
+        CalculateTotals(dto);
 
-        var validation = ValidateQuotation(dto);
-        if (!validation.IsValid) return (false, validation.Message, null);
+        if (dto.EmpId is null or 0)
+            dto.EmpId = await _invoiceService.GetEmployeeIdByUserNameAsync(currentUserName);
 
-        await using var tx = await _db.Database.BeginTransactionAsync();
-        try
+        // ✅ توليد الرقم وحفظه في قاعدة البيانات بدلاً من الـ DTO
+        var refNumber = await GenerateNextQuotationNumberAsync();
+
+        var quotation = new Quotation
         {
-            CalculateTotals(dto);
+            ReferenceNumber = refNumber, // تأكد من إضافة هذا الحقل في موديل Quotation
+            QuotationDate = dto.QuotationDate,
+            ValidUntil = dto.ValidUntil,
+            PartyId = dto.PartyId!.Value,
+            WarehouseId = dto.WarehouseId,
+            EmpId = dto.EmpId,
+            PricingType = dto.PricingType,
+            TotalAmount = dto.TotalAmount,
+            DiscountAmount = dto.DiscountAmount ?? 0,
+            GrandTotal = dto.GrandTotal,
+            Notes = dto.Notes,
+            Status = string.IsNullOrEmpty(dto.Status) ? QuotationStatuses.Draft : dto.Status,
+            CreatedBy = currentUserName,
+            CreatedAt = DateTime.Now
+        };
 
-            if (dto.EmpId is null or 0)
-                dto.EmpId = await _invoiceService.GetEmployeeIdByUserNameAsync(currentUserName);
+        _db.Quotations.Add(quotation);
+        await _db.SaveChangesAsync();
 
-            var quotation = new Quotation
-            {
-                QuotationDate = dto.QuotationDate,
-                ValidUntil = dto.ValidUntil,
-                PartyId = dto.PartyId!.Value,
-                WarehouseId = dto.WarehouseId,
-                EmpId = dto.EmpId,
-                PricingType = dto.PricingType,
-                TotalAmount = dto.TotalAmount,
-                DiscountAmount = dto.DiscountAmount ?? 0,
-                GrandTotal = dto.GrandTotal,
-                Notes = dto.Notes,
-                Status = string.IsNullOrEmpty(dto.Status) ? QuotationStatuses.Draft : dto.Status,
-                CreatedBy = currentUserName,
-                CreatedAt = DateTime.Now
-            };
-
-            _db.Quotations.Add(quotation);
-            await _db.SaveChangesAsync();
-
-            foreach (var item in dto.Items)
-            {
-                _db.QuotationDetails.Add(new QuotationDetail
-                {
-                    QuotationId = quotation.QuotationId,
-                    ProductId = item.ProductId,
-                    Quantity = item.Quantity,
-                    UnitPrice = item.UnitPrice,
-                    TotalAmount = item.TotalAmount,
-                    Notes = BuildDetailNotes(item.PricingTier, item.Notes)
-                });
-            }
-
-            await _db.SaveChangesAsync();
-            await tx.CommitAsync();
-
-            await _audit.LogAsync("Quotations", "Insert",
-                quotation.QuotationId.ToString(), null, quotation, currentUserName);
-
-            await SendQuotationNotificationAsync(quotation, currentUserName, "تم إنشاء عرض سعر جديد");
-
-            return (true, "تم إنشاء عرض السعر بنجاح.", quotation.QuotationId);
-        }
-        catch (Exception ex)
+        foreach (var item in dto.Items)
         {
-            await tx.RollbackAsync();
-            _logger.LogError(ex, "Error creating quotation");
-            return (false, "تعذّر حفظ عرض السعر.", null);
+            _db.QuotationDetails.Add(new QuotationDetail
+            {
+                QuotationId = quotation.QuotationId,
+                ProductId = item.ProductId,
+                Quantity = item.Quantity,
+                UnitPrice = item.UnitPrice,
+                TotalAmount = item.TotalAmount,
+                Notes = BuildDetailNotes(item.PricingTier, item.Notes)
+            });
         }
+
+        await _db.SaveChangesAsync();
+        await tx.CommitAsync();
+
+        await _audit.LogAsync("Quotations", "Insert",
+            quotation.QuotationId.ToString(), null, quotation, currentUserName);
+
+        await SendQuotationNotificationAsync(quotation, currentUserName, "تم إنشاء عرض سعر جديد");
+
+        return (true, "تم إنشاء عرض السعر بنجاح.", quotation.QuotationId);
     }
+    catch (Exception ex)
+    {
+        await tx.RollbackAsync();
+        _logger.LogError(ex, "Error creating quotation");
+        return (false, "تعذّر حفظ عرض السعر.", null);
+    }
+}
 
     // ============================================================
     //  تعديل
@@ -828,17 +832,18 @@ public class QuotationService : IQuotationService
     //  تحويل لفاتورة
     // ============================================================
     public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
-        int quotationId, decimal initialPaidAmount, int? cashBoxId,
-        string paymentMethod, string currentUserName)
+    int quotationId, decimal initialPaidAmount, int? cashBoxId,
+    string paymentMethod, string currentUserName)
+{
+    if (!HasPermission("Edit"))
+        return (false, "ليس لديك صلاحية تحويل عرض السعر لفاتورة.", null);
+
+    // ✅ تغيير Serializable إلى ReadCommitted لمنع الـ Deadlocks
+    await using var tx = await _db.Database.BeginTransactionAsync(
+        System.Data.IsolationLevel.ReadCommitted); 
+
+    try 
     {
-        if (!HasPermission("Edit"))
-            return (false, "ليس لديك صلاحية تحويل عرض السعر لفاتورة.", null);
-
-        await using var tx = await _db.Database.BeginTransactionAsync(
-            System.Data.IsolationLevel.Serializable);
-
-        try
-        {
             var quotation = await _db.Quotations.FirstOrDefaultAsync(q => q.QuotationId == quotationId);
             if (quotation == null) { await tx.RollbackAsync(); return (false, "عرض السعر غير موجود.", null); }
             if (quotation.InvoiceId != null)

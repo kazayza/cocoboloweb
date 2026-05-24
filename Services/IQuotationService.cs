@@ -28,4 +28,7 @@ public interface IQuotationService
     Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
         int quotationId, decimal initialPaidAmount, int? cashBoxId,
         string paymentMethod, string currentUserName);
+
+    Task<(bool Success, string? Error, byte[]? Excel, string FileName)> ExportQuotationsToExcelAsync(
+        QuotationFilterDto filter);
 }
