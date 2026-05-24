@@ -38,6 +38,7 @@ public class QuotationListDto
 
     public string CreatedBy { get; set; } = "";
     public DateTime CreatedAt { get; set; }
+    public string? RejectionReason { get; set; }
 }
 
 // ============================

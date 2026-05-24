@@ -164,7 +164,8 @@ public class QuotationService : IQuotationService
                     InvId = q.InvoiceId,
                     Valid = q.ValidUntil,
                     CBy = q.CreatedBy,
-                    CAt = (DateTime?)q.CreatedAt
+                    CAt = (DateTime?)q.CreatedAt,
+                    RejectionReason = q.RejectionReason
                 })
                 .ToListAsync();
 
@@ -286,7 +287,8 @@ public class QuotationService : IQuotationService
                     InvoiceReference = invRef,
                     ValidUntil = r.Valid,
                     CreatedBy = r.CBy ?? "",
-                    CreatedAt = r.CAt ?? DateTime.Today
+                    CreatedAt = r.CAt ?? DateTime.Today,
+                    RejectionReason = r.RejectionReason
                 };
             }).ToList();
 
@@ -747,10 +749,11 @@ public class QuotationService : IQuotationService
     //  تغيير الحالة
     // ============================================================
     public async Task<(bool Success, string Message)> ChangeStatusAsync(
-        int quotationId, string newStatus, string currentUserName)
-    {
-        if (!HasPermission("Edit"))
-            return (false, "ليس لديك صلاحية تغيير حالة عرض السعر.");
+    int quotationId, string newStatus, string currentUserName, bool isPublic = false)
+{
+    // ✅ تخطي permission check لو الاستدعاء من الصفحة العامة
+    if (!isPublic && !HasPermission("Edit"))
+        return (false, "ليس لديك صلاحية تغيير حالة عرض السعر.");
 
         var quotation = await _db.Quotations
             .FirstOrDefaultAsync(q => q.QuotationId == quotationId);
@@ -778,6 +781,18 @@ public class QuotationService : IQuotationService
         try
         {
             quotation.Status = newStatus;
+            // ⭐ تسجيل تفاصيل الرد
+    if (newStatus == QuotationStatuses.Accepted)
+    {
+        quotation.AcceptedAt = DateTime.Now;
+        quotation.AcceptedBy = currentUserName;
+    }
+    else if (newStatus == QuotationStatuses.Rejected)
+    {
+        quotation.RejectedAt = DateTime.Now;
+        quotation.RejectedBy = currentUserName;
+        // RejectionReason بيتسجل في method منفصلة
+    }
             await _db.SaveChangesAsync();
             await _audit.LogAsync<object>("Quotations", "ChangeStatus",
                 quotationId.ToString(), new { OldStatus = oldStatus },
@@ -831,119 +846,255 @@ public class QuotationService : IQuotationService
     // ============================================================
     //  تحويل لفاتورة
     // ============================================================
-    public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
+    // ============================================================
+//  تحويل لفاتورة (بدون transaction خارجية)
+// ============================================================
+public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
     int quotationId, decimal initialPaidAmount, int? cashBoxId,
     string paymentMethod, string currentUserName)
 {
     if (!HasPermission("Edit"))
         return (false, "ليس لديك صلاحية تحويل عرض السعر لفاتورة.", null);
 
-    // ✅ تغيير Serializable إلى ReadCommitted لمنع الـ Deadlocks
-    await using var tx = await _db.Database.BeginTransactionAsync(
-        System.Data.IsolationLevel.ReadCommitted); 
-
-    try 
+    try
     {
-            var quotation = await _db.Quotations.FirstOrDefaultAsync(q => q.QuotationId == quotationId);
-            if (quotation == null) { await tx.RollbackAsync(); return (false, "عرض السعر غير موجود.", null); }
-            if (quotation.InvoiceId != null)
+        // ⭐ Pre-check قبل ما نستدعي InvoiceService
+        var quotation = await _db.Quotations
+            .FirstOrDefaultAsync(q => q.QuotationId == quotationId);
+
+        if (quotation == null)
+            return (false, "عرض السعر غير موجود.", null);
+
+        if (quotation.InvoiceId != null)
+            return (false, 
+                $"تم تحويل هذا العرض من قبل للفاتورة #{quotation.InvoiceId}.", 
+                quotation.InvoiceId);
+
+        // جلب الأصناف مع بيانات المنتج
+        var dRows = await _db.QuotationDetails.AsNoTracking()
+            .Where(d => d.QuotationId == quotationId)
+            .Select(d => new { d.ProductId, d.Quantity, d.UnitPrice, d.Notes })
+            .ToListAsync();
+
+        if (!dRows.Any())
+            return (false, "لا توجد أصناف في عرض السعر.", null);
+
+        var productIds = dRows.Select(d => d.ProductId).Distinct().ToList();
+        var products = await _db.Products.AsNoTracking()
+            .Where(p => productIds.Contains(p.ProductId))
+            .Select(p => new
             {
-                await tx.RollbackAsync();
-                return (false, $"تم تحويل هذا العرض من قبل للفاتورة #{quotation.InvoiceId}.", quotation.InvoiceId);
-            }
+                p.ProductId,
+                p.ProductName,
+                p.ProductDescription,
+                p.SuggestedSalePrice,
+                p.SuggestedSalePriceElite,
+                p.PurchasePrice,
+                p.PurchasePriceElite,
+                p.Period
+            })
+            .ToListAsync();
+        var prodDict = products.ToDictionary(p => p.ProductId);
 
-            // جلب الأصناف منفصلة عن المنتجات
-            var dRows = await _db.QuotationDetails.AsNoTracking()
-                .Where(d => d.QuotationId == quotationId)
-                .Select(d => new { d.ProductId, d.Quantity, d.UnitPrice, d.Notes })
-                .ToListAsync();
-
-            if (!dRows.Any()) { await tx.RollbackAsync(); return (false, "لا توجد أصناف في عرض السعر.", null); }
-
-            var productIds = dRows.Select(d => d.ProductId).Distinct().ToList();
-            var products = await _db.Products.AsNoTracking()
-                .Where(p => productIds.Contains(p.ProductId))
-                .Select(p => new {
-                    p.ProductId, p.ProductName, p.ProductDescription,
-                    p.SuggestedSalePrice, p.SuggestedSalePriceElite,
-                    p.PurchasePrice, p.PurchasePriceElite, p.Period
-                })
-                .ToListAsync();
-            var prodDict = products.ToDictionary(p => p.ProductId);
-
-            var warehouseId = quotation.WarehouseId;
-            if (!warehouseId.HasValue)
-            {
-                warehouseId = await _db.Warehouses
-                    .Where(w => w.IsActive == true)
-                    .OrderBy(w => w.WarehouseId)
-                    .Select(w => (int?)w.WarehouseId)
-                    .FirstOrDefaultAsync();
-            }
-            if (!warehouseId.HasValue)
-            {
-                await tx.RollbackAsync();
-                return (false, "يرجى اختيار المخزن قبل التحويل.", null);
-            }
-
-            var invoiceForm = new InvoiceFormDto
-            {
-                TransactionDate = DateTime.Now,
-                PartyId = quotation.PartyId,
-                WarehouseId = warehouseId,
-                EmpId = quotation.EmpId,
-                DueDate = quotation.ValidUntil,
-                Notes = $"تحويل من عرض السعر QT-{quotation.QuotationDate.Year}-{quotation.QuotationId:D5}" +
-                        (string.IsNullOrEmpty(quotation.Notes) ? "" : $"\n{quotation.Notes}"),
-                DiscountAmount = quotation.DiscountAmount,
-                DiscountPercentage = quotation.DiscountAmount.HasValue && quotation.TotalAmount > 0
-                    ? Math.Round((quotation.DiscountAmount.Value / quotation.TotalAmount) * 100, 2)
-                    : null,
-                PaidAmount = initialPaidAmount,
-                CashBoxId = cashBoxId,
-                PaymentMethod = paymentMethod,
-                Items = dRows.Select(d =>
-                {
-                    prodDict.TryGetValue(d.ProductId, out var p);
-                    return new InvoiceItemDto
-                    {
-                        ProductId = d.ProductId,
-                        ProductName = p?.ProductName,
-                        ProductDescription = p?.ProductDescription,
-                        Quantity = d.Quantity,
-                        UnitPrice = d.UnitPrice,
-                        Notes = StripTierTag(d.Notes),
-                        PricingTier = ExtractTier(d.Notes),
-                        SalePricePremium = p?.SuggestedSalePrice,
-                        SalePriceElite = p?.SuggestedSalePriceElite,
-                        PurchasePricePremium = p?.PurchasePrice,
-                        PurchasePriceElite = p?.PurchasePriceElite,
-                        Period = p?.Period
-                    };
-                }).ToList()
-            };
-
-            var (ok, msg, invoiceId, mirrorId) = await _invoiceService.CreateInvoiceAsync(invoiceForm, currentUserName);
-            if (!ok || invoiceId == null) { await tx.RollbackAsync(); return (false, msg, null); }
-
-            quotation.InvoiceId = invoiceId.Value;
-            quotation.Status = QuotationStatuses.Converted;
-            await _db.SaveChangesAsync();
-            await tx.CommitAsync();
-
-            await _audit.LogAsync("Quotations", "ConvertToInvoice",
-                quotationId.ToString(), null,
-                new { InvoiceId = invoiceId.Value, MirrorId = mirrorId }, currentUserName);
-
-            return (true, "تم تحويل عرض السعر إلى فاتورة بنجاح. ✅", invoiceId);
-        }
-        catch (Exception ex)
+        // تأكد من المخزن
+        var warehouseId = quotation.WarehouseId;
+        if (!warehouseId.HasValue)
         {
-            await tx.RollbackAsync();
-            _logger.LogError(ex, "Error converting quotation {Id}", quotationId);
-            return (false, "تعذّر تحويل عرض السعر إلى فاتورة.", null);
+            warehouseId = await _db.Warehouses
+                .Where(w => w.IsActive == true)
+                .OrderBy(w => w.WarehouseId)
+                .Select(w => (int?)w.WarehouseId)
+                .FirstOrDefaultAsync();
         }
+
+        if (!warehouseId.HasValue)
+            return (false, "يرجى اختيار المخزن قبل التحويل.", null);
+
+        // جهّز بيانات الفاتورة
+        var invoiceForm = new InvoiceFormDto
+        {
+            TransactionDate = DateTime.Now,
+            PartyId = quotation.PartyId,
+            WarehouseId = warehouseId,
+            EmpId = quotation.EmpId,
+            DueDate = quotation.ValidUntil,
+            Notes = $"تحويل من عرض السعر QT-{quotation.QuotationDate.Year}-{quotation.QuotationId:D5}" +
+                    (string.IsNullOrEmpty(quotation.Notes) ? "" : $"\n{quotation.Notes}"),
+
+            DiscountAmount = quotation.DiscountAmount,
+            DiscountPercentage = quotation.DiscountAmount.HasValue && quotation.TotalAmount > 0
+                ? Math.Round((quotation.DiscountAmount.Value / quotation.TotalAmount) * 100, 2)
+                : null,
+
+            PaidAmount = initialPaidAmount,
+            CashBoxId = cashBoxId,
+            PaymentMethod = paymentMethod,
+
+            Items = dRows.Select(d =>
+            {
+                prodDict.TryGetValue(d.ProductId, out var p);
+                return new InvoiceItemDto
+                {
+                    ProductId = d.ProductId,
+                    ProductName = p?.ProductName,
+                    ProductDescription = p?.ProductDescription,
+                    Quantity = d.Quantity,
+                    UnitPrice = d.UnitPrice,
+                    Notes = StripTierTag(d.Notes),
+                    PricingTier = ExtractTier(d.Notes),
+                    SalePricePremium = p?.SuggestedSalePrice,
+                    SalePriceElite = p?.SuggestedSalePriceElite,
+                    PurchasePricePremium = p?.PurchasePrice,
+                    PurchasePriceElite = p?.PurchasePriceElite,
+                    Period = p?.Period
+                };
+            }).ToList()
+        };
+
+        // ⭐ استدعاء InvoiceService - هو بيدير الـ transaction بنفسه
+        var (ok, msg, invoiceId, mirrorId) = 
+            await _invoiceService.CreateInvoiceAsync(invoiceForm, currentUserName);
+
+        if (!ok || invoiceId == null)
+            return (false, msg, null);
+
+        // ⭐ بعد ما الفاتورة اتعملت بنجاح، نربط عرض السعر بيها
+        // (مفيش transaction هنا - مجرد update واحد)
+        quotation.InvoiceId = invoiceId.Value;
+        quotation.Status = QuotationStatuses.Converted;
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync("Quotations", "ConvertToInvoice",
+            quotationId.ToString(), null,
+            new { InvoiceId = invoiceId.Value, MirrorId = mirrorId }, 
+            currentUserName);
+
+        return (true, "تم تحويل عرض السعر إلى فاتورة بنجاح. ✅", invoiceId);
     }
+    catch (Exception ex)
+    {
+        var rootCause = ex.InnerException?.InnerException?.Message
+                     ?? ex.InnerException?.Message
+                     ?? ex.Message;
+        
+        _logger.LogError(ex, 
+            "❌ Convert quotation {Id} FAILED. Root: {Root}", 
+            quotationId, rootCause);
+        
+        return (false, $"تعذّر التحويل: {rootCause}", null);
+    }
+}
+// ============================================================
+//  ⭐ Public Access (بدون permission check)
+// ============================================================
+public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
+{
+    // ✅ نفس الـ logic بتاع GetQuotationForEditAsync لكن بدون permission
+    var rawData = await _db.Quotations.AsNoTracking()
+        .Where(x => x.QuotationId == quotationId)
+        .Select(x => new
+        {
+            QuotationId = (int?)x.QuotationId,
+            QuotationDate = (DateTime?)x.QuotationDate,
+            x.ValidUntil,
+            PartyId = (int?)x.PartyId,
+            x.WarehouseId,
+            x.EmpId,
+            x.PricingType,
+            TotalAmount = (decimal?)x.TotalAmount,
+            x.DiscountAmount,
+            x.GrandTotal,
+            x.InvoiceId,
+            x.Notes,
+            x.Status,
+            x.CreatedBy,
+            CreatedAt = (DateTime?)x.CreatedAt
+        })
+        .FirstOrDefaultAsync();
+
+    if (rawData == null) return null;
+
+    var qid = rawData.QuotationId ?? 0;
+    var pid = rawData.PartyId ?? 0;
+    var qdate = rawData.QuotationDate ?? DateTime.Today;
+    var total = rawData.TotalAmount ?? 0m;
+
+    var party = await _db.Parties.AsNoTracking()
+        .Where(p => p.PartyId == pid)
+        .Select(p => new { p.PartyName, p.Phone })
+        .FirstOrDefaultAsync();
+
+    var detailRows = await _db.QuotationDetails.AsNoTracking()
+        .Where(d => d.QuotationId == qid)
+        .Select(d => new
+        {
+            DId = (int?)d.QuotationDetailId,
+            PrId = (int?)d.ProductId,
+            Qty = (decimal?)d.Quantity,
+            Price = (decimal?)d.UnitPrice,
+            d.Notes
+        })
+        .ToListAsync();
+
+    var productIds = detailRows.Where(d => d.PrId.HasValue)
+        .Select(d => d.PrId!.Value).Distinct().ToList();
+
+    var productsDict = new Dictionary<int, (string? Name, string? Desc)>();
+    if (productIds.Any())
+    {
+        var prods = await _db.Products.AsNoTracking()
+            .Where(p => productIds.Contains(p.ProductId))
+            .Select(p => new { p.ProductId, p.ProductName, p.ProductDescription })
+            .ToListAsync();
+        foreach (var p in prods)
+            productsDict[p.ProductId] = (p.ProductName, p.ProductDescription);
+    }
+
+    var items = detailRows.Select(d =>
+    {
+        productsDict.TryGetValue(d.PrId ?? 0, out var p);
+        return new QuotationItemDto
+        {
+            QuotationDetailId = d.DId ?? 0,
+            ProductId = d.PrId ?? 0,
+            ProductName = p.Name,
+            ProductDescription = p.Desc,
+            Quantity = d.Qty ?? 0,
+            UnitPrice = d.Price ?? 0,
+            Notes = StripTierTag(d.Notes),
+            PricingTier = ExtractTier(d.Notes)
+        };
+    }).ToList();
+
+    decimal? discountPct = null;
+    if (rawData.DiscountAmount.HasValue && rawData.DiscountAmount.Value > 0 && total > 0)
+        discountPct = Math.Round((rawData.DiscountAmount.Value / total) * 100, 2);
+
+    return new QuotationFormDto
+    {
+        QuotationId = qid,
+        ReferenceNumber = $"QT-{qdate.Year}-{qid:D5}",
+        QuotationDate = qdate,
+        ValidUntil = rawData.ValidUntil,
+        PartyId = pid,
+        PartyName = party?.PartyName,
+        PartyPhone = party?.Phone,
+        WarehouseId = rawData.WarehouseId,
+        EmpId = rawData.EmpId,
+        PricingType = rawData.PricingType ?? PricingTiers.Premium,
+        TotalAmount = total,
+        DiscountAmount = rawData.DiscountAmount,
+        DiscountPercentage = discountPct,
+        NetTotalAmount = total - (rawData.DiscountAmount ?? 0),
+        GrandTotal = rawData.GrandTotal ?? total,
+        Notes = rawData.Notes,
+        Status = string.IsNullOrWhiteSpace(rawData.Status) ? QuotationStatuses.Draft : rawData.Status,
+        InvoiceId = rawData.InvoiceId,
+        CreatedBy = rawData.CreatedBy,
+        CreatedAt = rawData.CreatedAt ?? DateTime.Today,
+        Items = items
+    };
+}
 
     // ============================================================
     //  Helpers
@@ -1032,4 +1183,46 @@ public class QuotationService : IQuotationService
         var prop = obj.GetType().GetProperty(propertyName);
         return prop?.GetValue(obj)?.ToString();
     }
+    /// <summary>تسجيل سبب رفض العميل</summary>
+public async Task<bool> SaveRejectionReasonAsync(int quotationId, string reason)
+{
+    try
+    {
+        var quotation = await _db.Quotations
+            .FirstOrDefaultAsync(q => q.QuotationId == quotationId);
+        
+        if (quotation == null) return false;
+        
+        quotation.RejectionReason = reason;
+        await _db.SaveChangesAsync();
+        
+        _logger.LogInformation(
+            "Rejection reason saved for quotation {Id}: {Reason}", 
+            quotationId, reason);
+        
+        return true;
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Failed to save rejection reason for {Id}", quotationId);
+        return false;
+    }
+}
+/// <summary>جلب تفاصيل الرفض</summary>
+public async Task<(string? Reason, DateTime? RejectedAt, string? RejectedBy)> 
+    GetRejectionDetailsAsync(int quotationId)
+{
+    var result = await _db.Quotations
+        .AsNoTracking()
+        .Where(q => q.QuotationId == quotationId)
+        .Select(q => new
+        {
+            q.RejectionReason,
+            q.RejectedAt,
+            q.RejectedBy
+        })
+        .FirstOrDefaultAsync();
+    
+    return (result?.RejectionReason, result?.RejectedAt, result?.RejectedBy);
+}
 }

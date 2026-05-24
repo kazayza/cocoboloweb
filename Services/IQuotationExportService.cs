@@ -1,3 +1,5 @@
+using COCOBOLOERPNEW.DTOs;
+
 namespace COCOBOLOERPNEW.Services;
 
 /// <summary>
@@ -5,9 +7,23 @@ namespace COCOBOLOERPNEW.Services;
 /// </summary>
 public interface IQuotationExportService
 {
-    /// <summary>توليد PDF للعرض. يرجع bytes جاهزة للإرسال.</summary>
-    Task<(bool Success, string? Error, byte[]? Pdf, string FileName)> GeneratePdfAsync(int quotationId);
+    // ============ Single Quotation Exports ============
 
-    /// <summary>توليد Excel للعرض.</summary>
-    Task<(bool Success, string? Error, byte[]? Excel, string FileName)> GenerateExcelAsync(int quotationId);
+    /// <summary>توليد PDF لعرض سعر واحد.</summary>
+    Task<(bool Success, string? Error, byte[]? Pdf, string FileName)> 
+        GeneratePdfAsync(int quotationId);
+
+    /// <summary>توليد Excel لعرض سعر واحد.</summary>
+    Task<(bool Success, string? Error, byte[]? Excel, string FileName)> 
+        GenerateExcelAsync(int quotationId);
+
+    // ============ List Exports (مع الفلاتر) ============
+
+    /// <summary>⭐ تصدير قائمة عروض الأسعار لـ Excel (مع تطبيق الفلاتر).</summary>
+    Task<(bool Success, string? Error, byte[]? Excel, string FileName)> 
+        ExportQuotationsToExcelAsync(QuotationFilterDto filter);
+
+    /// <summary>⭐ تصدير قائمة عروض الأسعار لـ PDF (مع تطبيق الفلاتر).</summary>
+    Task<(bool Success, string? Error, byte[]? Pdf, string FileName)> 
+        ExportQuotationsToPdfAsync(QuotationFilterDto filter);
 }

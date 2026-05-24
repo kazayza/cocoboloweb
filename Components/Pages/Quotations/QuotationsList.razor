@@ -2,6 +2,7 @@
 
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
+@using System.Net.Http.Json
 
 @inject IQuotationService QuotationService
 @inject NavigationManager Navigation
@@ -170,20 +171,55 @@ else
                     <MudTd>@context.ItemsCount</MudTd>
                     <MudTd>
                         @if (context.InvoiceId != null)
-                        {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Success"
-                                     Icon="@Icons.Material.Filled.CheckCircle">
-                                تحوّل لفاتورة
-                            </MudChip>
-                        }
-                        else if (context.IsExpired)
-                        {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Error">منتهي</MudChip>
-                        }
-                        else
-                        {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Info">قيد المراجعة</MudChip>
-                        }
+{
+    <MudChip T="string" Size="Size.Small" Color="Color.Success"
+             Icon="@Icons.Material.Filled.CheckCircle">
+        تحوّل لفاتورة
+    </MudChip>
+}
+else if (context.IsExpired)
+{
+    <MudChip T="string" Size="Size.Small" Color="Color.Error"
+             Icon="@Icons.Material.Filled.Schedule">
+        منتهي
+    </MudChip>
+}
+else
+{
+    @switch (context.Status)
+    {
+        case "Draft":
+            <MudChip T="string" Size="Size.Small" Color="Color.Default"
+                     Icon="@Icons.Material.Filled.Edit">مسودة</MudChip>
+            break;
+        case "Sent":
+            <MudChip T="string" Size="Size.Small" Color="Color.Info"
+                     Icon="@Icons.Material.Filled.Send">تم الإرسال</MudChip>
+            break;
+        case "Accepted":
+            <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                     Icon="@Icons.Material.Filled.ThumbUp">مقبول</MudChip>
+            break;
+        case "Rejected":
+    <div style="display:inline-flex; align-items:center; gap:4px;">
+        <MudChip T="string" Size="Size.Small" Color="Color.Error"
+                 Icon="@Icons.Material.Filled.ThumbDown">مرفوض</MudChip>
+        @if (!string.IsNullOrEmpty(context.RejectionReason))
+        {
+            <MudTooltip Text="@($"سبب الرفض: {context.RejectionReason}")">
+                <MudIcon Icon="@Icons.Material.Filled.Info" 
+                         Size="Size.Small" 
+                         Color="Color.Error"
+                         Style="cursor:help;" />
+            </MudTooltip>
+        }
+    </div>
+    break;
+        default:
+            <MudChip T="string" Size="Size.Small" Color="Color.Info">قيد المراجعة</MudChip>
+            break;
+    }
+}
                     </MudTd>
                     <MudTd>
                         @if (!string.IsNullOrEmpty(context.InvoiceReference))
@@ -609,25 +645,79 @@ Title="طباعة" />
         _selected = q;
         _showDeleteDialog = true;
     }
-    private async Task ExportToExcel()
-    {
-        try {
-            await ExportService.ExportQuotationsToExcelAsync(_filter);
-            Snackbar.Add("تم تصدير الملف بنجاح", Severity.Success);
-        } catch (Exception ex) {
-            Snackbar.Add($"خطأ في التصدير: {ex.Message}", Severity.Error);
-        }
-    }
+    [Inject] private IJSRuntime JS { get; set; } = null!;
+[Inject] private IHttpClientFactory HttpFactory { get; set; } = null!;
 
-    private async Task ExportToPdf()
+private async Task ExportToExcel()
+{
+    try
     {
-        try {
-            await ExportService.ExportQuotationsToPdfAsync(_filter);
-            Snackbar.Add("تم تصدير الملف بنجاح", Severity.Success);
-        } catch (Exception ex) {
-            Snackbar.Add($"خطأ في التصدير: {ex.Message}", Severity.Error);
+        Snackbar.Add("جاري تصدير الملف...", Severity.Info);
+
+        var http = HttpFactory.CreateClient();
+        http.BaseAddress = new Uri(Navigation.BaseUri);
+
+        var response = await http.PostAsJsonAsync(
+            "/api/quotations/export-excel", _filter);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Snackbar.Add($"تعذّر التصدير. كود الخطأ: {response.StatusCode}", Severity.Error);
+            return;
         }
+
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+        var fileName = $"Quotations-{DateTime.Now:yyyyMMdd-HHmm}.xlsx";
+
+        await DownloadFile(fileName,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            bytes);
+
+        Snackbar.Add($"✅ تم تصدير {_pagedResult.TotalCount} عرض سعر بنجاح", Severity.Success);
     }
+    catch (Exception ex)
+    {
+        Snackbar.Add($"خطأ في التصدير: {ex.Message}", Severity.Error);
+    }
+}
+
+private async Task ExportToPdf()
+{
+    try
+    {
+        Snackbar.Add("جاري تصدير الملف...", Severity.Info);
+
+        var http = HttpFactory.CreateClient();
+        http.BaseAddress = new Uri(Navigation.BaseUri);
+
+        var response = await http.PostAsJsonAsync(
+            "/api/quotations/export-pdf", _filter);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Snackbar.Add($"تعذّر التصدير. كود الخطأ: {response.StatusCode}", Severity.Error);
+            return;
+        }
+
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+        var fileName = $"Quotations-{DateTime.Now:yyyyMMdd-HHmm}.pdf";
+
+        await DownloadFile(fileName, "application/pdf", bytes);
+
+        Snackbar.Add($"✅ تم تصدير {_pagedResult.TotalCount} عرض سعر بنجاح", Severity.Success);
+    }
+    catch (Exception ex)
+    {
+        Snackbar.Add($"خطأ في التصدير: {ex.Message}", Severity.Error);
+    }
+}
+
+/// <summary>تنزيل ملف من الـ bytes عبر JS</summary>
+private async Task DownloadFile(string fileName, string contentType, byte[] bytes)
+{
+    var base64 = Convert.ToBase64String(bytes);
+    await JS.InvokeVoidAsync("downloadFileFromBase64", fileName, contentType, base64);
+}
 
     private async Task ExecuteDelete()
     {

@@ -1,10 +1,15 @@
-@page "/q/{Token}"
+@page "/q/quotation/{Id:int}"
 @layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
 
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
 @using System.Net.Http.Json
-@inject IHttpClientFactory HttpClientFactory
+@using Microsoft.AspNetCore.Components
+
+@inject IQuotationService QuotationService
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
+@inject IHttpClientFactory HttpFactory
 
 <PageTitle>عرض سعر - COCOBOLO</PageTitle>
 
@@ -27,261 +32,465 @@
             <div class="error-icon">⚠️</div>
             <h2>تعذّر فتح عرض السعر</h2>
             <p>@_error</p>
-            <p class="hint">قد يكون الرابط منتهي الصلاحية أو غير صحيح.<br />
-            يرجى التواصل مع المسؤول للحصول على رابط جديد.</p>
         </div>
     }
-    else if (_info != null)
+    else if (_quote != null)
     {
         <div class="quote-card">
+            <!-- الهيدر -->
             <div class="header">
                 <div class="logo">COCOBOLO</div>
                 <div class="title">📋 عرض سعر</div>
-                <div class="ref">@_info.ReferenceNumber</div>
+                <div class="ref">@_quote.ReferenceNumber</div>
             </div>
 
+            <!-- شارة الحالة -->
+            @if (_quote.IsConverted)
+            {
+                <div class="status-badge converted">
+                    ✅ تم تأكيد هذا العرض وإصدار فاتورة
+                </div>
+            }
+            else if (_quote.Status == "Accepted")
+            {
+                <div class="status-badge accepted">
+                    ✅ شكراً لموافقتك على هذا العرض
+                </div>
+            }
+            else if (_quote.Status == "Rejected")
+            {
+                <div class="status-badge rejected">
+                    ❌ تم تسجيل عدم رغبتك في العرض
+                </div>
+            }
+            else if (_quote.IsExpired)
+            {
+                <div class="status-badge expired">
+                    ⏰ هذا العرض انتهت صلاحيته
+                </div>
+            }
+
+            <!-- البيانات -->
             <div class="info-grid">
                 <div class="info-row">
                     <span class="label">العميل:</span>
-                    <span class="value">@_info.PartyName</span>
+                    <span class="value">@_quote.PartyName</span>
                 </div>
                 <div class="info-row">
                     <span class="label">التاريخ:</span>
-                    <span class="value">@_info.Date.ToString("yyyy/MM/dd")</span>
+                    <span class="value">@_quote.QuotationDate.ToString("yyyy/MM/dd")</span>
                 </div>
-                @if (_info.ValidUntil.HasValue)
+                @if (_quote.ValidUntil.HasValue)
                 {
-                    <div class="info-row @(_info.IsExpired ? "expired" : "")">
+                    <div class="info-row">
                         <span class="label">صالح حتى:</span>
-                        <span class="value">@_info.ValidUntil.Value.ToString("yyyy/MM/dd")</span>
+                        <span class="value">@_quote.ValidUntil.Value.ToString("yyyy/MM/dd")</span>
                     </div>
                 }
                 <div class="info-row">
                     <span class="label">عدد الأصناف:</span>
-                    <span class="value">@_info.ItemsCount</span>
+                    <span class="value">@_quote.Items.Count</span>
                 </div>
                 <div class="info-row total">
                     <span class="label">الإجمالي:</span>
-                    <span class="value">@_info.GrandTotal.ToString("N2") ج</span>
+                    <span class="value">@_quote.GrandTotal.ToString("N2") ج</span>
                 </div>
             </div>
 
-            @if (_info.IsExpired)
-            {
-                <div class="badge expired-badge">⚠️ منتهي الصلاحية</div>
-            }
-            else if (_info.IsConverted)
-            {
-                <div class="badge converted-badge">✅ تم التحويل لفاتورة</div>
-            }
-
+            <!-- أزرار العمليات -->
             <div class="actions">
-                <a href="@_pdfUrl" target="_blank" class="btn btn-primary">
-                    📄 عرض / تنزيل PDF
-                </a>
-                <a href="@_excelUrl" download class="btn btn-secondary">
+                <a href="/api/public/quotations/@Id/pdf-view" target="_blank" class="btn btn-primary">
+    📄 عرض / تنزيل PDF
+</a>
+<a href="/api/public/quotations/@Id/excel-view" download class="btn btn-secondary">
                     📊 تنزيل Excel
                 </a>
                 <button @onclick="PrintPdf" class="btn btn-outline">
                     🖨️ طباعة
                 </button>
-                <button @onclick="ShareLink" class="btn btn-outline">
-                    🔗 نسخ الرابط
-                </button>
             </div>
 
-            <!-- معاينة PDF مدمجة -->
+            <!-- ⭐ زرارين الرد (يظهروا فقط لو العميل ينفع يرد) -->
+            @if (CanCustomerRespond())
+            {
+                <div class="response-section">
+                    <h3 class="response-title">📝 ما هو ردك على العرض؟</h3>
+                    <p class="response-subtitle">
+                        رأيك يهمنا. اضغط على أحد الزرارين أدناه لإعلامنا بقرارك.
+                    </p>
+
+                    @if (_isSubmittingResponse)
+                    {
+                        <div class="submitting">
+                            <div class="spinner-sm"></div>
+                            <span>جاري إرسال ردك...</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="response-buttons">
+                            <button @onclick="@(() => ShowAcceptConfirmation())" 
+                                    class="btn-response btn-accept">
+                                <div class="btn-icon">✅</div>
+                                <div class="btn-text">
+                                    <strong>أوافق على العرض</strong>
+                                    <small>سيتم التواصل معك لإتمام الإجراءات</small>
+                                </div>
+                            </button>
+
+                            <button @onclick="@(() => ShowRejectConfirmation())" 
+                                    class="btn-response btn-reject">
+                                <div class="btn-icon">❌</div>
+                                <div class="btn-text">
+                                    <strong>أعتذر، غير مهتم</strong>
+                                    <small>شكراً لاهتمامك بشركتنا</small>
+                                </div>
+                            </button>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(_responseMessage))
+                    {
+                        <div class="response-message @(_responseSuccess ? "success" : "error")">
+                            @_responseMessage
+                        </div>
+                    }
+                </div>
+            }
+
+            <!-- معاينة PDF -->
             <div class="pdf-preview">
-                <iframe src="@_pdfUrl" frameborder="0"></iframe>
+                <iframe src="/api/public/quotations/@Id/pdf-view" frameborder="0"></iframe>
             </div>
 
             <div class="footer">
-                <p>هذا عرض سعر رسمي صادر من <strong>COCOBOLO</strong></p>
-                <p class="small">للاستفسار تواصل معنا.</p>
+                <p>عرض سعر رسمي صادر من <strong>COCOBOLO</strong></p>
             </div>
         </div>
     }
 </div>
 
+<!-- ⭐ Dialog تأكيد الموافقة -->
+@if (_showAcceptDialog)
+{
+    <div class="modal-overlay" @onclick="@(() => _showAcceptDialog = false)">
+        <div class="modal-content" @onclick:stopPropagation="true">
+            <div class="modal-header accept">
+                <h2>✅ تأكيد الموافقة</h2>
+            </div>
+            <div class="modal-body">
+                <p>هل أنت متأكد من موافقتك على هذا العرض؟</p>
+                <p class="small">سيتم التواصل معك من فريقنا قريباً لإتمام الإجراءات.</p>
+                
+                <input type="text" 
+                       @bind="_customerName" 
+                       placeholder="اسمك (اختياري)" 
+                       class="input-field" />
+            </div>
+            <div class="modal-footer">
+                <button @onclick="@(() => _showAcceptDialog = false)" 
+                        class="btn-modal btn-cancel">إلغاء</button>
+                <button @onclick="SubmitAccept" class="btn-modal btn-confirm-accept">
+                    ✅ نعم، أوافق
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ⭐ Dialog تأكيد الرفض -->
+@if (_showRejectDialog)
+{
+    <div class="modal-overlay" @onclick="@(() => _showRejectDialog = false)">
+        <div class="modal-content" @onclick:stopPropagation="true">
+            <div class="modal-header reject">
+                <h2>❌ تأكيد عدم الرغبة</h2>
+            </div>
+            <div class="modal-body">
+                <p>نأسف لعدم استمرارك. هل يمكنك إخبارنا بالسبب؟</p>
+                <textarea @bind="_rejectionReason" 
+                          placeholder="سبب الرفض (اختياري)..." 
+                          class="textarea-field" rows="3"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button @onclick="@(() => _showRejectDialog = false)" 
+                        class="btn-modal btn-cancel">إلغاء</button>
+                <button @onclick="SubmitReject" class="btn-modal btn-confirm-reject">
+                    ❌ نعم، أعتذر
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
 <style>
-    /* Reset for public page */
     body { margin: 0; padding: 0; background: #f5f5f7; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; }
+    .public-quote-page { min-height: 100vh; padding: 20px; display: flex; justify-content: center;
+        background: linear-gradient(135deg, #f5f5f7 0%, #e8e8eb 100%); }
 
-    .public-quote-page {
-        min-height: 100vh;
-        padding: 20px;
-        display: flex;
-        justify-content: center;
-        background: linear-gradient(135deg, #f5f5f7 0%, #e8e8eb 100%);
-    }
+    .loading-state, .error-state { text-align: center; padding: 60px 20px; background: white;
+        border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); max-width: 500px; width: 100%; }
 
-    .loading-state, .error-state {
-        text-align: center;
-        padding: 60px 20px;
-        background: white;
-        border-radius: 12px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-        max-width: 500px;
-        width: 100%;
-    }
-
-    .spinner {
-        width: 50px; height: 50px;
-        border: 4px solid #f0f0f0;
-        border-top-color: #B8860B;
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-        margin: 0 auto 20px;
-    }
+    .spinner { width: 50px; height: 50px; border: 4px solid #f0f0f0; border-top-color: #B8860B;
+        border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+    .spinner-sm { width: 24px; height: 24px; border: 3px solid #f0f0f0; border-top-color: #B8860B;
+        border-radius: 50%; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; }
     @@keyframes spin { to { transform: rotate(360deg); } }
 
     .error-icon { font-size: 64px; margin-bottom: 16px; }
     .error-state h2 { color: #d32f2f; margin: 12px 0; }
-    .error-state .hint { color: #666; font-size: 14px; line-height: 1.6; }
 
-    .quote-card {
-        background: white;
-        border-radius: 16px;
-        max-width: 900px;
-        width: 100%;
-        overflow: hidden;
-        box-shadow: 0 8px 30px rgba(0,0,0,0.12);
-    }
+    .quote-card { background: white; border-radius: 16px; max-width: 900px; width: 100%;
+        overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.12); }
 
-    .header {
-        background: linear-gradient(135deg, #B8860B 0%, #DAA520 100%);
-        color: white;
-        padding: 30px 24px;
-        text-align: center;
-    }
+    .header { background: linear-gradient(135deg, #B8860B 0%, #DAA520 100%); color: white;
+        padding: 30px 24px; text-align: center; }
     .header .logo { font-size: 28px; font-weight: 700; letter-spacing: 2px; }
     .header .title { font-size: 18px; margin-top: 6px; opacity: 0.95; }
     .header .ref { font-size: 22px; font-weight: 600; margin-top: 8px;
-                   background: rgba(255,255,255,0.2); display: inline-block;
-                   padding: 6px 18px; border-radius: 20px; }
+        background: rgba(255,255,255,0.2); display: inline-block;
+        padding: 6px 18px; border-radius: 20px; }
+
+    /* Status Badges */
+    .status-badge { padding: 16px 24px; text-align: center; font-weight: 600; font-size: 15px; }
+    .status-badge.converted { background: #d4edda; color: #155724; border-bottom: 2px solid #28a745; }
+    .status-badge.accepted { background: #d1ecf1; color: #0c5460; border-bottom: 2px solid #17a2b8; }
+    .status-badge.rejected { background: #f8d7da; color: #721c24; border-bottom: 2px solid #dc3545; }
+    .status-badge.expired { background: #fff3cd; color: #856404; border-bottom: 2px solid #ffc107; }
 
     .info-grid { padding: 24px; }
-    .info-row {
-        display: flex; justify-content: space-between;
-        padding: 12px 0;
-        border-bottom: 1px solid #f0f0f0;
-        font-size: 15px;
-    }
+    .info-row { display: flex; justify-content: space-between; padding: 12px 0;
+        border-bottom: 1px solid #f0f0f0; font-size: 15px; }
     .info-row:last-child { border-bottom: none; }
     .info-row .label { color: #666; }
     .info-row .value { font-weight: 600; color: #333; }
     .info-row.total { background: #fff8dc; margin: 8px -24px -8px; padding: 16px 24px;
-                       border-top: 2px solid #B8860B; border-bottom: none; }
+        border-top: 2px solid #B8860B; border-bottom: none; }
     .info-row.total .value { color: #B8860B; font-size: 20px; }
-    .info-row.expired .value { color: #d32f2f; }
 
-    .badge {
-        margin: 16px 24px; padding: 12px; border-radius: 8px;
-        text-align: center; font-weight: 600;
-    }
-    .expired-badge { background: #ffebee; color: #c62828; }
-    .converted-badge { background: #e8f5e9; color: #2e7d32; }
-
-    .actions {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 10px;
-        padding: 20px 24px;
-        background: #fafafa;
-    }
-
-    .btn {
-        padding: 12px 18px;
-        border-radius: 8px;
-        font-size: 15px;
-        font-weight: 600;
-        text-decoration: none;
-        text-align: center;
-        cursor: pointer;
-        border: none;
-        transition: all 0.2s;
-        font-family: inherit;
-    }
+    .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 10px; padding: 20px 24px; background: #fafafa; }
+    .btn { padding: 12px 18px; border-radius: 8px; font-size: 15px; font-weight: 600;
+        text-decoration: none; text-align: center; cursor: pointer; border: none;
+        transition: all 0.2s; font-family: inherit; }
     .btn-primary { background: #B8860B; color: white; }
-    .btn-primary:hover { background: #9a7008; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(184,134,11,0.3); }
-
+    .btn-primary:hover { background: #9a7008; }
     .btn-secondary { background: #2e7d32; color: white; }
     .btn-secondary:hover { background: #1b5e20; }
-
     .btn-outline { background: white; color: #B8860B; border: 2px solid #B8860B; }
     .btn-outline:hover { background: #fff8dc; }
 
-    .pdf-preview {
-        background: #525659;
-        padding: 8px;
-        margin-top: 8px;
+    /* ⭐ Response Section */
+    .response-section {
+        background: linear-gradient(135deg, #fff8e7 0%, #fffaf0 100%);
+        padding: 30px 24px;
+        border-top: 3px solid #B8860B;
+        text-align: center;
     }
-    .pdf-preview iframe {
-        width: 100%;
-        height: 70vh;
-        min-height: 500px;
-        border: none;
+    .response-title {
+        margin: 0 0 8px 0;
+        color: #B8860B;
+        font-size: 22px;
+        font-weight: 700;
+    }
+    .response-subtitle {
+        color: #666;
+        margin: 0 0 24px 0;
+        font-size: 14px;
+    }
+    .response-buttons {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        max-width: 600px;
+        margin: 0 auto;
+    }
+    .btn-response {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 18px 20px;
+        border: 2px solid transparent;
+        border-radius: 12px;
         background: white;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-align: right;
+        font-family: inherit;
+    }
+    .btn-response:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(0,0,0,0.12);
+    }
+    .btn-accept {
+        border-color: #28a745;
+        color: #155724;
+    }
+    .btn-accept:hover {
+        background: #d4edda;
+    }
+    .btn-reject {
+        border-color: #dc3545;
+        color: #721c24;
+    }
+    .btn-reject:hover {
+        background: #f8d7da;
+    }
+    .btn-icon {
+        font-size: 36px;
+        flex-shrink: 0;
+    }
+    .btn-text {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .btn-text strong {
+        font-size: 16px;
+        font-weight: 700;
+    }
+    .btn-text small {
+        font-size: 12px;
+        color: #666;
+        opacity: 0.85;
     }
 
-    .footer {
+    .submitting {
         padding: 20px;
         text-align: center;
-        background: #f8f8fa;
-        border-top: 1px solid #eee;
-        font-size: 13px;
-        color: #666;
+        color: #B8860B;
+        font-weight: 600;
     }
-    .footer .small { font-size: 11px; opacity: 0.7; margin-top: 4px; }
 
-    /* موبايل */
+    .response-message {
+        margin-top: 20px;
+        padding: 16px;
+        border-radius: 8px;
+        font-weight: 600;
+    }
+    .response-message.success {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #28a745;
+    }
+    .response-message.error {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #dc3545;
+    }
+
+    /* Modal */
+    .modal-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        padding: 20px;
+    }
+    .modal-content {
+        background: white;
+        border-radius: 12px;
+        max-width: 500px;
+        width: 100%;
+        overflow: hidden;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+    }
+    .modal-header {
+        padding: 20px 24px;
+        color: white;
+    }
+    .modal-header.accept { background: #28a745; }
+    .modal-header.reject { background: #dc3545; }
+    .modal-header h2 { margin: 0; font-size: 20px; }
+    .modal-body { padding: 24px; }
+    .modal-body p { margin: 0 0 12px 0; }
+    .modal-body .small { font-size: 13px; color: #666; }
+    .input-field, .textarea-field {
+        width: 100%;
+        padding: 10px 14px;
+        border: 2px solid #e0e0e0;
+        border-radius: 8px;
+        font-family: inherit;
+        font-size: 14px;
+        margin-top: 8px;
+        box-sizing: border-box;
+    }
+    .input-field:focus, .textarea-field:focus {
+        outline: none;
+        border-color: #B8860B;
+    }
+    .modal-footer {
+        display: flex;
+        gap: 10px;
+        padding: 16px 24px;
+        background: #f9f9f9;
+        border-top: 1px solid #e0e0e0;
+    }
+    .btn-modal {
+        flex: 1;
+        padding: 12px;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: inherit;
+    }
+    .btn-cancel { background: #e0e0e0; color: #333; }
+    .btn-confirm-accept { background: #28a745; color: white; }
+    .btn-confirm-reject { background: #dc3545; color: white; }
+
+    .pdf-preview { background: #525659; padding: 8px; }
+    .pdf-preview iframe { width: 100%; height: 70vh; min-height: 500px; border: none; background: white; }
+
+    .footer { padding: 20px; text-align: center; background: #f8f8fa;
+        border-top: 1px solid #eee; font-size: 13px; color: #666; }
+
     @@media (max-width: 600px) {
         .public-quote-page { padding: 0; }
         .quote-card { border-radius: 0; min-height: 100vh; }
-        .header { padding: 20px 16px; }
-        .header .logo { font-size: 24px; }
-        .header .ref { font-size: 18px; }
-        .info-grid { padding: 16px; }
         .actions { padding: 14px 16px; grid-template-columns: 1fr 1fr; }
+        .response-buttons { grid-template-columns: 1fr; }
         .pdf-preview iframe { height: 60vh; }
     }
 </style>
 
 @code {
-    [Parameter] public string Token { get; set; } = "";
+    [Parameter] public int Id { get; set; }
 
     private bool _isLoading = true;
     private string? _error;
-    private QuoteInfoDto? _info;
-    private string _pdfUrl = "";
-    private string _excelUrl = "";
+    private QuotationFormDto? _quote;
+
+    // ⭐ Response State
+    private bool _showAcceptDialog = false;
+    private bool _showRejectDialog = false;
+    private bool _isSubmittingResponse = false;
+    private string _customerName = "";
+    private string _rejectionReason = "";
+    private string _responseMessage = "";
+    private bool _responseSuccess = false;
 
     protected override async Task OnInitializedAsync()
     {
-        _pdfUrl = $"/api/public/quotations/{Token}/pdf";
-        _excelUrl = $"/api/public/quotations/{Token}/excel";
-
         try
         {
-            var http = HttpClientFactory.CreateClient();
-            var baseUri = new Uri(Navigation.BaseUri);
-            http.BaseAddress = baseUri;
-
-            var response = await http.GetAsync($"/api/public/quotations/{Token}/info");
-
-            if (!response.IsSuccessStatusCode)
+            _quote = await QuotationService.GetQuotationPublicAsync(Id);
+            if (_quote == null)
             {
-                _error = response.StatusCode == System.Net.HttpStatusCode.NotFound
-                    ? "الرابط غير صحيح أو منتهي الصلاحية."
-                    : "تعذّر تحميل عرض السعر.";
-                return;
+                _error = "عرض السعر غير موجود.";
             }
-
-            _info = await response.Content.ReadFromJsonAsync<QuoteInfoDto>();
+            else
+            {
+                // ⭐ سجل المشاهدة
+                _ = TrackViewing();
+            }
         }
         catch (Exception ex)
         {
-            _error = $"خطأ في الاتصال: {ex.Message}";
+            _error = $"خطأ في التحميل: {ex.Message}";
         }
         finally
         {
@@ -289,48 +498,105 @@
         }
     }
 
-    private async Task PrintPdf()
+    /// <summary>هل يمكن للعميل الرد على العرض؟</summary>
+    private bool CanCustomerRespond()
     {
-        // افتح الـ PDF في تاب جديد وتلقائيًا اطبعه
-        await JS.InvokeVoidAsync("eval", $@"
-            var w = window.open('{_pdfUrl}', '_blank');
-            if (w) w.addEventListener('load', function() {{ setTimeout(function() {{ w.print(); }}, 500); }});
-        ");
+        if (_quote == null) return false;
+        if (_quote.IsConverted) return false;
+        if (_quote.IsExpired) return false;
+        if (_quote.Status == "Accepted") return false;
+        if (_quote.Status == "Rejected") return false;
+        return true;
     }
 
-    private async Task ShareLink()
+    private void ShowAcceptConfirmation() => _showAcceptDialog = true;
+    private void ShowRejectConfirmation() => _showRejectDialog = true;
+
+    private async Task SubmitAccept()
     {
-        var currentUrl = Navigation.Uri;
+        _showAcceptDialog = false;
+        await SubmitResponse("Accepted", null);
+    }
+
+    private async Task SubmitReject()
+    {
+        _showRejectDialog = false;
+        await SubmitResponse("Rejected", _rejectionReason);
+    }
+
+    private async Task SubmitResponse(string response, string? reason)
+    {
+        if (_isSubmittingResponse) return;
+        _isSubmittingResponse = true;
+        _responseMessage = "";
+
         try
         {
-            // Web Share API على الموبايل + clipboard كـ fallback
-            await JS.InvokeVoidAsync("eval", $@"
-                (async function() {{
-                    var url = '{currentUrl}';
-                    if (navigator.share) {{
-                        try {{ await navigator.share({{ title: 'عرض سعر COCOBOLO', url: url }}); }}
-                        catch(e) {{ }}
-                    }} else if (navigator.clipboard) {{
-                        await navigator.clipboard.writeText(url);
-                        alert('تم نسخ الرابط ✅');
-                    }} else {{
-                        prompt('انسخ الرابط:', url);
-                    }}
-                }})();
-            ");
+            var http = HttpFactory.CreateClient();
+            http.BaseAddress = new Uri(Navigation.BaseUri);
+
+            var payload = new
+            {
+                response = response,
+                reason = reason,
+                customerName = _customerName
+            };
+
+            var apiResponse = await http.PostAsJsonAsync(
+                $"/api/public/quotations/{Id}/respond", payload);
+
+            if (apiResponse.IsSuccessStatusCode)
+            {
+                var result = await apiResponse.Content.ReadFromJsonAsync<ResponseResult>();
+                _responseMessage = result?.message ?? "تم تسجيل ردك بنجاح";
+                _responseSuccess = true;
+                
+                // ✅ Reload to update status
+                await Task.Delay(2000);
+                _quote = await QuotationService.GetQuotationPublicAsync(Id);
+            }
+            else
+            {
+                var errorResult = await apiResponse.Content.ReadFromJsonAsync<ResponseResult>();
+                _responseMessage = errorResult?.error ?? "تعذّر تسجيل ردك";
+                _responseSuccess = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _responseMessage = $"خطأ: {ex.Message}";
+            _responseSuccess = false;
+        }
+        finally
+        {
+            _isSubmittingResponse = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task TrackViewing()
+    {
+        try
+        {
+            var http = HttpFactory.CreateClient();
+            http.BaseAddress = new Uri(Navigation.BaseUri);
+            await http.PostAsync($"/api/public/quotations/{Id}/viewed", null);
         }
         catch { /* ignore */ }
     }
 
-    private class QuoteInfoDto
+    private async Task PrintPdf()
     {
-        public string ReferenceNumber { get; set; } = "";
-        public DateTime Date { get; set; }
-        public DateTime? ValidUntil { get; set; }
-        public string PartyName { get; set; } = "";
-        public decimal GrandTotal { get; set; }
-        public int ItemsCount { get; set; }
-        public bool IsExpired { get; set; }
-        public bool IsConverted { get; set; }
+        await JS.InvokeVoidAsync("eval", $@"
+            var w = window.open('/api/quotations/{Id}/pdf', '_blank');
+            if (w) w.addEventListener('load', function() {{ setTimeout(function() {{ w.print(); }}, 500); }});
+        ");
+    }
+
+    private class ResponseResult
+    {
+        public bool success { get; set; }
+        public string? message { get; set; }
+        public string? error { get; set; }
     }
 }

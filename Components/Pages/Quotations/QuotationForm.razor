@@ -12,6 +12,7 @@
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthProvider
+@inject IDialogService DialogService
 
 @if (_isLoading)
 {
@@ -49,6 +50,21 @@ else
                                 <MudChip T="string" Size="Size.Small" Color="Color.Error"
                                          Icon="@Icons.Material.Filled.Warning">منتهي الصلاحية</MudChip>
                             }
+                            @if (_form.Status == QuotationStatuses.Rejected && !string.IsNullOrEmpty(_rejectionReason))
+{
+    <MudAlert Severity="Severity.Warning" Class="mt-3" Icon="@Icons.Material.Filled.Info">
+        <strong>سبب الرفض من العميل:</strong>
+        <br />
+        @_rejectionReason
+        @if (_rejectedAt.HasValue)
+        {
+            <div style="font-size:0.85rem; opacity:0.8; margin-top:8px;">
+                <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" />
+                تاريخ الرفض: @_rejectedAt.Value.ToString("yyyy/MM/dd HH:mm")
+            </div>
+        }
+    </MudAlert>
+}
                             @if (!string.IsNullOrEmpty(_form.ReferenceNumber))
                             {
                                 <span> • @_form.ReferenceNumber</span>
@@ -92,6 +108,34 @@ else
                                        OnClick="OpenChangeStatusDialog"
                                        StartIcon="@Icons.Material.Filled.Flag">تغيير الحالة</MudButton>
                         }
+                        @* ⭐ زرارين رد العميل (يظهروا لو العرض مش متحول ومش متأكد منه) *@
+@if (IsEdit && _form.QuotationId > 0 && !_form.IsConverted 
+     && _form.Status != QuotationStatuses.Accepted 
+     && _form.Status != QuotationStatuses.Rejected
+     && _form.Status != QuotationStatuses.Converted)
+{
+    <MudTooltip Text="تسجيل موافقة العميل (بعد التواصل معه)">
+        <MudButton Variant="Variant.Filled" Color="Color.Success"
+                   StartIcon="@Icons.Material.Filled.ThumbUp"
+                   OnClick="@(() => UpdateCustomerResponse(true))"
+                   Disabled="@_isUpdatingResponse"
+                   Size="Size.Small"
+                   Class="mx-1">
+            العميل وافق
+        </MudButton>
+    </MudTooltip>
+
+    <MudTooltip Text="تسجيل رفض العميل">
+        <MudButton Variant="Variant.Filled" Color="Color.Error"
+                   StartIcon="@Icons.Material.Filled.ThumbDown"
+                   OnClick="@(() => UpdateCustomerResponse(false))"
+                   Disabled="@_isUpdatingResponse"
+                   Size="Size.Small"
+                   Class="mx-1">
+            العميل رفض
+        </MudButton>
+    </MudTooltip>
+}
 
                         @if (!_form.IsConverted)
                         {
@@ -508,53 +552,87 @@ else
                     </div>
 
                     <!-- ✅ خصم مرن: نسبة أو قيمة -->
-                    <div class="discount-section">
-                        <div class="discount-label">
-                            <MudIcon Icon="@Icons.Material.Filled.LocalOffer" Size="Size.Small" />
-                            <span>الخصم:</span>
-                        </div>
+                    <!-- ✅ خصم مرن: نسبة أو قيمة -->
+<div class="discount-section">
+    <div class="discount-header">
+        <MudIcon Icon="@Icons.Material.Filled.LocalOffer" Size="Size.Small" Style="color: var(--gold-dark);" />
+        <span class="discount-title">الخصم</span>
+        @if ((_form.DiscountAmount ?? 0) > 0 || (_form.DiscountPercentage ?? 0) > 0)
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                           Size="Size.Small" Color="Color.Error"
+                           OnClick="ClearDiscount"
+                           Disabled="@_isReadOnly"
+                           Title="إلغاء الخصم"
+                           Class="discount-clear-btn" />
+        }
+    </div>
 
-                        <div class="discount-inputs">
-                            <!-- خصم بالنسبة -->
-                            <div class="discount-input-group">
-                                <MudNumericField Value="_form.DiscountPercentage"
-                                                 ValueChanged="@((decimal? v) => OnDiscountPercentageChanged(v))"
-                                                 T="decimal?"
-                                                 Variant="Variant.Outlined" Margin="Margin.Dense"
-                                                 Min="0m" Max="100m" Step="1m"
-                                                 Placeholder="0"
-                                                 HideSpinButtons="false"
-                                                 Disabled="@_isReadOnly"
-                                                 Adornment="Adornment.End" AdornmentText="%"
-                                                 Class="discount-field" />
-                            </div>
+    <div class="discount-tabs">
+        <button type="button" 
+                class="discount-tab @(_discountByPercentage ? "active" : "")"
+                @onclick="@(() => _discountByPercentage = true)"
+                disabled="@_isReadOnly">
+            <MudIcon Icon="@Icons.Material.Filled.Percent" Size="Size.Small" />
+            <span>بالنسبة</span>
+        </button>
+        <button type="button" 
+                class="discount-tab @(!_discountByPercentage ? "active" : "")"
+                @onclick="@(() => _discountByPercentage = false)"
+                disabled="@_isReadOnly">
+            <MudIcon Icon="@Icons.Material.Filled.AttachMoney" Size="Size.Small" />
+            <span>بالقيمة</span>
+        </button>
+    </div>
 
-                            <span class="discount-or">أو</span>
-
-                            <!-- خصم بالقيمة -->
-                            <div class="discount-input-group">
-                                <MudNumericField Value="_form.DiscountAmount"
-                                                 ValueChanged="@((decimal? v) => OnDiscountAmountChanged(v))"
-                                                 T="decimal?"
-                                                 Variant="Variant.Outlined" Margin="Margin.Dense"
-                                                 Min="0m" Step="10m"
-                                                 Placeholder="0"
-                                                 HideSpinButtons="false"
-                                                 Disabled="@_isReadOnly"
-                                                 Adornment="Adornment.End" AdornmentText="ج"
-                                                 Class="discount-field" />
-                            </div>
-
-                            @if ((_form.DiscountAmount ?? 0) > 0 || (_form.DiscountPercentage ?? 0) > 0)
-                            {
-                                <MudIconButton Icon="@Icons.Material.Filled.Close"
-                                               Size="Size.Small" Color="Color.Error"
-                                               OnClick="ClearDiscount"
-                                               Disabled="@_isReadOnly"
-                                               Title="إلغاء الخصم" />
-                            }
-                        </div>
-                    </div>
+    <div class="discount-input-wrapper">
+        @if (_discountByPercentage)
+        {
+            <MudNumericField Value="_form.DiscountPercentage"
+                             ValueChanged="@((decimal? v) => OnDiscountPercentageChanged(v))"
+                             T="decimal?"
+                             Variant="Variant.Outlined"
+                             Margin="Margin.Normal"
+                             Min="0m" Max="100m" Step="1m"
+                             Placeholder="0"
+                             HideSpinButtons="false"
+                             Disabled="@_isReadOnly"
+                             Adornment="Adornment.End" AdornmentText="%"
+                             Class="discount-big-field"
+                             Style="text-align: center; font-size: 1.5rem; font-weight: 700;" />
+            
+            @if ((_form.DiscountAmount ?? 0) > 0)
+            {
+                <div class="discount-equivalent">
+                    = <strong>@FormatMoney(_form.DiscountAmount ?? 0) ج</strong>
+                </div>
+            }
+        }
+        else
+        {
+            <MudNumericField Value="_form.DiscountAmount"
+                             ValueChanged="@((decimal? v) => OnDiscountAmountChanged(v))"
+                             T="decimal?"
+                             Variant="Variant.Outlined"
+                             Margin="Margin.Normal"
+                             Min="0m" Step="50m"
+                             Placeholder="0"
+                             HideSpinButtons="false"
+                             Disabled="@_isReadOnly"
+                             Adornment="Adornment.End" AdornmentText="ج"
+                             Class="discount-big-field"
+                             Style="text-align: center; font-size: 1.5rem; font-weight: 700;" />
+            
+            @if ((_form.DiscountPercentage ?? 0) > 0)
+            {
+                <div class="discount-equivalent">
+                    = <strong>@_form.DiscountPercentage%</strong>
+                </div>
+            }
+        }
+    </div>
+</div>
+                    
 
                     @if ((_form.DiscountAmount ?? 0) > 0)
                     {
@@ -658,46 +736,85 @@ else
 </MudDialog>
 
 <!-- ============= WhatsApp Dialog ============= -->
-<MudDialog @bind-Visible="_showWhatsAppDialog">
+<!-- ============= WhatsApp Dialog (Improved) ============= -->
+<MudDialog @bind-Visible="_showWhatsAppDialog" Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true })">
     <TitleContent>
         <div style="display:flex; align-items:center; gap:0.5rem;">
-            <MudIcon Icon="@Icons.Material.Filled.Send" Style="color: #25D366;" />
-            <MudText Typo="Typo.h6">إرسال عرض السعر عبر واتساب</MudText>
+            <MudIcon Icon="@Icons.Material.Filled.Share" Style="color: #25D366;" />
+            <MudText Typo="Typo.h6">مشاركة عرض السعر عبر واتساب</MudText>
         </div>
     </TitleContent>
     <DialogContent>
-        <MudAlert Severity="Severity.Info" Class="mb-3" Dense="true">
-            <strong>الخطوات:</strong><br />
-            1. <strong>أولاً</strong>: اضغط "تحميل PDF" واحفظ الملف على جهازك<br />
-            2. <strong>ثانياً</strong>: اضغط "فتح واتساب" - هيفتح المحادثة مع العميل<br />
-            3. <strong>ثالثاً</strong>: ارفق الـ PDF في المحادثة وأرسله
+
+        <MudAlert Severity="Severity.Success" Class="mb-3" Dense="true" Icon="@Icons.Material.Filled.CheckCircle">
+            <strong>الرسالة فيها رابط مباشر</strong> للعميل لعرض / تنزيل / طباعة العرض من المتصفح،
+            بدون الحاجة لإرفاق ملفات يدوياً.
         </MudAlert>
 
-        <MudTextField @bind-Value="_whatsappPhone"
-                      Label="رقم الواتساب (مع كود الدولة)"
-                      Variant="Variant.Outlined"
-                      Placeholder="201234567890"
-                      HelperText="مثال: 201234567890 (بدون +)"
-                      Class="mb-3" />
+        <!-- اختيار كود الدولة + الرقم -->
+        <MudText Typo="Typo.body2" Class="mb-2" Style="font-weight:600;">رقم الواتساب:</MudText>
+        <div class="d-flex gap-2 align-items-start mb-1">
+            <MudSelect T="string" @bind-Value="_whatsappCountryCode"
+                       Variant="Variant.Outlined" Margin="Margin.Dense"
+                       Style="max-width:170px;" Dense="true">
+                @foreach (var c in PhoneNormalizer.Countries)
+                {
+                    <MudSelectItem T="string" Value="@c.Value.DialCode">
+                        @c.Value.DisplayName (+@c.Value.DialCode)
+                    </MudSelectItem>
+                }
+            </MudSelect>
 
+            <MudTextField @bind-Value="_whatsappPhone"
+                          Placeholder="01001234567"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Phone"
+                          Style="flex:1;" />
+        </div>
+
+        @{
+            var preview = GetPhonePreview();
+        }
+        @if (!string.IsNullOrEmpty(preview))
+        {
+            <MudText Typo="Typo.caption" Style="@(preview.StartsWith("✅") ? "color:green;" : "color:#d32f2f;")">
+                @preview
+            </MudText>
+        }
+
+        <!-- رابط المشاركة + زرار النسخ -->
+        <MudText Typo="Typo.body2" Class="mt-3 mb-2" Style="font-weight:600;">رابط المشاركة:</MudText>
+        <MudTextField @bind-Value="_shareLink" 
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      ReadOnly="true"
+                      Adornment="Adornment.End"
+                      AdornmentIcon="@Icons.Material.Filled.ContentCopy"
+                      OnAdornmentClick="CopyShareLink"
+                      AdornmentAriaLabel="نسخ الرابط" />
+
+        <!-- الرسالة (قابلة للتعديل) -->
         <MudTextField @bind-Value="_whatsappMessage"
                       Label="نص الرسالة"
                       Variant="Variant.Outlined"
-                      Lines="6"
-                      Class="mb-3" />
+                      Lines="7"
+                      Class="mt-3" />
+
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="@(() => _showWhatsAppDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
-        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                   StartIcon="@Icons.Material.Filled.Download"
-                   OnClick="DownloadPdf">
-            تحميل PDF
+
+        <MudButton Variant="Variant.Outlined" Color="Color.Info"
+                   StartIcon="@Icons.Material.Filled.OpenInNew"
+                   OnClick="PreviewShareLink">
+            معاينة الرابط
         </MudButton>
+
         <MudButton Variant="Variant.Filled"
                    StartIcon="@Icons.Material.Filled.Send"
                    OnClick="OpenWhatsApp"
                    Style="background: #25D366 !important; color: white !important;">
-            فتح واتساب
+            إرسال واتساب
         </MudButton>
     </DialogActions>
 </MudDialog>
@@ -1178,6 +1295,114 @@ else
             flex-direction: column;
         }
     }
+    /* ============ Discount Section v2 - محسّن ============ */
+.discount-section {
+    background: linear-gradient(135deg, #fff8dc 0%, #fffaf0 100%);
+    border: 2px solid rgba(184, 134, 11, 0.2);
+    border-radius: 12px;
+    padding: 1rem;
+    margin: 0.8rem 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.discount-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.8rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px dashed rgba(184, 134, 11, 0.3);
+}
+
+.discount-title {
+    font-weight: 700;
+    color: var(--gold-dark, #B8860B);
+    font-size: 1rem;
+}
+
+.discount-clear-btn {
+    margin-right: auto;
+}
+
+.discount-tabs {
+    display: flex;
+    gap: 0;
+    background: white;
+    border-radius: 8px;
+    padding: 4px;
+    margin-bottom: 0.8rem;
+    border: 1px solid rgba(0,0,0,0.08);
+}
+
+.discount-tab {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.6rem 0.8rem;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--mud-palette-text-secondary, #666);
+    transition: all 0.2s ease;
+    font-family: inherit;
+}
+
+.discount-tab:hover:not(:disabled) {
+    background: rgba(184, 134, 11, 0.05);
+    color: var(--gold-dark, #B8860B);
+}
+
+.discount-tab.active {
+    background: var(--gold-dark, #B8860B);
+    color: white;
+    box-shadow: 0 2px 6px rgba(184, 134, 11, 0.3);
+}
+
+.discount-tab:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.discount-input-wrapper {
+    text-align: center;
+}
+
+.discount-big-field {
+    max-width: 100%;
+}
+
+.discount-big-field input {
+    text-align: center !important;
+    font-size: 1.6rem !important;
+    font-weight: 700 !important;
+    color: var(--gold-dark, #B8860B) !important;
+}
+
+.discount-equivalent {
+    margin-top: 0.6rem;
+    padding: 0.5rem;
+    background: rgba(184, 134, 11, 0.08);
+    border-radius: 6px;
+    text-align: center;
+    color: var(--mud-palette-text-secondary, #666);
+    font-size: 1rem;
+}
+
+.discount-equivalent strong {
+    color: var(--gold-dark, #B8860B);
+    font-size: 1.1rem;
+}
+
+@@media (max-width: 600px) {
+    .discount-tab span {
+        font-size: 0.8rem;
+    }
+}
 
 </style>
 @code {
@@ -1187,6 +1412,9 @@ else
 
     private bool _isLoading = true;
     private bool _isSaving = false;
+    private string? _rejectionReason;
+private DateTime? _rejectedAt;
+private string? _rejectedBy;
 
     private QuotationFormDto _form = new()
     {
@@ -1209,10 +1437,12 @@ else
 
     // WhatsApp dialog
     private bool _showWhatsAppDialog;
+    private bool _isUpdatingResponse = false;
     private string _whatsappPhone = "";
     private string _whatsappMessage = "";
     private string _shareLink = "";
-private string _whatsappCountryCode = "20";
+    private string _whatsappCountryCode = "20";
+    private bool _discountByPercentage = true;
 
     // Change status dialog
     private bool _showStatusDialog, _isChangingStatus;
@@ -1250,6 +1480,14 @@ private string _whatsappCountryCode = "20";
                 _form = loaded;
                 // ✅ الفورم تكون readonly لو محول لفاتورة أو اليوزر مش عنده Edit
                 _isReadOnly = _form.IsConverted || !_canEdit;
+                // ⭐ تحميل تفاصيل الرفض
+if (_form.QuotationId > 0)
+{
+    var rejectionDetails = await QuotationService.GetRejectionDetailsAsync(_form.QuotationId);
+    _rejectionReason = rejectionDetails.Reason;
+    _rejectedAt = rejectionDetails.RejectedAt;
+    _rejectedBy = rejectionDetails.RejectedBy;
+}
 
                 if (_form.PartyId.HasValue)
                 {
@@ -1452,98 +1690,109 @@ private string _whatsappCountryCode = "20";
     // ============================================================
     // ✅ Calculations - بدون لمس الخصم (الخصم ليه handlers خاصة)
     // ============================================================
-    private void RecalculateTotals()
-    {
-        _form.TotalAmount = Math.Round(_form.Items.Sum(i => i.TotalAmount), 2);
+    /// <summary>إعادة حساب الإجماليات بعد تعديل الأصناف</summary>
+private void RecalculateTotals()
+{
+    _form.TotalAmount = Math.Round(_form.Items.Sum(i => i.TotalAmount), 2);
 
-        // ✅ لو الإجمالي اتغير وكان فيه نسبة خصم → نعيد حساب القيمة بناءً على الإجمالي الجديد
+    // ⭐ احترم آخر تعديل من المستخدم
+    if (_discountByPercentage)
+    {
+        // المستخدم آخر تعديل كان نسبة → احسب القيمة من النسبة
         if (_form.DiscountPercentage.HasValue && _form.DiscountPercentage.Value > 0)
         {
             _form.DiscountAmount = Math.Round(
-                _form.TotalAmount * (_form.DiscountPercentage.Value / 100m), 2);
-        }
-        // لو فيه قيمة بدون نسبة، نتأكد إنها مش أكبر من الإجمالي
-        else if (_form.DiscountAmount.HasValue && _form.DiscountAmount.Value > 0)
-        {
-            if (_form.DiscountAmount.Value > _form.TotalAmount)
-                _form.DiscountAmount = _form.TotalAmount;
+                _form.TotalAmount * (_form.DiscountPercentage.Value / 100m), 0);
         }
         else
         {
             _form.DiscountAmount = 0;
         }
-
-        _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
-        _form.GrandTotal = _form.NetTotalAmount ?? 0;
-
-        StateHasChanged();
     }
+    else
+    {
+        // المستخدم آخر تعديل كان قيمة → خلي القيمة ثابتة، أعد حساب النسبة
+        if (_form.DiscountAmount.HasValue && _form.DiscountAmount.Value > 0)
+        {
+            if (_form.DiscountAmount.Value > _form.TotalAmount)
+                _form.DiscountAmount = _form.TotalAmount;
+
+            _form.DiscountPercentage = _form.TotalAmount > 0
+                ? Math.Round((_form.DiscountAmount.Value / _form.TotalAmount) * 100, 2)
+                : 0;
+        }
+        else
+        {
+            _form.DiscountAmount = 0;
+        }
+    }
+
+    _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
+    _form.GrandTotal = _form.NetTotalAmount ?? 0;
+
+    StateHasChanged();
+}
 
     // ============================================================
     // ✅ معالجات الخصم المرن
     // ============================================================
     /// <summary>المستخدم غيّر نسبة الخصم → احسب القيمة منها</summary>
-    private void OnDiscountPercentageChanged(decimal? newPercentage)
+    /// <summary>المستخدم غيّر نسبة الخصم</summary>
+private void OnDiscountPercentageChanged(decimal? newPercentage)
+{
+    _discountByPercentage = true;  // ⭐ آخر تعديل: نسبة
+    _form.DiscountPercentage = newPercentage;
+
+    if (newPercentage.HasValue && newPercentage.Value > 0)
     {
-        _form.DiscountPercentage = newPercentage;
-
-        if (newPercentage.HasValue && newPercentage.Value > 0)
-        {
-            // حدد القيمة بناءً على النسبة
-            _form.DiscountAmount = Math.Round(
-                _form.TotalAmount * (newPercentage.Value / 100m), 2);
-        }
-        else
-        {
-            // النسبة 0 → القيمة 0
-            _form.DiscountAmount = 0;
-        }
-
-        UpdateGrandTotal();
+        // ⭐ تقريب لأقرب جنيه (بدون كسور)
+        _form.DiscountAmount = Math.Round(
+            _form.TotalAmount * (newPercentage.Value / 100m), 0);
     }
-
-    /// <summary>المستخدم غيّر قيمة الخصم → احسب النسبة منها</summary>
-    private void OnDiscountAmountChanged(decimal? newAmount)
-    {
-        _form.DiscountAmount = newAmount;
-
-        if (newAmount.HasValue && newAmount.Value > 0)
-        {
-            // حد أقصى = الإجمالي
-            if (newAmount.Value > _form.TotalAmount)
-            {
-                _form.DiscountAmount = _form.TotalAmount;
-                newAmount = _form.TotalAmount;
-            }
-
-            // احسب النسبة المقابلة
-            _form.DiscountPercentage = _form.TotalAmount > 0
-                ? Math.Round((newAmount.Value / _form.TotalAmount) * 100, 2)
-                : 0;
-        }
-        else
-        {
-            _form.DiscountPercentage = 0;
-        }
-
-        UpdateGrandTotal();
-    }
-
-    /// <summary>إلغاء الخصم تمامًا</summary>
-    private void ClearDiscount()
+    else
     {
         _form.DiscountAmount = 0;
-        _form.DiscountPercentage = 0;
-        UpdateGrandTotal();
     }
 
-    /// <summary>تحديث الإجمالي النهائي فقط (بدون لمس الخصم)</summary>
-    private void UpdateGrandTotal()
-    {
-        _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
-        _form.GrandTotal = _form.NetTotalAmount ?? 0;
-        StateHasChanged();
-    }
+    UpdateGrandTotal();
+}
+
+/// <summary>المستخدم غيّر قيمة الخصم</summary>
+private void OnDiscountAmountChanged(decimal? newAmount)
+{
+    _discountByPercentage = false;  // ⭐ آخر تعديل: قيمة
+    
+    // ⭐ تقريب القيمة المُدخلة لأقرب جنيه
+    var rounded = newAmount.HasValue ? Math.Round(newAmount.Value, 0) : 0;
+    
+    if (rounded > _form.TotalAmount) rounded = _form.TotalAmount;
+    
+    _form.DiscountAmount = rounded;
+
+    // احسب النسبة المقابلة (مع تقريب لأقرب 0.01%)
+    _form.DiscountPercentage = _form.TotalAmount > 0
+        ? Math.Round((rounded / _form.TotalAmount) * 100, 2)
+        : 0;
+
+    UpdateGrandTotal();
+}
+
+/// <summary>إلغاء الخصم تمامًا</summary>
+private void ClearDiscount()
+{
+    _form.DiscountAmount = 0;
+    _form.DiscountPercentage = 0;
+    _discountByPercentage = true;  // reset
+    UpdateGrandTotal();
+}
+
+/// <summary>تحديث الإجمالي النهائي</summary>
+private void UpdateGrandTotal()
+{
+    _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
+    _form.GrandTotal = _form.NetTotalAmount ?? 0;
+    StateHasChanged();
+}
 
     private string FormatMoney(decimal v) => $"{v:N2}";
 
@@ -1718,21 +1967,125 @@ private string _whatsappCountryCode = "20";
         }
     }
 
-    private async Task OpenWhatsApp()
+   private async Task OpenWhatsApp()
 {
-    var normalizedPhone = PhoneNormalizer.ToWhatsAppFormat(_whatsappPhone, _whatsappCountryCode);
-    
-    if (string.IsNullOrEmpty(normalizedPhone))
+    var normalizedPhone = PhoneNormalizer.ToWhatsAppFormat(
+        _whatsappPhone, _whatsappCountryCode);
+
+    if (string.IsNullOrEmpty(normalizedPhone) || 
+        !PhoneNormalizer.IsValidWhatsAppNumber(normalizedPhone))
     {
-        Snackbar.Add("رقم الواتساب غير صحيح. مثال صحيح: 01001234567", Severity.Warning);
+        Snackbar.Add("رقم الواتساب غير صحيح. مثال: 01001234567", Severity.Warning);
         return;
     }
 
-    var encodedMsg = Uri.EscapeDataString(_whatsappMessage);
-    var url = $"https://api.whatsapp.com/send?phone={normalizedPhone}&text={encodedMsg}";
+    try
+    {
+        // افتح واتساب
+        var encodedMsg = Uri.EscapeDataString(_whatsappMessage);
+        var url = $"https://api.whatsapp.com/send?phone={normalizedPhone}&text={encodedMsg}";
+        await JS.InvokeVoidAsync("open", url, "_blank");
+        _showWhatsAppDialog = false;
+
+        // ⭐ Auto-update status to "Sent" لو لسه Draft
+        if (_form.Status == QuotationStatuses.Draft)
+        {
+            var (ok, _) = await QuotationService.ChangeStatusAsync(
+                _form.QuotationId, QuotationStatuses.Sent, _currentUserName!);
+            if (ok)
+            {
+                _form.Status = QuotationStatuses.Sent;
+                StateHasChanged();
+                Snackbar.Add("✅ تم تحديث الحالة إلى: تم الإرسال", Severity.Success);
+            }
+        }
+
+        Snackbar.Add($"تم فتح واتساب على: {PhoneNormalizer.FormatForDisplay(normalizedPhone)}",
+                     Severity.Info);
+    }
+    catch (Exception ex)
+    {
+        Snackbar.Add($"تعذّر فتح واتساب: {ex.Message}", Severity.Error);
+    }
+}
+/// <summary>يعرض رقم الواتساب بعد التطبيع</summary>
+private string GetPhonePreview()
+{
+    if (string.IsNullOrWhiteSpace(_whatsappPhone)) return "";
+    var normalized = PhoneNormalizer.ToWhatsAppFormat(_whatsappPhone, _whatsappCountryCode);
+    if (normalized == null) return "❌ رقم غير صحيح";
+    if (!PhoneNormalizer.IsValidWhatsAppNumber(normalized)) return "❌ رقم غير صحيح";
+    return $"✅ سيتم الإرسال إلى: {PhoneNormalizer.FormatForDisplay(normalized)}";
+}
+
+/// <summary>نسخ رابط المشاركة للحافظة</summary>
+private async Task CopyShareLink()
+{
+    if (string.IsNullOrEmpty(_shareLink)) return;
+    try
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", _shareLink);
+        Snackbar.Add("✅ تم نسخ الرابط", Severity.Success);
+    }
+    catch
+    {
+        Snackbar.Add("اضغط على الرابط واختر نسخ يدوياً", Severity.Info);
+    }
+}
+/// <summary>تحديث رد العميل (موافقة/رفض) - بواسطة الموظف</summary>
+/// <summary>تحديث رد العميل (موافقة/رفض) - بواسطة الموظف</summary>
+private async Task UpdateCustomerResponse(bool accepted)
+{
+    if (_isUpdatingResponse) return;
+
+    var actionText = accepted ? "موافقة العميل" : "رفض العميل";
     
-    await JS.InvokeVoidAsync("open", url, "_blank");
-    _showWhatsAppDialog = false;
+    // ✅ استخدام JS confirm (الأبسط والأضمن)
+    var confirmed = await JS.InvokeAsync<bool>("confirm", 
+        $"هل تريد تسجيل {actionText} على هذا العرض؟");
+
+    if (!confirmed) return;
+
+    _isUpdatingResponse = true;
+    StateHasChanged();
+
+    try
+    {
+        var newStatus = accepted 
+            ? QuotationStatuses.Accepted 
+            : QuotationStatuses.Rejected;
+
+        var (ok, msg) = await QuotationService.ChangeStatusAsync(
+            _form.QuotationId, newStatus, _currentUserName!);
+
+        if (ok)
+        {
+            _form.Status = newStatus;
+            var emoji = accepted ? "✅" : "❌";
+            var text = accepted ? "موافقة العميل" : "رفض العميل";
+            Snackbar.Add($"{emoji} تم تسجيل {text}", Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add(msg, Severity.Error);
+        }
+    }
+    catch (Exception ex)
+    {
+        Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+    }
+    finally
+    {
+        _isUpdatingResponse = false;
+        StateHasChanged();
+    }
+}
+
+/// <summary>فتح الرابط في تاب جديد للمعاينة</summary>
+private async Task PreviewShareLink()
+{
+    if (string.IsNullOrEmpty(_shareLink)) return;
+    await JS.InvokeVoidAsync("open", _shareLink, "_blank");
 }
 
     /// <summary>

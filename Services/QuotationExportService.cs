@@ -676,4 +676,160 @@ private static string GetStatusText(string status)
         _ => status
     };
 }
+// ============================================================
+// ⭐ Export List to PDF (مع الفلاتر)
+// ============================================================
+public async Task<(bool Success, string? Error, byte[]? Pdf, string FileName)> 
+    ExportQuotationsToPdfAsync(QuotationFilterDto filter)
+{
+    try
+    {
+        // نجيب كل النتائج
+        var bigFilter = new QuotationFilterDto
+        {
+            SearchText = filter.SearchText,
+            PartyId = filter.PartyId,
+            DateFrom = filter.DateFrom,
+            DateTo = filter.DateTo,
+            Status = filter.Status,
+            IsConverted = filter.IsConverted,
+            IsExpired = filter.IsExpired,
+            SortBy = filter.SortBy,
+            SortDescending = filter.SortDescending,
+            PageNumber = 1,
+            PageSize = 10000
+        };
+
+        var result = await _quotations.GetQuotationsAsync(bigFilter);
+        var items = result.Items;
+
+        LoadArabicFontIfNeeded();
+        QuestPDF.Settings.License = LicenseType.Community;
+
+        var fileName = $"Quotations-List-{DateTime.Now:yyyy-MM-dd-HHmm}.pdf";
+
+        var bytes = Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4.Landscape());   // ⭐ عرضي عشان الجدول
+                page.Margin(1, Unit.Centimetre);
+                page.PageColor(Colors.White);
+                page.DefaultTextStyle(t => t
+                    .FontFamily(GetFontFamily())
+                    .FontSize(9)
+                    .DirectionFromRightToLeft());
+
+                // Header
+                page.Header().Column(col =>
+                {
+                    col.Item().Row(row =>
+                    {
+                        row.RelativeItem().Text("📋 قائمة عروض الأسعار - COCOBOLO")
+                            .Bold().FontSize(16).FontColor("#B8860B");
+                        row.ConstantItem(200).AlignLeft().Text($"التاريخ: {DateTime.Now:yyyy/MM/dd HH:mm}")
+                            .FontSize(9).FontColor(Colors.Grey.Darken1);
+                    });
+
+                    if (filter.DateFrom.HasValue || filter.DateTo.HasValue)
+                    {
+                        var fromStr = filter.DateFrom?.ToString("yyyy/MM/dd") ?? "البداية";
+                        var toStr = filter.DateTo?.ToString("yyyy/MM/dd") ?? "اليوم";
+                        col.Item().PaddingTop(4).Text($"الفترة: من {fromStr} إلى {toStr}")
+                            .FontSize(10).Italic();
+                    }
+
+                    col.Item().PaddingTop(6).LineHorizontal(2).LineColor("#B8860B");
+                });
+
+                // Content - الجدول
+                page.Content().PaddingVertical(8).Table(table =>
+                {
+                    table.ColumnsDefinition(c =>
+                    {
+                        c.ConstantColumn(30);     // م
+                        c.ConstantColumn(85);     // رقم
+                        c.ConstantColumn(65);     // التاريخ
+                        c.RelativeColumn(2);      // العميل
+                        c.ConstantColumn(80);     // التليفون
+                        c.RelativeColumn(1.5f);   // الموظف
+                        c.ConstantColumn(50);     // الباقة
+                        c.ConstantColumn(75);     // الإجمالي
+                        c.ConstantColumn(75);     // الصافي
+                        c.ConstantColumn(70);     // الحالة
+                    });
+
+                    table.Header(h =>
+                    {
+                        static IContainer HCell(IContainer c) => c.Background("#B8860B")
+                            .Padding(5).DefaultTextStyle(t => t.FontColor(Colors.White).Bold().FontSize(9));
+
+                        h.Cell().Element(HCell).AlignCenter().Text("م");
+                        h.Cell().Element(HCell).Text("رقم العرض");
+                        h.Cell().Element(HCell).AlignCenter().Text("التاريخ");
+                        h.Cell().Element(HCell).Text("العميل");
+                        h.Cell().Element(HCell).AlignCenter().Text("التليفون");
+                        h.Cell().Element(HCell).Text("الموظف");
+                        h.Cell().Element(HCell).AlignCenter().Text("الباقة");
+                        h.Cell().Element(HCell).AlignCenter().Text("الإجمالي");
+                        h.Cell().Element(HCell).AlignCenter().Text("الصافي");
+                        h.Cell().Element(HCell).AlignCenter().Text("الحالة");
+                    });
+
+                    int idx = 1;
+                    decimal totalSum = 0, netSum = 0;
+                    foreach (var q in items)
+                    {
+                        var rowIdx = idx;
+                        IContainer Cell(IContainer c) => c
+                            .BorderBottom(0.5f).BorderColor(Colors.Grey.Lighten2)
+                            .Background(rowIdx % 2 == 0 ? "#FAFAFA" : Colors.White)
+                            .Padding(4);
+
+                        table.Cell().Element(Cell).AlignCenter().Text(idx.ToString()).FontSize(8);
+                        table.Cell().Element(Cell).Text(q.ReferenceNumber).FontSize(8);
+                        table.Cell().Element(Cell).AlignCenter().Text(q.QuotationDate.ToString("yyyy/MM/dd")).FontSize(8);
+                        table.Cell().Element(Cell).Text(q.PartyName).FontSize(8);
+                        table.Cell().Element(Cell).AlignCenter().Text(q.PartyPhone ?? "-").FontSize(8);
+                        table.Cell().Element(Cell).Text(q.EmpName ?? "-").FontSize(8);
+                        table.Cell().Element(Cell).AlignCenter().Text(q.PricingType == "Elite" ? "إيليت" : "بريميم").FontSize(8);
+                        table.Cell().Element(Cell).AlignCenter().Text(q.TotalAmount.ToString("N2")).FontSize(8);
+                        table.Cell().Element(Cell).AlignCenter().Text(q.GrandTotal.ToString("N2")).Bold().FontSize(8);
+                        table.Cell().Element(Cell).AlignCenter().Text(GetStatusText(q.Status)).FontSize(8);
+
+                        totalSum += q.TotalAmount;
+                        netSum += q.GrandTotal;
+                        idx++;
+                    }
+
+                    // Totals row
+                    IContainer TCell(IContainer c) => c.Background("#FFF8DC").Padding(6)
+                        .BorderTop(2).BorderColor("#B8860B");
+
+                    table.Cell().ColumnSpan(7).Element(TCell).AlignCenter().Text("الإجمالي").Bold().FontSize(11);
+                    table.Cell().Element(TCell).AlignCenter().Text(totalSum.ToString("N2")).Bold().FontSize(11);
+                    table.Cell().Element(TCell).AlignCenter().Text(netSum.ToString("N2")).Bold().FontColor("#B8860B").FontSize(11);
+                    table.Cell().Element(TCell);
+                });
+
+                // Footer
+                page.Footer().AlignCenter().Text(t =>
+                {
+                    t.Span("صفحة ").FontSize(8).FontColor(Colors.Grey.Medium);
+                    t.CurrentPageNumber().FontSize(8).FontColor(Colors.Grey.Medium);
+                    t.Span(" من ").FontSize(8).FontColor(Colors.Grey.Medium);
+                    t.TotalPages().FontSize(8).FontColor(Colors.Grey.Medium);
+                    t.Span($" | إجمالي: {items.Count} عرض").FontSize(8).FontColor(Colors.Grey.Medium);
+                });
+            });
+        }).GeneratePdf();
+
+        return (true, null, bytes, fileName);
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Failed to export quotations list to PDF");
+        return (false, "تعذّر تصدير القائمة لـ PDF.", null, "");
+    }
+}
 }

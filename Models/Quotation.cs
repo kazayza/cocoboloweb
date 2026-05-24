@@ -35,6 +35,11 @@ public partial class Quotation
     public string? CreatedBy { get; set; }
 
     public DateTime CreatedAt { get; set; }
+    public string? RejectionReason { get; set; }
+public DateTime? RejectedAt { get; set; }
+public string? RejectedBy { get; set; }
+public DateTime? AcceptedAt { get; set; }
+public string? AcceptedBy { get; set; }
 
     public virtual ICollection<QuotationDetail> QuotationDetails { get; set; } = new List<QuotationDetail>();
 

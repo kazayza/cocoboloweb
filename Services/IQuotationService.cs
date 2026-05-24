@@ -7,9 +7,11 @@ public interface IQuotationService
     // Read
     Task<PagedResult<QuotationListDto>> GetQuotationsAsync(QuotationFilterDto filter);
     Task<QuotationFormDto?> GetQuotationForEditAsync(int quotationId);
+    Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId);
     Task<QuotationPrintDto?> GetQuotationForPrintAsync(int quotationId);
     Task<QuotationStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null);
     Task<string> GenerateNextQuotationNumberAsync();
+    Task<bool> SaveRejectionReasonAsync(int quotationId, string reason);
 
     // Write
     Task<(bool Success, string Message, int? QuotationId)> CreateQuotationAsync(
@@ -18,8 +20,8 @@ public interface IQuotationService
     Task<(bool Success, string Message)> UpdateQuotationAsync(
         QuotationFormDto dto, string currentUserName);
 
-    Task<(bool Success, string Message)> ChangeStatusAsync(
-        int quotationId, string newStatus, string currentUserName);
+   Task<(bool Success, string Message)> ChangeStatusAsync(
+    int quotationId, string newStatus, string currentUserName, bool isPublic = false);
 
     Task<(bool Success, string Message)> DeleteQuotationAsync(
         int quotationId, string currentUserName);
@@ -28,7 +30,10 @@ public interface IQuotationService
     Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
         int quotationId, decimal initialPaidAmount, int? cashBoxId,
         string paymentMethod, string currentUserName);
+    
+    Task<(string? Reason, DateTime? RejectedAt, string? RejectedBy)> 
+    GetRejectionDetailsAsync(int quotationId);
+    
 
-    Task<(bool Success, string? Error, byte[]? Excel, string FileName)> ExportQuotationsToExcelAsync(
-        QuotationFilterDto filter);
+    
 }

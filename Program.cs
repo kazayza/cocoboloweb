@@ -1,6 +1,7 @@
 using COCOBOLOERPNEW.Components;
 using COCOBOLOERPNEW.Models;
 using COCOBOLOERPNEW.Services;
+using COCOBOLOERPNEW.DTOs;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
@@ -358,26 +359,128 @@ static string DetectMimeType(byte[] imageBytes)
 
     return "image/png";
 }
-// قبل app.Run()
-
-// ============ PDF + Excel Endpoints ============
-app.MapGet("/api/quotations/{id:int}/pdf", async (
-    int id, IQuotationExportService export) =>
+// ============ List Export Endpoints (للقائمة بالفلاتر) ============
+app.MapPost("/api/quotations/export-excel", async (
+    QuotationFilterDto filter,
+    IQuotationExportService export) =>
 {
-    var (ok, error, pdf, fileName) = await export.GeneratePdfAsync(id);
-    if (!ok || pdf == null) return Results.NotFound(new { error });
-    return Results.File(pdf, "application/pdf", fileName);
-}); // ⚠️ مش .RequireAuthorization() عشان الـ Public Page تشتغل
-
-app.MapGet("/api/quotations/{id:int}/excel", async (
-    int id, IQuotationExportService export) =>
-{
-    var (ok, error, xlsx, fileName) = await export.GenerateExcelAsync(id);
+    var (ok, error, xlsx, fileName) = await export.ExportQuotationsToExcelAsync(filter);
     if (!ok || xlsx == null) return Results.NotFound(new { error });
     return Results.File(xlsx,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         fileName);
+}).RequireAuthorization();
+
+app.MapPost("/api/quotations/export-pdf", async (
+    QuotationFilterDto filter,
+    IQuotationExportService export) =>
+{
+    var (ok, error, pdf, fileName) = await export.ExportQuotationsToPdfAsync(filter);
+    if (!ok || pdf == null) return Results.NotFound(new { error });
+    return Results.File(pdf, "application/pdf", fileName);
+}).RequireAuthorization();
+
+// ============ Single Quotation Endpoints + Public Share ============
+
+// ============================================================
+// ⭐ Customer Response Endpoint (للصفحة العامة - بدون login)
+// ============================================================
+app.MapPost("/api/public/quotations/{quotationId:int}/respond", async (
+    int quotationId,
+    [FromBody] CustomerResponseDto request,
+    IQuotationService quotationService) =>
+{
+    // ✅ Validation
+    if (request == null)
+        return Results.BadRequest(new { error = "بيانات غير صحيحة" });
+
+    if (string.IsNullOrEmpty(request.Response))
+        return Results.BadRequest(new { error = "الرد مطلوب" });
+
+    // ✅ تأكد من أن الرد صحيح
+    if (request.Response != "Accepted" && request.Response != "Rejected")
+        return Results.BadRequest(new { error = "الرد يجب أن يكون Accepted أو Rejected" });
+
+    // ✅ تأكد من أن العرض موجود
+    var quote = await quotationService.GetQuotationPublicAsync(quotationId);
+    if (quote == null)
+        return Results.NotFound(new { error = "عرض السعر غير موجود" });
+
+    // ✅ منع التعديل لو العرض متحول لفاتورة
+    if (quote.IsConverted)
+        return Results.BadRequest(new { error = "هذا العرض تم تحويله لفاتورة بالفعل" });
+
+    // ✅ منع التعديل لو العرض رد عليه مسبقاً
+    if (quote.Status == "Accepted" || quote.Status == "Rejected")
+        return Results.BadRequest(new { 
+            error = $"تم تسجيل ردك مسبقاً ({(quote.Status == "Accepted" ? "موافقة" : "رفض")})" 
+        });
+
+    // ✅ تحديث الحالة
+    var (ok, msg) = await quotationService.ChangeStatusAsync(
+    quotationId, request.Response, "Customer (Public)", isPublic: true);
+
+    if (!ok)
+        return Results.BadRequest(new { error = msg });
+
+    // ✅ Logging الرفض مع السبب (لو فيه)
+    if (request.Response == "Rejected" && !string.IsNullOrEmpty(request.Reason))
+{
+    await quotationService.SaveRejectionReasonAsync(quotationId, request.Reason);
+}
+
+    return Results.Ok(new { 
+        success = true, 
+        message = request.Response == "Accepted" 
+            ? "تم تسجيل موافقتك بنجاح. سيتم التواصل معك قريباً." 
+            : "تم تسجيل ردك. شكراً لاهتمامك."
+    });
 });
+
+// ============================================================
+// ⭐ Track Customer Viewing (تتبع المشاهدة)
+// ============================================================
+app.MapPost("/api/public/quotations/{quotationId:int}/viewed", async (
+    int quotationId,
+    HttpContext http,
+    IQuotationService quotationService) =>
+{
+    var quote = await quotationService.GetQuotationPublicAsync(quotationId);
+    if (quote == null) return Results.NotFound();
+
+    // ✅ سجل المشاهدة (يمكن إضافة جدول QuotationViews لاحقاً)
+    var ip = http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    var userAgent = http.Request.Headers.UserAgent.ToString();
+    
+    Console.WriteLine($"[Quote {quotationId}] Viewed by customer. IP: {ip}");
+
+    return Results.Ok(new { tracked = true });
+});
+// ⭐ Public PDF endpoint (بدون auth - للعميل من الصفحة العامة)
+app.MapGet("/api/public/quotations/{id:int}/pdf-view", async (
+    int id,
+    IQuotationExportService export) =>
+{
+    var (ok, error, pdf, fileName) = await export.GeneratePdfAsync(id);
+    if (!ok || pdf == null) return Results.NotFound();
+    
+    // ⭐ inline display بدل download
+    return Results.File(pdf, "application/pdf", 
+        fileDownloadName: null, // null = inline
+        enableRangeProcessing: true);
+});
+// ⭐ Public Excel endpoint
+app.MapGet("/api/public/quotations/{id:int}/excel-view", async (
+    int id,
+    IQuotationExportService export) =>
+{
+    var (ok, error, xlsx, fileName) = await export.GenerateExcelAsync(id);
+    if (!ok || xlsx == null) return Results.NotFound();
+    return Results.File(xlsx,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        fileName);
+});
+
 
 app.MapQuotationExports();
 app.Run();
