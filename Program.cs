@@ -388,7 +388,8 @@ app.MapPost("/api/quotations/export-pdf", async (
 app.MapPost("/api/public/quotations/{quotationId:int}/respond", async (
     int quotationId,
     [FromBody] CustomerResponseDto request,
-    IQuotationService quotationService) =>
+    IQuotationService quotationService,
+    NotificationService notify) => 
 {
     // ✅ Validation
     if (request == null)
@@ -416,18 +417,89 @@ app.MapPost("/api/public/quotations/{quotationId:int}/respond", async (
             error = $"تم تسجيل ردك مسبقاً ({(quote.Status == "Accepted" ? "موافقة" : "رفض")})" 
         });
 
-    // ✅ تحديث الحالة
-    var (ok, msg) = await quotationService.ChangeStatusAsync(
-    quotationId, request.Response, "Customer (Public)", isPublic: true);
+    // ✅ تحديد اسم المسجل (اسم اللي دخل من اللينك أو اسم العميل من DB)
+var responderName = !string.IsNullOrWhiteSpace(request.CustomerName)
+    ? $"{request.CustomerName.Trim()} (Public Link)"
+    : $"{quote.PartyName ?? "العميل"} (Public Link)";
+
+// ✅ تحديث الحالة
+var (ok, msg) = await quotationService.ChangeStatusAsync(
+    quotationId, request.Response, responderName, isPublic: true);
 
     if (!ok)
         return Results.BadRequest(new { error = msg });
 
     // ✅ Logging الرفض مع السبب (لو فيه)
-    if (request.Response == "Rejected" && !string.IsNullOrEmpty(request.Reason))
+    // ✅ حفظ سبب الرفض لو موجود
+if (request.Response == "Rejected" && !string.IsNullOrWhiteSpace(request.Reason))
 {
-    await quotationService.SaveRejectionReasonAsync(quotationId, request.Reason);
+    var savedReason = await quotationService.SaveRejectionReasonAsync(
+        quotationId, request.Reason.Trim());
+    
+    if (!savedReason)
+    {
+        // الحالة اتغيرت بس السبب ما اتسجلش - log warning
+        Console.WriteLine($"[WARN] Quote {quotationId} rejected but reason save FAILED. Reason: {request.Reason}");
+    }
 }
+// ⭐ إشعار للموظف اللي عمل العرض + للأدمن
+try
+{
+    var actionEmoji = request.Response == "Accepted" ? "✅" : "❌";
+    var actionText = request.Response == "Accepted" ? "وافق على" : "رفض";
+    var customerLabel = !string.IsNullOrWhiteSpace(request.CustomerName)
+        ? request.CustomerName.Trim()
+        : (quote.PartyName ?? "العميل");
+
+    var title = $"{actionEmoji} {actionText} العميل: {customerLabel}";
+    
+    var message = $"العميل {customerLabel} {actionText} عرض السعر {quote.ReferenceNumber} " +
+                  $"بقيمة {quote.GrandTotal:N2} ج";
+    
+    if (request.Response == "Rejected" && !string.IsNullOrWhiteSpace(request.Reason))
+    {
+        message += $"\nالسبب: {request.Reason.Trim()}";
+    }
+
+    // إشعار للموظف اللي عمل العرض
+    if (!string.IsNullOrWhiteSpace(quote.CreatedBy))
+    {
+        await notify.AddAsync(
+            title: title,
+            message: message,
+            recipientUser: quote.CreatedBy,
+            createdBy: "Customer",
+            formName: "quotations",
+            relatedTable: "Quotations",
+            relatedId: quotationId);
+    }
+
+    // إشعار للأدمن
+    await notify.NotifyRoleAsync(
+        title: title,
+        message: message,
+        role: "Admin",
+        createdBy: "Customer",
+        formName: "quotations",
+        relatedTable: "Quotations",
+        relatedId: quotationId);
+
+    // إشعار لمدير المبيعات
+    await notify.NotifyRoleAsync(
+        title: title,
+        message: message,
+        role: "SalesManager",
+        createdBy: "Customer",
+        formName: "quotations",
+        relatedTable: "Quotations",
+        relatedId: quotationId);
+}
+catch (Exception notifyEx)
+{
+    // مش بنفشل العملية لو الإشعار فشل
+    Console.WriteLine($"[WARN] Failed to send notification: {notifyEx.Message}");
+}
+
 
     return Results.Ok(new { 
         success = true, 

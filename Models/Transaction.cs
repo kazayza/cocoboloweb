@@ -1,10 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 
+
 namespace COCOBOLOERPNEW.Models;
 
 public partial class Transaction
 {
+    
     public int TransactionId { get; set; }
 
     public DateTime TransactionDate { get; set; }

@@ -1136,19 +1136,40 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
     }
 
     private static void CalculateTotals(QuotationFormDto dto)
+{
+    dto.TotalAmount = Math.Round(dto.Items.Sum(i => i.TotalAmount), 2);
+
+    // ⭐ الأولوية للـ DiscountAmount لو موجود (لأنه هو اللي اتسجل)
+    // النسبة بتتحسب من القيمة، مش العكس
+    if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
     {
-        dto.TotalAmount = Math.Round(dto.Items.Sum(i => i.TotalAmount), 2);
-        if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0)
-            dto.DiscountAmount = Math.Round(dto.TotalAmount * (dto.DiscountPercentage.Value / 100m), 2);
-        else if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
-        {
-            if (dto.DiscountAmount.Value > dto.TotalAmount)
-                dto.DiscountAmount = dto.TotalAmount;
-        }
-        else dto.DiscountAmount = 0;
-        dto.NetTotalAmount = dto.TotalAmount - (dto.DiscountAmount ?? 0);
-        dto.GrandTotal = dto.NetTotalAmount ?? 0;
+        // لو القيمة أكبر من الإجمالي، قللها
+        if (dto.DiscountAmount.Value > dto.TotalAmount)
+            dto.DiscountAmount = dto.TotalAmount;
+        
+        // احسب النسبة من القيمة (للعرض فقط)
+        dto.DiscountPercentage = dto.TotalAmount > 0
+            ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100, 2)
+            : 0;
     }
+    else if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0)
+    {
+        // لو فيه نسبة بدون قيمة، احسب القيمة وقربها لأقرب 100 ج
+        var rawAmount = dto.TotalAmount * (dto.DiscountPercentage.Value / 100m);
+        dto.DiscountAmount = Math.Round(rawAmount / 100m, 0) * 100m;
+        
+        // لو القيمة أكبر من الإجمالي، قللها
+        if (dto.DiscountAmount > dto.TotalAmount)
+            dto.DiscountAmount = dto.TotalAmount;
+    }
+    else
+    {
+        dto.DiscountAmount = 0;
+    }
+
+    dto.NetTotalAmount = dto.TotalAmount - (dto.DiscountAmount ?? 0);
+    dto.GrandTotal = dto.NetTotalAmount ?? 0;
+}
 
     private static string BuildDetailNotes(string? tier, string? userNotes)
     {
