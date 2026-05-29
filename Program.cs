@@ -11,6 +11,7 @@ using MudBlazor.Services;
 using COCOBOLOERPNEW.Helpers;
 using COCOBOLOERPNEW.Endpoints;
 using QuestPDF.Infrastructure;
+using System.Threading.RateLimiting;
 QuestPDF.Settings.License = LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -21,13 +22,34 @@ builder.Services.AddRazorComponents()
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddMudServices();
 
+// ⭐ Rate Limiting - حماية من Brute Force
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = 429; // Too Many Requests
+    
+    // قاعدة الـ Login: 5 محاولات كل دقيقة لكل IP
+    options.AddPolicy("login", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,                          // 5 محاولات
+                Window = TimeSpan.FromMinutes(1),         // كل دقيقة
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+});
+
 // ✅ Memory Cache
 builder.Services.AddMemoryCache();
 builder.Services.AddScoped<CacheService>();
 
-builder.Services.AddDbContext<db24804Context>(options =>
-    options.UseSqlServer(
-        builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddDbContextFactory<db24804Context>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+builder.Services.AddScoped(sp => 
+    sp.GetRequiredService<IDbContextFactory<db24804Context>>().CreateDbContext());
 
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
@@ -35,13 +57,22 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.LoginPath         = "/login";
         options.AccessDeniedPath  = "/access-denied";
         options.SlidingExpiration = true;
-        options.ExpireTimeSpan    = TimeSpan.FromHours(8);
+        options.ExpireTimeSpan = TimeSpan.FromMinutes(5);
+       // options.ExpireTimeSpan    = TimeSpan.FromHours(8);
+        
 
         options.Cookie.Name         = "COCOBOLO.Auth";
         options.Cookie.HttpOnly     = true;
         options.Cookie.IsEssential  = true;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
-        options.Cookie.SameSite     = SameSiteMode.Lax;
+        //options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        //options.Cookie.SameSite     = SameSiteMode.Lax;
+        options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+    ? CookieSecurePolicy.SameAsRequest
+    : CookieSecurePolicy.Always;
+    
+options.Cookie.SameSite = builder.Environment.IsDevelopment()
+    ? SameSiteMode.Lax
+    : SameSiteMode.Strict;
 
         options.Events = new CookieAuthenticationEvents
         {
@@ -100,6 +131,8 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
+app.UseRateLimiter();
+
 app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseAuthentication();
@@ -126,8 +159,8 @@ app.MapPost("/auth/login", async (
     // ⚠️ بدون AsNoTracking عشان نقدر نعمل Update
     var user = await db.Users.SingleOrDefaultAsync(u => u.Username == username);
 
-    if (user is null)          return Results.BadRequest("اسم المستخدم غير موجود.");
-    if (user.IsActive == false) return Results.BadRequest("الحساب غير مفعل.");
+    if (user is null) return Results.BadRequest("بيانات الدخول غير صحيحة.");
+    if (user.IsActive == false) return Results.BadRequest("بيانات الدخول غير صحيحة.");
 
     // ✅ تحقق ذكي - BCrypt أو Plain Text (Migration تلقائي)
     bool passwordValid;
@@ -146,7 +179,7 @@ app.MapPost("/auth/login", async (
     }
 
     if (!passwordValid)
-        return Results.BadRequest("كلمة المرور غير صحيحة.");
+        return Results.BadRequest("بيانات الدخول غير صحيحة.");
 
     // ✅ Migration تلقائي عند أول Login
     if (needsMigration)
@@ -188,15 +221,17 @@ app.MapPost("/auth/login", async (
         principal,
         new AuthenticationProperties
         {
-            IsPersistent = request.RememberMe,
+            //IsPersistent = request.RememberMe,
+            IsPersistent = false,
             AllowRefresh  = true,
-            ExpiresUtc    = request.RememberMe
-                ? DateTimeOffset.UtcNow.AddDays(30)
-                : DateTimeOffset.UtcNow.AddHours(8)
+            //ExpiresUtc    = request.RememberMe
+               // ? DateTimeOffset.UtcNow.AddDays(30)
+              //  : DateTimeOffset.UtcNow.AddHours(8)
         });
 
     return Results.Ok(new { message = "Authenticated" });
-});
+    
+}).RequireRateLimiting("login"); 
 
 // ============================================================
 // Logout
@@ -262,6 +297,45 @@ app.MapGet("/api/product-images/{productId:int}", async (
     }
 
     // 4) مفيش صورة صالحة
+    return Results.NotFound();
+}).RequireAuthorization();
+
+// ⭐ Public endpoint للصور - للعميل من عرض السعر العام
+app.MapGet("/api/public/product-images/{productId:int}", async (
+    int productId,
+    db24804Context db,
+    IWebHostEnvironment env) =>
+{
+    var image = await db.ProductImages
+        .AsNoTracking()
+        .Where(im => im.ProductId == productId)
+        .OrderByDescending(im => im.IsPrimary)
+        .ThenByDescending(im => im.CreatedAt)
+        .ThenByDescending(im => im.ProductImagesId)
+        .FirstOrDefaultAsync();
+
+    if (image == null)
+        return Results.NotFound();
+
+    if (!string.IsNullOrEmpty(image.ImagePath))
+    {
+        var relativePath = image.ImagePath.TrimStart('/');
+        var fullPath = Path.Combine(env.WebRootPath, relativePath);
+
+        if (File.Exists(fullPath))
+        {
+            var mimeType = GetMimeTypeFromExtension(fullPath);
+            var fileBytes = await File.ReadAllBytesAsync(fullPath);
+            return Results.File(fileBytes, mimeType, enableRangeProcessing: true);
+        }
+    }
+
+    if (image.ImageProduct != null && image.ImageProduct.Length > 0)
+    {
+        var mimeType = DetectMimeType(image.ImageProduct);
+        return Results.File(image.ImageProduct, mimeType);
+    }
+
     return Results.NotFound();
 });
 // ============================================================

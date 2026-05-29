@@ -1126,11 +1126,11 @@ public class InvoiceService : IInvoiceService
 
             // إشعار للأدمن
 await _notify.NotifyRoleAsync(title, message, SystemRoles.Admin, actor,
-    "frmInvoices", "Transactions", transaction.TransactionId);
+    "sales/invoices", "Transactions", transaction.TransactionId);
 
 // إشعار لمدير الحسابات
 await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, actor,
-    "frmInvoices", "Transactions", transaction.TransactionId);
+    "sales/invoices", "Transactions", transaction.TransactionId);
         }
         catch (Exception ex)
         {
