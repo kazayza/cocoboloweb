@@ -62,6 +62,10 @@ public partial class Transaction
     public bool? IsDelivered { get; set; }
 
     public string? InvoiceStatus { get; set; }
+    public int? DeliveryEmployeeId { get; set; }
+public string? DeliveryEmployeeName { get; set; }
+public DateTime? DeliveredAt { get; set; }
+public string? DeliveredNotes { get; set; }
 
     public virtual ICollection<Payment> Payments { get; set; } = new List<Payment>();
 

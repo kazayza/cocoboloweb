@@ -38,4 +38,11 @@ public partial class VwSalesDeliveryStatus
     public decimal TotalChargesAmount { get; set; }
 
     public decimal GrandTotal { get; set; }
+     public int? DeliveryEmployeeId { get; set; }
+    
+    public string? DeliveryEmployeeName { get; set; }
+    
+    public DateTime? DeliveredAt { get; set; }
+    
+    public string? DeliveredNotes { get; set; }
 }
