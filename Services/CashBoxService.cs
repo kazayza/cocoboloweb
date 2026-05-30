@@ -759,4 +759,23 @@ private async Task<(string? Title, string? Url, string? PartyName, string? Perso
         return result.OrderByDescending(r => r.IsActive)
                      .ThenByDescending(r => r.CurrentBalance).ToList();
     }
+        public async Task<(decimal TotalIn, decimal TotalOut)> GetTransactionsTotalsAsync(CashBoxTransactionFilterDto filter)
+    {
+        var query = _db.CashboxTransactions.AsNoTracking().AsQueryable();
+
+        // 1. تطبيق نفس الفلاتر (خزينة، تاريخ، نوع الحركة، الخ)
+        if (filter.CashBoxId.HasValue)
+            query = query.Where(t => t.CashBoxId == filter.CashBoxId.Value);
+
+        if (filter.DateFrom.HasValue)
+            query = query.Where(t => t.TransactionDate >= filter.DateFrom.Value.Date);
+            
+        // ... (باقي الفلاتر)
+
+        // 2. حساب المجموع الكلي مباشرة من قاعدة البيانات
+        var totalIn = await query.Where(t => t.TransactionType == "قبض").SumAsync(t => (decimal?)t.Amount) ?? 0;
+        var totalOut = await query.Where(t => t.TransactionType == "صرف").SumAsync(t => (decimal?)t.Amount) ?? 0;
+
+        return (totalIn, totalOut);
+    }
 }

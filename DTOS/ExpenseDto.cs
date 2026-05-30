@@ -9,7 +9,6 @@ public class ExpenseListDto
     public bool IsAdvance { get; set; }
     public int? AdvanceMonths { get; set; }
 
-    // ⭐ للمصروف المقدم
     public int? AdvanceParentExpenseId { get; set; }
     public int? AdvanceMonthIndex { get; set; }
     public bool IsAdvanceParent => AdvanceMonthIndex == 0 && IsAdvance;
@@ -46,6 +45,7 @@ public class ExpenseFormDto
 public class ExpenseFilterDto
 {
     public string? SearchText { get; set; }
+    public int? ParentGroupId { get; set; }
     public int? ExpenseGroupId { get; set; }
     public int? CashBoxId { get; set; }
     public DateTime? DateFrom { get; set; }
@@ -53,7 +53,7 @@ public class ExpenseFilterDto
     public decimal? AmountFrom { get; set; }
     public decimal? AmountTo { get; set; }
     public bool? IsAdvance { get; set; }
-    public bool? OnlyParents { get; set; }   // عرض الأصل فقط (بدون أشهر فرعية)
+    public bool? OnlyParents { get; set; }
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 25;
     public string SortBy { get; set; } = "ExpenseDate";
@@ -69,9 +69,9 @@ public class ExpenseStatsDto
     public decimal YearAmount { get; set; }
     public List<ExpenseGroupStatsDto> GroupBreakdown { get; set; } = new();
 }
+
 public class ExpenseDashboardDto
 {
-    // KPIs
     public decimal CurrentMonthAmount { get; set; }
     public decimal PreviousMonthAmount { get; set; }
     public decimal MonthOverMonthGrowth { get; set; }
@@ -81,11 +81,11 @@ public class ExpenseDashboardDto
     public int ActiveAdvanceExpensesCount { get; set; }
     public decimal ActiveAdvanceExpensesAmount { get; set; }
 
-    // Charts
     public List<ExpenseGroupStatsDto> GroupDistribution { get; set; } = new();
-    public List<MonthlyTrendDto> MonthlyTrends { get; set; } = new();
-
-    // Tables
+    public List<ExpenseMonthlyTrendDto> MonthlyTrends { get; set; } = new();
+    public List<ExpenseVarianceDto> VarianceAnalysis { get; set; } = new();
+    public List<ExpenseParetoDto> ParetoAnalysis { get; set; } = new();
+    public List<ExpenseDailyTrendDto> DailyTrend { get; set; } = new();
     public List<ExpenseListDto> TopExpenses { get; set; } = new();
 }
 
@@ -124,4 +124,27 @@ public class ExpenseGroupFormDto
     public int ExpenseGroupId { get; set; }
     public string ExpenseGroupName { get; set; } = "";
     public int? ParentGroupId { get; set; }
+}
+
+public class ExpenseVarianceDto
+{
+    public string GroupName { get; set; } = "";
+    public decimal CurrentMonth { get; set; }
+    public decimal PreviousMonthsAverage { get; set; }
+    public decimal VariancePercentage { get; set; }
+    public bool IsOverspending => VariancePercentage > 10;
+}
+
+public class ExpenseParetoDto
+{
+    public string ItemName { get; set; } = "";
+    public decimal Amount { get; set; }
+    public decimal Percentage { get; set; }
+    public decimal CumulativePercentage { get; set; }
+}
+
+public class ExpenseDailyTrendDto
+{
+    public int Day { get; set; }
+    public decimal Amount { get; set; }
 }

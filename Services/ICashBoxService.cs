@@ -11,6 +11,7 @@ public interface ICashBoxService
     Task<(bool Success, string Message, int? Id)> SaveCashBoxAsync(CashBoxFormDto dto, string userName);
     Task<(bool Success, string Message)> DeleteCashBoxAsync(int id, string userName);
     Task<decimal> GetCurrentBalanceAsync(int cashBoxId);
+    Task<(decimal TotalIn, decimal TotalOut)> GetTransactionsTotalsAsync(CashBoxTransactionFilterDto filter);
 
     // Transactions
     Task<PagedResult<CashBoxTransactionDto>> GetTransactionsAsync(CashBoxTransactionFilterDto filter);

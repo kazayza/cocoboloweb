@@ -12,18 +12,18 @@
 <div class="exp-report-page" dir="rtl">
     <div class="page-header mb-4">
         <div class="header-left">
-            <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Large" Class="mr-2" />
+            <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="MudBlazor.Size.Large" Class="mr-2" />
             <div>
                 <h1 class="mb-0">تقرير المصروفات</h1>
                 <p class="text-muted mb-0">استعلام، فلترة، وطباعة تفاصيل المصروفات</p>
             </div>
         </div>
         <div class="header-actions">
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Dashboard"
+            <MudButton Variant="Variant.Filled" Color="MudBlazor.Color.Primary" StartIcon="@Icons.Material.Filled.Dashboard"
                        OnClick="@(() => Navigation.NavigateTo("/expenses/dashboard"))" Class="me-2">
                 لوحة التحكم
             </MudButton>
-            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.List"
+            <MudButton Variant="Variant.Outlined" Color="MudBlazor.Color.Secondary" StartIcon="@Icons.Material.Filled.List"
                        OnClick="@(() => Navigation.NavigateTo("/expenses"))">
                 إدارة المصروفات
             </MudButton>
@@ -38,12 +38,20 @@
             <MudDatePicker @bind-Date="_filter.DateFrom" Label="من تاريخ" Variant="Variant.Outlined" Clearable="true" />
             <MudDatePicker @bind-Date="_filter.DateTo" Label="إلى تاريخ" Variant="Variant.Outlined" Clearable="true" />
             
-            <MudSelect T="int?" @bind-Value="_filter.ExpenseGroupId" Label="مجموعة المصروفات" Variant="Variant.Outlined" Clearable="true">
-                @foreach (var g in _groups)
+            <MudSelect T="int?" Value="@_filter.ParentGroupId" ValueChanged="OnParentGroupChanged" 
+                       Label="المجموعة الرئيسية" Variant="Variant.Outlined" Clearable="true" Margin="Margin.Dense">
+                @foreach (var g in _mainGroups)
                 {
-                    <MudSelectItem T="int?" Value="@((int?)g.ExpenseGroupId)">
-                        @(string.IsNullOrEmpty(g.ParentGroupName) ? g.ExpenseGroupName : $"{g.ParentGroupName} > {g.ExpenseGroupName}")
-                    </MudSelectItem>
+                    <MudSelectItem T="int?" Value="@((int?)g.ExpenseGroupId)">@g.ExpenseGroupName</MudSelectItem>
+                }
+            </MudSelect>
+            
+            <MudSelect T="int?" @bind-Value="_filter.ExpenseGroupId" 
+                       Label="نوع المصروف" Variant="Variant.Outlined" Clearable="true" Margin="Margin.Dense"
+                       Disabled="@(!_filter.ParentGroupId.HasValue)">
+                @foreach (var g in _subGroups)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)g.ExpenseGroupId)">@g.ExpenseGroupName</MudSelectItem>
                 }
             </MudSelect>
 
@@ -56,18 +64,18 @@
         </div>
         
         <div class="filters-actions mt-3">
-            <MudButton Variant="Variant.Filled" Color="Color.Info" StartIcon="@Icons.Material.Filled.Search" 
+            <MudButton Variant="Variant.Filled" Color="MudBlazor.Color.Info" StartIcon="@Icons.Material.Filled.Search" 
                        OnClick="LoadData" Class="me-2">بحث</MudButton>
             <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Clear" 
                        OnClick="ClearFilters" Class="me-4">تفريغ</MudButton>
                        
             <span class="spacer"></span>
             
-            <MudButton Variant="Variant.Filled" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Print" 
+            <MudButton Variant="Variant.Filled" Color="MudBlazor.Color.Secondary" StartIcon="@Icons.Material.Filled.Print" 
                        OnClick="PrintReport" Class="me-2" Disabled="@(!_expenses.Any())">
                 طباعة / تصدير PDF
             </MudButton>
-            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.TableView" 
+            <MudButton Variant="Variant.Filled" Color="MudBlazor.Color.Success" StartIcon="@Icons.Material.Filled.TableView" 
                        OnClick="ExportExcel" Disabled="@(!_expenses.Any())">
                 تصدير Excel
             </MudButton>
@@ -79,7 +87,7 @@
         @if (_isLoading)
         {
             <div class="text-center py-5">
-                <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+                <MudProgressCircular Color="MudBlazor.Color.Primary" Indeterminate="true" />
                 <p class="mt-2">جاري تحميل البيانات...</p>
             </div>
         }
@@ -175,12 +183,17 @@
     private List<ExpenseListDto> _expenses = new();
     private decimal _totalAmount = 0;
     
-    private List<ExpenseGroupDto> _groups = new();
+    private List<ExpenseGroupDto> _allGroups = new();
+    private List<ExpenseGroupDto> _mainGroups = new();
+    private List<ExpenseGroupDto> _subGroups = new();
+    
     private List<CashBoxListDto> _boxes = new();
 
     protected override async Task OnInitializedAsync()
     {
-        _groups = await ExpenseService.GetExpenseGroupsAsync();
+        _allGroups = await ExpenseService.GetExpenseGroupsAsync();
+        _mainGroups = _allGroups.Where(g => g.ParentGroupId == null).ToList();
+        
         _boxes = await CashBoxService.GetCashBoxesAsync();
         
         // Default filter: current month
@@ -189,6 +202,21 @@
         _filter.DateTo = _filter.DateFrom.Value.AddMonths(1).AddDays(-1);
         
         await LoadData();
+    }
+
+    private void OnParentGroupChanged(int? parentId)
+    {
+        _filter.ParentGroupId = parentId;
+        _filter.ExpenseGroupId = null; // Reset sub-group
+        
+        if (parentId.HasValue)
+        {
+            _subGroups = _allGroups.Where(g => g.ParentGroupId == parentId.Value).ToList();
+        }
+        else
+        {
+            _subGroups.Clear();
+        }
     }
 
     private async Task LoadData()
@@ -228,29 +256,8 @@
 
     private async Task ExportExcel()
     {
-        // Simple JS export using pure HTML table parsing to Excel format, 
-        // or passing to a backend endpoint. Here we implement a simple browser-side CSV export
-        
-        var csv = "التاريخ,اسم المصروف,المجموعة,الخزينة,المستلم,المبلغ\n";
-        foreach(var exp in _expenses)
-        {
-            var date = exp.ExpenseDate.ToString("yyyy-MM-dd");
-            var name = exp.ExpenseName.Replace(",", " ");
-            var group = (exp.ExpenseGroupName ?? "").Replace(",", " ");
-            var box = (exp.CashBoxName ?? "").Replace(",", " ");
-            var rec = (exp.Recipient ?? "").Replace(",", " ");
-            var amt = exp.Amount.ToString(CultureInfo.InvariantCulture);
-            
-            csv += $"{date},{name},{group},{box},{rec},{amt}\n";
-        }
-        
-        csv += $",,,,إجمالي المصروفات,{_totalAmount.ToString(CultureInfo.InvariantCulture)}\n";
-
-        // Add BOM for Excel UTF-8 arabic support
-        var bom = "\uFEFF";
-        var bytes = System.Text.Encoding.UTF8.GetBytes(bom + csv);
-        var base64 = Convert.ToBase64String(bytes);
-        
-        await JS.InvokeVoidAsync("downloadFile", "ExpenseReport.csv", "text/csv;charset=utf-8", base64);
+        var fileBytes = await ExpenseService.ExportExpensesToExcelAsync(_filter);
+        var base64 = Convert.ToBase64String(fileBytes);
+        await JS.InvokeVoidAsync("downloadFileFromBase64", base64, "ExpenseReport.xlsx");
     }
 }

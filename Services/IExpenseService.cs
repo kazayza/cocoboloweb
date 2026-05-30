@@ -14,6 +14,9 @@ public interface IExpenseService
 
     Task<(bool Success, string Message)> DeleteExpenseAsync(int id, string userName);
 
+    // ⭐ دالة التصدير للإكسيل الجديدة
+    Task<byte[]> ExportExpensesToExcelAsync(ExpenseFilterDto filter);
+
     // Expense Groups
     Task<List<ExpenseGroupDto>> GetExpenseGroupsAsync(bool asTree = false);
     Task<ExpenseGroupDto?> GetExpenseGroupByIdAsync(int id);
@@ -23,6 +26,7 @@ public interface IExpenseService
 
     Task<(bool Success, string Message)> DeleteExpenseGroupAsync(int id, string userName);
 
-    // ⭐ خاص بالمصروف المقدم
     Task<List<ExpenseListDto>> GetAdvanceChildrenAsync(int parentExpenseId);
+    
+    
 }
