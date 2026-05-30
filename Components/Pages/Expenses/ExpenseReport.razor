@@ -1,0 +1,256 @@
+@page "/expenses/report"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+
+@inject IExpenseService ExpenseService
+@inject ICashBoxService CashBoxService
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<div class="exp-report-page" dir="rtl">
+    <div class="page-header mb-4">
+        <div class="header-left">
+            <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Large" Class="mr-2" />
+            <div>
+                <h1 class="mb-0">تقرير المصروفات</h1>
+                <p class="text-muted mb-0">استعلام، فلترة، وطباعة تفاصيل المصروفات</p>
+            </div>
+        </div>
+        <div class="header-actions">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Dashboard"
+                       OnClick="@(() => Navigation.NavigateTo("/expenses/dashboard"))" Class="me-2">
+                لوحة التحكم
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.List"
+                       OnClick="@(() => Navigation.NavigateTo("/expenses"))">
+                إدارة المصروفات
+            </MudButton>
+        </div>
+    </div>
+
+    <!-- Filters Section -->
+    <MudPaper Class="filters-section p-4 mb-4" Elevation="0">
+        <h3 class="filters-title"><MudIcon Icon="@Icons.Material.Filled.FilterAlt" Class="mr-1" /> محددات التقرير</h3>
+        
+        <div class="filters-grid">
+            <MudDatePicker @bind-Date="_filter.DateFrom" Label="من تاريخ" Variant="Variant.Outlined" Clearable="true" />
+            <MudDatePicker @bind-Date="_filter.DateTo" Label="إلى تاريخ" Variant="Variant.Outlined" Clearable="true" />
+            
+            <MudSelect T="int?" @bind-Value="_filter.ExpenseGroupId" Label="مجموعة المصروفات" Variant="Variant.Outlined" Clearable="true">
+                @foreach (var g in _groups)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)g.ExpenseGroupId)">
+                        @(string.IsNullOrEmpty(g.ParentGroupName) ? g.ExpenseGroupName : $"{g.ParentGroupName} > {g.ExpenseGroupName}")
+                    </MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSelect T="int?" @bind-Value="_filter.CashBoxId" Label="الخزينة" Variant="Variant.Outlined" Clearable="true">
+                @foreach (var box in _boxes)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)box.CashBoxId)">@box.CashBoxName</MudSelectItem>
+                }
+            </MudSelect>
+        </div>
+        
+        <div class="filters-actions mt-3">
+            <MudButton Variant="Variant.Filled" Color="Color.Info" StartIcon="@Icons.Material.Filled.Search" 
+                       OnClick="LoadData" Class="me-2">بحث</MudButton>
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Clear" 
+                       OnClick="ClearFilters" Class="me-4">تفريغ</MudButton>
+                       
+            <span class="spacer"></span>
+            
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Print" 
+                       OnClick="PrintReport" Class="me-2" Disabled="@(!_expenses.Any())">
+                طباعة / تصدير PDF
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.TableView" 
+                       OnClick="ExportExcel" Disabled="@(!_expenses.Any())">
+                تصدير Excel
+            </MudButton>
+        </div>
+    </MudPaper>
+
+    <!-- Data Table -->
+    <MudPaper Class="table-section p-4" Elevation="0">
+        @if (_isLoading)
+        {
+            <div class="text-center py-5">
+                <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+                <p class="mt-2">جاري تحميل البيانات...</p>
+            </div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="report-table">
+                    <thead>
+                        <tr>
+                            <th>التاريخ</th>
+                            <th>المصروف</th>
+                            <th>المجموعة</th>
+                            <th>الخزينة</th>
+                            <th>المستلم</th>
+                            <th class="text-left">المبلغ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!_expenses.Any())
+                        {
+                            <tr>
+                                <td colspan="6" class="text-center py-4 text-muted">لا توجد نتائج تطابق الفلاتر المحددة.</td>
+                            </tr>
+                        }
+                        else
+                        {
+                            @foreach (var exp in _expenses)
+                            {
+                                <tr>
+                                    <td>@exp.ExpenseDate.ToString("yyyy/MM/dd")</td>
+                                    <td>
+                                        <strong>@exp.ExpenseName</strong>
+                                        @if (exp.IsAdvance)
+                                        {
+                                            <span class="badge-advance">مقدم</span>
+                                        }
+                                    </td>
+                                    <td><span class="badge-group">@exp.ExpenseGroupName</span></td>
+                                    <td>@exp.CashBoxName</td>
+                                    <td>@exp.Recipient</td>
+                                    <td class="text-left amount-val">@exp.Amount.ToString("N2", CultureInfo.InvariantCulture) ج</td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                    @if (_expenses.Any())
+                    {
+                        <tfoot>
+                            <tr>
+                                <td colspan="5" class="text-left foot-label">إجمالي المصروفات:</td>
+                                <td class="text-left foot-total">@_totalAmount.ToString("N2", CultureInfo.InvariantCulture) ج</td>
+                            </tr>
+                        </tfoot>
+                    }
+                </table>
+            </div>
+        }
+    </MudPaper>
+</div>
+
+<style>
+    .exp-report-page { max-width: 1400px; margin: 0 auto; padding: 1rem; }
+    
+    .page-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+    .header-left { display: flex; align-items: center; color: var(--mud-palette-text-primary); }
+    .header-left h1 { font-size: 1.75rem; font-weight: 800; }
+    
+    .filters-section { border-radius: 16px; border: 1px solid var(--mud-palette-divider); box-shadow: 0 4px 20px rgba(0,0,0,0.02); }
+    .filters-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 1rem; display: flex; align-items: center; color: var(--mud-palette-primary); }
+    .filters-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+    .filters-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+    .spacer { flex: 1; }
+
+    .table-section { border-radius: 16px; border: 1px solid var(--mud-palette-divider); box-shadow: 0 4px 20px rgba(0,0,0,0.02); }
+    
+    .report-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.95rem; }
+    .report-table th { padding: 1rem; font-weight: 700; color: var(--mud-palette-text-secondary); background: var(--mud-palette-background-grey); border-bottom: 2px solid var(--mud-palette-divider); }
+    .report-table td { padding: 1rem; border-bottom: 1px solid var(--mud-palette-divider); vertical-align: middle; }
+    .report-table tbody tr:hover td { background: var(--mud-palette-background-grey); }
+    
+    .amount-val { font-weight: 800; color: #ef4444; }
+    .badge-advance { background: #fef3c7; color: #d97706; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-right: 0.5rem; }
+    .badge-group { background: #e0e7ff; color: #4338ca; padding: 0.2rem 0.6rem; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+    
+    .foot-label { font-weight: 800; font-size: 1.1rem; color: var(--mud-palette-text-primary); }
+    .foot-total { font-weight: 900; font-size: 1.25rem; color: #dc2626; background: rgba(239, 68, 68, 0.05); }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private ExpenseFilterDto _filter = new();
+    
+    private List<ExpenseListDto> _expenses = new();
+    private decimal _totalAmount = 0;
+    
+    private List<ExpenseGroupDto> _groups = new();
+    private List<CashBoxListDto> _boxes = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _groups = await ExpenseService.GetExpenseGroupsAsync();
+        _boxes = await CashBoxService.GetCashBoxesAsync();
+        
+        // Default filter: current month
+        var today = DateTime.Today;
+        _filter.DateFrom = new DateTime(today.Year, today.Month, 1);
+        _filter.DateTo = _filter.DateFrom.Value.AddMonths(1).AddDays(-1);
+        
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+        StateHasChanged();
+        
+        // For reports, we might want to fetch all matching without pagination, or use a large page size
+        _filter.PageSize = 5000; 
+        
+        var result = await ExpenseService.GetExpensesAsync(_filter);
+        _expenses = result.Items.ToList();
+        _totalAmount = _expenses.Sum(e => e.Amount);
+        
+        _isLoading = false;
+        StateHasChanged();
+    }
+
+    private async Task ClearFilters()
+    {
+        _filter = new ExpenseFilterDto { PageSize = 5000 };
+        await LoadData();
+    }
+
+    private void PrintReport()
+    {
+        // Construct query string for print page
+        var query = new List<string>();
+        if (_filter.DateFrom.HasValue) query.Add($"DateFrom={_filter.DateFrom.Value:yyyy-MM-dd}");
+        if (_filter.DateTo.HasValue) query.Add($"DateTo={_filter.DateTo.Value:yyyy-MM-dd}");
+        if (_filter.ExpenseGroupId.HasValue) query.Add($"GroupId={_filter.ExpenseGroupId.Value}");
+        if (_filter.CashBoxId.HasValue) query.Add($"BoxId={_filter.CashBoxId.Value}");
+        
+        var url = "/expenses/print" + (query.Any() ? "?" + string.Join("&", query) : "");
+        JS.InvokeVoidAsync("window.open", url, "_blank");
+    }
+
+    private async Task ExportExcel()
+    {
+        // Simple JS export using pure HTML table parsing to Excel format, 
+        // or passing to a backend endpoint. Here we implement a simple browser-side CSV export
+        
+        var csv = "التاريخ,اسم المصروف,المجموعة,الخزينة,المستلم,المبلغ\n";
+        foreach(var exp in _expenses)
+        {
+            var date = exp.ExpenseDate.ToString("yyyy-MM-dd");
+            var name = exp.ExpenseName.Replace(",", " ");
+            var group = (exp.ExpenseGroupName ?? "").Replace(",", " ");
+            var box = (exp.CashBoxName ?? "").Replace(",", " ");
+            var rec = (exp.Recipient ?? "").Replace(",", " ");
+            var amt = exp.Amount.ToString(CultureInfo.InvariantCulture);
+            
+            csv += $"{date},{name},{group},{box},{rec},{amt}\n";
+        }
+        
+        csv += $",,,,إجمالي المصروفات,{_totalAmount.ToString(CultureInfo.InvariantCulture)}\n";
+
+        // Add BOM for Excel UTF-8 arabic support
+        var bom = "\uFEFF";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(bom + csv);
+        var base64 = Convert.ToBase64String(bytes);
+        
+        await JS.InvokeVoidAsync("downloadFile", "ExpenseReport.csv", "text/csv;charset=utf-8", base64);
+    }
+}

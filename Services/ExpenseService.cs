@@ -251,6 +251,118 @@ public class ExpenseService : IExpenseService
 
         return stats;
     }
+     public async Task<ExpenseDashboardDto> GetDashboardDataAsync()
+    {
+        var dashboard = new ExpenseDashboardDto();
+        var today = DateTime.Today;
+
+        // Current Month Data
+        var currentMonthStart = new DateTime(today.Year, today.Month, 1);
+        var currentMonthEnd = currentMonthStart.AddMonths(1).AddDays(-1);
+
+        // Previous Month Data
+        var prevMonthStart = currentMonthStart.AddMonths(-1);
+        var prevMonthEnd = currentMonthStart.AddDays(-1);
+
+        // All expenses
+        var allExpenses = _db.Expenses.AsNoTracking().AsQueryable();
+        // Base expenses only (no children of advances)
+        var baseExpenses = allExpenses.Where(e => e.AdvanceParentExpenseId == null);
+
+        dashboard.CurrentMonthAmount = await baseExpenses
+            .Where(e => e.ExpenseDate >= currentMonthStart && e.ExpenseDate <= currentMonthEnd)
+            .SumAsync(e => (decimal?)e.Amount) ?? 0;
+
+        dashboard.PreviousMonthAmount = await baseExpenses
+            .Where(e => e.ExpenseDate >= prevMonthStart && e.ExpenseDate <= prevMonthEnd)
+            .SumAsync(e => (decimal?)e.Amount) ?? 0;
+
+        if (dashboard.PreviousMonthAmount > 0)
+        {
+            dashboard.MonthOverMonthGrowth = ((dashboard.CurrentMonthAmount - dashboard.PreviousMonthAmount) / dashboard.PreviousMonthAmount) * 100;
+        }
+        else if (dashboard.CurrentMonthAmount > 0)
+        {
+            dashboard.MonthOverMonthGrowth = 100;
+        }
+
+        int daysInMonthPassed = today.Day;
+        dashboard.DailyAverage = daysInMonthPassed > 0 ? dashboard.CurrentMonthAmount / daysInMonthPassed : 0;
+
+        // Active Advances
+        var advancesQuery = baseExpenses.Where(e => e.IsAdvance == true && e.AdvanceMonths > 1);
+        dashboard.ActiveAdvanceExpensesCount = await advancesQuery.CountAsync();
+        dashboard.ActiveAdvanceExpensesAmount = await advancesQuery.SumAsync(e => (decimal?)e.Amount) ?? 0;
+
+        // Group Distribution (Current Year)
+        var yearStart = new DateTime(today.Year, 1, 1);
+        var groupData = await baseExpenses
+            .Where(e => e.ExpenseDate >= yearStart)
+            .GroupBy(e => e.ExpenseGroupId)
+            .Select(g => new { GroupId = g.Key, Total = g.Sum(x => x.Amount), Count = g.Count() })
+            .ToListAsync();
+
+        var groups = await _db.ExpenseGroups.AsNoTracking().ToDictionaryAsync(g => g.ExpenseGroupId, g => g.ExpenseGroupName);
+        var totalYearAmount = groupData.Sum(g => g.Total);
+        var totalForPct = totalYearAmount == 0 ? 1 : totalYearAmount;
+
+        dashboard.GroupDistribution = groupData.Select(x => new ExpenseGroupStatsDto
+        {
+            ExpenseGroupId = x.GroupId,
+            GroupName = groups.GetValueOrDefault(x.GroupId, "غير محدد"),
+            Total = x.Total,
+            Count = x.Count,
+            Percentage = Math.Round((x.Total / totalForPct) * 100, 1)
+        }).OrderByDescending(x => x.Total).Take(5).ToList();
+
+        // Top 5 Expenses (Current Month)
+        var topExpensesQuery = await baseExpenses
+            .Where(e => e.ExpenseDate >= currentMonthStart && e.ExpenseDate <= currentMonthEnd)
+            .OrderByDescending(e => e.Amount)
+            .Take(5)
+            .Select(e => new ExpenseListDto
+            {
+                ExpenseId = e.ExpenseId,
+                ExpenseName = e.ExpenseName,
+                ExpenseDate = e.ExpenseDate,
+                Amount = e.Amount,
+                ExpenseGroupId = e.ExpenseGroupId
+            })
+            .ToListAsync();
+
+        foreach(var topExp in topExpensesQuery)
+        {
+            topExp.ExpenseGroupName = groups.GetValueOrDefault(topExp.ExpenseGroupId, "غير محدد");
+        }
+        dashboard.TopExpenses = topExpensesQuery;
+
+        // Monthly Trends (Last 6 Months)
+        var sixMonthsAgo = currentMonthStart.AddMonths(-5);
+        var trendData = await baseExpenses
+            .Where(e => e.ExpenseDate >= sixMonthsAgo && e.ExpenseDate <= currentMonthEnd)
+            .GroupBy(e => new { e.ExpenseDate.Year, e.ExpenseDate.Month })
+            .Select(g => new
+            {
+                Year = g.Key.Year,
+                Month = g.Key.Month,
+                Total = g.Sum(x => x.Amount)
+            })
+            .ToListAsync();
+
+        for (int i = 5; i >= 0; i--)
+        {
+            var m = currentMonthStart.AddMonths(-i);
+            var mData = trendData.FirstOrDefault(x => x.Year == m.Year && x.Month == m.Month);
+            dashboard.MonthlyTrends.Add(new MonthlyTrendDto
+            {
+                MonthDate = m,
+                MonthName = m.ToString("MMMM yyyy", new System.Globalization.CultureInfo("ar-EG")),
+                TotalAmount = mData?.Total ?? 0
+            });
+        }
+
+        return dashboard;
+    }
 
     // ============================================================
     //  ⭐ حفظ مصروف (محسّن للتعديل والمصروف المقدم)

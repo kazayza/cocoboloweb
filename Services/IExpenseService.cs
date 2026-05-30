@@ -7,6 +7,7 @@ public interface IExpenseService
     Task<PagedResult<ExpenseListDto>> GetExpensesAsync(ExpenseFilterDto filter);
     Task<ExpenseFormDto?> GetExpenseForEditAsync(int id);
     Task<ExpenseStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null);
+    Task<ExpenseDashboardDto> GetDashboardDataAsync();
 
     Task<(bool Success, string Message, int? Id)> SaveExpenseAsync(
         ExpenseFormDto dto, string userName);

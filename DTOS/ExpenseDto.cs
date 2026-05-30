@@ -69,6 +69,32 @@ public class ExpenseStatsDto
     public decimal YearAmount { get; set; }
     public List<ExpenseGroupStatsDto> GroupBreakdown { get; set; } = new();
 }
+public class ExpenseDashboardDto
+{
+    // KPIs
+    public decimal CurrentMonthAmount { get; set; }
+    public decimal PreviousMonthAmount { get; set; }
+    public decimal MonthOverMonthGrowth { get; set; }
+    
+    public decimal DailyAverage { get; set; }
+    
+    public int ActiveAdvanceExpensesCount { get; set; }
+    public decimal ActiveAdvanceExpensesAmount { get; set; }
+
+    // Charts
+    public List<ExpenseGroupStatsDto> GroupDistribution { get; set; } = new();
+    public List<MonthlyTrendDto> MonthlyTrends { get; set; } = new();
+
+    // Tables
+    public List<ExpenseListDto> TopExpenses { get; set; } = new();
+}
+
+public class ExpenseMonthlyTrendDto
+{
+    public string MonthName { get; set; } = "";
+    public DateTime MonthDate { get; set; }
+    public decimal TotalAmount { get; set; }
+}
 
 public class ExpenseGroupStatsDto
 {

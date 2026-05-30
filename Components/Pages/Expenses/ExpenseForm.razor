@@ -59,14 +59,23 @@ else
                         <h3>معلومات المصروف</h3>
                     </div>
                     <div class="grid-2">
-                        <MudTextField @bind-Value="_form.ExpenseName"
-                                      Label="اسم المصروف *"
-                                      Variant="Variant.Outlined" />
+                        <MudAutocomplete T="string"
+                                         Value="@_form.ExpenseName"
+                                         ValueChanged="OnExpenseNameChanged"
+                                         SearchFunc="SearchExpenseNames"
+                                         Label="اسم المصروف *"
+                                         Variant="Variant.Outlined"
+                                         ResetValueOnEmptyText="false"
+                                         CoerceText="true"
+                                         CoerceValue="true"
+                                         MinCharacters="0"
+                                         AdornmentIcon="@Icons.Material.Filled.Search" />
+
                         <MudDatePicker Date="_form.ExpenseDate"
                                        DateChanged="@(d => _form.ExpenseDate = d ?? DateTime.Today)"
                                        Label="تاريخ المصروف *" Variant="Variant.Outlined" />
 
-                        <MudSelect T="int?" @bind-Value="_form.ExpenseGroupId"
+                        <MudSelect T="int?" Value="@_form.ExpenseGroupId" ValueChanged="OnGroupSelected"
                                    Label="المجموعة *" Variant="Variant.Outlined">
                             @foreach (var g in _groups)
                             {
@@ -441,6 +450,9 @@ else
 
     private List<ExpenseGroupDto> _groups = new();
     private List<CashBoxListDto> _boxes = new();
+    
+    // Previous expenses cache for auto-suggesting
+    private List<ExpenseListDto> _previousExpenses = new();
 
     private bool CanSave =>
         !string.IsNullOrWhiteSpace(_form.ExpenseName) &&
@@ -453,7 +465,7 @@ else
     {
         var auth = await AuthProvider.GetAuthenticationStateAsync();
         var user = auth.User;
-        var canManage = user.HasClaim("Permission", IsEdit ? "frmExpenses:Edit" : "frmExpenses:Add")
+        var canManage = user.HasClaim("Permission", IsEdit ? "frm_Expenses:Edit" : "frm_Expenses:Add")
             || user.IsInRole("Admin");
         if (!canManage) { Navigation.NavigateTo("/expenses"); return; }
 
@@ -478,7 +490,64 @@ else
             if (defaultBox != null) _form.CashBoxId = defaultBox.CashBoxId;
         }
 
+        // Load recent expenses to build the auto-suggest list
+        var pagedExpenses = await ExpenseService.GetExpensesAsync(new ExpenseFilterDto { PageSize = 1000 });
+        _previousExpenses = pagedExpenses.Items.ToList();
+
         _isLoading = false;
+    }
+
+    private async Task<IEnumerable<string>> SearchExpenseNames(string value, CancellationToken token)
+    {
+        // Add a slight delay to allow MudBlazor state to update before fetching autocomplete list
+        await Task.Yield();
+        
+        IEnumerable<string> expenseNames = _previousExpenses
+            .Where(e => !_form.ExpenseGroupId.HasValue || e.ExpenseGroupId == _form.ExpenseGroupId.Value)
+            .Select(e => e.ExpenseName)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct()
+            .ToList();
+
+        // If user typed nothing, return all distinct names for the current filter
+        if (string.IsNullOrEmpty(value))
+        {
+            return expenseNames;
+        }
+
+        return expenseNames.Where(x => x.Contains(value, StringComparison.InvariantCultureIgnoreCase));
+    }
+
+    private void OnExpenseNameChanged(string newValue)
+    {
+        _form.ExpenseName = newValue;
+        
+        // Auto-select group based on exact typed match if it exists
+        if (!string.IsNullOrEmpty(newValue))
+        {
+            var exactMatch = _previousExpenses.FirstOrDefault(e => e.ExpenseName.Equals(newValue, StringComparison.OrdinalIgnoreCase));
+            if (exactMatch != null)
+            {
+                // Always try to select the group if we find a match
+                _form.ExpenseGroupId = exactMatch.ExpenseGroupId;
+            }
+        }
+    }
+
+    private void OnGroupSelected(int? newGroupId)
+    {
+        _form.ExpenseGroupId = newGroupId;
+        
+        // Clear the expense name if it's not compatible with the newly selected group
+        if (newGroupId.HasValue && !string.IsNullOrEmpty(_form.ExpenseName))
+        {
+            var isCompatible = _previousExpenses.Any(e => e.ExpenseGroupId == newGroupId.Value && e.ExpenseName.Equals(_form.ExpenseName, StringComparison.OrdinalIgnoreCase));
+            if (!isCompatible)
+            {
+                // Un-comment to clear name if they change groups
+                // _form.ExpenseName = string.Empty;
+            }
+        }
     }
 
     private async Task Save()
