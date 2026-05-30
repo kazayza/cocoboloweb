@@ -1,720 +1,1036 @@
-@* ============================================================
-   📁 Pages/Expenses/ExpenseDashboard.razor
-   ⭐ شاشة مؤشرات أداء المصروفات - احترافية
-   ============================================================ *@
-
 @page "/expenses/dashboard"
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
 @using ApexCharts
 @using MudBlazor
 @using Microsoft.AspNetCore.Authorization
-
+@using System.Globalization
 @inject IExpenseService ExpenseService
 @attribute [Authorize]
 @rendermode InteractiveServer
 
-@* ── نحل تعارض Color و Size و Align بين ApexCharts و MudBlazor ── *@
-@* في الـ HTML نستخدم MudBlazor.Color و MudBlazor.Size صراحةً *@
-
 <PageTitle>مؤشرات أداء المصروفات</PageTitle>
 
-<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4 mb-6">
-
-    @* ── Header ── *@
-    <MudStack Row AlignItems="MudBlazor.AlignItems.Center"
-              Justify="Justify.SpaceBetween" Class="mb-4">
-        <MudStack Spacing="0">
-            <MudText Typo="Typo.h4" Class="fw-bold" Style="color:#1a237e;">
-                <MudIcon Icon="@Icons.Material.Filled.Analytics" Class="me-2" />
-                مؤشرات أداء المصروفات
-            </MudText>
-            <MudText Typo="Typo.body2" Color="MudBlazor.Color.Secondary">
-                تحليل مالي شامل • آخر تحديث: @DateTime.Now.ToString("hh:mm tt - yyyy/MM/dd")
-            </MudText>
-        </MudStack>
-        <MudStack Row Spacing="2">
-            <MudButton Variant="Variant.Outlined"
-                       Color="MudBlazor.Color.Primary"
-                       StartIcon="@Icons.Material.Filled.Refresh"
-                       OnClick="LoadDataAsync"
-                       Disabled="_loading">
-                تحديث
-            </MudButton>
-            <MudButton Variant="Variant.Filled"
-                       Color="MudBlazor.Color.Primary"
-                       StartIcon="@Icons.Material.Filled.ListAlt"
-                       Href="/expenses">
-                قائمة المصروفات
-            </MudButton>
-        </MudStack>
-    </MudStack>
-
-    @* ── Loading ── *@
-    @if (_loading)
-    {
-        <MudStack AlignItems="MudBlazor.AlignItems.Center"
-                  Justify="Justify.Center"
-                  Style="min-height:400px;">
-            <MudProgressCircular Indeterminate
-                                 Size="MudBlazor.Size.Large"
-                                 Color="MudBlazor.Color.Primary" />
-            <MudText Typo="Typo.body1" Color="MudBlazor.Color.Secondary" Class="mt-3">
-                جارٍ تحميل البيانات...
-            </MudText>
-        </MudStack>
+<style>
+    .expense-dashboard-page {
+        background:
+            radial-gradient(circle at top right, rgba(37, 99, 235, 0.07), transparent 22%),
+            radial-gradient(circle at top left, rgba(14, 165, 233, 0.05), transparent 18%),
+            linear-gradient(180deg, #f8fbff 0%, #f4f7fb 100%);
+        min-height: 100%;
     }
-    else if (_dashboard == null)
-    {
-        <MudAlert Severity="Severity.Error" Class="mt-4">
-            حدث خطأ في تحميل البيانات. حاول مرة أخرى.
-        </MudAlert>
-    }
-    else
-    {
-        @* ═══════════════════════════════════════════════════════
-           ROW 1: KPI Cards الرئيسية
-           ═══════════════════════════════════════════════════════ *@
-        <MudGrid Spacing="3" Class="mb-4">
 
-            @* Card 1: مصروفات الشهر الحالي *@
-            <MudItem xs="12" sm="6" md="3">
-                <MudPaper Elevation="0" Class="pa-4 rounded-lg"
-                          Style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
-                                 color:white; min-height:160px;">
-                    <MudStack Spacing="1">
-                        <MudStack Row
-                                  AlignItems="MudBlazor.AlignItems.Center"
-                                  Justify="Justify.SpaceBetween">
-                            <MudText Typo="Typo.body2" Style="opacity:0.85;">
-                                مصروفات الشهر الحالي
-                            </MudText>
-                            <MudAvatar Style="background:rgba(255,255,255,0.2);"
-                                       Size="MudBlazor.Size.Medium">
-                                <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" />
+    .expense-dashboard-page * {
+        box-sizing: border-box;
+    }
+
+    .expense-dashboard-page .page-title,
+    .expense-dashboard-page .section-title,
+    .expense-dashboard-page .kpi-value,
+    .expense-dashboard-page .hero-main-value,
+    .expense-dashboard-page .hero-title {
+        font-weight: 800 !important;
+    }
+
+    .expense-dashboard-page .section-subtitle,
+    .expense-dashboard-page .kpi-label,
+    .expense-dashboard-page .muted-label,
+    .expense-dashboard-page .hero-subtitle,
+    .expense-dashboard-page .hero-mini-label {
+        font-weight: 700 !important;
+    }
+
+    .hero-shell {
+        position: relative;
+        overflow: hidden;
+        border-radius: 30px;
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #2563eb 100%);
+        box-shadow: 0 24px 55px rgba(15, 23, 42, 0.18);
+        border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .hero-shell::before {
+        content: "";
+        position: absolute;
+        width: 320px;
+        height: 320px;
+        border-radius: 50%;
+        top: -120px;
+        left: -80px;
+        background: rgba(255,255,255,0.07);
+    }
+
+    .hero-shell::after {
+        content: "";
+        position: absolute;
+        width: 240px;
+        height: 240px;
+        border-radius: 50%;
+        bottom: -100px;
+        right: -60px;
+        background: rgba(255,255,255,0.08);
+    }
+
+    .hero-content {
+        position: relative;
+        z-index: 2;
+    }
+
+    .hero-chip {
+        border-radius: 14px !important;
+        font-weight: 800 !important;
+        letter-spacing: .2px;
+    }
+
+    .hero-chip-light {
+        color: #fff !important;
+        background: rgba(255,255,255,0.10) !important;
+        border: 1px solid rgba(255,255,255,0.16) !important;
+    }
+
+    .hero-title {
+        color: #fff;
+        line-height: 1.12;
+        letter-spacing: -.5px;
+        margin-top: 6px;
+    }
+
+    .hero-subtitle {
+        color: rgba(255,255,255,0.84);
+        line-height: 1.9;
+        max-width: 780px;
+        font-size: 1rem;
+    }
+
+    .hero-action-btn {
+        border-radius: 16px !important;
+        font-weight: 800 !important;
+        min-width: 150px;
+    }
+
+    .hero-action-btn.secondary {
+        color: #fff !important;
+        border-color: rgba(255,255,255,0.18) !important;
+        background: rgba(255,255,255,0.06) !important;
+    }
+
+    .hero-summary-panel {
+        position: relative;
+        z-index: 2;
+        border-radius: 24px;
+        background: rgba(255,255,255,0.10);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255,255,255,0.14);
+        color: white;
+        height: 100%;
+    }
+
+    .hero-mini-label {
+        color: rgba(255,255,255,0.74);
+        font-size: .82rem;
+    }
+
+    .hero-main-value {
+        color: #fff;
+        line-height: 1.1;
+        margin-top: 4px;
+    }
+
+    .hero-main-sub {
+        color: rgba(255,255,255,0.84);
+        font-weight: 700;
+    }
+
+    .hero-meta-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .hero-meta-row .key {
+        color: rgba(255,255,255,0.82);
+        font-weight: 700;
+    }
+
+    .hero-meta-row .val {
+        color: #fff;
+        font-weight: 800;
+    }
+
+    .dashboard-card {
+        border-radius: 24px;
+        background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+    }
+
+    .section-card {
+        border-radius: 24px;
+        background: linear-gradient(180deg, #ffffff 0%, #fcfdff 100%);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+    }
+
+    .section-title {
+        color: #0f172a;
+        letter-spacing: -.3px;
+    }
+
+    .section-subtitle {
+        color: #64748b;
+        font-size: .88rem;
+        margin-top: 2px;
+    }
+
+    .kpi-card {
+        position: relative;
+        overflow: hidden;
+        min-height: 156px;
+        transition: all .24s ease;
+    }
+
+    .kpi-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 18px 36px rgba(15, 23, 42, 0.10);
+    }
+
+    .kpi-top-strip {
+        position: absolute;
+        top: 0;
+        right: 0;
+        left: 0;
+        height: 5px;
+    }
+
+    .kpi-label {
+        color: #64748b;
+        font-size: .92rem;
+    }
+
+    .kpi-value {
+        color: #0f172a;
+        letter-spacing: -.4px;
+        line-height: 1.1;
+    }
+
+    .kpi-note {
+        font-weight: 700;
+        font-size: .82rem;
+        color: #475569;
+    }
+
+    .kpi-avatar {
+        width: 58px !important;
+        height: 58px !important;
+        border-radius: 18px !important;
+    }
+
+    .kpi-current .kpi-top-strip {
+        background: linear-gradient(90deg, #2563eb, #60a5fa);
+    }
+
+    .kpi-current .kpi-avatar {
+        background: rgba(37, 99, 235, 0.10) !important;
+        color: #1d4ed8 !important;
+    }
+
+    .kpi-previous .kpi-top-strip {
+        background: linear-gradient(90deg, #7c3aed, #a78bfa);
+    }
+
+    .kpi-previous .kpi-avatar {
+        background: rgba(124, 58, 237, 0.10) !important;
+        color: #7c3aed !important;
+    }
+
+    .kpi-daily .kpi-top-strip {
+        background: linear-gradient(90deg, #0f766e, #2dd4bf);
+    }
+
+    .kpi-daily .kpi-avatar {
+        background: rgba(15, 118, 110, 0.10) !important;
+        color: #0f766e !important;
+    }
+
+    .kpi-advance .kpi-top-strip {
+        background: linear-gradient(90deg, #b45309, #f59e0b);
+    }
+
+    .kpi-advance .kpi-avatar {
+        background: rgba(180, 83, 9, 0.10) !important;
+        color: #b45309 !important;
+    }
+
+    .trend-up {
+        color: #dc2626 !important;
+        font-weight: 800 !important;
+    }
+
+    .trend-down {
+        color: #059669 !important;
+        font-weight: 800 !important;
+    }
+
+    .trend-flat {
+        color: #64748b !important;
+        font-weight: 800 !important;
+    }
+
+    .panel-badge {
+        border-radius: 14px !important;
+        font-weight: 800 !important;
+    }
+
+    .metric-soft-box {
+        border-radius: 18px;
+        background: linear-gradient(180deg, #f8fbff 0%, #f3f7ff 100%);
+        border: 1px solid rgba(96, 165, 250, 0.18);
+    }
+
+    .top-expense-item {
+        border-radius: 18px;
+        border: 1px solid rgba(148, 163, 184, 0.14);
+    }
+
+    .top-expense-item.rank-1 {
+        background: linear-gradient(180deg, #fff9e7 0%, #fffdf5 100%);
+    }
+
+    .top-expense-item.rank-2 {
+        background: linear-gradient(180deg, #f7efff 0%, #fcf8ff 100%);
+    }
+
+    .top-expense-item.rank-3 {
+        background: linear-gradient(180deg, #eef7ff 0%, #f9fcff 100%);
+    }
+
+    .top-expense-item.rank-x {
+        background: linear-gradient(180deg, #fafafa 0%, #ffffff 100%);
+    }
+
+    .rank-avatar {
+        font-weight: 800 !important;
+        color: white !important;
+    }
+
+    .rank-1-color { background: #ca8a04 !important; }
+    .rank-2-color { background: #7c3aed !important; }
+    .rank-3-color { background: #2563eb !important; }
+    .rank-x-color { background: #64748b !important; }
+
+    .legend-dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-left: 8px;
+        flex-shrink: 0;
+    }
+
+    .distribution-row,
+    .pareto-row {
+        border-radius: 16px;
+        padding: 10px 12px;
+        background: #fbfdff;
+        border: 1px solid rgba(148, 163, 184, 0.12);
+    }
+
+    .table-head-strong th {
+        font-weight: 800 !important;
+        color: #334155;
+        background: #f8fafc;
+    }
+
+    .insight-box {
+        border-radius: 18px;
+        background: linear-gradient(180deg, #f8fbff 0%, #f4f8ff 100%);
+        border: 1px solid rgba(59, 130, 246, 0.14);
+    }
+
+    .insight-status {
+        font-weight: 800;
+        font-size: .95rem;
+    }
+
+    .empty-soft {
+        color: #64748b;
+        font-weight: 700;
+        text-align: center;
+        padding: 40px 0;
+    }
+
+    .loading-box {
+        min-height: 420px;
+    }
+
+    @@media (max-width: 960px) {
+        .hero-title {
+            font-size: 2rem !important;
+        }
+
+        .hero-subtitle {
+            font-size: .95rem;
+        }
+    }
+</style>
+
+<div class="expense-dashboard-page">
+    <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4">
+
+        @if (_loading)
+        {
+            <MudPaper Class="section-card pa-6 loading-box" Elevation="0">
+                <MudStack AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.Center" Style="min-height:340px;">
+                    <MudProgressCircular Indeterminate Size="MudBlazor.Size.Large" Color="MudBlazor.Color.Primary" />
+                    <MudText Typo="Typo.h6" Class="mt-4 page-title">جارٍ تحميل مؤشرات أداء المصروفات...</MudText>
+                </MudStack>
+            </MudPaper>
+        }
+        else if (_dashboard is null)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mt-4">
+                حدث خطأ أثناء تحميل بيانات لوحة مؤشرات المصروفات.
+            </MudAlert>
+        }
+        else
+        {
+            var projectedAmount = GetProjectedAmount();
+            var projectedVsPrev = GetProjectedVsPrevious();
+            var spendColor = GetProjectionColor(projectedVsPrev);
+
+            <MudPaper Elevation="0" Class="hero-shell pa-5 mb-4">
+                <div class="hero-content">
+                    <MudGrid Spacing="3">
+                        <MudItem xs="12" md="8">
+                            <MudStack Spacing="2">
+                                <MudStack Row Spacing="1">
+                                    <MudChip T="string"
+                                             Class="hero-chip"
+                                             Color="MudBlazor.Color.Primary"
+                                             Variant="Variant.Filled">
+                                        Expense Intelligence
+                                    </MudChip>
+
+                                    <MudChip T="string"
+                                             Class="hero-chip hero-chip-light"
+                                             Variant="Variant.Outlined">
+                                        @DateTime.Today.ToString("dd MMMM yyyy", _arCulture)
+                                    </MudChip>
+                                </MudStack>
+
+                                <MudText Typo="Typo.h3" Class="hero-title">
+                                    مؤشرات أداء المصروفات
+                                </MudText>
+
+                                <MudText Typo="Typo.body1" Class="hero-subtitle">
+                                    لوحة تنفيذية متقدمة لتحليل المصروفات، متابعة الاتجاهات الشهرية واليومية،
+                                    قياس الانحرافات، وتحديد البنود الأعلى تأثيرًا على الإنفاق.
+                                </MudText>
+
+                                <MudStack Row Spacing="2" Class="mt-2">
+                                    <MudButton Variant="Variant.Filled"
+                                               Color="MudBlazor.Color.Primary"
+                                               StartIcon="@Icons.Material.Filled.Refresh"
+                                               OnClick="LoadDataAsync"
+                                               Disabled="_loading"
+                                               Class="hero-action-btn">
+                                        تحديث البيانات
+                                    </MudButton>
+
+                                    <MudButton Variant="Variant.Outlined"
+                                               StartIcon="@Icons.Material.Filled.ListAlt"
+                                               Href="/expenses"
+                                               Class="hero-action-btn secondary">
+                                        قائمة المصروفات
+                                    </MudButton>
+                                </MudStack>
+                            </MudStack>
+                        </MudItem>
+
+                        <MudItem xs="12" md="4">
+                            <MudPaper Elevation="0" Class="hero-summary-panel pa-4">
+                                <MudText Typo="Typo.caption" Class="hero-mini-label">
+                                    الملخص التنفيذي للشهر الحالي
+                                </MudText>
+
+                                <MudText Typo="Typo.h4" Class="hero-main-value">
+                                    @_dashboard.CurrentMonthAmount.ToString("N0") ج
+                                </MudText>
+
+                                <MudText Typo="Typo.body2" Class="hero-main-sub">
+                                    إجمالي المصروفات المسجلة خلال الشهر
+                                </MudText>
+
+                                <MudDivider Class="my-3" />
+
+                                <MudStack Spacing="2">
+                                    <div class="hero-meta-row">
+                                        <span class="key">النمو الشهري</span>
+                                        <span class="@GetGrowthClass(_dashboard.MonthOverMonthGrowth)">
+                                            @GetGrowthText(_dashboard.MonthOverMonthGrowth)
+                                        </span>
+                                    </div>
+
+                                    <div class="hero-meta-row">
+                                        <span class="key">المتوسط اليومي</span>
+                                        <span class="val">@_dashboard.DailyAverage.ToString("N0") ج</span>
+                                    </div>
+
+                                    <div class="hero-meta-row">
+                                        <span class="key">المصروف المتوقع</span>
+                                        <span class="val">@projectedAmount.ToString("N0") ج</span>
+                                    </div>
+
+                                    <div class="hero-meta-row">
+                                        <span class="key">المصروفات المقدمة</span>
+                                        <span class="val">@_dashboard.ActiveAdvanceExpensesCount</span>
+                                    </div>
+                                </MudStack>
+                            </MudPaper>
+                        </MudItem>
+                    </MudGrid>
+                </div>
+            </MudPaper>
+
+            <MudGrid Spacing="3" Class="mb-4">
+
+                <MudItem xs="12" sm="6" md="3">
+                    <MudPaper Elevation="0" Class="dashboard-card kpi-card kpi-current pa-4">
+                        <div class="kpi-top-strip"></div>
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween">
+                            <MudStack Spacing="1">
+                                <MudText Typo="Typo.body2" Class="kpi-label">مصروفات الشهر الحالي</MudText>
+                                <MudText Typo="Typo.h4" Class="kpi-value">@_dashboard.CurrentMonthAmount.ToString("N0") ج</MudText>
+                                <MudText Typo="Typo.caption" Class="@GetGrowthClass(_dashboard.MonthOverMonthGrowth)">
+                                    @GetGrowthText(_dashboard.MonthOverMonthGrowth) عن الشهر السابق
+                                </MudText>
+                            </MudStack>
+
+                            <MudAvatar Size="MudBlazor.Size.Large" Class="kpi-avatar">
+                                <MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" />
                             </MudAvatar>
                         </MudStack>
-                        <MudText Typo="Typo.h4" Class="fw-bold">
-                            @_dashboard.CurrentMonthAmount.ToString("N0") ج
-                        </MudText>
-                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Spacing="1">
-                            <MudIcon Icon="@GetGrowthIcon(_dashboard.MonthOverMonthGrowth)"
-                                     Size="MudBlazor.Size.Small" />
-                            <MudText Typo="Typo.caption"
-                                     Style="@GetGrowthStyle(_dashboard.MonthOverMonthGrowth)">
-                                @GetGrowthText(_dashboard.MonthOverMonthGrowth) عن الشهر السابق
-                            </MudText>
-                        </MudStack>
-                    </MudStack>
-                </MudPaper>
-            </MudItem>
+                    </MudPaper>
+                </MudItem>
 
-            @* Card 2: الشهر السابق *@
-            <MudItem xs="12" sm="6" md="3">
-                <MudPaper Elevation="0" Class="pa-4 rounded-lg"
-                          Style="background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%);
-                                 color:white; min-height:160px;">
-                    <MudStack Spacing="1">
-                        <MudStack Row
-                                  AlignItems="MudBlazor.AlignItems.Center"
-                                  Justify="Justify.SpaceBetween">
-                            <MudText Typo="Typo.body2" Style="opacity:0.85;">
-                                مصروفات الشهر السابق
-                            </MudText>
-                            <MudAvatar Style="background:rgba(255,255,255,0.2);"
-                                       Size="MudBlazor.Size.Medium">
+                <MudItem xs="12" sm="6" md="3">
+                    <MudPaper Elevation="0" Class="dashboard-card kpi-card kpi-previous pa-4">
+                        <div class="kpi-top-strip"></div>
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween">
+                            <MudStack Spacing="1">
+                                <MudText Typo="Typo.body2" Class="kpi-label">مصروفات الشهر السابق</MudText>
+                                <MudText Typo="Typo.h4" Class="kpi-value">@_dashboard.PreviousMonthAmount.ToString("N0") ج</MudText>
+                                <MudText Typo="Typo.caption" Class="kpi-note">
+                                    @DateTime.Today.AddMonths(-1).ToString("MMMM yyyy", _arCulture)
+                                </MudText>
+                            </MudStack>
+
+                            <MudAvatar Size="MudBlazor.Size.Large" Class="kpi-avatar">
                                 <MudIcon Icon="@Icons.Material.Filled.History" />
                             </MudAvatar>
                         </MudStack>
-                        <MudText Typo="Typo.h4" Class="fw-bold">
-                            @_dashboard.PreviousMonthAmount.ToString("N0") ج
-                        </MudText>
-                        <MudText Typo="Typo.caption" Style="opacity:0.8;">
-                            @DateTime.Today.AddMonths(-1).ToString("MMMM yyyy",
-                                new System.Globalization.CultureInfo("ar-EG"))
-                        </MudText>
-                    </MudStack>
-                </MudPaper>
-            </MudItem>
+                    </MudPaper>
+                </MudItem>
 
-            @* Card 3: المتوسط اليومي *@
-            <MudItem xs="12" sm="6" md="3">
-                <MudPaper Elevation="0" Class="pa-4 rounded-lg"
-                          Style="background:linear-gradient(135deg,#4facfe 0%,#00f2fe 100%);
-                                 color:white; min-height:160px;">
-                    <MudStack Spacing="1">
-                        <MudStack Row
-                                  AlignItems="MudBlazor.AlignItems.Center"
-                                  Justify="Justify.SpaceBetween">
-                            <MudText Typo="Typo.body2" Style="opacity:0.85;">
-                                المتوسط اليومي
-                            </MudText>
-                            <MudAvatar Style="background:rgba(255,255,255,0.2);"
-                                       Size="MudBlazor.Size.Medium">
+                <MudItem xs="12" sm="6" md="3">
+                    <MudPaper Elevation="0" Class="dashboard-card kpi-card kpi-daily pa-4">
+                        <div class="kpi-top-strip"></div>
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween">
+                            <MudStack Spacing="1">
+                                <MudText Typo="Typo.body2" Class="kpi-label">المتوسط اليومي</MudText>
+                                <MudText Typo="Typo.h4" Class="kpi-value">@_dashboard.DailyAverage.ToString("N0") ج</MudText>
+                                <MudText Typo="Typo.caption" Class="kpi-note">
+                                    المتوقع نهاية الشهر: @projectedAmount.ToString("N0") ج
+                                </MudText>
+                            </MudStack>
+
+                            <MudAvatar Size="MudBlazor.Size.Large" Class="kpi-avatar">
                                 <MudIcon Icon="@Icons.Material.Filled.TrendingUp" />
                             </MudAvatar>
                         </MudStack>
-                        <MudText Typo="Typo.h4" Class="fw-bold">
-                            @_dashboard.DailyAverage.ToString("N0") ج
-                        </MudText>
-                        <MudText Typo="Typo.caption" Style="opacity:0.8;">
-                            المتوقع نهاية الشهر: @GetProjectedAmount().ToString("N0") ج
-                        </MudText>
-                    </MudStack>
-                </MudPaper>
-            </MudItem>
+                    </MudPaper>
+                </MudItem>
 
-            @* Card 4: المصروفات المقدمة *@
-            <MudItem xs="12" sm="6" md="3">
-                <MudPaper Elevation="0" Class="pa-4 rounded-lg"
-                          Style="background:linear-gradient(135deg,#43e97b 0%,#38f9d7 100%);
-                                 color:white; min-height:160px;">
-                    <MudStack Spacing="1">
-                        <MudStack Row
-                                  AlignItems="MudBlazor.AlignItems.Center"
-                                  Justify="Justify.SpaceBetween">
-                            <MudText Typo="Typo.body2" Style="opacity:0.85;">
-                                مصروفات مقدمة نشطة
-                            </MudText>
-                            <MudAvatar Style="background:rgba(255,255,255,0.2);"
-                                       Size="MudBlazor.Size.Medium">
+                <MudItem xs="12" sm="6" md="3">
+                    <MudPaper Elevation="0" Class="dashboard-card kpi-card kpi-advance pa-4">
+                        <div class="kpi-top-strip"></div>
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween">
+                            <MudStack Spacing="1">
+                                <MudText Typo="Typo.body2" Class="kpi-label">مصروفات مقدمة نشطة</MudText>
+                                <MudText Typo="Typo.h4" Class="kpi-value">@_dashboard.ActiveAdvanceExpensesCount</MudText>
+                                <MudText Typo="Typo.caption" Class="kpi-note">
+                                    بإجمالي: @_dashboard.ActiveAdvanceExpensesAmount.ToString("N0") ج
+                                </MudText>
+                            </MudStack>
+
+                            <MudAvatar Size="MudBlazor.Size.Large" Class="kpi-avatar">
                                 <MudIcon Icon="@Icons.Material.Filled.Schedule" />
                             </MudAvatar>
                         </MudStack>
-                        <MudText Typo="Typo.h4" Class="fw-bold">
-                            @_dashboard.ActiveAdvanceExpensesCount
-                        </MudText>
-                        <MudText Typo="Typo.caption" Style="opacity:0.8;">
-                            بإجمالي: @_dashboard.ActiveAdvanceExpensesAmount.ToString("N0") ج
-                        </MudText>
-                    </MudStack>
-                </MudPaper>
-            </MudItem>
-        </MudGrid>
+                    </MudPaper>
+                </MudItem>
 
-        @* ═══════════════════════════════════════════════════════
-           ROW 2: الاتجاه الشهري + توزيع المجموعات
-           ═══════════════════════════════════════════════════════ *@
-        <MudGrid Spacing="3" Class="mb-4">
+            </MudGrid>
 
-            @* Monthly Trend Chart *@
-            <MudItem xs="12" md="8">
-                <MudPaper Elevation="2" Class="pa-4 rounded-lg" Style="min-height:420px;">
-                    <MudStack Row
-                              AlignItems="MudBlazor.AlignItems.Center"
-                              Justify="Justify.SpaceBetween"
-                              Class="mb-3">
-                        <MudText Typo="Typo.h6" Class="fw-bold" Style="color:#1a237e;">
-                            <MudIcon Icon="@Icons.Material.Filled.ShowChart" Class="me-1" />
-                            الاتجاه الشهري للمصروفات
-                        </MudText>
-                        <MudChip T="string" Color="MudBlazor.Color.Info"
-                                 Size="MudBlazor.Size.Small"
-                                 Variant="Variant.Outlined">
-                            آخر 12 شهر
-                        </MudChip>
-                    </MudStack>
+            <MudGrid Spacing="3" Class="mb-4">
 
-                    @if (_dashboard.MonthlyTrends.Any())
-                    {
-                        <ApexChart TItem="ExpenseMonthlyTrendDto"
-                                   Height="340"
-                                   Options="_monthlyTrendOptions">
-                            <ApexPointSeries TItem="ExpenseMonthlyTrendDto"
-                                             Items="_dashboard.MonthlyTrends"
-                                             SeriesType="SeriesType.Area"
-                                             Name="المصروفات"
-                                             XValue="e => e.MonthName"
-                                             YValue="e => e.TotalAmount"
-                                             OrderBy="e => e.X" />
-                        </ApexChart>
-                    }
-                    else
-                    {
-                        <MudText Color="MudBlazor.Color.Secondary"
-                                 Align="MudBlazor.Align.Center" Class="mt-10">
-                            لا توجد بيانات
-                        </MudText>
-                    }
-                </MudPaper>
-            </MudItem>
+                <MudItem xs="12" lg="8">
+                    <MudPaper Elevation="0" Class="section-card pa-4" Style="min-height:430px;">
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.h6" Class="section-title">
+                                    <MudIcon Icon="@Icons.Material.Filled.ShowChart" Class="me-1" />
+                                    الاتجاه الشهري للمصروفات
+                                </MudText>
+                                <MudText Typo="Typo.body2" Class="section-subtitle">
+                                    نظرة على حركة الإنفاق خلال آخر 12 شهر
+                                </MudText>
+                            </MudStack>
 
-            @* Group Distribution (Donut) *@
-            <MudItem xs="12" md="4">
-                <MudPaper Elevation="2" Class="pa-4 rounded-lg" Style="min-height:420px;">
-                    <MudText Typo="Typo.h6" Class="fw-bold mb-3" Style="color:#1a237e;">
-                        <MudIcon Icon="@Icons.Material.Filled.DonutLarge" Class="me-1" />
-                        توزيع المصروفات
-                    </MudText>
-
-                    @if (_dashboard.GroupDistribution.Any())
-                    {
-                        <ApexChart TItem="ExpenseGroupStatsDto"
-                                   Height="280"
-                                   Options="_donutOptions">
-                            <ApexPointSeries TItem="ExpenseGroupStatsDto"
-                                             Items="_dashboard.GroupDistribution"
-                                             SeriesType="SeriesType.Donut"
-                                             Name="المبلغ"
-                                             XValue="e => e.GroupName"
-                                             YValue="e => e.Total"
-                                             OrderByDescending="e => e.Y" />
-                        </ApexChart>
-
-                        <MudDivider Class="my-2" />
-                        <MudStack Spacing="1">
-                            @foreach (var g in _dashboard.GroupDistribution.Take(6))
-                            {
-                                <MudStack Row
-                                          AlignItems="MudBlazor.AlignItems.Center"
-                                          Justify="Justify.SpaceBetween">
-                                    <MudText Typo="Typo.caption">@g.GroupName</MudText>
-                                    <MudChip T="string"
-                                             Size="MudBlazor.Size.Small"
-                                             Color="MudBlazor.Color.Primary"
-                                             Variant="Variant.Text">
-                                        @g.Percentage%
-                                    </MudChip>
-                                </MudStack>
-                            }
+                            <MudChip T="string" Class="panel-badge" Color="MudBlazor.Color.Info" Variant="Variant.Outlined">
+                                آخر 12 شهر
+                            </MudChip>
                         </MudStack>
-                    }
-                    else
-                    {
-                        <MudText Color="MudBlazor.Color.Secondary"
-                                 Align="MudBlazor.Align.Center" Class="mt-10">
-                            لا توجد بيانات
-                        </MudText>
-                    }
-                </MudPaper>
-            </MudItem>
-        </MudGrid>
 
-        @* ═══════════════════════════════════════════════════════
-           ROW 3: الاتجاه اليومي + أعلى المصروفات
-           ═══════════════════════════════════════════════════════ *@
-        <MudGrid Spacing="3" Class="mb-4">
+                        @if (_dashboard.MonthlyTrends.Any())
+                        {
+                            <ApexChart TItem="ExpenseMonthlyTrendDto" Height="330" Options="_monthlyTrendOptions">
+                                <ApexPointSeries TItem="ExpenseMonthlyTrendDto"
+                                                 Items="_dashboard.MonthlyTrends"
+                                                 SeriesType="SeriesType.Area"
+                                                 Name="المصروفات"
+                                                 XValue="e => e.MonthName"
+                                                 YValue="e => e.TotalAmount" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="empty-soft">لا توجد بيانات للاتجاه الشهري</div>
+                        }
+                    </MudPaper>
+                </MudItem>
 
-            @* Daily Trend *@
-            <MudItem xs="12" md="7">
-                <MudPaper Elevation="2" Class="pa-4 rounded-lg" Style="min-height:380px;">
-                    <MudStack Row
-                              AlignItems="MudBlazor.AlignItems.Center"
-                              Justify="Justify.SpaceBetween"
-                              Class="mb-3">
-                        <MudText Typo="Typo.h6" Class="fw-bold" Style="color:#1a237e;">
-                            <MudIcon Icon="@Icons.Material.Filled.CalendarViewDay" Class="me-1" />
-                            الاتجاه اليومي -
-                            @DateTime.Today.ToString("MMMM yyyy",
-                                new System.Globalization.CultureInfo("ar-EG"))
-                        </MudText>
-                        <MudChip T="string"
-                                 Color="MudBlazor.Color.Warning"
-                                 Size="MudBlazor.Size.Small"
-                                 Variant="Variant.Outlined">
-                            المتوسط: @_dashboard.DailyAverage.ToString("N0") ج
-                        </MudChip>
-                    </MudStack>
+                <MudItem xs="12" lg="4">
+                    <MudPaper Elevation="0" Class="section-card pa-4" Style="min-height:430px;">
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.h6" Class="section-title">
+                                    <MudIcon Icon="@Icons.Material.Filled.DonutLarge" Class="me-1" />
+                                    توزيع المصروفات
+                                </MudText>
+                                <MudText Typo="Typo.body2" Class="section-subtitle">
+                                    أعلى المجموعات مساهمة في الإنفاق
+                                </MudText>
+                            </MudStack>
+                        </MudStack>
 
-                    @if (_dashboard.DailyTrend.Any())
-                    {
-                        <ApexChart TItem="ExpenseDailyTrendDto"
-                                   Height="300"
-                                   Options="_dailyTrendOptions">
-                            <ApexPointSeries TItem="ExpenseDailyTrendDto"
-                                             Items="_dashboard.DailyTrend"
-                                             SeriesType="SeriesType.Bar"
-                                             Name="المصروفات اليومية"
-                                             XValue="e => e.Day.ToString()"
-                                             YValue="e => e.Amount"
-                                             OrderBy="e => e.X" />
-                        </ApexChart>
-                    }
-                    else
-                    {
-                        <MudText Color="MudBlazor.Color.Secondary"
-                                 Align="MudBlazor.Align.Center" Class="mt-10">
-                            لا توجد بيانات
-                        </MudText>
-                    }
-                </MudPaper>
-            </MudItem>
+                        @if (_dashboard.GroupDistribution.Any())
+                        {
+                            <ApexChart TItem="ExpenseGroupStatsDto" Height="260" Options="_donutOptions">
+                                <ApexPointSeries TItem="ExpenseGroupStatsDto"
+                                                 Items="_dashboard.GroupDistribution"
+                                                 SeriesType="SeriesType.Donut"
+                                                 Name="المبلغ"
+                                                 XValue="e => e.GroupName"
+                                                 YValue="e => e.Total" />
+                            </ApexChart>
 
-            @* Top 5 Expenses *@
-            <MudItem xs="12" md="5">
-                <MudPaper Elevation="2" Class="pa-4 rounded-lg" Style="min-height:380px;">
-                    <MudText Typo="Typo.h6" Class="fw-bold mb-3" Style="color:#1a237e;">
-                        <MudIcon Icon="@Icons.Material.Filled.EmojiEvents" Class="me-1" />
-                        أعلى 5 مصروفات هذا الشهر
-                    </MudText>
+                            <MudDivider Class="my-3" />
 
-                    @if (_dashboard.TopExpenses.Any())
-                    {
-                        <MudStack Spacing="2">
-                            @{int rank = 0;}
-                            @foreach (var exp in _dashboard.TopExpenses)
-                            {
-                                rank++;
-                                var pct = _dashboard.CurrentMonthAmount > 0
-                                    ? (exp.Amount / _dashboard.CurrentMonthAmount) * 100 : 0;
+                            <MudStack Spacing="1">
+                                @for (int i = 0; i < _dashboard.GroupDistribution.Count; i++)
+                                {
+                                    var item = _dashboard.GroupDistribution[i];
+                                    <div class="distribution-row">
+                                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween">
+                                            <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Spacing="1">
+                                                <span class="legend-dot" style="background:@GetPaletteColor(i)"></span>
+                                                <MudText Typo="Typo.body2" Class="muted-label">@item.GroupName</MudText>
+                                            </MudStack>
 
-                                <MudPaper Elevation="0" Class="pa-3 rounded-lg"
-                                          Style="@($"background:{GetRankBg(rank)};")">
-                                    <MudStack Row
-                                              AlignItems="MudBlazor.AlignItems.Center"
-                                              Justify="Justify.SpaceBetween">
-                                        <MudStack Row
-                                                  AlignItems="MudBlazor.AlignItems.Center"
-                                                  Spacing="2">
-                                            <MudAvatar Size="MudBlazor.Size.Small"
-                                                       Style="@($"background:{GetRankColor(rank)};color:white;font-weight:bold;")">
-                                                @rank
-                                            </MudAvatar>
-                                            <MudStack Spacing="0">
-                                                <MudText Typo="Typo.body2" Class="fw-bold">
-                                                    @exp.ExpenseName
+                                            <MudChip T="string" Size="MudBlazor.Size.Small" Color="MudBlazor.Color.Primary" Variant="Variant.Text">
+                                                @item.Percentage%
+                                            </MudChip>
+                                        </MudStack>
+                                    </div>
+                                }
+                            </MudStack>
+                        }
+                        else
+                        {
+                            <div class="empty-soft">لا توجد بيانات للتوزيع</div>
+                        }
+                    </MudPaper>
+                </MudItem>
+
+            </MudGrid>
+
+            <MudGrid Spacing="3" Class="mb-4">
+
+                <MudItem xs="12" lg="7">
+                    <MudPaper Elevation="0" Class="section-card pa-4" Style="min-height:390px;">
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.h6" Class="section-title">
+                                    <MudIcon Icon="@Icons.Material.Filled.CalendarViewDay" Class="me-1" />
+                                    الاتجاه اليومي للمصروفات
+                                </MudText>
+                                <MudText Typo="Typo.body2" Class="section-subtitle">
+                                    توزيع المصروفات على أيام الشهر الحالي
+                                </MudText>
+                            </MudStack>
+
+                            <MudChip T="string" Class="panel-badge" Color="MudBlazor.Color.Warning" Variant="Variant.Outlined">
+                                المتوسط: @_dashboard.DailyAverage.ToString("N0") ج
+                            </MudChip>
+                        </MudStack>
+
+                        @if (_dashboard.DailyTrend.Any())
+                        {
+                            <ApexChart TItem="ExpenseDailyTrendDto" Height="290" Options="_dailyTrendOptions">
+                                <ApexPointSeries TItem="ExpenseDailyTrendDto"
+                                                 Items="_dashboard.DailyTrend"
+                                                 SeriesType="SeriesType.Bar"
+                                                 Name="المصروفات اليومية"
+                                                 XValue="e => e.Day.ToString()"
+                                                 YValue="e => e.Amount" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="empty-soft">لا توجد بيانات يومية خلال الشهر الحالي</div>
+                        }
+                    </MudPaper>
+                </MudItem>
+
+                <MudItem xs="12" lg="5">
+                    <MudPaper Elevation="0" Class="section-card pa-4" Style="min-height:390px;">
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.h6" Class="section-title">
+                                    <MudIcon Icon="@Icons.Material.Filled.EmojiEvents" Class="me-1" />
+                                    أعلى 5 مصروفات هذا الشهر
+                                </MudText>
+                                <MudText Typo="Typo.body2" Class="section-subtitle">
+                                    البنود الأعلى استنزافًا للسيولة
+                                </MudText>
+                            </MudStack>
+                        </MudStack>
+
+                        @if (_dashboard.TopExpenses.Any())
+                        {
+                            <MudStack Spacing="2">
+                                @for (int i = 0; i < _dashboard.TopExpenses.Count; i++)
+                                {
+                                    var exp = _dashboard.TopExpenses[i];
+                                    var rank = i + 1;
+                                    var pct = _dashboard.CurrentMonthAmount > 0
+                                        ? (exp.Amount / _dashboard.CurrentMonthAmount) * 100
+                                        : 0m;
+
+                                    <MudPaper Elevation="0" Class="@($"{GetTopExpenseClass(rank)} top-expense-item pa-3")">
+                                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween">
+                                            <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Spacing="2">
+                                                <MudAvatar Size="MudBlazor.Size.Medium" Class="@GetRankAvatarClass(rank)">
+                                                    @rank
+                                                </MudAvatar>
+
+                                                <MudStack Spacing="0">
+                                                    <MudText Typo="Typo.body2" Class="page-title">@exp.ExpenseName</MudText>
+                                                    <MudText Typo="Typo.caption" Color="MudBlazor.Color.Secondary">
+                                                        @exp.ExpenseGroupName • @exp.ExpenseDate.ToString("dd/MM")
+                                                    </MudText>
+                                                </MudStack>
+                                            </MudStack>
+
+                                            <MudStack Spacing="0" AlignItems="MudBlazor.AlignItems.End">
+                                                <MudText Typo="Typo.body2" Class="page-title" Color="MudBlazor.Color.Error">
+                                                    @exp.Amount.ToString("N0") ج
                                                 </MudText>
-                                                <MudText Typo="Typo.caption"
-                                                         Color="MudBlazor.Color.Secondary">
-                                                    @exp.ExpenseGroupName •
-                                                    @exp.ExpenseDate.ToString("MM/dd")
+                                                <MudText Typo="Typo.caption" Color="MudBlazor.Color.Secondary">
+                                                    @pct.ToString("N1")%
                                                 </MudText>
                                             </MudStack>
                                         </MudStack>
-                                        <MudStack Spacing="0"
-                                                  AlignItems="MudBlazor.AlignItems.End">
-                                            <MudText Typo="Typo.body2" Class="fw-bold"
-                                                     Color="MudBlazor.Color.Error">
-                                                @exp.Amount.ToString("N0") ج
-                                            </MudText>
-                                            <MudText Typo="Typo.caption"
-                                                     Color="MudBlazor.Color.Secondary">
-                                                @pct.ToString("N1")%
-                                            </MudText>
-                                        </MudStack>
-                                    </MudStack>
-                                </MudPaper>
-                            }
-                        </MudStack>
-                    }
-                    else
-                    {
-                        <MudText Color="MudBlazor.Color.Secondary"
-                                 Align="MudBlazor.Align.Center" Class="mt-10">
-                            لا توجد مصروفات هذا الشهر
-                        </MudText>
-                    }
-                </MudPaper>
-            </MudItem>
-        </MudGrid>
-
-        @* ═══════════════════════════════════════════════════════
-           ROW 4: تحليل الانحراف + تحليل باريتو
-           ═══════════════════════════════════════════════════════ *@
-        <MudGrid Spacing="3" Class="mb-4">
-
-            @* Variance Analysis *@
-            <MudItem xs="12" md="6">
-                <MudPaper Elevation="2" Class="pa-4 rounded-lg" Style="min-height:400px;">
-                    <MudStack Row
-                              AlignItems="MudBlazor.AlignItems.Center"
-                              Justify="Justify.SpaceBetween"
-                              Class="mb-3">
-                        <MudText Typo="Typo.h6" Class="fw-bold" Style="color:#1a237e;">
-                            <MudIcon Icon="@Icons.Material.Filled.CompareArrows" Class="me-1" />
-                            تحليل الانحراف
-                        </MudText>
-                        <MudChip T="string"
-                                 Color="MudBlazor.Color.Secondary"
-                                 Size="MudBlazor.Size.Small"
-                                 Variant="Variant.Outlined">
-                            الشهر الحالي vs متوسط 3 أشهر
-                        </MudChip>
-                    </MudStack>
-
-                    @if (_dashboard.VarianceAnalysis.Any())
-                    {
-                        <MudTable Items="@_dashboard.VarianceAnalysis"
-                                  Dense Hover Elevation="0">
-                            <HeaderContent>
-                                <MudTh>المجموعة</MudTh>
-                                <MudTh Style="text-align:center;">الشهر الحالي</MudTh>
-                                <MudTh Style="text-align:center;">المتوسط</MudTh>
-                                <MudTh Style="text-align:center;">الانحراف</MudTh>
-                                <MudTh Style="text-align:center;">الحالة</MudTh>
-                            </HeaderContent>
-                            <RowTemplate>
-                                <MudTd>
-                                    <MudText Typo="Typo.body2">@context.GroupName</MudText>
-                                </MudTd>
-                                <MudTd Style="text-align:center;">
-                                    <MudText Typo="Typo.body2">
-                                        @context.CurrentMonth.ToString("N0")
-                                    </MudText>
-                                </MudTd>
-                                <MudTd Style="text-align:center;">
-                                    <MudText Typo="Typo.body2">
-                                        @context.PreviousMonthsAverage.ToString("N0")
-                                    </MudText>
-                                </MudTd>
-                                <MudTd Style="text-align:center;">
-                                    <MudText Typo="Typo.body2" Class="fw-bold"
-                                             Color="@GetVarianceColor(context.VariancePercentage)">
-                                        @(context.VariancePercentage > 0 ? "+" : "")@context.VariancePercentage%
-                                    </MudText>
-                                </MudTd>
-                                <MudTd Style="text-align:center;">
-                                    @if (context.IsOverspending)
-                                    {
-                                        <MudChip T="string"
-                                                 Color="MudBlazor.Color.Error"
-                                                 Size="MudBlazor.Size.Small"
-                                                 Variant="Variant.Filled">
-                                            <MudIcon Icon="@Icons.Material.Filled.Warning"
-                                                     Size="MudBlazor.Size.Small"
-                                                     Class="me-1" />
-                                            إنفاق زائد
-                                        </MudChip>
-                                    }
-                                    else if (context.VariancePercentage < -10)
-                                    {
-                                        <MudChip T="string"
-                                                 Color="MudBlazor.Color.Success"
-                                                 Size="MudBlazor.Size.Small"
-                                                 Variant="Variant.Filled">
-                                            <MudIcon Icon="@Icons.Material.Filled.ThumbUp"
-                                                     Size="MudBlazor.Size.Small"
-                                                     Class="me-1" />
-                                            وفّر
-                                        </MudChip>
-                                    }
-                                    else
-                                    {
-                                        <MudChip T="string"
-                                                 Color="MudBlazor.Color.Default"
-                                                 Size="MudBlazor.Size.Small"
-                                                 Variant="Variant.Outlined">
-                                            طبيعي
-                                        </MudChip>
-                                    }
-                                </MudTd>
-                            </RowTemplate>
-                        </MudTable>
-                    }
-                    else
-                    {
-                        <MudText Color="MudBlazor.Color.Secondary"
-                                 Align="MudBlazor.Align.Center" Class="mt-10">
-                            لا توجد بيانات كافية للتحليل
-                        </MudText>
-                    }
-                </MudPaper>
-            </MudItem>
-
-            @* Pareto Analysis *@
-            <MudItem xs="12" md="6">
-                <MudPaper Elevation="2" Class="pa-4 rounded-lg" Style="min-height:400px;">
-                    <MudStack Row
-                              AlignItems="MudBlazor.AlignItems.Center"
-                              Justify="Justify.SpaceBetween"
-                              Class="mb-3">
-                        <MudText Typo="Typo.h6" Class="fw-bold" Style="color:#1a237e;">
-                            <MudIcon Icon="@Icons.Material.Filled.BarChart" Class="me-1" />
-                            تحليل باريتو (80/20)
-                        </MudText>
-                        <MudChip T="string"
-                                 Color="MudBlazor.Color.Info"
-                                 Size="MudBlazor.Size.Small"
-                                 Variant="Variant.Outlined">
-                            منذ بداية السنة
-                        </MudChip>
-                    </MudStack>
-
-                    @if (_dashboard.ParetoAnalysis.Any())
-                    {
-                        <ApexChart TItem="ExpenseParetoDto"
-                                   Height="320"
-                                   Options="_paretoOptions">
-                            <ApexPointSeries TItem="ExpenseParetoDto"
-                                             Items="_dashboard.ParetoAnalysis"
-                                             SeriesType="SeriesType.Bar"
-                                             Name="المبلغ"
-                                             XValue="e => e.ItemName"
-                                             YValue="e => e.Amount"
-                                             OrderByDescending="e => e.Y" />
-                            <ApexPointSeries TItem="ExpenseParetoDto"
-                                             Items="_dashboard.ParetoAnalysis"
-                                             SeriesType="SeriesType.Line"
-                                             Name="التراكمي %"
-                                             XValue="e => e.ItemName"
-                                             YValue="e => e.CumulativePercentage"
-                                             OrderByDescending="e => e.Y" />
-                        </ApexChart>
-                    }
-                    else
-                    {
-                        <MudText Color="MudBlazor.Color.Secondary"
-                                 Align="MudBlazor.Align.Center" Class="mt-10">
-                            لا توجد بيانات
-                        </MudText>
-                    }
-                </MudPaper>
-            </MudItem>
-        </MudGrid>
-
-        @* ═══════════════════════════════════════════════════════
-           ROW 5: مؤشر الإنفاق + توزيع المجموعات بالتفصيل
-           ═══════════════════════════════════════════════════════ *@
-        <MudGrid Spacing="3" Class="mb-4">
-
-            @* مؤشر الإنفاق المتوقع *@
-            <MudItem xs="12" md="4">
-                <MudPaper Elevation="2" Class="pa-4 rounded-lg">
-                    <MudText Typo="Typo.h6" Class="fw-bold mb-3" Style="color:#1a237e;">
-                        <MudIcon Icon="@Icons.Material.Filled.Speed" Class="me-1" />
-                        مؤشر الإنفاق
-                    </MudText>
-
-                    @{
-                        var projected = GetProjectedAmount();
-                        var projectedVsPrev = _dashboard.PreviousMonthAmount > 0
-                            ? ((projected - _dashboard.PreviousMonthAmount)
-                               / _dashboard.PreviousMonthAmount) * 100 : 0;
-
-                        var gaugeColor = projectedVsPrev > 20
-                            ? MudBlazor.Color.Error
-                            : projectedVsPrev > 5
-                                ? MudBlazor.Color.Warning
-                                : MudBlazor.Color.Success;
-
-                        var progressPct = _dashboard.PreviousMonthAmount > 0
-                            ? Math.Min(
-                                (double)(_dashboard.CurrentMonthAmount
-                                         / _dashboard.PreviousMonthAmount) * 100, 150)
-                            : 0;
-                    }
-
-                    <MudStack AlignItems="MudBlazor.AlignItems.Center" Spacing="2">
-                        <MudProgressLinear Color="@gaugeColor"
-                                           Value="@progressPct"
-                                           Max="150"
-                                           Rounded
-                                           Size="MudBlazor.Size.Large"
-                                           Style="height:20px;"
-                                           Class="my-2" />
-
-                        <MudStack Row Justify="Justify.SpaceBetween" Style="width:100%;">
-                            <MudStack Spacing="0">
-                                <MudText Typo="Typo.caption" Color="MudBlazor.Color.Secondary">
-                                    الحالي
-                                </MudText>
-                                <MudText Typo="Typo.body1" Class="fw-bold">
-                                    @_dashboard.CurrentMonthAmount.ToString("N0") ج
-                                </MudText>
-                            </MudStack>
-                            <MudStack Spacing="0" AlignItems="MudBlazor.AlignItems.End">
-                                <MudText Typo="Typo.caption" Color="MudBlazor.Color.Secondary">
-                                    المتوقع نهاية الشهر
-                                </MudText>
-                                <MudText Typo="Typo.body1" Class="fw-bold"
-                                         Color="@gaugeColor">
-                                    @projected.ToString("N0") ج
-                                </MudText>
-                            </MudStack>
-                        </MudStack>
-
-                        <MudDivider />
-
-                        <MudStack Row Justify="Justify.SpaceBetween" Style="width:100%;">
-                            <MudText Typo="Typo.caption" Color="MudBlazor.Color.Secondary">
-                                الشهر السابق
-                            </MudText>
-                            <MudText Typo="Typo.caption" Class="fw-bold">
-                                @_dashboard.PreviousMonthAmount.ToString("N0") ج
-                            </MudText>
-                        </MudStack>
-
-                        <MudStack Row Justify="Justify.SpaceBetween" Style="width:100%;">
-                            <MudText Typo="Typo.caption" Color="MudBlazor.Color.Secondary">
-                                نسبة التغيير المتوقع
-                            </MudText>
-                            <MudText Typo="Typo.caption" Class="fw-bold"
-                                     Color="@gaugeColor">
-                                @(projectedVsPrev > 0 ? "+" : "")@projectedVsPrev.ToString("N1")%
-                            </MudText>
-                        </MudStack>
-                    </MudStack>
-                </MudPaper>
-            </MudItem>
-
-            @* Group Distribution Details *@
-            <MudItem xs="12" md="8">
-                <MudPaper Elevation="2" Class="pa-4 rounded-lg">
-                    <MudText Typo="Typo.h6" Class="fw-bold mb-3" Style="color:#1a237e;">
-                        <MudIcon Icon="@Icons.Material.Filled.ViewList" Class="me-1" />
-                        تفاصيل التوزيع حسب المجموعات
-                    </MudText>
-
-                    <MudStack Spacing="3">
-                        @foreach (var g in _dashboard.GroupDistribution)
-                        {
-                            <MudStack Spacing="1">
-                                <MudStack Row
-                                          AlignItems="MudBlazor.AlignItems.Center"
-                                          Justify="Justify.SpaceBetween">
-                                    <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Spacing="1">
-                                        <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord"
-                                                 Size="MudBlazor.Size.Small"
-                                                 Style="@($"color:{GetGroupHexColor(_groupColorIndex++)};")"/>
-                                        <MudText Typo="Typo.body2" Class="fw-bold">
-                                            @g.GroupName
-                                        </MudText>
-                                        <MudChip T="string"
-                                                 Size="MudBlazor.Size.Small"
-                                                 Variant="Variant.Text"
-                                                 Color="MudBlazor.Color.Default">
-                                            @g.Count مصروف
-                                        </MudChip>
-                                    </MudStack>
-                                    <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Spacing="2">
-                                        <MudText Typo="Typo.body2" Class="fw-bold">
-                                            @g.Total.ToString("N0") ج
-                                        </MudText>
-                                        <MudChip T="string"
-                                                 Size="MudBlazor.Size.Small"
-                                                 Color="MudBlazor.Color.Primary"
-                                                 Variant="Variant.Outlined">
-                                            @g.Percentage%
-                                        </MudChip>
-                                    </MudStack>
-                                </MudStack>
-                                <MudProgressLinear Value="@((double)g.Percentage)"
-                                                   Max="100"
-                                                   Color="MudBlazor.Color.Primary"
-                                                   Rounded
-                                                   Size="MudBlazor.Size.Medium" />
+                                    </MudPaper>
+                                }
                             </MudStack>
                         }
-                    </MudStack>
-                </MudPaper>
-            </MudItem>
-        </MudGrid>
-    }
-</MudContainer>
+                        else
+                        {
+                            <div class="empty-soft">لا توجد مصروفات مسجلة خلال الشهر الحالي</div>
+                        }
+                    </MudPaper>
+                </MudItem>
+
+            </MudGrid>
+
+            <MudGrid Spacing="3" Class="mb-4">
+
+                <MudItem xs="12" lg="6">
+                    <MudPaper Elevation="0" Class="section-card pa-4" Style="min-height:430px;">
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.h6" Class="section-title">
+                                    <MudIcon Icon="@Icons.Material.Filled.CompareArrows" Class="me-1" />
+                                    تحليل الانحراف
+                                </MudText>
+                                <MudText Typo="Typo.body2" Class="section-subtitle">
+                                    مقارنة الشهر الحالي بمتوسط آخر 3 أشهر لكل مجموعة
+                                </MudText>
+                            </MudStack>
+
+                            <MudChip T="string" Class="panel-badge" Color="MudBlazor.Color.Secondary" Variant="Variant.Outlined">
+                                Variance Analysis
+                            </MudChip>
+                        </MudStack>
+
+                        @if (_dashboard.VarianceAnalysis.Any())
+                        {
+                            <MudTable Items="_dashboard.VarianceAnalysis.Take(8)" Dense Hover Elevation="0" Breakpoint="Breakpoint.Sm" Class="table-head-strong">
+                                <HeaderContent>
+                                    <MudTh>المجموعة</MudTh>
+                                    <MudTh Style="text-align:center;">الحالي</MudTh>
+                                    <MudTh Style="text-align:center;">المتوسط</MudTh>
+                                    <MudTh Style="text-align:center;">الانحراف</MudTh>
+                                    <MudTh Style="text-align:center;">الحالة</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd>
+                                        <MudText Typo="Typo.body2" Class="muted-label">@context.GroupName</MudText>
+                                    </MudTd>
+                                    <MudTd Style="text-align:center;">
+                                        <MudText Typo="Typo.body2" Class="page-title">@context.CurrentMonth.ToString("N0")</MudText>
+                                    </MudTd>
+                                    <MudTd Style="text-align:center;">
+                                        <MudText Typo="Typo.body2" Class="muted-label">@context.PreviousMonthsAverage.ToString("N0")</MudText>
+                                    </MudTd>
+                                    <MudTd Style="text-align:center;">
+                                        <MudText Typo="Typo.body2"
+                                                 Class="page-title"
+                                                 Color="@GetVarianceColor(context.VariancePercentage)">
+                                            @(context.VariancePercentage > 0 ? "+" : "")@context.VariancePercentage%
+                                        </MudText>
+                                    </MudTd>
+                                    <MudTd Style="text-align:center;">
+                                        @if (context.VariancePercentage > 10)
+                                        {
+                                            <MudChip T="string" Size="MudBlazor.Size.Small" Color="MudBlazor.Color.Error" Variant="Variant.Filled">
+                                                إنفاق زائد
+                                            </MudChip>
+                                        }
+                                        else if (context.VariancePercentage < -10)
+                                        {
+                                            <MudChip T="string" Size="MudBlazor.Size.Small" Color="MudBlazor.Color.Success" Variant="Variant.Filled">
+                                                وفر
+                                            </MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudChip T="string" Size="MudBlazor.Size.Small" Color="MudBlazor.Color.Default" Variant="Variant.Outlined">
+                                                طبيعي
+                                            </MudChip>
+                                        }
+                                    </MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
+                        else
+                        {
+                            <div class="empty-soft">لا توجد بيانات كافية لتحليل الانحراف</div>
+                        }
+                    </MudPaper>
+                </MudItem>
+
+                <MudItem xs="12" lg="6">
+                    <MudPaper Elevation="0" Class="section-card pa-4" Style="min-height:430px;">
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.h6" Class="section-title">
+                                    <MudIcon Icon="@Icons.Material.Filled.BarChart" Class="me-1" />
+                                    تحليل باريتو
+                                </MudText>
+                                <MudText Typo="Typo.body2" Class="section-subtitle">
+                                    تحديد المجموعات التي تمثل الجزء الأكبر من إجمالي الإنفاق
+                                </MudText>
+                            </MudStack>
+
+                            <MudChip T="string" Class="panel-badge" Color="MudBlazor.Color.Info" Variant="Variant.Outlined">
+                                Pareto 80/20
+                            </MudChip>
+                        </MudStack>
+
+                        @if (_dashboard.ParetoAnalysis.Any())
+                        {
+                            <ApexChart TItem="ExpenseParetoDto" Height="220" Options="_paretoBarOptions">
+                                <ApexPointSeries TItem="ExpenseParetoDto"
+                                                 Items="_dashboard.ParetoAnalysis.Take(6)"
+                                                 SeriesType="SeriesType.Bar"
+                                                 Name="المبلغ"
+                                                 XValue="e => e.ItemName"
+                                                 YValue="e => e.Amount" />
+                            </ApexChart>
+
+                            <MudDivider Class="my-3" />
+
+                            <MudStack Spacing="1">
+                                @foreach (var item in _dashboard.ParetoAnalysis.Take(6))
+                                {
+                                    var isFocus = item.CumulativePercentage <= 80 || Math.Abs(item.CumulativePercentage - 80) < 0.1m;
+                                    <div class="pareto-row">
+                                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween">
+                                            <MudStack Spacing="0">
+                                                <MudText Typo="Typo.body2" Class="page-title">@item.ItemName</MudText>
+                                                <MudText Typo="Typo.caption" Color="MudBlazor.Color.Secondary">
+                                                    @item.Amount.ToString("N0") ج • @item.Percentage%
+                                                </MudText>
+                                            </MudStack>
+
+                                            <MudStack Spacing="1" AlignItems="MudBlazor.AlignItems.End">
+                                                <MudChip T="string"
+                                                         Size="MudBlazor.Size.Small"
+                                                         Color="@(isFocus ? MudBlazor.Color.Primary : MudBlazor.Color.Default)"
+                                                         Variant="@(isFocus ? Variant.Filled : Variant.Outlined)">
+                                                    تراكمي @item.CumulativePercentage%
+                                                </MudChip>
+                                            </MudStack>
+                                        </MudStack>
+                                    </div>
+                                }
+                            </MudStack>
+                        }
+                        else
+                        {
+                            <div class="empty-soft">لا توجد بيانات لتحليل باريتو</div>
+                        }
+                    </MudPaper>
+                </MudItem>
+
+            </MudGrid>
+
+            <MudGrid Spacing="3">
+
+                <MudItem xs="12" lg="4">
+                    <MudPaper Elevation="0" Class="section-card pa-4" Style="min-height:360px;">
+                        <MudStack Spacing="2">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.h6" Class="section-title">
+                                    <MudIcon Icon="@Icons.Material.Filled.Speed" Class="me-1" />
+                                    مؤشر الإنفاق المتوقع
+                                </MudText>
+                                <MudText Typo="Typo.body2" Class="section-subtitle">
+                                    تقدير نهاية الشهر بناءً على المتوسط الحالي
+                                </MudText>
+                            </MudStack>
+
+                            <MudPaper Elevation="0" Class="metric-soft-box pa-4">
+                                <MudStack Spacing="1">
+                                    <MudText Typo="Typo.caption" Class="muted-label">المصروف المتوقع نهاية الشهر</MudText>
+                                    <MudText Typo="Typo.h4" Class="page-title">@projectedAmount.ToString("N0") ج</MudText>
+                                    <MudText Typo="Typo.caption" Color="@spendColor" Class="page-title">
+                                        @(projectedVsPrev > 0 ? "+" : "")@projectedVsPrev.ToString("N1")%
+                                        مقارنة بالشهر السابق
+                                    </MudText>
+                                </MudStack>
+                            </MudPaper>
+
+                            <MudStack Spacing="1">
+                                <MudText Typo="Typo.body2" Class="muted-label">نسبة التقدم مقابل الشهر السابق</MudText>
+                                <MudProgressLinear Rounded
+                                                   Color="@spendColor"
+                                                   Value="@GetProgressPercent()"
+                                                   Max="150"
+                                                   Size="MudBlazor.Size.Large"
+                                                   Style="height:18px;" />
+                            </MudStack>
+
+                            <MudPaper Elevation="0" Class="insight-box pa-4">
+                                <MudStack Spacing="1">
+                                    <MudText Typo="Typo.caption" Class="muted-label">قراءة سريعة</MudText>
+                                    <MudText Typo="Typo.body1" Class="insight-status" Color="@spendColor">
+                                        @GetSpendingStatusText(projectedVsPrev)
+                                    </MudText>
+                                    <MudText Typo="Typo.body2" Color="MudBlazor.Color.Secondary">
+                                        @GetSpendingStatusDescription(projectedVsPrev)
+                                    </MudText>
+                                </MudStack>
+                            </MudPaper>
+                        </MudStack>
+                    </MudPaper>
+                </MudItem>
+
+                <MudItem xs="12" lg="8">
+                    <MudPaper Elevation="0" Class="section-card pa-4" Style="min-height:360px;">
+                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.h6" Class="section-title">
+                                    <MudIcon Icon="@Icons.Material.Filled.ViewList" Class="me-1" />
+                                    تفاصيل التوزيع حسب المجموعات
+                                </MudText>
+                                <MudText Typo="Typo.body2" Class="section-subtitle">
+                                    مساهمة كل مجموعة في إجمالي المصروفات منذ بداية السنة
+                                </MudText>
+                            </MudStack>
+                        </MudStack>
+
+                        @if (_dashboard.GroupDistribution.Any())
+                        {
+                            <MudStack Spacing="3">
+                                @for (int i = 0; i < _dashboard.GroupDistribution.Count; i++)
+                                {
+                                    var g = _dashboard.GroupDistribution[i];
+                                    <MudStack Spacing="1">
+                                        <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Justify="Justify.SpaceBetween">
+                                            <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Spacing="1">
+                                                <span class="legend-dot" style="background:@GetPaletteColor(i)"></span>
+                                                <MudText Typo="Typo.body2" Class="page-title">@g.GroupName</MudText>
+                                                <MudChip T="string" Size="MudBlazor.Size.Small" Variant="Variant.Text" Color="MudBlazor.Color.Default">
+                                                    @g.Count عملية
+                                                </MudChip>
+                                            </MudStack>
+
+                                            <MudStack Row AlignItems="MudBlazor.AlignItems.Center" Spacing="2">
+                                                <MudText Typo="Typo.body2" Class="page-title">@g.Total.ToString("N0") ج</MudText>
+                                                <MudChip T="string" Size="MudBlazor.Size.Small" Color="MudBlazor.Color.Primary" Variant="Variant.Outlined">
+                                                    @g.Percentage%
+                                                </MudChip>
+                                            </MudStack>
+                                        </MudStack>
+
+                                        <MudProgressLinear Rounded
+                                                           Color="MudBlazor.Color.Primary"
+                                                           Value="@((double)g.Percentage)"
+                                                           Max="100"
+                                                           Size="MudBlazor.Size.Medium"
+                                                           Style="height:12px;" />
+                                    </MudStack>
+                                }
+                            </MudStack>
+                        }
+                        else
+                        {
+                            <div class="empty-soft">لا توجد بيانات تفصيلية للتوزيع</div>
+                        }
+                    </MudPaper>
+                </MudItem>
+
+            </MudGrid>
+        }
+    </MudContainer>
+</div>
 
 @code {
-    // ── State ──
+    private readonly CultureInfo _arCulture = new("ar-EG");
+
     private bool _loading = true;
     private ExpenseDashboardDto? _dashboard;
-    private int _groupColorIndex = 0;
 
-    // ── Chart Options ──
     private ApexChartOptions<ExpenseMonthlyTrendDto> _monthlyTrendOptions = new();
-    private ApexChartOptions<ExpenseGroupStatsDto>   _donutOptions        = new();
-    private ApexChartOptions<ExpenseDailyTrendDto>   _dailyTrendOptions   = new();
-    private ApexChartOptions<ExpenseParetoDto>        _paretoOptions       = new();
+    private ApexChartOptions<ExpenseGroupStatsDto> _donutOptions = new();
+    private ApexChartOptions<ExpenseDailyTrendDto> _dailyTrendOptions = new();
+    private ApexChartOptions<ExpenseParetoDto> _paretoBarOptions = new();
 
-    // ── Lifecycle ──
     protected override async Task OnInitializedAsync()
     {
         InitializeChartOptions();
@@ -724,15 +1040,15 @@
     private async Task LoadDataAsync()
     {
         _loading = true;
-        _groupColorIndex = 0;
         StateHasChanged();
+
         try
         {
             _dashboard = await ExpenseService.GetDashboardDataAsync();
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Dashboard Error: {ex.Message}");
+            Console.WriteLine($"Expense dashboard error: {ex.Message}");
             _dashboard = null;
         }
         finally
@@ -742,40 +1058,44 @@
         }
     }
 
-    // ═══════════════════════════════════════════════════════
-    // Chart Options
-    // ═══════════════════════════════════════════════════════
     private void InitializeChartOptions()
     {
-        // ── Monthly Trend (Area) ──
         _monthlyTrendOptions = new ApexChartOptions<ExpenseMonthlyTrendDto>
         {
             Chart = new Chart
             {
-                Toolbar  = new Toolbar { Show = false },
+                Toolbar = new Toolbar { Show = false },
                 FontFamily = "inherit",
                 Animations = new Animations { Enabled = true }
             },
-            Colors = new List<string> { "#667eea" },
-            Stroke = new Stroke { Curve = Curve.Smooth, Width = 3 },
+            Colors = new List<string> { "#2563eb" },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = 3
+            },
             Fill = new Fill
             {
                 Type = new List<FillType> { FillType.Gradient },
                 Gradient = new FillGradient
                 {
                     ShadeIntensity = 1,
-                    OpacityFrom    = 0.45,
-                    OpacityTo      = 0.05,
-                    Stops          = new List<double> { 0, 100 }
+                    OpacityFrom = 0.38,
+                    OpacityTo = 0.05,
+                    Stops = new List<double> { 0, 100 }
                 }
+            },
+            DataLabels = new DataLabels { Enabled = false },
+            Grid = new Grid
+            {
+                BorderColor = "#eef2f7",
+                StrokeDashArray = 4
             },
             Xaxis = new XAxis
             {
                 Labels = new XAxisLabels
                 {
-                    RotateAlways = false,
-                    Rotate       = 0,
-                    Style        = new AxisLabelStyle { FontSize = "11px" }
+                    Style = new AxisLabelStyle { FontSize = "11px" }
                 }
             },
             Yaxis = new List<YAxis>
@@ -786,7 +1106,7 @@
                     {
                         Formatter = @"function(val){
                             if(val>=1000000) return (val/1000000).toFixed(1)+'M';
-                            if(val>=1000)    return (val/1000).toFixed(0)+'K';
+                            if(val>=1000) return (val/1000).toFixed(0)+'K';
                             return val.toFixed(0);
                         }"
                     }
@@ -797,85 +1117,81 @@
                 Y = new TooltipY
                 {
                     Formatter = @"function(val){
-                        return val.toLocaleString('ar-EG')+' ج';
+                        return val.toLocaleString('ar-EG') + ' ج';
                     }"
                 }
-            },
-            DataLabels = new DataLabels { Enabled = false },
-            Grid = new Grid
-            {
-                BorderColor = "#f0f0f0",
-                StrokeDashArray = 4
             }
         };
 
-        // ── Donut Chart ──
         _donutOptions = new ApexChartOptions<ExpenseGroupStatsDto>
         {
             Chart = new Chart
             {
-                Toolbar    = new Toolbar { Show = false },
-                FontFamily = "inherit",
-                Animations = new Animations { Enabled = true }
+                Toolbar = new Toolbar { Show = false },
+                FontFamily = "inherit"
             },
             Colors = new List<string>
             {
-                "#667eea","#f5576c","#4facfe","#43e97b",
-                "#fa709a","#fee140","#a18cd1","#84fab0","#f093fb","#fbc2eb"
+                "#2563eb", "#7c3aed", "#0f766e", "#f59e0b", "#ef4444",
+                "#06b6d4", "#8b5cf6", "#10b981", "#f97316", "#64748b"
             },
-            Legend     = new Legend { Show = false },
+            Legend = new Legend { Show = false },
+            DataLabels = new DataLabels { Enabled = false },
             PlotOptions = new PlotOptions
             {
                 Pie = new PlotOptionsPie
                 {
                     Donut = new PlotOptionsDonut
                     {
-                        Size   = "70%",
+                        Size = "72%",
                         Labels = new DonutLabels
                         {
-                            Show  = true,
+                            Show = true,
                             Total = new DonutLabelTotal
                             {
-                                Show      = true,
-                                Label     = "الإجمالي",
+                                Show = true,
+                                Label = "الإجمالي",
                                 Formatter = @"function(w){
-                                    var t=w.globals.seriesTotals.reduce((a,b)=>a+b,0);
-                                    return t.toLocaleString('ar-EG');
+                                    var total = w.globals.seriesTotals.reduce((a,b)=>a+b,0);
+                                    return total.toLocaleString('ar-EG');
                                 }"
                             }
                         }
                     }
                 }
             },
-            DataLabels = new DataLabels { Enabled = false },
             Tooltip = new Tooltip
             {
                 Y = new TooltipY
                 {
                     Formatter = @"function(val){
-                        return val.toLocaleString('ar-EG')+' ج';
+                        return val.toLocaleString('ar-EG') + ' ج';
                     }"
                 }
             }
         };
 
-        // ── Daily Trend (Bar) ──
         _dailyTrendOptions = new ApexChartOptions<ExpenseDailyTrendDto>
         {
             Chart = new Chart
             {
-                Toolbar    = new Toolbar { Show = false },
-                FontFamily = "inherit",
-                Animations = new Animations { Enabled = true }
+                Toolbar = new Toolbar { Show = false },
+                FontFamily = "inherit"
             },
-            Colors = new List<string> { "#4facfe" },
+            Colors = new List<string> { "#0ea5e9" },
+            DataLabels = new DataLabels { Enabled = false },
             PlotOptions = new PlotOptions
             {
                 Bar = new PlotOptionsBar
                 {
-                    BorderRadius = 4,
-                    ColumnWidth  = "60%"
+                    BorderRadius = 5,
+                    ColumnWidth = "58%"
                 }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "#eef2f7",
+                StrokeDashArray = 4
             },
             Xaxis = new XAxis
             {
@@ -902,46 +1218,46 @@
                 Y = new TooltipY
                 {
                     Formatter = @"function(val){
-                        return val.toLocaleString('ar-EG')+' ج';
+                        return val.toLocaleString('ar-EG') + ' ج';
                     }"
                 }
-            },
-            DataLabels = new DataLabels { Enabled = false },
-            Grid = new Grid
-            {
-                BorderColor    = "#f0f0f0",
-                StrokeDashArray = 4
             }
         };
 
-        // ── Pareto Chart (Bar + Line) ──
-        _paretoOptions = new ApexChartOptions<ExpenseParetoDto>
+        _paretoBarOptions = new ApexChartOptions<ExpenseParetoDto>
         {
             Chart = new Chart
             {
-                Toolbar    = new Toolbar { Show = false },
-                FontFamily = "inherit",
-                Animations = new Animations { Enabled = true }
+                Toolbar = new Toolbar { Show = false },
+                FontFamily = "inherit"
             },
-            Colors = new List<string> { "#764ba2", "#f5576c" },
+            Colors = new List<string> { "#8b5cf6" },
+            DataLabels = new DataLabels { Enabled = false },
             PlotOptions = new PlotOptions
             {
                 Bar = new PlotOptionsBar
                 {
-                    BorderRadius = 4,
-                    ColumnWidth  = "55%"
+                    BorderRadius = 5,
+                    ColumnWidth = "54%"
                 }
             },
-            Stroke = new Stroke
+            Grid = new Grid
             {
-                Width = new List<int> { 0, 3 },
-                Curve = Curve.Smooth
+                BorderColor = "#eef2f7",
+                StrokeDashArray = 4
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels
+                {
+                    Rotate = -18,
+                    Style = new AxisLabelStyle { FontSize = "10px" }
+                }
             },
             Yaxis = new List<YAxis>
             {
                 new YAxis
                 {
-                    Title = new AxisTitle { Text = "المبلغ" },
                     Labels = new YAxisLabels
                     {
                         Formatter = @"function(val){
@@ -949,80 +1265,45 @@
                             return val.toFixed(0);
                         }"
                     }
-                },
-                new YAxis
-                {
-                    Opposite = true,
-                    Min      = 0,
-                    Max      = 100,
-                    Title    = new AxisTitle { Text = "التراكمي %" },
-                    Labels   = new YAxisLabels
-                    {
-                        Formatter = @"function(val){ return val.toFixed(0)+'%'; }"
-                    }
                 }
             },
-            Xaxis = new XAxis
-            {
-                Labels = new XAxisLabels
-                {
-                    Rotate = -35,
-                    Style  = new AxisLabelStyle { FontSize = "10px" }
-                }
-            },
-            DataLabels = new DataLabels { Enabled = false },
             Tooltip = new Tooltip
             {
                 Y = new TooltipY
                 {
                     Formatter = @"function(val){
-                        return val.toLocaleString('ar-EG');
+                        return val.toLocaleString('ar-EG') + ' ج';
                     }"
-                }
-            },
-            // ⭐ خط الـ 80% كـ Annotation
-            Annotations = new Annotations
-            {
-                Yaxis = new List<AnnotationsYAxis>
-                {
-                    new AnnotationsYAxis
-                    {
-                        Y           = 80,
-                        YAxisIndex  = 1,
-                        BorderColor = "#f5576c",
-                        BorderWidth = 2,
-                        Label = new Label
-                        {
-                            Text  = "حد 80%",
-                            Style = new Style
-                            {
-                                Color      = "#fff",
-                                Background = "#f5576c",
-                                FontSize   = "12px"
-                            }
-                        }
-                    }
                 }
             }
         };
     }
 
-    // ═══════════════════════════════════════════════════════
-    // Helper Methods
-    // ═══════════════════════════════════════════════════════
-
     private decimal GetProjectedAmount()
     {
-        if (_dashboard == null) return 0;
-        var today       = DateTime.Today;
+        if (_dashboard is null) return 0;
+        var today = DateTime.Today;
         var daysInMonth = DateTime.DaysInMonth(today.Year, today.Month);
-        return _dashboard.DailyAverage * daysInMonth;
+        return Math.Round(_dashboard.DailyAverage * daysInMonth, 2);
     }
 
-    private string GetGrowthIcon(decimal growth) =>
-        growth > 0 ? Icons.Material.Filled.TrendingUp
-      : growth < 0 ? Icons.Material.Filled.TrendingDown
-      : Icons.Material.Filled.TrendingFlat;
+    private decimal GetProjectedVsPrevious()
+    {
+        if (_dashboard is null) return 0;
+        var projected = GetProjectedAmount();
+
+        if (_dashboard.PreviousMonthAmount > 0)
+            return Math.Round(((projected - _dashboard.PreviousMonthAmount) / _dashboard.PreviousMonthAmount) * 100, 1);
+
+        return projected > 0 ? 100 : 0;
+    }
+
+    private double GetProgressPercent()
+    {
+        if (_dashboard is null || _dashboard.PreviousMonthAmount <= 0) return 0;
+        var value = (double)(_dashboard.CurrentMonthAmount / _dashboard.PreviousMonthAmount) * 100;
+        return Math.Min(value, 150);
+    }
 
     private string GetGrowthText(decimal growth)
     {
@@ -1032,41 +1313,76 @@
         return "بدون تغيير";
     }
 
-    private string GetGrowthStyle(decimal growth)
+    private string GetGrowthClass(decimal growth)
     {
-        // في المصروفات: الزيادة = سيء (أحمر فاتح)، النقصان = جيد (أخضر فاتح)
-        if (growth > 0) return "color:rgba(255,200,200,0.95); font-weight:bold;";
-        if (growth < 0) return "color:rgba(200,255,200,0.95); font-weight:bold;";
-        return "opacity:0.8;";
+        if (growth > 0) return "trend-up";
+        if (growth < 0) return "trend-down";
+        return "trend-flat";
     }
 
-    private MudBlazor.Color GetVarianceColor(decimal variance) =>
-        variance > 10  ? MudBlazor.Color.Error
-      : variance < -10 ? MudBlazor.Color.Success
-      : MudBlazor.Color.Default;
-
-    private string GetRankBg(int rank) => rank switch
+    private MudBlazor.Color GetVarianceColor(decimal variance)
     {
-        1 => "#fff8e1",
-        2 => "#f3e5f5",
-        3 => "#e3f2fd",
-        _ => "#f5f5f5"
-    };
+        if (variance > 10) return MudBlazor.Color.Error;
+        if (variance < -10) return MudBlazor.Color.Success;
+        return MudBlazor.Color.Default;
+    }
 
-    private string GetRankColor(int rank) => rank switch
+    private MudBlazor.Color GetProjectionColor(decimal projectedVsPrev)
     {
-        1 => "#f57f17",
-        2 => "#7b1fa2",
-        3 => "#1565c0",
-        _ => "#616161"
-    };
+        if (projectedVsPrev > 20) return MudBlazor.Color.Error;
+        if (projectedVsPrev > 5) return MudBlazor.Color.Warning;
+        return MudBlazor.Color.Success;
+    }
 
-    private static readonly string[] GroupHexColors =
+    private string GetSpendingStatusText(decimal projectedVsPrev)
     {
-        "#667eea","#f5576c","#4facfe","#43e97b",
-        "#fa709a","#fee140","#a18cd1","#84fab0","#f093fb","#fbc2eb"
-    };
+        if (projectedVsPrev > 20) return "مستوى الإنفاق مرتفع";
+        if (projectedVsPrev > 5) return "الإنفاق أعلى من المعتاد";
+        if (projectedVsPrev < -10) return "الإنفاق تحت السيطرة";
+        return "الإنفاق في الحدود الطبيعية";
+    }
 
-    private string GetGroupHexColor(int index) =>
-        GroupHexColors[index % GroupHexColors.Length];
+    private string GetSpendingStatusDescription(decimal projectedVsPrev)
+    {
+        if (projectedVsPrev > 20)
+            return "المؤشرات الحالية توضح أن إجمالي الشهر قد يتجاوز الشهر السابق بشكل ملحوظ، ويفضل مراجعة البنود الأعلى تكلفة.";
+        if (projectedVsPrev > 5)
+            return "هناك ارتفاع متوقع في إجمالي الإنفاق مقارنة بالشهر السابق، لكن ما زال ضمن نطاق يحتاج متابعة.";
+        if (projectedVsPrev < -10)
+            return "الأداء الحالي يشير إلى تحسن في مستوى المصروفات مقارنة بالشهر السابق، وهو مؤشر جيد.";
+        return "الإنفاق الحالي يسير بمعدل قريب من النمط المعتاد دون تغيّر حاد.";
+    }
+
+    private string GetPaletteColor(int index)
+    {
+        string[] palette =
+        {
+            "#2563eb", "#7c3aed", "#0f766e", "#f59e0b", "#ef4444",
+            "#06b6d4", "#8b5cf6", "#10b981", "#f97316", "#64748b"
+        };
+
+        return palette[index % palette.Length];
+    }
+
+    private string GetTopExpenseClass(int rank)
+    {
+        return rank switch
+        {
+            1 => "rank-1",
+            2 => "rank-2",
+            3 => "rank-3",
+            _ => "rank-x"
+        };
+    }
+
+    private string GetRankAvatarClass(int rank)
+    {
+        return rank switch
+        {
+            1 => "rank-avatar rank-1-color",
+            2 => "rank-avatar rank-2-color",
+            3 => "rank-avatar rank-3-color",
+            _ => "rank-avatar rank-x-color"
+        };
+    }
 }

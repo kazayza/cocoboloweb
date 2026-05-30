@@ -121,6 +121,7 @@ builder.Services.AddScoped<IPayrollService, PayrollService>();
 builder.Services.AddScoped<IQuotationService, QuotationService>();
 builder.Services.AddSingleton<ShareTokenService>();
 builder.Services.AddScoped<IQuotationExportService, QuotationExportService>();
+builder.Services.AddScoped<ISalesDeliveryStatusService, SalesDeliveryStatusService>();
 
 
 var app = builder.Build();
