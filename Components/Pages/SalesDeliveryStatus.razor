@@ -1,0 +1,162 @@
+@page "/sales-delivery-status"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Components.Shared
+@using MudBlazor
+@using Microsoft.AspNetCore.Authorization
+
+@inject ISalesDeliveryStatusService DeliveryService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@attribute [Authorize]
+
+<PageTitle>متابعة التسليمات</PageTitle>
+
+@code {
+    private const string StatusPending = "جارى";
+    private const string StatusDelivered = "تم التسليم";
+    private const string StatusOverdue = "متأخر";
+}
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+
+    <div Style="background:linear-gradient(135deg,#1a237e,#283593); padding:20px; border-radius:12px; color:white; margin-bottom:16px;">
+        <MudStack Row="true" Justify="Justify.SpaceBetween">
+            <MudText Typo="Typo.h5">
+                <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Class="me-2" Style="color:#ffd700;" />
+                متابعة التسليمات
+            </MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Color="Color.Inherit" OnClick="Refresh" />
+        </MudStack>
+    </div>
+
+    <MudGrid Spacing="2" Class="mb-4">
+        <MudItem xs="3">
+            <MudPaper Style="padding:16px; border-radius:12px; text-align:center; background:#667eea; color:white; cursor:pointer;" OnClick="(() => SetStatus(null))">
+                <MudText>الكل</MudText>
+                <MudText Typo="Typo.h4">@_summary.TotalCount</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="3">
+            <MudPaper Style="padding:16px; border-radius:12px; text-align:center; background:#f5576c; color:white; cursor:pointer;" OnClick="(() => SetStatus(StatusPending))">
+                <MudText>@StatusPending</MudText>
+                <MudText Typo="Typo.h4">@_summary.PendingCount</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="3">
+            <MudPaper Style="padding:16px; border-radius:12px; text-align:center; background:#43e97b; color:white; cursor:pointer;" OnClick="(() => SetStatus(StatusDelivered))">
+                <MudText>@StatusDelivered</MudText>
+                <MudText Typo="Typo.h4">@_summary.DeliveredCount</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="3">
+            <MudPaper Style="padding:16px; border-radius:12px; text-align:center; background:#ff9800; color:white; cursor:pointer;" OnClick="(() => SetStatus(StatusOverdue))">
+                <MudText>@StatusOverdue</MudText>
+                <MudText Typo="Typo.h4">@_summary.OverdueCount</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudPaper Style="padding:16px; margin-bottom:16px;">
+        <MudGrid>
+            <MudItem xs="12" sm="6" md="3">
+                <MudDatePicker @bind-Date="_from" Label="من" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudDatePicker @bind-Date="_to" Label="إلى" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudTextField T="string" @bind-Value="_search" Label="العميل" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudStack Row="true">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Search">بحث</MudButton>
+                    <MudButton Variant="Variant.Outlined" OnClick="Clear">مسح</MudButton>
+                </MudStack>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    <MudTable Items="_items" Dense="true" Hover="true" Loading="_loading" OnRowClick="OpenDetail" RowsPerPage="20">
+        <HeaderContent>
+            <MudTh>رقم</MudTh>
+            <MudTh>التاريخ</MudTh>
+            <MudTh>العميل</MudTh>
+            <MudTh>المندوب</MudTh>
+            <MudTh>الإجمالي</MudTh>
+            <MudTh>الحالة</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.TransactionId</MudTd>
+            <MudTd>@context.TransactionDate.ToString("yyyy/MM/dd")</MudTd>
+            <MudTd>@context.PartyName</MudTd>
+            <MudTd>@(context.DeliveryEmployeeName ?? "-")</MudTd>
+            <MudTd>@context.GrandTotal.ToString("N0") ج</MudTd>
+            <MudTd>
+                <MudChip T="string" Size="Size.Small" Color="@GetColor(context.DeliveryStatus)">@context.DeliveryStatus</MudChip>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+
+</MudContainer>
+
+@code {
+    private List<VwSalesDeliveryStatus> _items = new();
+    private DeliverySummaryDto _summary = new();
+    private bool _loading = true;
+    private DateTime? _from;
+    private DateTime? _to;
+    private string? _search;
+    private string? _status;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Refresh();
+    }
+
+    private async Task Refresh()
+    {
+        _loading = true;
+        var t1 = DeliveryService.GetFilteredAsync(_from, _to, _search, _status);
+        var t2 = DeliveryService.GetSummaryAsync(_from, _to, _search, _status);
+        await Task.WhenAll(t1, t2);
+        _items = t1.Result;
+        _summary = t2.Result;
+        _loading = false;
+    }
+
+    private async Task Search() => await Refresh();
+    
+    private async Task Clear() 
+    { 
+        _from = null; 
+        _to = null; 
+        _search = null; 
+        _status = null; 
+        await Refresh(); 
+    }
+    
+    private async Task SetStatus(string? s) 
+    { 
+        _status = s; 
+        await Refresh(); 
+    }
+
+    private async Task OpenDetail(TableRowClickEventArgs<VwSalesDeliveryStatus> e)
+    {
+        var parameters = new DialogParameters<DeliveryDetailDialog>();
+        parameters.Add("TransactionId", e.Item.TransactionId);
+        var dialog = await DialogService.ShowAsync<DeliveryDetailDialog>("تفاصيل التسليم", parameters, new DialogOptions { MaxWidth = MaxWidth.Medium });
+        var result = await dialog.Result;
+        if (result != null && !result.Canceled) await Refresh();
+    }
+
+    private Color GetColor(string s) => s switch
+    {
+        "جارى" => Color.Warning,
+        "متأخر" => Color.Error,
+        "تم التسليم" => Color.Success,
+        _ => Color.Default
+    };
+}

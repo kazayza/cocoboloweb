@@ -1,0 +1,155 @@
+@page "/delivery-detail-dialog"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Style="min-height:200px;">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+            </MudStack>
+        }
+        else if (_detail == null)
+        {
+            <MudAlert Severity="Severity.Error">لا توجد بيانات</MudAlert>
+        }
+        else
+        {
+            <MudStack Spacing="3">
+                <MudPaper Style="background:#1a237e; color:white; padding:16px; border-radius:8px;">
+                    <MudStack Row="true" Justify="Justify.SpaceBetween">
+                        <MudText Typo="Typo.h6">فاتورة #@TransactionId</MudText>
+                        <MudChip T="string" Color="GetChipColor(_detail.DeliveryStatus)">@_detail.DeliveryStatus</MudChip>
+                    </MudStack>
+                </MudPaper>
+
+                <MudGrid>
+                    <MudItem xs="12" md="6">
+                        <MudText Typo="Typo.subtitle2">العميل</MudText>
+                        <MudText>@_detail.PartyName</MudText>
+                        @if (!string.IsNullOrEmpty(_detail.PartyPhone))
+                        {
+                            <MudText>@_detail.PartyPhone</MudText>
+                        }
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudText Typo="Typo.subtitle2">مندوب التسليم</MudText>
+                        <MudText>@(_detail.DeliveryEmployeeName ?? "لم يحدد")</MudText>
+                    </MudItem>
+                </MudGrid>
+
+                <MudText Typo="Typo.subtitle2">المنتجات</MudText>
+                @foreach (var p in _detail.Products)
+                {
+                    <MudPaper Style="padding:8px;" Elevation="0">
+                        <MudStack Row="true" Justify="Justify.SpaceBetween">
+                            <MudText>@p.ProductName</MudText>
+                            <MudText>@p.Quantity × @p.TotalAmount.ToString("N2")</MudText>
+                        </MudStack>
+                    </MudPaper>
+                }
+
+                <MudDivider />
+                <MudStack Row="true" Justify="Justify.SpaceBetween">
+                    <MudText>الإجمالي</MudText>
+                    <MudText Color="Color.Primary">@_detail.GrandTotal.ToString("N2") ج</MudText>
+                </MudStack>
+
+                <MudTextField T="string" @bind-Value="_deliveryEmployee" Label="اسم المندوب" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudSelect T="string" @bind-Value="_updateStatus" Label="الحالة" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudSelectItem T="string" Value="@("جارى")">جارى</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("متأخر")">متأخر</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("تم التسليم")">تم التسليم</MudSelectItem>
+                </MudSelect>
+                <MudTextField T="string" @bind-Value="_notes" Label="ملاحظات" Variant="Variant.Outlined" Lines="2" Margin="Margin.Dense" />
+
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveUpdate" Disabled="_saving">
+                    @if (_saving) { <MudProgressCircular Size="Size.Small" Class="me-2" /> }
+                    حفظ
+                </MudButton>
+            </MudStack>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">إغلاق</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IDialogReference? Dialog { get; set; }
+
+    [Inject]
+    private ISalesDeliveryStatusService? DeliveryService { get; set; }
+
+    [Inject]
+    private ISnackbar? Snackbar { get; set; }
+
+    [Parameter]
+    public int? TransactionId { get; set; }
+
+    private DeliveryDetailDto? _detail;
+    private bool _loading = true;
+    private bool _saving = false;
+    private string _updateStatus = "جارى";
+    private string _deliveryEmployee = "";
+    private string _notes = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        if (TransactionId == null || DeliveryService == null) return;
+        _loading = true;
+        try
+        {
+            _detail = await DeliveryService.GetDeliveryDetailsAsync(TransactionId.Value);
+            if (_detail != null)
+            {
+                _updateStatus = _detail.DeliveryStatus;
+                _deliveryEmployee = _detail.DeliveryEmployeeName ?? "";
+                _notes = _detail.DeliveredNotes ?? "";
+            }
+        }
+        catch { }
+        _loading = false;
+    }
+
+    private async Task SaveUpdate()
+    {
+        if (TransactionId == null || DeliveryService == null || _detail == null) return;
+        _saving = true;
+        var dto = new DeliveryUpdateDto
+        {
+            TransactionId = TransactionId.Value,
+            Status = _updateStatus,
+            DeliveryEmployeeName = _deliveryEmployee,
+            Notes = _notes
+        };
+        var result = await DeliveryService.UpdateDeliveryStatusAsync(dto);
+        if (result.Success) 
+        { 
+            Dialog?.Close(); 
+        }
+        else
+        {
+            Snackbar?.Add(result.Message, Severity.Error);
+        }
+        _saving = false;
+    }
+
+    private void Cancel() => Dialog?.Close();
+
+    private Color GetChipColor(string s) => s switch
+    {
+        "جارى" => Color.Warning,
+        "متأخر" => Color.Error,
+        "تم التسليم" => Color.Success,
+        _ => Color.Default
+    };
+}
