@@ -57,7 +57,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.LoginPath         = "/login";
         options.AccessDeniedPath  = "/access-denied";
         options.SlidingExpiration = true;
-        options.ExpireTimeSpan = TimeSpan.FromMinutes(5);
+        options.ExpireTimeSpan = TimeSpan.FromMinutes(30);
        // options.ExpireTimeSpan    = TimeSpan.FromHours(8);
         
 
@@ -123,6 +123,8 @@ builder.Services.AddSingleton<ShareTokenService>();
 builder.Services.AddScoped<IQuotationExportService, QuotationExportService>();
 builder.Services.AddScoped<ISalesDeliveryStatusService, SalesDeliveryStatusService>();
 builder.Services.AddScoped<IComplaintService, ComplaintService>();
+builder.Services.AddScoped<IPasswordService, PasswordService>();
+builder.Services.AddScoped<ICompanyInfoService, CompanyInfoService>();
 
 
 var app = builder.Build();
@@ -140,6 +142,110 @@ app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
+// ============================================================
+// 🏢 Company Info API
+// ============================================================
+
+// جلب بيانات الشركة
+app.MapGet("/api/company-info", async (ICompanyInfoService service) =>
+{
+    var info = await service.GetCompanyInfoAsync();
+    return info is not null ? Results.Ok(info) : Results.NotFound("لا توجد بيانات للشركة");
+}).RequireAuthorization();
+
+// تحديث بيانات الشركة
+app.MapPut("/api/company-info", async (
+    CompanyInfoUpdateDto dto,
+    ICompanyInfoService service) =>
+{
+    try
+    {
+        var result = await service.UpdateCompanyInfoAsync(dto);
+        return Results.Ok(result);
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(ex.Message);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
+}).RequireAuthorization();
+
+// رفع شعار الشركة
+app.MapPost("/api/company-info/logo", async (
+    int companyId,
+    string base64Image,
+    ICompanyInfoService service) =>
+{
+    try
+    {
+        var result = await service.UploadLogoAsync(companyId, base64Image);
+        return Results.Ok(new { message = result });
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(ex.Message);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
+}).RequireAuthorization();
+
+// جلب فروع الشركة
+app.MapGet("/api/company-locations", async (ICompanyInfoService service) =>
+{
+    var locations = await service.GetLocationsAsync();
+    return Results.Ok(locations);
+}).RequireAuthorization();
+
+// إضافة فرع جديد
+app.MapPost("/api/company-locations", async (
+    CompanyLocationFormDto dto,
+    ICompanyInfoService service) =>
+{
+    try
+    {
+        var result = await service.AddLocationAsync(dto);
+        return Results.Ok(result);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
+}).RequireAuthorization();
+
+// تعديل فرع
+app.MapPut("/api/company-locations", async (
+    CompanyLocationFormDto dto,
+    ICompanyInfoService service) =>
+{
+    try
+    {
+        var result = await service.UpdateLocationAsync(dto);
+        return Results.Ok(result);
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(ex.Message);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
+}).RequireAuthorization();
+
+// حذف فرع
+app.MapDelete("/api/company-locations/{locationId:int}", async (
+    int locationId,
+    ICompanyInfoService service) =>
+{
+    var success = await service.DeleteLocationAsync(locationId);
+    return success ? Results.Ok(new { message = "تم الحذف بنجاح" }) : Results.NotFound("لم يتم العثور على الفرع");
+}).RequireAuthorization();
+
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
@@ -455,6 +561,8 @@ app.MapPost("/api/quotations/export-pdf", async (
     if (!ok || pdf == null) return Results.NotFound(new { error });
     return Results.File(pdf, "application/pdf", fileName);
 }).RequireAuthorization();
+
+
 
 // ============ Single Quotation Endpoints + Public Share ============
 

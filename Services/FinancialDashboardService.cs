@@ -6,16 +6,16 @@ namespace COCOBOLOERPNEW.Services;
 
 public class FinancialDashboardService : IFinancialDashboardService
 {
-    private readonly db24804Context _db;
+    private readonly IDbContextFactory<db24804Context> _factory;
     private readonly IFinancialReportsService _income;
     private readonly ICashFlowService _cashFlow;
 
     public FinancialDashboardService(
-        db24804Context db,
+        IDbContextFactory<db24804Context> factory,
         IFinancialReportsService income,
         ICashFlowService cashFlow)
     {
-        _db = db;
+        _factory = factory;
         _income = income;
         _cashFlow = cashFlow;
     }
@@ -25,6 +25,7 @@ public class FinancialDashboardService : IFinancialDashboardService
     // ============================================================
     public async Task<FinancialDashboardDto> GetDashboardAsync(FinancialDashboardFilterDto filter)
     {
+        using var _db = _factory.CreateDbContext();
         var dto = new FinancialDashboardDto
         {
             FromDate = filter.FromDate.Date,
@@ -218,6 +219,7 @@ public class FinancialDashboardService : IFinancialDashboardService
     // ============================================================
     private async Task BuildRatiosAsync(FinancialDashboardDto dto, IncomeStatementDto income, CashFlowStatementDto cf)
     {
+        using var _db = _factory.CreateDbContext();
         var r = dto.Ratios;
 
         // ربحية
@@ -263,6 +265,7 @@ public class FinancialDashboardService : IFinancialDashboardService
 
     private async Task<decimal> GetTotalCustomerReceivablesAsync()
     {
+        using var _db = _factory.CreateDbContext();
         return await _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Sale
                 && t.InvoiceStatus != "Cancelled"
@@ -482,6 +485,7 @@ public class FinancialDashboardService : IFinancialDashboardService
     // ============================================================
     private async Task BuildUnifiedMonthlyTrendAsync(FinancialDashboardDto dto)
     {
+        using var _db = _factory.CreateDbContext();
         var endDate = DateTime.Today;
         var startDate = endDate.AddMonths(-11);
         startDate = new DateTime(startDate.Year, startDate.Month, 1);
@@ -568,6 +572,7 @@ public class FinancialDashboardService : IFinancialDashboardService
     // ============================================================
     private async Task GetTopProductsAsync(FinancialDashboardDto dto)
     {
+        using var _db = _factory.CreateDbContext();
         var data = await (
             from t in _db.Transactions.AsNoTracking()
             join d in _db.TransactionDetails.AsNoTracking() on t.TransactionId equals d.TransactionId
@@ -606,6 +611,7 @@ public class FinancialDashboardService : IFinancialDashboardService
     // ============================================================
     private async Task GetTopCustomersAsync(FinancialDashboardDto dto)
     {
+        using var _db = _factory.CreateDbContext();
         var data = await (
             from t in _db.Transactions.AsNoTracking()
             join p in _db.Parties.AsNoTracking() on t.PartyId equals p.PartyId
@@ -660,6 +666,7 @@ public class FinancialDashboardService : IFinancialDashboardService
     // ============================================================
     private async Task BuildReceivablesSummaryAsync(FinancialDashboardDto dto)
     {
+        using var _db = _factory.CreateDbContext();
         var r = dto.Receivables;
 
         // مستحقات على العملاء (فواتير لم تُسدد)

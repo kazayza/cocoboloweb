@@ -25,7 +25,7 @@ window.printPage = function () { window.print(); };
 // ═══════════════════════════════════════════
 window.idleLogout = {
     timer: null,
-    minutes: 5,  // ⏰ مدة الـ Idle (غيرها لو حابب)
+    minutes: 30,  // ⏰ مدة الـ Idle (غيرها لو حابب)
     dotNetRef: null,
 
     start: function (dotNetReference) {

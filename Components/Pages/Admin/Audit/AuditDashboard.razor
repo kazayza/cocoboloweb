@@ -1,0 +1,888 @@
+@page "/admin/audit"
+@page "/admin/audit-log"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using ApexCharts
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using COCOBOLOERPNEW.Components.Pages.Admin.Audit
+@using System.Globalization
+
+@inject IAuditService AuditService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+@inject ILogger<AuditDashboard> Logger
+
+@attribute [Authorize]
+
+<PageTitle>سجل التدقيق</PageTitle>
+
+@if (_isInitialLoading)
+{
+    <div class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-spinner-box">
+                <MudProgressCircular Color="MudBlazor.Color.Secondary" Size="MudBlazor.Size.Large" Indeterminate="true" />
+            </div>
+            <MudText Typo="Typo.h6" Class="loading-text">جاري تحميل سجل التدقيق...</MudText>
+            <div class="loading-dots"><span></span><span></span><span></span></div>
+        </div>
+    </div>
+}
+else
+{
+<div dir="rtl" class="audit-page">
+
+    <!-- BG -->
+    <div class="page-bg-decorations">
+        <div class="bg-orb bg-orb-1"></div>
+        <div class="bg-orb bg-orb-2"></div>
+        <div class="bg-orb bg-orb-3"></div>
+    </div>
+    <div class="top-accent-bar"><div class="accent-shimmer"></div></div>
+
+    <!-- HEADER -->
+    <div class="audit-header">
+        <div class="header-bg">
+            <div class="header-gradient"></div>
+            <div class="header-orbs">
+                <div class="header-orb orb-1"></div>
+                <div class="header-orb orb-2"></div>
+                <div class="header-orb orb-3"></div>
+            </div>
+            <div class="header-grid"></div>
+        </div>
+        <div class="header-content">
+            <div class="header-top">
+                <div class="header-info">
+                    <div class="header-icon-wrapper">
+                        <div class="header-icon-glow"></div>
+                        <div class="header-icon">
+                            <MudIcon Icon="@Icons.Material.Filled.Policy" Size="MudBlazor.Size.Large" />
+                        </div>
+                        <div class="header-icon-badge">
+                            <MudIcon Icon="@Icons.Material.Filled.Visibility" />
+                        </div>
+                    </div>
+                    <div class="header-text">
+                        <div class="header-title-row">
+                            <MudText Typo="Typo.h4" Class="header-title">سجل التدقيق</MudText>
+                            <div class="header-badge">@(_dashboard?.TotalLogs ?? 0) سجل</div>
+                        </div>
+                        <MudText Typo="Typo.body2" Class="header-subtitle">
+                            مراقبة وتتبع كل العمليات في النظام (للأدمن فقط)
+                        </MudText>
+                    </div>
+                </div>
+                <div class="header-actions">
+                    @if (_canExport)
+                    {
+                        <MudButton Variant="Variant.Outlined" Class="btn-export"
+                                   StartIcon="@Icons.Material.Filled.FileDownload"
+                                   OnClick="ExportAsync"
+                                   Disabled="_isExporting">
+                            @if (_isExporting)
+                            {
+                                <MudProgressCircular Size="MudBlazor.Size.Small" Indeterminate="true" Class="me-1" />
+                            }
+                            تصدير Excel
+                        </MudButton>
+                    }
+                    @if (_canPurge)
+                    {
+                        <MudButton Variant="Variant.Outlined" Class="btn-purge"
+                                   StartIcon="@Icons.Material.Filled.DeleteSweep"
+                                   OnClick="OpenPurgeDialog">
+                            تنظيف القديم
+                        </MudButton>
+                    }
+                    <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                   Class="btn-refresh"
+                                   OnClick="RefreshAllAsync"
+                                   Disabled="_isLoadingList || _isLoadingDashboard" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TABS -->
+    <MudTabs Elevation="0" Rounded="true" Class="audit-tabs"
+             ActivePanelIndex="@_activeTab" ActivePanelIndexChanged="OnTabChanged">
+
+        <!-- TAB 1: DASHBOARD -->
+        <MudTabPanel Text=" لوحة التحكم" Icon="@Icons.Material.Filled.Dashboard">
+
+            @if (_isLoadingDashboard)
+            {
+                <div class="tab-loading">
+                    <MudProgressCircular Color="MudBlazor.Color.Primary" Indeterminate="true" />
+                </div>
+            }
+            else if (_dashboard != null)
+            {
+                <div class="stats-grid">
+                    <div class="stat-card stat-total animate-card" style="--delay: 0.05s">
+                        <div class="stat-accent"></div>
+                        <div class="stat-content">
+                            <div class="stat-icon-box">
+                                <MudIcon Icon="@Icons.Material.Filled.History" />
+                            </div>
+                            <div class="stat-data">
+                                <div class="stat-label">إجمالي السجلات</div>
+                                <div class="stat-value">@_dashboard.TotalLogs.ToString("N0")</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card stat-today animate-card" style="--delay: 0.1s">
+                        <div class="stat-accent"></div>
+                        <div class="stat-content">
+                            <div class="stat-icon-box">
+                                <MudIcon Icon="@Icons.Material.Filled.Today" />
+                            </div>
+                            <div class="stat-data">
+                                <div class="stat-label">اليوم</div>
+                                <div class="stat-value">@_dashboard.TodayLogs.ToString("N0")</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card stat-week animate-card" style="--delay: 0.15s">
+                        <div class="stat-accent"></div>
+                        <div class="stat-content">
+                            <div class="stat-icon-box">
+                                <MudIcon Icon="@Icons.Material.Filled.CalendarViewWeek" />
+                            </div>
+                            <div class="stat-data">
+                                <div class="stat-label">آخر 7 أيام</div>
+                                <div class="stat-value">@_dashboard.Last7DaysLogs.ToString("N0")</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card stat-month animate-card" style="--delay: 0.2s">
+                        <div class="stat-accent"></div>
+                        <div class="stat-content">
+                            <div class="stat-icon-box">
+                                <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" />
+                            </div>
+                            <div class="stat-data">
+                                <div class="stat-label">آخر 30 يوم</div>
+                                <div class="stat-value">@_dashboard.Last30DaysLogs.ToString("N0")</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card stat-insert animate-card" style="--delay: 0.25s">
+                        <div class="stat-accent"></div>
+                        <div class="stat-content">
+                            <div class="stat-icon-box">
+                                <MudIcon Icon="@Icons.Material.Filled.Add" />
+                            </div>
+                            <div class="stat-data">
+                                <div class="stat-label">إضافات</div>
+                                <div class="stat-value">@_dashboard.InsertCount.ToString("N0")</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card stat-update animate-card" style="--delay: 0.3s">
+                        <div class="stat-accent"></div>
+                        <div class="stat-content">
+                            <div class="stat-icon-box">
+                                <MudIcon Icon="@Icons.Material.Filled.Edit" />
+                            </div>
+                            <div class="stat-data">
+                                <div class="stat-label">تعديلات</div>
+                                <div class="stat-value">@_dashboard.UpdateCount.ToString("N0")</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card stat-delete animate-card" style="--delay: 0.35s">
+                        <div class="stat-accent"></div>
+                        <div class="stat-content">
+                            <div class="stat-icon-box">
+                                <MudIcon Icon="@Icons.Material.Filled.Delete" />
+                            </div>
+                            <div class="stat-data">
+                                <div class="stat-label">حذف</div>
+                                <div class="stat-value">@_dashboard.DeleteCount.ToString("N0")</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="charts-grid">
+                    <!-- Daily Activity -->
+                    <div class="chart-card animate-card" style="--delay: 0.4s">
+                        <div class="chart-card-header">
+                            <div class="section-icon section-icon-blue">
+                                <MudIcon Icon="@Icons.Material.Filled.Timeline" />
+                            </div>
+                            <div>
+                                <div class="section-title">النشاط اليومي</div>
+                                <div class="section-subtitle">آخر 14 يوم — تفصيل العمليات</div>
+                            </div>
+                        </div>
+                        <div class="chart-card-body">
+                            <ApexChart TItem="DailyActivityDto" Options="_activityOptions" Height="300">
+                                <ApexPointSeries TItem="DailyActivityDto" Items="_dashboard.DailyActivity"
+                                                 Name="إضافات" SeriesType="SeriesType.Bar"
+                                                 XValue="@(e => e.Label)"
+                                                 YValue="@(e => (decimal?)e.Insert)" />
+                                <ApexPointSeries TItem="DailyActivityDto" Items="_dashboard.DailyActivity"
+                                                 Name="تعديلات" SeriesType="SeriesType.Bar"
+                                                 XValue="@(e => e.Label)"
+                                                 YValue="@(e => (decimal?)e.Update)" />
+                                <ApexPointSeries TItem="DailyActivityDto" Items="_dashboard.DailyActivity"
+                                                 Name="حذف" SeriesType="SeriesType.Bar"
+                                                 XValue="@(e => e.Label)"
+                                                 YValue="@(e => (decimal?)e.Delete)" />
+                            </ApexChart>
+                        </div>
+                    </div>
+
+                    <!-- Top Users -->
+                    <div class="chart-card animate-card" style="--delay: 0.45s">
+                        <div class="chart-card-header">
+                            <div class="section-icon section-icon-purple">
+                                <MudIcon Icon="@Icons.Material.Filled.PersonPin" />
+                            </div>
+                            <div>
+                                <div class="section-title">أكثر المستخدمين نشاطاً</div>
+                                <div class="section-subtitle">في آخر 30 يوم</div>
+                            </div>
+                        </div>
+                        <div class="chart-card-body">
+                            @if (_dashboard.TopUsers.Any())
+                            {
+                                <div class="top-list">
+                                    @{ int idx = 0; var maxC = _dashboard.TopUsers.Max(x => x.Count); }
+                                    @foreach (var u in _dashboard.TopUsers)
+                                    {
+                                        idx++;
+                                        var pct = maxC > 0 ? (double)u.Count / maxC * 100 : 0;
+                                        <div class="top-item">
+                                            <div class="top-rank">@idx</div>
+                                            <div class="top-body">
+                                                <div class="top-head">
+                                                    <span class="top-name">@u.UserName</span>
+                                                    <span class="top-count">@u.Count</span>
+                                                </div>
+                                                <div class="top-bar">
+                                                    <div class="top-bar-fill" style="width: @pct.ToString("F0", CultureInfo.InvariantCulture)%;"></div>
+                                                </div>
+                                                @if (u.LastActionAt.HasValue)
+                                                {
+                                                    <div class="top-meta">آخر نشاط: @u.LastActionAt.Value.ToString("yyyy/MM/dd HH:mm")</div>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            else { <div class="empty-state">لا توجد بيانات</div> }
+                        </div>
+                    </div>
+
+                    <!-- Top Tables -->
+                    <div class="chart-card animate-card" style="--delay: 0.5s">
+                        <div class="chart-card-header">
+                            <div class="section-icon section-icon-gold">
+                                <MudIcon Icon="@Icons.Material.Filled.TableChart" />
+                            </div>
+                            <div>
+                                <div class="section-title">أكثر الجداول نشاطاً</div>
+                                <div class="section-subtitle">في آخر 30 يوم</div>
+                            </div>
+                        </div>
+                        <div class="chart-card-body">
+                            @if (_dashboard.TopTables.Any())
+                            {
+                                <ApexChart TItem="TopTableDto" Options="_topTablesOptions" Height="280">
+                                    <ApexPointSeries TItem="TopTableDto" Items="_dashboard.TopTables"
+                                                     Name="عمليات" SeriesType="SeriesType.Bar"
+                                                     XValue="@(e => TableNameTranslator.Translate(e.TableName))"
+                                                     YValue="@(e => (decimal?)e.Count)" />
+                                </ApexChart>
+                            }
+                            else { <div class="empty-state">لا توجد بيانات</div> }
+                        </div>
+                    </div>
+
+                    <!-- Recent Activity -->
+                    <div class="chart-card animate-card" style="--delay: 0.55s">
+                        <div class="chart-card-header">
+                            <div class="section-icon section-icon-green">
+                                <MudIcon Icon="@Icons.Material.Filled.AccessTime" />
+                            </div>
+                            <div>
+                                <div class="section-title">آخر العمليات</div>
+                                <div class="section-subtitle">آخر 10 عمليات</div>
+                            </div>
+                        </div>
+                        <div class="chart-card-body recent-body">
+                            @if (_dashboard.RecentLogs.Any())
+                            {
+                                <div class="recent-list">
+                                    @foreach (var log in _dashboard.RecentLogs)
+                                    {
+                                        <div class="recent-item @GetActionClass(log.ActionType)" @onclick="@(() => OpenDetailAsync(log.AuditId))">
+                                            <div class="recent-icon">
+                                                <MudIcon Icon="@GetActionIcon(log.ActionType)" />
+                                            </div>
+                                            <div class="recent-body-inner">
+                                                <div class="recent-head">
+                                                    <span class="recent-user">@(log.LoginName ?? "—")</span>
+                                                    <span class="recent-action">@GetActionLabel(log.ActionType)</span>
+                                                    <span class="recent-table" title="@log.TableName">@TableNameTranslator.Translate(log.TableName)</span>
+                                                </div>
+                                                <div class="recent-meta">
+                                                    @if (!string.IsNullOrWhiteSpace(log.PrimaryKeyValue))
+                                                    {
+                                                        <span>المعرّف: <strong>@log.PrimaryKeyValue</strong></span>
+                                                    }
+                                                    <span class="recent-time">@(log.ActionDate?.ToString("yyyy/MM/dd HH:mm:ss") ?? "—")</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </MudTabPanel>
+
+        <!-- TAB 2: LIST -->
+        <MudTabPanel Text=" السجلات الكاملة" Icon="@Icons.Material.Filled.ListAlt">
+
+            <div class="filters-panel">
+                <div class="filters-header">
+                    <div class="filters-title">
+                        <MudIcon Icon="@Icons.Material.Filled.FilterAlt" />
+                        <span>الفلاتر والبحث</span>
+                    </div>
+                    @if (HasActiveFilters)
+                    {
+                        <MudButton Variant="Variant.Text" Size="MudBlazor.Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Clear"
+                                   OnClick="ClearFilters">مسح الفلاتر</MudButton>
+                    }
+                </div>
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" md="3">
+                        <MudTextField T="string" @bind-Value="_filter.SearchText"
+                                      @bind-Value:after="OnFilterChangedAsync"
+                                      Placeholder="بحث في المعرّف أو البيانات..."
+                                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                                      Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.Search"
+                                      DebounceInterval="400" Immediate="true" Clearable="true" />
+                    </MudItem>
+                    <MudItem xs="6" md="2">
+                        <MudSelect T="string" @bind-Value="_filter.TableName"
+                                   @bind-Value:after="OnFilterChangedAsync"
+                                   Label="الجدول" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+                            @foreach (var t in _lookups.Tables)
+                            {
+                                <MudSelectItem T="string" Value="@t">@TableNameTranslator.Translate(t)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="6" md="2">
+                        <MudSelect T="string" @bind-Value="_filter.ActionType"
+                                   @bind-Value:after="OnFilterChangedAsync"
+                                   Label="نوع العملية" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+                            @foreach (var a in _lookups.Actions)
+                            {
+                                <MudSelectItem T="string" Value="@a">@a</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="6" md="2">
+                        <MudSelect T="string" @bind-Value="_filter.UserName"
+                                   @bind-Value:after="OnFilterChangedAsync"
+                                   Label="المستخدم" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+                            @foreach (var u in _lookups.UserNames)
+                            {
+                                <MudSelectItem T="string" Value="@u">@u</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="6" md="1">
+                        <MudDatePicker @bind-Date="_filter.DateFrom"
+                                       @bind-Date:after="OnFilterChangedAsync"
+                                       Label="من" Variant="Variant.Outlined"
+                                       Margin="Margin.Dense" Clearable="true" />
+                    </MudItem>
+                    <MudItem xs="6" md="2">
+                        <MudDatePicker @bind-Date="_filter.DateTo"
+                                       @bind-Date:after="OnFilterChangedAsync"
+                                       Label="إلى" Variant="Variant.Outlined"
+                                       Margin="Margin.Dense" Clearable="true" />
+                    </MudItem>
+                </MudGrid>
+            </div>
+
+            <div class="table-card">
+                <MudTable T="AuditLogListItemDto" Items="_items" Dense="true" Hover="true" Striped="true"
+                          Loading="_isLoadingList" LoadingProgressColor="MudBlazor.Color.Secondary"
+                          Class="audit-table" Elevation="0">
+                    <NoRecordsContent>
+                        <div class="empty-state-big">
+                            <MudIcon Icon="@Icons.Material.Filled.SearchOff" Size="MudBlazor.Size.Large" />
+                            <MudText Typo="Typo.h6">لا توجد سجلات</MudText>
+                        </div>
+                    </NoRecordsContent>
+                    <HeaderContent>
+                        <MudTh>الرقم</MudTh>
+                        <MudTh>التاريخ والوقت</MudTh>
+                        <MudTh>المستخدم</MudTh>
+                        <MudTh>الجدول</MudTh>
+                        <MudTh>العملية</MudTh>
+                        <MudTh>المعرّف</MudTh>
+                        <MudTh>الجهاز</MudTh>
+                        <MudTh Style="text-align:center">البيانات</MudTh>
+                        <MudTh Style="text-align:center">عرض</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="ID">
+                            <span class="cell-id">#@context.AuditId</span>
+                        </MudTd>
+                        <MudTd DataLabel="التاريخ">
+                            <span class="cell-date">@(context.ActionDate?.ToString("yyyy/MM/dd HH:mm:ss") ?? "—")</span>
+                        </MudTd>
+                        <MudTd DataLabel="المستخدم">
+                            <div class="cell-user">
+                                <div class="user-avatar">@(context.LoginName?.Length > 0 ? context.LoginName.Substring(0, 1) : "؟")</div>
+                                <span>@(context.LoginName ?? "—")</span>
+                            </div>
+                        </MudTd>
+                        <MudTd DataLabel="الجدول">
+                            <div class="cell-table-stack">
+                                <span class="cell-table">@TableNameTranslator.Translate(context.TableName)</span>
+                                @if (TableNameTranslator.HasTranslation(context.TableName))
+                                {
+                                    <span class="cell-table-en">@context.TableName</span>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd DataLabel="العملية">
+                            <span class="@GetActionBadgeClass(context.ActionType)">
+                                @GetActionLabel(context.ActionType)
+                            </span>
+                        </MudTd>
+                        <MudTd DataLabel="المعرّف">
+                            <code class="cell-pk">@(context.PrimaryKeyValue ?? "—")</code>
+                        </MudTd>
+                        <MudTd DataLabel="الجهاز">
+                            <span class="cell-host">@(context.HostName ?? "—")</span>
+                        </MudTd>
+                        <MudTd DataLabel="بيانات" Style="text-align:center">
+                            <div class="data-indicators">
+                                @if (context.HasOldData)
+                                {
+                                    <span class="data-pill data-pill-red" title="بيانات قديمة">قديم</span>
+                                }
+                                @if (context.HasNewData)
+                                {
+                                    <span class="data-pill data-pill-green" title="بيانات جديدة">جديد</span>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd Style="text-align:center">
+                            <MudIconButton Icon="@Icons.Material.Filled.Visibility"
+                                           Size="MudBlazor.Size.Small"
+                                           Color="MudBlazor.Color.Info"
+                                           OnClick="@(() => OpenDetailAsync(context.AuditId))" />
+                        </MudTd>
+                    </RowTemplate>
+                    <PagerContent>
+                        <MudTablePager PageSizeOptions="@(new int[] { 25, 50, 100, 200 })"
+                                       RowsPerPageString="عدد الصفوف"
+                                       InfoFormat="{first_item}-{last_item} من {all_items}" />
+                    </PagerContent>
+                </MudTable>
+            </div>
+        </MudTabPanel>
+    </MudTabs>
+</div>
+}
+
+<style>
+    .loading-screen { position: fixed; inset: 0; background: linear-gradient(135deg, #0f1a2e 0%, #1a2842 100%); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+    .loading-content { text-align: center; }
+    .loading-spinner-box { background: rgba(212,175,55,0.1); padding: 24px; border-radius: 50%; border: 2px solid rgba(212,175,55,0.3); margin-bottom: 16px; display: inline-block; }
+    .loading-text { color: #d4af37 !important; margin-bottom: 8px; }
+    .loading-dots { display: inline-flex; gap: 6px; justify-content: center; }
+    .loading-dots span { width: 8px; height: 8px; border-radius: 50%; background: #d4af37; animation: bounce 1.4s infinite ease-in-out both; }
+    .loading-dots span:nth-child(2) { animation-delay: 0.16s; }
+    .loading-dots span:nth-child(3) { animation-delay: 0.32s; }
+    @@keyframes bounce { 0%,80%,100% { transform: scale(0); opacity: 0.5; } 40% { transform: scale(1); opacity: 1; } }
+
+    .audit-page { position: relative; min-height: 100vh; padding: 12px; background: linear-gradient(180deg, #f8f9fa 0%, #ffffff 100%); }
+    .page-bg-decorations { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+    .bg-orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.2; }
+    .bg-orb-1 { width: 300px; height: 300px; background: radial-gradient(circle, #6366f1, transparent); top: -100px; right: -50px; }
+    .bg-orb-2 { width: 400px; height: 400px; background: radial-gradient(circle, #ec4899, transparent); top: 30%; left: -100px; }
+    .bg-orb-3 { width: 250px; height: 250px; background: radial-gradient(circle, #06b6d4, transparent); bottom: 20%; right: 30%; }
+    .top-accent-bar { position: relative; height: 4px; background: linear-gradient(90deg, #6366f1, #ec4899, #6366f1); border-radius: 2px; margin-bottom: 12px; overflow: hidden; }
+    .accent-shimmer { position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent); animation: shimmer 3s infinite; }
+    @@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+    .audit-header { position: relative; background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); border-radius: 16px; overflow: hidden; margin-bottom: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+    .header-bg { position: absolute; inset: 0; overflow: hidden; }
+    .header-gradient { position: absolute; inset: 0; background: linear-gradient(135deg, rgba(168,85,247,0.1) 0%, transparent 50%); }
+    .header-orbs { position: absolute; inset: 0; }
+    .header-orb { position: absolute; border-radius: 50%; filter: blur(40px); opacity: 0.4; }
+    .header-orb.orb-1 { width: 200px; height: 200px; background: #a855f7; top: -50px; right: 10%; }
+    .header-orb.orb-2 { width: 150px; height: 150px; background: #ec4899; bottom: -30px; left: 20%; }
+    .header-orb.orb-3 { width: 100px; height: 100px; background: #06b6d4; top: 40%; right: 40%; }
+    .header-grid { position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px); background-size: 30px 30px; }
+    .header-content { position: relative; padding: 20px; z-index: 1; }
+    .header-top { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .header-info { display: flex; gap: 16px; align-items: center; }
+    .header-icon-wrapper { position: relative; width: 60px; height: 60px; }
+    .header-icon-glow { position: absolute; inset: -4px; background: radial-gradient(circle, rgba(168,85,247,0.5), transparent); border-radius: 50%; filter: blur(10px); animation: pulse 2s infinite; }
+    @@keyframes pulse { 0%,100% { opacity: 0.5; transform: scale(1); } 50% { opacity: 1; transform: scale(1.1); } }
+    .header-icon { position: relative; width: 100%; height: 100%; background: linear-gradient(135deg, #a855f7, #7e22ce); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; box-shadow: 0 8px 24px rgba(168,85,247,0.4); }
+    .header-icon-badge { position: absolute; bottom: -2px; left: -2px; background: #ec4899; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; box-shadow: 0 2px 8px rgba(236,72,153,0.5); }
+    .header-title { color: white !important; font-weight: 700; margin: 0; }
+    .header-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .header-badge { background: rgba(168,85,247,0.2); color: #c4b5fd; padding: 4px 12px; border-radius: 16px; font-size: 11px; border: 1px solid rgba(168,85,247,0.4); font-weight: 600; }
+    .header-subtitle { color: rgba(255,255,255,0.7) !important; margin-top: 3px; font-size: 12px; }
+    .header-actions { display: flex; gap: 8px; align-items: center; }
+    .btn-export, .btn-purge, .btn-refresh { color: white !important; border-color: rgba(255,255,255,0.3) !important; padding: 8px 16px !important; border-radius: 10px !important; }
+    .btn-purge { color: #fda4af !important; border-color: rgba(253,164,175,0.4) !important; }
+    .btn-refresh { padding: 8px !important; }
+
+    .audit-tabs { background: transparent; position: relative; z-index: 1; }
+    .audit-tabs .mud-tab { font-weight: 700; }
+    .tab-loading { padding: 60px; text-align: center; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 14px; padding-top: 14px; }
+    .stat-card { position: relative; background: white; border-radius: 14px; padding: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; overflow: hidden; transition: all 0.3s; }
+    .stat-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+    .stat-accent { position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+    .stat-total .stat-accent { background: linear-gradient(90deg, transparent, #6366f1, transparent); }
+    .stat-today .stat-accent { background: linear-gradient(90deg, transparent, #3b82f6, transparent); }
+    .stat-week .stat-accent { background: linear-gradient(90deg, transparent, #06b6d4, transparent); }
+    .stat-month .stat-accent { background: linear-gradient(90deg, transparent, #a855f7, transparent); }
+    .stat-insert .stat-accent { background: linear-gradient(90deg, transparent, #10b981, transparent); }
+    .stat-update .stat-accent { background: linear-gradient(90deg, transparent, #f59e0b, transparent); }
+    .stat-delete .stat-accent { background: linear-gradient(90deg, transparent, #ef4444, transparent); }
+    .stat-content { display: flex; gap: 12px; align-items: center; }
+    .stat-icon-box { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: #f1f5f9; color: #6366f1; }
+    .stat-total .stat-icon-box { background: #e0e7ff; color: #6366f1; }
+    .stat-today .stat-icon-box { background: #dbeafe; color: #2563eb; }
+    .stat-week .stat-icon-box { background: #cffafe; color: #0891b2; }
+    .stat-month .stat-icon-box { background: #f3e8ff; color: #7e22ce; }
+    .stat-insert .stat-icon-box { background: #d1fae5; color: #059669; }
+    .stat-update .stat-icon-box { background: #fef3c7; color: #d97706; }
+    .stat-delete .stat-icon-box { background: #fee2e2; color: #dc2626; }
+    .stat-data { flex: 1; min-width: 0; }
+    .stat-label { color: #64748b; font-size: 11px; font-weight: 600; }
+    .stat-value { color: #1a2842; font-size: 22px; font-weight: 800; line-height: 1.2; margin-top: 2px; }
+
+    @@keyframes slideIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-card { animation: slideIn 0.5s ease both; animation-delay: var(--delay); }
+
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @@media (max-width: 1199px) { .charts-grid { grid-template-columns: 1fr; } }
+    .chart-card { background: white; border-radius: 14px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.06); border: 1px solid #e5e7eb; }
+    .chart-card-header { display: flex; gap: 12px; align-items: center; padding: 14px 16px; background: linear-gradient(135deg, #f8fafc, #f1f5f9); border-bottom: 1px solid #e5e7eb; }
+    .section-icon { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; font-size: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); flex-shrink: 0; }
+    .section-icon-blue { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+    .section-icon-purple { background: linear-gradient(135deg, #a855f7, #7e22ce); }
+    .section-icon-gold { background: linear-gradient(135deg, #d4af37, #b8941f); }
+    .section-icon-green { background: linear-gradient(135deg, #10b981, #059669); }
+    .section-title { font-size: 15px; font-weight: 700; color: #1a2842; }
+    .section-subtitle { font-size: 11px; color: #64748b; margin-top: 2px; }
+    .chart-card-body { padding: 14px; }
+
+    .top-list { display: flex; flex-direction: column; gap: 8px; }
+    .top-item { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; background: #f8fafc; border-radius: 10px; }
+    .top-rank { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #a855f7, #7e22ce); color: white; font-weight: 800; font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .top-body { flex: 1; min-width: 0; }
+    .top-head { display: flex; justify-content: space-between; margin-bottom: 4px; }
+    .top-name { font-weight: 700; color: #1a2842; font-size: 13px; }
+    .top-count { font-weight: 800; color: #a855f7; font-size: 13px; }
+    .top-bar { height: 5px; background: #f1f5f9; border-radius: 3px; overflow: hidden; }
+    .top-bar-fill { height: 100%; border-radius: 3px; transition: width 0.6s; background: linear-gradient(90deg, #a855f7, #7e22ce); }
+    .top-meta { font-size: 10px; color: #94a3b8; margin-top: 4px; }
+
+    .recent-body { padding: 0; max-height: 380px; overflow-y: auto; }
+    .recent-list { display: flex; flex-direction: column; }
+    .recent-item { display: flex; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #f1f5f9; cursor: pointer; transition: background 0.15s; align-items: center; }
+    .recent-item:last-child { border-bottom: none; }
+    .recent-item:hover { background: #f8fafc; }
+    .recent-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .action-insert .recent-icon { background: #d1fae5; color: #059669; }
+    .action-update .recent-icon { background: #fef3c7; color: #d97706; }
+    .action-delete .recent-icon { background: #fee2e2; color: #dc2626; }
+    .action-other .recent-icon { background: #f1f5f9; color: #475569; }
+    .recent-body-inner { flex: 1; min-width: 0; }
+    .recent-head { display: flex; gap: 8px; align-items: center; font-size: 13px; flex-wrap: wrap; }
+    .recent-user { font-weight: 700; color: #1a2842; }
+    .recent-action { color: #6b7280; font-size: 11px; }
+    .recent-table { background: #e0e7ff; color: #3730a3; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .recent-meta { font-size: 11px; color: #94a3b8; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .recent-time { margin-right: auto; }
+
+    .empty-state { text-align: center; padding: 30px; color: #cbd5e1; font-size: 13px; }
+    .empty-state-big { text-align: center; padding: 50px 20px; color: #cbd5e1; }
+    .empty-state-big .mud-icon-root { font-size: 56px !important; color: #cbd5e1; margin-bottom: 8px; }
+
+    .filters-panel { background: white; border-radius: 12px; padding: 14px; margin: 14px 0 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; }
+    .filters-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .filters-title { display: flex; gap: 6px; align-items: center; color: #1a2842; font-weight: 600; font-size: 14px; }
+
+    .table-card { background: white; border-radius: 12px; padding: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border: 1px solid #e5e7eb; }
+    .audit-table .mud-table-head { background: linear-gradient(135deg, #1e1b4b, #312e81); }
+    .audit-table .mud-table-head .mud-table-cell { color: white !important; font-weight: 600; font-size: 12px; }
+    .audit-table .mud-table-row:hover { background: rgba(168,85,247,0.05) !important; }
+    .audit-table .mud-table-cell { padding: 8px 10px !important; vertical-align: middle; }
+
+    .cell-id { color: #6366f1; font-weight: 700; white-space: nowrap; }
+    .cell-date { font-size: 11px; color: #64748b; font-family: 'Consolas', monospace; }
+    .cell-user { display: flex; gap: 6px; align-items: center; }
+    .user-avatar { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #a855f7, #7e22ce); color: white; font-weight: 700; font-size: 11px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .cell-table-stack { display: flex; flex-direction: column; gap: 2px; }
+    .cell-table { padding: 3px 10px; background: #e0e7ff; color: #3730a3; border-radius: 6px; font-size: 12px; font-weight: 700; display: inline-block; white-space: nowrap; width: fit-content; }
+    .cell-table-en { font-size: 9px; color: #94a3b8; font-family: 'Consolas', monospace; padding-right: 4px; }
+    .cell-pk { background: #f8fafc; padding: 3px 8px; border-radius: 4px; font-size: 11px; color: #475569; display: inline-block; }
+    .cell-host { font-size: 11px; color: #94a3b8; font-family: 'Consolas', monospace; display: inline-block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .action-badge { display: inline-block; padding: 3px 12px; border-radius: 12px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .badge-insert { background: #d1fae5; color: #047857; }
+    .badge-update { background: #fef3c7; color: #92400e; }
+    .badge-delete { background: #fee2e2; color: #b91c1c; }
+    .badge-other  { background: #f1f5f9; color: #475569; }
+
+    .data-indicators { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+    .data-pill { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 700; }
+    .data-pill-red { background: #fee2e2; color: #b91c1c; }
+    .data-pill-green { background: #d1fae5; color: #047857; }
+</style>
+
+@code {
+    private bool _isInitialLoading = true;
+    private bool _isLoadingDashboard = false;
+    private bool _isLoadingList = false;
+    private bool _isExporting = false;
+    private int _activeTab = 0;
+
+    private AuditDashboardDto? _dashboard;
+    private List<AuditLogListItemDto> _items = new();
+    private AuditLogFilterDto _filter = new() { PageSize = 50 };
+    private AuditLookupsDto _lookups = new();
+
+    private bool _canExport, _canPurge;
+    private bool _initialListLoaded;
+
+    private bool HasActiveFilters =>
+        !string.IsNullOrWhiteSpace(_filter.SearchText) ||
+        !string.IsNullOrWhiteSpace(_filter.TableName) ||
+        !string.IsNullOrWhiteSpace(_filter.ActionType) ||
+        !string.IsNullOrWhiteSpace(_filter.UserName) ||
+        _filter.DateFrom.HasValue || _filter.DateTo.HasValue;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPermissionsAsync();
+        await LoadDashboardAsync();
+        _lookups = await AuditService.GetLookupsAsync();
+        _isInitialLoading = false;
+    }
+
+    private async Task LoadPermissionsAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        if (!AuditPermissions.CanView(user))
+        {
+            Snackbar.Add("ليس لديك صلاحية", MudBlazor.Severity.Error);
+            Navigation.NavigateTo("/");
+            return;
+        }
+        _canExport = AuditPermissions.CanExport(user);
+        _canPurge  = AuditPermissions.CanPurge(user);
+    }
+
+    private async Task LoadDashboardAsync()
+    {
+        _isLoadingDashboard = true;
+        try
+        {
+            _dashboard = await AuditService.GetDashboardAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Load audit dashboard failed");
+            Snackbar.Add("تعذّر تحميل لوحة التحكم: " + ex.Message, MudBlazor.Severity.Error);
+        }
+        finally { _isLoadingDashboard = false; }
+    }
+
+    private async Task LoadListAsync()
+    {
+        _isLoadingList = true;
+        try
+        {
+            var result = await AuditService.GetLogsAsync(_filter);
+            _items = result.Items;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Load audit logs failed");
+            Snackbar.Add("تعذّر تحميل السجلات: " + ex.Message, MudBlazor.Severity.Error);
+        }
+        finally { _isLoadingList = false; }
+    }
+
+    private async Task OnTabChanged(int idx)
+    {
+        _activeTab = idx;
+        if (idx == 1 && !_initialListLoaded)
+        {
+            _initialListLoaded = true;
+            await LoadListAsync();
+        }
+    }
+
+    private async Task OnFilterChangedAsync()
+    {
+        _filter.Page = 1;
+        await LoadListAsync();
+    }
+
+    private async Task ClearFilters()
+    {
+        _filter = new AuditLogFilterDto { PageSize = _filter.PageSize };
+        await LoadListAsync();
+    }
+
+    private async Task RefreshAllAsync()
+    {
+        await LoadDashboardAsync();
+        if (_initialListLoaded) await LoadListAsync();
+        _lookups = await AuditService.GetLookupsAsync();
+    }
+
+    private async Task OpenDetailAsync(long auditId)
+    {
+        var parameters = new DialogParameters<AuditDetailDialog>
+        {
+            { x => x.AuditId, auditId }
+        };
+        await DialogService.ShowAsync<AuditDetailDialog>("تفاصيل السجل", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true });
+    }
+
+    private async Task ExportAsync()
+    {
+        _isExporting = true;
+        try
+        {
+            var bytes = await AuditService.ExportToExcelAsync(_filter);
+            var fileName = $"audit_log_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
+            await JS.InvokeVoidAsync("downloadFile", fileName,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                Convert.ToBase64String(bytes));
+            Snackbar.Add("تم تصدير الملف", MudBlazor.Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("فشل التصدير: " + ex.Message, MudBlazor.Severity.Error);
+        }
+        finally { _isExporting = false; }
+    }
+
+    private async Task OpenPurgeDialog()
+    {
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Title, "تنظيف السجلات القديمة" },
+            { x => x.Message, "هل تريد حذف كل السجلات الأقدم من 6 شهور؟ هذه العملية لا يمكن التراجع عنها." },
+            { x => x.YesText, "نعم، احذف" },
+            { x => x.CancelText, "إلغاء" }
+        };
+        var dlg = await DialogService.ShowAsync<MudMessageBox>("تأكيد", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+        var res = await dlg.Result;
+        if (res is null || res.Canceled) return;
+
+        var cutoff = DateTime.Today.AddMonths(-6);
+        var (count, msg) = await AuditService.PurgeOldLogsAsync(cutoff);
+        Snackbar.Add(msg, count > 0 ? MudBlazor.Severity.Success : MudBlazor.Severity.Warning);
+        if (count > 0) await RefreshAllAsync();
+    }
+
+    // ApexCharts Options
+    private ApexChartOptions<DailyActivityDto> _activityOptions => new()
+    {
+        Chart = new Chart { FontFamily = "Cairo, sans-serif", Toolbar = new Toolbar { Show = false }, Background = "transparent", Stacked = true },
+        Colors = new List<string> { "#10b981", "#f59e0b", "#ef4444" },
+        PlotOptions = new PlotOptions { Bar = new PlotOptionsBar { BorderRadius = 4, ColumnWidth = "60%" } },
+        DataLabels = new DataLabels { Enabled = false },
+        Legend = new Legend { Position = LegendPosition.Top, HorizontalAlign = ApexCharts.Align.Center, FontFamily = "Cairo, sans-serif" },
+        Tooltip = new Tooltip { Shared = true, Intersect = false, Theme = Mode.Light },
+        Grid = new Grid { BorderColor = "#e5e7eb", StrokeDashArray = 3 },
+        Xaxis = new XAxis { Labels = new XAxisLabels { Style = new AxisLabelStyle { FontFamily = "Cairo, sans-serif", FontSize = "10px" } } }
+    };
+
+    private ApexChartOptions<TopTableDto> _topTablesOptions => new()
+    {
+        Chart = new Chart { FontFamily = "Cairo, sans-serif", Toolbar = new Toolbar { Show = false }, Background = "transparent" },
+        Colors = new List<string> { "#d4af37" },
+        PlotOptions = new PlotOptions { Bar = new PlotOptionsBar { Horizontal = true, BorderRadius = 6, BarHeight = "70%" } },
+        DataLabels = new DataLabels { Enabled = true, Style = new DataLabelsStyle { Colors = new List<string> { "#1a2842" }, FontWeight = 700 } },
+        Tooltip = new Tooltip { Y = new TooltipY { Formatter = "function(val) { return val + ' عملية'; }" } },
+        Grid = new Grid { BorderColor = "#e5e7eb", StrokeDashArray = 3 }
+    };
+
+    // Helpers
+    private string GetActionClass(string? action) => (action ?? "").ToLower() switch
+    {
+        "insert" => "action-insert",
+        "update" => "action-update",
+        "delete" => "action-delete",
+        _        => "action-other"
+    };
+
+    private string GetActionBadgeClass(string? action)
+    {
+        var cls = (action ?? "").ToLower() switch
+        {
+            "insert" => "badge-insert",
+            "update" => "badge-update",
+            "delete" => "badge-delete",
+            _        => "badge-other"
+        };
+        return $"action-badge {cls}";
+    }
+
+    private string GetActionIcon(string? action) => (action ?? "").ToLower() switch
+    {
+        "insert" => Icons.Material.Filled.AddCircle,
+        "update" => Icons.Material.Filled.Edit,
+        "delete" => Icons.Material.Filled.Delete,
+        _        => Icons.Material.Filled.Info
+    };
+
+    private string GetActionLabel(string? action) => (action ?? "").ToLower() switch
+    {
+        "insert" => "إضافة",
+        "update" => "تعديل",
+        "delete" => "حذف",
+        _        => action ?? "—"
+    };
+}
