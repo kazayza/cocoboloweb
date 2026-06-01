@@ -1,0 +1,83 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+
+@inject IComplaintService ComplaintService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.PriorityHigh" Color="Color.Error" />
+            <MudText Typo="Typo.h6">تصعيد الشكوى</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">
+            تصعيد الشكوى يعني نقلها لجهة أعلى للنظر فيها. لازم تكتب السبب.
+        </MudAlert>
+        <MudTextField T="string"
+                      @bind-Value="_escalatedTo"
+                      Label="الجهة المُصعَّد إليها"
+                      Required="true"
+                      RequiredError="مطلوب"
+                      Variant="Variant.Outlined"
+                      Placeholder="مثال: المدير العام، إدارة الجودة..."
+                      MaxLength="100"
+                      Class="mb-3" />
+        <MudTextField T="string"
+                      @bind-Value="_reason"
+                      Label="سبب التصعيد"
+                      Variant="Variant.Outlined"
+                      Lines="4"
+                      Counter="500"
+                      MaxLength="500" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Error"
+                   OnClick="Save" Disabled="_saving">
+            @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+            else { <span>تصعيد</span> }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter, EditorRequired] public int ComplaintId { get; set; }
+
+    private string  _escalatedTo = "";
+    private string? _reason;
+    private bool    _saving;
+
+    private async Task Save()
+    {
+        if (string.IsNullOrWhiteSpace(_escalatedTo))
+        {
+            Snackbar.Add("الجهة مطلوبة", Severity.Warning);
+            return;
+        }
+
+        _saving = true;
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var userName = user.Identity?.Name ?? "system";
+        int.TryParse(user.FindFirst("UserId")?.Value, out var userId);
+
+        var (ok, msg) = await ComplaintService.EscalateAsync(new EscalateComplaintDto
+        {
+            ComplaintId      = ComplaintId,
+            EscalatedTo      = _escalatedTo,
+            EscalationReason = _reason
+        }, userId, userName);
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        _saving = false;
+        if (ok) MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

@@ -1,0 +1,1103 @@
+@page "/complaints/{Id:int}"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using COCOBOLOERPNEW.Components.Pages.Complaints.Dialogs
+
+@inject IComplaintService ComplaintService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
+@inject IDbContextFactory<COCOBOLOERPNEW.Models.db24804Context> DbFactory
+@inject ILogger<Detail> Logger
+
+@using Microsoft.EntityFrameworkCore
+
+@attribute [Authorize]
+
+<PageTitle>شكوى #@Id</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-spinner-box">
+                <MudProgressCircular Color="Color.Secondary" Size="Size.Large" Indeterminate="true" />
+            </div>
+            <MudText Typo="Typo.h6" Class="loading-text">جاري تحميل التفاصيل...</MudText>
+            <div class="loading-dots"><span></span><span></span><span></span></div>
+        </div>
+    </div>
+}
+else if (_detail is null)
+{
+    <div class="error-state">
+        <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Size="Size.Large" />
+        <MudText Typo="Typo.h5">الشكوى غير موجودة</MudText>
+        <MudButton Variant="Variant.Outlined" OnClick="@(() => Navigation.NavigateTo("/complaints/list"))">
+            رجوع للقائمة
+        </MudButton>
+    </div>
+}
+else
+{
+<div dir="rtl" class="cmp-detail-page">
+
+    <!-- BG -->
+    <div class="page-bg-decorations">
+        <div class="bg-orb bg-orb-1"></div>
+        <div class="bg-orb bg-orb-2"></div>
+    </div>
+
+    <div class="top-accent-bar"><div class="accent-shimmer"></div></div>
+
+    <!-- ═══ HEADER ═══ -->
+    <div class="detail-header">
+        <div class="header-bg">
+            <div class="header-gradient"></div>
+            <div class="header-orbs">
+                <div class="header-orb orb-1"></div>
+                <div class="header-orb orb-2"></div>
+            </div>
+            <div class="header-grid"></div>
+        </div>
+
+        <div class="header-content">
+            <div class="header-top">
+                <div class="header-info">
+                    <div class="header-icon-wrapper">
+                        <div class="header-icon-glow"></div>
+                        <div class="header-icon">
+                            <MudIcon Icon="@Icons.Material.Filled.SupportAgent" Size="Size.Large" />
+                        </div>
+                    </div>
+                    <div class="header-text">
+                        <div class="header-title-row">
+                            <MudText Typo="Typo.h5" Class="header-title">شكوى #@_detail.ComplaintId</MudText>
+                            <span class="@GetStatusClass(_detail.Status)">@_detail.StatusName</span>
+                            <span class="@GetPriorityClass(_detail.Priority)">@_detail.PriorityName</span>
+                            @if (_detail.Escalated == true)
+                            {
+                                <span class="badge-escalated">⚠️ مصعدة</span>
+                            }
+                        </div>
+                        <MudText Typo="Typo.body2" Class="header-subtitle">
+                            @_detail.Subject
+                        </MudText>
+                        <div class="header-meta">
+                            <span><MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" /> @(_detail.ComplaintDate?.ToString("yyyy/MM/dd HH:mm") ?? "—")</span>
+                            <span><MudIcon Icon="@Icons.Material.Filled.Timelapse" Size="Size.Small" /> @_detail.DaysOpen يوم</span>
+                            @if (!string.IsNullOrWhiteSpace(_detail.CreatedBy))
+                            {
+                                <span><MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" /> @_detail.CreatedBy</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <div class="header-actions">
+                    <MudButton Variant="Variant.Outlined" Class="btn-back"
+                               StartIcon="@Icons.Material.Filled.ArrowForward"
+                               OnClick="@(() => Navigation.NavigateTo("/complaints/list"))">
+                        رجوع
+                    </MudButton>
+                    @if (_canEdit && !_detail.IsClosed)
+                    {
+                        <MudButton Variant="Variant.Filled" Class="btn-edit"
+                                   StartIcon="@Icons.Material.Filled.Edit"
+                                   OnClick="@(() => Navigation.NavigateTo($"/complaints/form/{_detail.ComplaintId}"))">
+                            تعديل
+                        </MudButton>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ ACTION BAR ═══ -->
+    @if (HasAnyAction)
+    {
+        <div class="action-bar">
+            <div class="action-bar-title">
+                <MudIcon Icon="@Icons.Material.Filled.PlayArrow" />
+                <span>الإجراءات السريعة</span>
+            </div>
+            <div class="action-bar-buttons">
+                @if (_canChangeStatus && !_detail.IsClosed)
+                {
+                    <MudButton Variant="Variant.Filled" Class="btn-action btn-action-success"
+                               StartIcon="@Icons.Material.Filled.TaskAlt"
+                               OnClick="OpenResolveDialog">
+                        تم الحل
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Class="btn-action btn-action-info"
+                               StartIcon="@Icons.Material.Filled.HourglassTop"
+                               OnClick="@(() => ChangeStatusAsync(ComplaintStatus.InProgress))">
+                        قيد الحل
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Class="btn-action btn-action-purple"
+                               StartIcon="@Icons.Material.Filled.HourglassEmpty"
+                               OnClick="@(() => ChangeStatusAsync(ComplaintStatus.AwaitingClient))">
+                        انتظار العميل
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Class="btn-action btn-action-danger"
+                               StartIcon="@Icons.Material.Filled.Cancel"
+                               OnClick="@(() => ChangeStatusAsync(ComplaintStatus.Rejected))">
+                        رفض
+                    </MudButton>
+                }
+                @if (_canAssign && !_detail.IsClosed)
+                {
+                    <MudButton Variant="Variant.Outlined" Class="btn-action-outlined"
+                               StartIcon="@Icons.Material.Filled.PersonPin"
+                               OnClick="OpenAssignDialog">
+                        إسناد/تغيير المسؤول
+                    </MudButton>
+                }
+                @if (_canEscalate && !_detail.IsClosed && _detail.Escalated != true)
+                {
+                    <MudButton Variant="Variant.Outlined" Class="btn-action-outlined btn-escalate"
+                               StartIcon="@Icons.Material.Filled.PriorityHigh"
+                               OnClick="OpenEscalateDialog">
+                        تصعيد
+                    </MudButton>
+                }
+                @if (_detail.IsClosed && _detail.SatisfactionLevel is null)
+                {
+                    <MudButton Variant="Variant.Outlined" Class="btn-action-outlined"
+                               StartIcon="@Icons.Material.Filled.StarRate"
+                               OnClick="OpenRateDialog">
+                        إضافة تقييم العميل
+                    </MudButton>
+                }
+            </div>
+        </div>
+    }
+
+    <MudGrid Spacing="2">
+        <!-- ═══ COLUMN: التفاصيل ═══ -->
+        <MudItem xs="12" lg="8">
+
+            <!-- 📋 Details Card -->
+            <div class="info-card animate-card" style="--delay: 0.05s">
+                <div class="info-card-header">
+                    <div class="card-icon card-icon-gold">
+                        <MudIcon Icon="@Icons.Material.Filled.Description" />
+                    </div>
+                    <span>تفاصيل الشكوى</span>
+                </div>
+                <div class="info-card-body">
+                    <div class="detail-row">
+                        <span class="detail-label">النوع:</span>
+                        <span class="detail-value">@(_detail.TypeName ?? "—")</span>
+                    </div>
+                    <div class="detail-block">
+                        <div class="detail-label">الموضوع:</div>
+                        <div class="detail-value-block">@_detail.Subject</div>
+                    </div>
+                    <div class="detail-block">
+                        <div class="detail-label">التفاصيل:</div>
+                        <div class="detail-value-block details-text">@_detail.Details</div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_detail.Solution))
+                    {
+                        <div class="detail-block solution-block">
+                            <div class="detail-label">
+                                <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" />
+                                الحل النهائي:
+                            </div>
+                            <div class="detail-value-block">@_detail.Solution</div>
+                            @if (_detail.SolvedDate.HasValue)
+                            {
+                                <div class="solution-meta">
+                                    تم الحل: @_detail.SolvedDate.Value.ToString("yyyy/MM/dd HH:mm")
+                                </div>
+                            }
+                        </div>
+                    }
+                    @if (_detail.Escalated == true && !string.IsNullOrWhiteSpace(_detail.EscalationReason))
+                    {
+                        <div class="detail-block escalation-block">
+                            <div class="detail-label">
+                                <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Size="Size.Small" />
+                                سبب التصعيد:
+                            </div>
+                            <div class="detail-value-block">@_detail.EscalationReason</div>
+                            <div class="solution-meta">
+                                مُصعدة إلى: <strong>@_detail.EscalatedTo</strong>
+                                @if (_detail.EscalatedDate.HasValue)
+                                {
+                                    <span> — @_detail.EscalatedDate.Value.ToString("yyyy/MM/dd HH:mm")</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- 📎 Attachments -->
+            <div class="info-card animate-card" style="--delay: 0.1s">
+                <div class="info-card-header">
+                    <div class="card-icon card-icon-blue">
+                        <MudIcon Icon="@Icons.Material.Filled.AttachFile" />
+                    </div>
+                    <span>المرفقات (@_detail.Attachments.Count)</span>
+                    <div class="header-spacer"></div>
+                    <MudFileUpload T="IBrowserFile" Accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.xlsx,.xls"
+                                   FilesChanged="OnFileUploadedAsync"
+                                   Disabled="_isUploading">
+                        <ActivatorContent>
+                            <MudButton HtmlTag="label"
+                                       Variant="Variant.Filled"
+                                       Size="Size.Small"
+                                       Class="btn-upload"
+                                       StartIcon="@Icons.Material.Filled.Upload"
+                                       Disabled="_isUploading">
+                                @if (_isUploading)
+                                {
+                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-1" />
+                                    <span>رفع...</span>
+                                }
+                                else { <span>رفع ملف</span> }
+                            </MudButton>
+                        </ActivatorContent>
+                    </MudFileUpload>
+                </div>
+                <div class="info-card-body">
+                    @if (_detail.Attachments.Count == 0)
+                    {
+                        <div class="empty-mini">
+                            <MudIcon Icon="@Icons.Material.Filled.NoteAdd" Size="Size.Large" />
+                            <span>لا توجد مرفقات</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="attachments-grid">
+                            @foreach (var att in _detail.Attachments)
+                            {
+                                <div class="attachment-card">
+                                    @if (att.IsImage)
+                                    {
+                                        <a href="@att.FilePath" target="_blank" class="att-image-link">
+                                            <img src="@att.FilePath" alt="@att.OriginalFileName" />
+                                        </a>
+                                    }
+                                    else
+                                    {
+                                        <div class="att-icon-box">
+                                            <MudIcon Icon="@GetFileIcon(att.MimeType)" Size="Size.Large" />
+                                        </div>
+                                    }
+                                    <div class="att-info">
+                                        <div class="att-name" title="@att.OriginalFileName">@att.OriginalFileName</div>
+                                        <div class="att-meta">@att.FileSizeFormatted</div>
+                                        <div class="att-actions">
+                                            <a href="@att.FilePath" target="_blank" class="att-btn att-btn-view">
+                                                <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" />
+                                            </a>
+                                            @if (_canEdit)
+                                            {
+                                                <button class="att-btn att-btn-delete"
+                                                        @onclick="() => DeleteAttachmentAsync(att.AttachmentId)">
+                                                    <MudIcon Icon="@Icons.Material.Filled.Delete" Size="Size.Small" />
+                                                </button>
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- 📋 FollowUps -->
+            <div class="info-card animate-card" style="--delay: 0.15s">
+                <div class="info-card-header">
+                    <div class="card-icon card-icon-purple">
+                        <MudIcon Icon="@Icons.Material.Filled.History" />
+                    </div>
+                    <span>المتابعات (@_detail.FollowUps.Count)</span>
+                </div>
+                <div class="info-card-body">
+
+                    @if (_canAddFollowUp && !_detail.IsClosed)
+                    {
+                        <!-- Add FollowUp Form -->
+                        <div class="followup-form">
+                            <MudGrid Spacing="2">
+                                <MudItem xs="12">
+                                    <MudTextField T="string"
+                                                  @bind-Value="_newFollowUp.Notes"
+                                                  Placeholder="اكتب ملاحظة المتابعة..."
+                                                  Variant="Variant.Outlined"
+                                                  Margin="Margin.Dense"
+                                                  Lines="2" />
+                                </MudItem>
+                                <MudItem xs="12" md="6">
+                                    <MudTextField T="string"
+                                                  @bind-Value="_newFollowUp.ActionTaken"
+                                                  Placeholder="الإجراء المتخذ (اختياري)"
+                                                  Variant="Variant.Outlined"
+                                                  Margin="Margin.Dense"
+                                                  Adornment="Adornment.Start"
+                                                  AdornmentIcon="@Icons.Material.Filled.PlayArrow" />
+                                </MudItem>
+                                <MudItem xs="12" md="4">
+                                    <MudDatePicker @bind-Date="_newFollowUp.NextFollowUpDate"
+                                                   Label="موعد المتابعة القادم"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Clearable="true" />
+                                </MudItem>
+                                <MudItem xs="12" md="2">
+                                    <MudButton Variant="Variant.Filled"
+                                               Class="btn-add-followup"
+                                               StartIcon="@Icons.Material.Filled.Send"
+                                               OnClick="AddFollowUpAsync"
+                                               Disabled="_isAddingFollowUp"
+                                               FullWidth="true">
+                                        @if (_isAddingFollowUp)
+                                        {
+                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                                        }
+                                        else { <span>إضافة</span> }
+                                    </MudButton>
+                                </MudItem>
+                            </MudGrid>
+                        </div>
+                    }
+
+                    @if (_detail.FollowUps.Count == 0)
+                    {
+                        <div class="empty-mini">
+                            <MudIcon Icon="@Icons.Material.Filled.Forum" Size="Size.Large" />
+                            <span>لا توجد متابعات بعد</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="followups-timeline">
+                            @foreach (var f in _detail.FollowUps)
+                            {
+                                <div class="followup-item">
+                                    <div class="followup-dot"></div>
+                                    <div class="followup-body">
+                                        <div class="followup-header">
+                                            <span class="followup-author">
+                                                <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Size="Size.Small" />
+                                                @(f.FollowUpByName ?? $"موظف #{f.FollowUpBy}")
+                                            </span>
+                                            <span class="followup-date">@(f.FollowUpDate?.ToString("yyyy/MM/dd HH:mm") ?? "—")</span>
+                                        </div>
+                                        <div class="followup-notes">@f.Notes</div>
+                                        @if (!string.IsNullOrWhiteSpace(f.ActionTaken))
+                                        {
+                                            <div class="followup-action">
+                                                <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Color="Color.Success" />
+                                                <span><strong>الإجراء:</strong> @f.ActionTaken</span>
+                                            </div>
+                                        }
+                                        @if (f.NextFollowUpDate.HasValue)
+                                        {
+                                            <div class="followup-next">
+                                                <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" Color="Color.Warning" />
+                                                <span><strong>متابعة قادمة:</strong> @f.NextFollowUpDate.Value.ToString("yyyy/MM/dd")</span>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        </MudItem>
+
+        <!-- ═══ COLUMN: الجانب الأيمن ═══ -->
+        <MudItem xs="12" lg="4">
+
+            <!-- 👤 Client -->
+            <div class="info-card animate-card" style="--delay: 0.08s">
+                <div class="info-card-header">
+                    <div class="card-icon card-icon-blue">
+                        <MudIcon Icon="@Icons.Material.Filled.Person" />
+                    </div>
+                    <span>العميل</span>
+                </div>
+                <div class="info-card-body">
+                    <div class="client-name">@_detail.ClientName</div>
+                    @if (!string.IsNullOrWhiteSpace(_detail.ClientPhone))
+                    {
+                        <div class="client-row">
+                            <MudIcon Icon="@Icons.Material.Filled.Phone" Size="Size.Small" />
+                            <a href="tel:@_detail.ClientPhone">@_detail.ClientPhone</a>
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_detail.ClientEmail))
+                    {
+                        <div class="client-row">
+                            <MudIcon Icon="@Icons.Material.Filled.Email" Size="Size.Small" />
+                            <a href="mailto:@_detail.ClientEmail">@_detail.ClientEmail</a>
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_detail.ClientAddress))
+                    {
+                        <div class="client-row">
+                            <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" />
+                            <span>@_detail.ClientAddress</span>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- 👨‍💼 Assigned -->
+            <div class="info-card animate-card" style="--delay: 0.12s">
+                <div class="info-card-header">
+                    <div class="card-icon card-icon-purple">
+                        <MudIcon Icon="@Icons.Material.Filled.AssignmentInd" />
+                    </div>
+                    <span>المسؤول</span>
+                </div>
+                <div class="info-card-body">
+                    @if (!string.IsNullOrWhiteSpace(_detail.AssignedToName))
+                    {
+                        <div class="assigned-box">
+                            <div class="assigned-avatar">
+                                @_detail.AssignedToName.Substring(0, 1)
+                            </div>
+                            <div class="assigned-info">
+                                <div class="assigned-name">@_detail.AssignedToName</div>
+                                <div class="assigned-label">المُسند إليه</div>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="empty-mini">
+                            <MudIcon Icon="@Icons.Material.Filled.PersonOff" Size="Size.Large" />
+                            <span>لم يتم الإسناد</span>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- 🔗 Related -->
+            @if (_detail.TransactionId.HasValue || _detail.ProductId.HasValue)
+            {
+                <div class="info-card animate-card" style="--delay: 0.16s">
+                    <div class="info-card-header">
+                        <div class="card-icon card-icon-gold">
+                            <MudIcon Icon="@Icons.Material.Filled.Link" />
+                        </div>
+                        <span>الربط</span>
+                    </div>
+                    <div class="info-card-body">
+                        @if (_detail.TransactionId.HasValue)
+                        {
+                            <div class="link-item">
+                                <MudIcon Icon="@Icons.Material.Filled.Receipt" />
+                                <div>
+                                    <div class="link-label">الفاتورة المرتبطة</div>
+                                    <a href="/sales/invoices/@_detail.TransactionId" class="link-value">
+                                        @(_detail.TransactionRef ?? $"#{_detail.TransactionId}")
+                                    </a>
+                                    @if (_detail.TransactionDate.HasValue)
+                                    {
+                                        <small> — @_detail.TransactionDate.Value.ToString("yyyy/MM/dd")</small>
+                                    }
+                                </div>
+                            </div>
+                        }
+                        @if (_detail.ProductId.HasValue)
+                        {
+                            <div class="link-item">
+                                <MudIcon Icon="@Icons.Material.Filled.Inventory2" />
+                                <div>
+                                    <div class="link-label">المنتج</div>
+                                    <div class="link-value">@(_detail.ProductName ?? $"#{_detail.ProductId}")</div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            <!-- ⭐ Rating -->
+            @if (_detail.SatisfactionLevel.HasValue)
+            {
+                <div class="info-card animate-card" style="--delay: 0.2s">
+                    <div class="info-card-header">
+                        <div class="card-icon card-icon-gold">
+                            <MudIcon Icon="@Icons.Material.Filled.Star" />
+                        </div>
+                        <span>تقييم العميل</span>
+                    </div>
+                    <div class="info-card-body" style="text-align:center;">
+                        <div class="rating-stars">
+                            @for (int i = 1; i <= 5; i++)
+                            {
+                                <MudIcon Icon="@(i <= _detail.SatisfactionLevel.Value ? Icons.Material.Filled.Star : Icons.Material.Filled.StarBorder)"
+                                         Color="@(i <= _detail.SatisfactionLevel.Value ? Color.Warning : Color.Default)" />
+                            }
+                        </div>
+                        <div class="rating-number">@_detail.SatisfactionLevel / 5</div>
+                    </div>
+                </div>
+            }
+        </MudItem>
+    </MudGrid>
+</div>
+}
+
+<style>
+    /* Common styles (Loading + Header) — مشتركة من الشاشات السابقة */
+    .loading-screen { position: fixed; inset: 0; background: linear-gradient(135deg, #0f1a2e 0%, #1a2842 100%); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+    .loading-content { text-align: center; }
+    .loading-spinner-box { background: rgba(212,175,55,0.1); padding: 24px; border-radius: 50%; border: 2px solid rgba(212,175,55,0.3); margin-bottom: 16px; display: inline-block; }
+    .loading-text { color: #d4af37 !important; margin-bottom: 8px; }
+    .loading-dots { display: inline-flex; gap: 6px; justify-content: center; }
+    .loading-dots span { width: 8px; height: 8px; border-radius: 50%; background: #d4af37; animation: bounce 1.4s infinite ease-in-out both; }
+    .loading-dots span:nth-child(2) { animation-delay: 0.16s; }
+    .loading-dots span:nth-child(3) { animation-delay: 0.32s; }
+    @@keyframes bounce { 0%,80%,100% { transform: scale(0); opacity: 0.5; } 40% { transform: scale(1); opacity: 1; } }
+
+    .error-state {
+        min-height: 60vh;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        gap: 12px; color: #ef4444;
+    }
+
+    .cmp-detail-page { position: relative; min-height: 100vh; padding: 12px; background: linear-gradient(180deg, #f8f9fa 0%, #ffffff 100%); }
+    .page-bg-decorations { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+    .bg-orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.2; }
+    .bg-orb-1 { width: 300px; height: 300px; background: radial-gradient(circle, #d4af37, transparent); top: -100px; right: -50px; }
+    .bg-orb-2 { width: 400px; height: 400px; background: radial-gradient(circle, #3b82f6, transparent); bottom: 10%; left: -100px; }
+    .top-accent-bar { position: relative; height: 4px; background: linear-gradient(90deg, #d4af37, #e8c855, #d4af37); border-radius: 2px; margin-bottom: 12px; overflow: hidden; }
+    .accent-shimmer { position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent); animation: shimmer 3s infinite; }
+    @@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+    /* ═════════════════ HEADER ═════════════════ */
+    .detail-header { position: relative; background: linear-gradient(135deg, #1a2842 0%, #2c3e5f 100%); border-radius: 16px; overflow: hidden; margin-bottom: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+    .header-bg { position: absolute; inset: 0; overflow: hidden; }
+    .header-gradient { position: absolute; inset: 0; background: linear-gradient(135deg, rgba(212,175,55,0.05) 0%, transparent 50%); }
+    .header-orbs { position: absolute; inset: 0; }
+    .header-orb { position: absolute; border-radius: 50%; filter: blur(40px); opacity: 0.4; }
+    .header-orb.orb-1 { width: 180px; height: 180px; background: #d4af37; top: -40px; right: 20%; }
+    .header-orb.orb-2 { width: 140px; height: 140px; background: #3b82f6; bottom: -30px; left: 30%; }
+    .header-grid { position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px); background-size: 30px 30px; }
+    .header-content { position: relative; z-index: 1; padding: 16px 20px; }
+    .header-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+    .header-info { display: flex; gap: 14px; align-items: flex-start; flex: 1; }
+    .header-icon-wrapper { position: relative; width: 56px; height: 56px; flex-shrink: 0; }
+    .header-icon-glow { position: absolute; inset: -4px; background: radial-gradient(circle, rgba(212,175,55,0.5), transparent); border-radius: 50%; filter: blur(10px); animation: pulse 2s infinite; }
+    @@keyframes pulse { 0%,100% { opacity: 0.5; transform: scale(1); } 50% { opacity: 1; transform: scale(1.1); } }
+    .header-icon { position: relative; width: 100%; height: 100%; background: linear-gradient(135deg, #d4af37, #b8941f); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; box-shadow: 0 8px 24px rgba(212,175,55,0.4); }
+    .header-title { color: white !important; font-weight: 700; margin: 0; }
+    .header-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .header-subtitle { color: rgba(255,255,255,0.85) !important; margin-top: 6px; font-weight: 500; }
+    .header-meta { display: flex; gap: 16px; color: rgba(255,255,255,0.65); font-size: 12px; margin-top: 8px; flex-wrap: wrap; }
+    .header-meta span { display: inline-flex; align-items: center; gap: 4px; }
+    .header-actions { display: flex; gap: 8px; }
+    .btn-back { color: white !important; border-color: rgba(255,255,255,0.3) !important; padding: 8px 16px !important; border-radius: 10px !important; }
+    .btn-edit { background: linear-gradient(135deg, #d4af37, #b8941f) !important; color: white !important; padding: 8px 18px !important; border-radius: 10px !important; box-shadow: 0 4px 12px rgba(212,175,55,0.4); }
+
+    /* ═════════════════ BADGES ═════════════════ */
+    .badge-priority, .badge-status, .badge-escalated { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .priority-1 { background: #fee2e2; color: #b91c1c; }
+    .priority-2 { background: #fed7aa; color: #c2410c; }
+    .priority-3 { background: #fef3c7; color: #92400e; }
+    .priority-4 { background: #d1fae5; color: #047857; }
+    .status-1 { background: #dbeafe; color: #1e40af; }
+    .status-2 { background: #fef3c7; color: #92400e; }
+    .status-3 { background: #ede9fe; color: #6d28d9; }
+    .status-4 { background: #d1fae5; color: #047857; }
+    .status-5 { background: #f3f4f6; color: #4b5563; }
+    .status-6 { background: #fecaca; color: #991b1b; }
+    .badge-escalated { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+
+    /* ═════════════════ ACTION BAR ═════════════════ */
+    .action-bar {
+        background: white;
+        border-radius: 12px;
+        padding: 14px;
+        margin-bottom: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        border: 1px solid #e5e7eb;
+    }
+    .action-bar-title { display: flex; gap: 8px; align-items: center; color: #1a2842; font-weight: 600; margin-bottom: 10px; }
+    .action-bar-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn-action { padding: 8px 16px !important; border-radius: 8px !important; color: white !important; font-weight: 600 !important; }
+    .btn-action-success { background: linear-gradient(135deg, #10b981, #059669) !important; }
+    .btn-action-info { background: linear-gradient(135deg, #3b82f6, #2563eb) !important; }
+    .btn-action-purple { background: linear-gradient(135deg, #a855f7, #7e22ce) !important; }
+    .btn-action-danger { background: linear-gradient(135deg, #ef4444, #dc2626) !important; }
+    .btn-action-outlined { padding: 8px 16px !important; border-radius: 8px !important; }
+    .btn-escalate { color: #ef4444 !important; border-color: #ef4444 !important; }
+
+    /* ═════════════════ INFO CARDS ═════════════════ */
+    .info-card { background: white; border-radius: 12px; margin-bottom: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; animation: slideIn 0.5s ease both; animation-delay: var(--delay); }
+    @@keyframes slideIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-card { animation: slideIn 0.5s ease both; animation-delay: var(--delay); }
+
+    .info-card-header {
+        display: flex; gap: 10px; align-items: center;
+        padding: 12px 16px;
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        border-bottom: 1px solid #e5e7eb;
+        font-weight: 600; color: #1a2842;
+    }
+    .header-spacer { flex: 1; }
+    .card-icon {
+        width: 34px; height: 34px;
+        border-radius: 10px;
+        display: flex; align-items: center; justify-content: center;
+        color: white; font-size: 18px;
+    }
+    .card-icon-gold { background: linear-gradient(135deg, #d4af37, #b8941f); }
+    .card-icon-blue { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+    .card-icon-purple { background: linear-gradient(135deg, #a855f7, #7e22ce); }
+
+    .info-card-body { padding: 16px; }
+
+    /* ═════════════════ DETAILS ═════════════════ */
+    .detail-row { display: flex; gap: 8px; padding: 6px 0; align-items: center; }
+    .detail-label { color: #64748b; font-size: 13px; font-weight: 500; }
+    .detail-value { color: #1a2842; font-weight: 600; }
+    .detail-block { margin-bottom: 14px; }
+    .detail-value-block {
+        margin-top: 4px; padding: 10px 12px;
+        background: #f8fafc; border-radius: 8px;
+        color: #1a2842; line-height: 1.7;
+    }
+    .details-text { white-space: pre-wrap; }
+    .solution-block .detail-value-block { background: #ecfdf5; border-left: 3px solid #10b981; }
+    .escalation-block .detail-value-block { background: #fef2f2; border-left: 3px solid #ef4444; }
+    .solution-meta { font-size: 11px; color: #64748b; margin-top: 6px; }
+
+    /* ═════════════════ CLIENT ═════════════════ */
+    .client-name { font-size: 18px; font-weight: 700; color: #1a2842; margin-bottom: 10px; }
+    .client-row { display: flex; gap: 8px; align-items: center; padding: 6px 0; color: #475569; font-size: 13px; }
+    .client-row a { color: #3b82f6; text-decoration: none; }
+    .client-row a:hover { text-decoration: underline; }
+
+    /* ═════════════════ ASSIGNED ═════════════════ */
+    .assigned-box { display: flex; gap: 10px; align-items: center; }
+    .assigned-avatar {
+        width: 44px; height: 44px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #a855f7, #7e22ce);
+        color: white; font-weight: 700; font-size: 18px;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .assigned-name { font-weight: 600; color: #1a2842; }
+    .assigned-label { font-size: 11px; color: #94a3b8; }
+
+    /* ═════════════════ LINK ═════════════════ */
+    .link-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+    .link-item:last-child { border-bottom: none; }
+    .link-label { font-size: 11px; color: #94a3b8; }
+    .link-value { color: #3b82f6; font-weight: 600; text-decoration: none; }
+    .link-value:hover { text-decoration: underline; }
+
+    /* ═════════════════ RATING ═════════════════ */
+    .rating-stars { font-size: 32px; margin-bottom: 8px; }
+    .rating-number { font-size: 14px; color: #64748b; font-weight: 600; }
+
+    /* ═════════════════ EMPTY MINI ═════════════════ */
+    .empty-mini {
+        text-align: center; padding: 24px 12px;
+        color: #cbd5e1;
+        display: flex; flex-direction: column;
+        gap: 6px; align-items: center;
+    }
+    .empty-mini span { font-size: 13px; }
+
+    /* ═════════════════ ATTACHMENTS ═════════════════ */
+    .btn-upload { background: linear-gradient(135deg, #3b82f6, #2563eb) !important; color: white !important; padding: 4px 12px !important; }
+    .attachments-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+    .attachment-card {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        overflow: hidden;
+        transition: all 0.2s;
+    }
+    .attachment-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .att-image-link { display: block; }
+    .att-image-link img {
+        width: 100%; height: 120px;
+        object-fit: cover;
+        background: #e5e7eb;
+    }
+    .att-icon-box {
+        height: 120px;
+        display: flex; align-items: center; justify-content: center;
+        background: linear-gradient(135deg, #f1f5f9, #e2e8f0);
+        color: #94a3b8;
+    }
+    .att-icon-box .mud-icon-root { font-size: 56px !important; }
+    .att-info { padding: 8px 10px; }
+    .att-name {
+        font-size: 12px; font-weight: 600; color: #1a2842;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .att-meta { font-size: 10px; color: #94a3b8; margin-top: 2px; }
+    .att-actions { display: flex; gap: 4px; margin-top: 6px; }
+    .att-btn {
+        flex: 1; padding: 4px;
+        border: none; border-radius: 6px;
+        cursor: pointer; transition: all 0.15s;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .att-btn-view { background: #dbeafe; color: #2563eb; text-decoration: none; }
+    .att-btn-view:hover { background: #bfdbfe; }
+    .att-btn-delete { background: #fee2e2; color: #dc2626; }
+    .att-btn-delete:hover { background: #fecaca; }
+
+    /* ═════════════════ FOLLOW-UPS ═════════════════ */
+    .followup-form {
+        background: #f8fafc;
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px dashed #cbd5e1;
+        margin-bottom: 14px;
+    }
+    .btn-add-followup { background: linear-gradient(135deg, #a855f7, #7e22ce) !important; color: white !important; }
+
+    .followups-timeline { position: relative; padding-right: 20px; }
+    .followups-timeline::before {
+        content: '';
+        position: absolute;
+        right: 8px; top: 8px; bottom: 8px;
+        width: 2px; background: #e2e8f0;
+    }
+    .followup-item {
+        position: relative;
+        margin-bottom: 12px;
+    }
+    .followup-dot {
+        position: absolute;
+        right: -16px; top: 8px;
+        width: 12px; height: 12px;
+        background: #a855f7;
+        border-radius: 50%;
+        border: 2px solid white;
+        box-shadow: 0 0 0 2px #a855f7;
+    }
+    .followup-body {
+        background: #f8fafc;
+        border-radius: 10px;
+        padding: 10px 14px;
+        border-right: 3px solid #a855f7;
+    }
+    .followup-header {
+        display: flex; justify-content: space-between;
+        align-items: center; margin-bottom: 6px;
+        flex-wrap: wrap; gap: 6px;
+    }
+    .followup-author { display: inline-flex; gap: 4px; align-items: center; font-weight: 600; color: #1a2842; font-size: 13px; }
+    .followup-date { font-size: 11px; color: #94a3b8; }
+    .followup-notes { color: #334155; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+    .followup-action, .followup-next {
+        display: flex; gap: 4px; align-items: center;
+        margin-top: 6px; padding: 4px 8px;
+        border-radius: 6px; font-size: 12px;
+    }
+    .followup-action { background: #ecfdf5; color: #047857; }
+    .followup-next { background: #fef3c7; color: #92400e; }
+</style>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private bool _isLoading = true;
+    private bool _isUploading = false;
+    private bool _isAddingFollowUp = false;
+
+    private ComplaintDetailDto? _detail;
+
+    private FollowUpFormDto _newFollowUp = new();
+
+    private bool _canEdit, _canChangeStatus, _canAssign, _canEscalate, _canAddFollowUp;
+    private string _currentUserName = "system";
+    private int    _currentUserId   = 0;
+    private int    _currentEmployeeId = 0;
+
+    private bool HasAnyAction =>
+        (_canChangeStatus && !_detail!.IsClosed)
+        || (_canAssign && !_detail!.IsClosed)
+        || (_canEscalate && !_detail!.IsClosed && _detail.Escalated != true)
+        || (_detail!.IsClosed && _detail.SatisfactionLevel is null);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPermissionsAsync();
+        await LoadDetailAsync();
+        _isLoading = false;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // إعادة تحميل عند تغيير الـ Id من نفس الصفحة
+        if (!_isLoading && _detail != null && _detail.ComplaintId != Id)
+        {
+            _isLoading = true;
+            await LoadDetailAsync();
+            _isLoading = false;
+        }
+    }
+
+    private async Task LoadPermissionsAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _currentUserName  = user.Identity?.Name ?? "system";
+        _canEdit          = ComplaintPermissions.CanEdit(user);
+        _canChangeStatus  = ComplaintPermissions.CanChangeStatus(user);
+        _canAssign        = ComplaintPermissions.CanAssign(user);
+        _canEscalate      = ComplaintPermissions.CanEscalate(user);
+        _canAddFollowUp   = ComplaintPermissions.CanAddFollowUp(user);
+
+        // تحديد UserId + EmployeeId من Claims
+        var uidClaim = user.FindFirst("UserId")?.Value;
+        if (int.TryParse(uidClaim, out var uid)) _currentUserId = uid;
+
+        // جلب EmployeeId المرتبط بالـ User (لو موجود)
+        if (_currentUserId > 0)
+        {
+            try
+            {
+                using var db = await DbFactory.CreateDbContextAsync();
+                var u = await db.Users.AsNoTracking()
+                    .Where(x => x.UserId == _currentUserId)
+                    .Select(x => new { x.UserId, x.FullName })
+                    .FirstOrDefaultAsync();
+
+                // محاولة ربط الـ User بالـ Employee بالاسم
+                if (u != null)
+                {
+                    var emp = await db.Employees.AsNoTracking()
+                        .Where(e => e.FullName == u.FullName)
+                        .Select(e => new { e.EmployeeId })
+                        .FirstOrDefaultAsync();
+                    if (emp != null) _currentEmployeeId = emp.EmployeeId;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to map user to employee");
+            }
+        }
+    }
+
+    private async Task LoadDetailAsync()
+    {
+        try
+        {
+            _detail = await ComplaintService.GetByIdAsync(Id);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Load complaint {Id} failed", Id);
+            Snackbar.Add("تعذّر تحميل التفاصيل: " + ex.Message, Severity.Error);
+        }
+    }
+
+    // ═══════════════ STATUS CHANGE ═══════════════
+
+    private async Task ChangeStatusAsync(byte newStatus)
+    {
+        if (_detail is null) return;
+
+        var dto = new ChangeStatusDto
+        {
+            ComplaintId = _detail.ComplaintId,
+            NewStatus   = newStatus
+        };
+
+        var (ok, msg) = await ComplaintService.ChangeStatusAsync(dto, _currentUserName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadDetailAsync();
+    }
+
+    private async Task OpenResolveDialog()
+    {
+        if (_detail is null) return;
+
+        var parameters = new DialogParameters<ResolveDialog>
+        {
+            { x => x.ComplaintId, _detail.ComplaintId }
+        };
+        var dialog = await DialogService.ShowAsync<ResolveDialog>("حل الشكوى",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled && result.Data is true)
+            await LoadDetailAsync();
+    }
+
+    // ═══════════════ ASSIGN ═══════════════
+
+    private async Task OpenAssignDialog()
+    {
+        if (_detail is null) return;
+
+        var parameters = new DialogParameters<AssignDialog>
+        {
+            { x => x.ComplaintId,       _detail.ComplaintId },
+            { x => x.CurrentAssignedTo, _detail.AssignedTo }
+        };
+        var dialog = await DialogService.ShowAsync<AssignDialog>("إسناد الشكوى",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled && result.Data is true)
+            await LoadDetailAsync();
+    }
+
+    // ═══════════════ ESCALATE ═══════════════
+
+    private async Task OpenEscalateDialog()
+    {
+        if (_detail is null) return;
+
+        var parameters = new DialogParameters<EscalateDialog>
+        {
+            { x => x.ComplaintId, _detail.ComplaintId }
+        };
+        var dialog = await DialogService.ShowAsync<EscalateDialog>("تصعيد الشكوى",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled && result.Data is true)
+            await LoadDetailAsync();
+    }
+
+    // ═══════════════ RATE ═══════════════
+
+    private async Task OpenRateDialog()
+    {
+        if (_detail is null) return;
+
+        var parameters = new DialogParameters<RateDialog>
+        {
+            { x => x.ComplaintId, _detail.ComplaintId }
+        };
+        var dialog = await DialogService.ShowAsync<RateDialog>("تقييم العميل",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled && result.Data is true)
+            await LoadDetailAsync();
+    }
+
+    // ═══════════════ FOLLOW-UPS ═══════════════
+
+    private async Task AddFollowUpAsync()
+    {
+        if (_detail is null) return;
+        if (string.IsNullOrWhiteSpace(_newFollowUp.Notes))
+        {
+            Snackbar.Add("الملاحظات مطلوبة", Severity.Warning);
+            return;
+        }
+        if (_currentEmployeeId <= 0)
+        {
+            Snackbar.Add("لا يوجد سجل موظف مرتبط بحسابك", Severity.Warning);
+            return;
+        }
+
+        _isAddingFollowUp = true;
+        try
+        {
+            _newFollowUp.ComplaintId = _detail.ComplaintId;
+            var (ok, msg, _) = await ComplaintService.AddFollowUpAsync(_newFollowUp, _currentEmployeeId);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok)
+            {
+                _newFollowUp = new FollowUpFormDto();
+                await LoadDetailAsync();
+            }
+        }
+        finally
+        {
+            _isAddingFollowUp = false;
+        }
+    }
+
+    // ═══════════════ ATTACHMENTS ═══════════════
+
+    private async Task OnFileUploadedAsync(IBrowserFile? file)
+    {
+        if (file is null || _detail is null) return;
+        if (file.Size > 10 * 1024 * 1024)
+        {
+            Snackbar.Add("حجم الملف يتجاوز 10 ميجا", Severity.Warning);
+            return;
+        }
+
+        _isUploading = true;
+        try
+        {
+            using var ms = new MemoryStream();
+            await file.OpenReadStream(11 * 1024 * 1024).CopyToAsync(ms);
+            var bytes = ms.ToArray();
+
+            var (ok, msg, _) = await ComplaintService.UploadAttachmentAsync(
+                _detail.ComplaintId, file.Name, bytes, file.ContentType, _currentUserId);
+
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok) await LoadDetailAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Upload failed");
+            Snackbar.Add("فشل الرفع: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isUploading = false;
+        }
+    }
+
+    private async Task DeleteAttachmentAsync(int attachmentId)
+    {
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Title,      "تأكيد الحذف" },
+            { x => x.Message,    "هل تريد حذف هذا المرفق؟" },
+            { x => x.YesText,    "حذف" },
+            { x => x.CancelText, "إلغاء" }
+        };
+        var dialog = await DialogService.ShowAsync<MudMessageBox>("حذف", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        var (ok, msg) = await ComplaintService.DeleteAttachmentAsync(attachmentId);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadDetailAsync();
+    }
+
+    // ═══════════════ HELPERS ═══════════════
+
+    private string GetStatusClass(byte? s) => $"badge-status status-{s ?? 0}";
+    private string GetPriorityClass(byte? p) => $"badge-priority priority-{p ?? 0}";
+
+    private static string GetFileIcon(string mime) => mime.ToLowerInvariant() switch
+    {
+        var m when m.Contains("pdf") => Icons.Material.Filled.PictureAsPdf,
+        var m when m.Contains("word") || m.Contains("doc") => Icons.Material.Filled.Description,
+        var m when m.Contains("sheet") || m.Contains("excel") => Icons.Material.Filled.TableChart,
+        var m when m.Contains("image") => Icons.Material.Filled.Image,
+        _ => Icons.Material.Filled.InsertDriveFile
+    };
+}

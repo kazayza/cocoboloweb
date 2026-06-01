@@ -40,6 +40,7 @@ public partial class db24804Context : DbContext
     public virtual DbSet<Complaint> Complaints { get; set; }
 
     public virtual DbSet<ComplaintFollowUp> ComplaintFollowUps { get; set; }
+    public virtual DbSet<ComplaintAttachment> ComplaintAttachments { get; set; }
 
     public virtual DbSet<ComplaintType> ComplaintTypes { get; set; }
 
@@ -411,6 +412,8 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
             entity.Property(e => e.Status).HasDefaultValue((byte)1);
             entity.Property(e => e.Subject).HasMaxLength(255);
             entity.Property(e => e.TypeId).HasColumnName("TypeID");
+            entity.Property(e => e.TransactionId).HasColumnName("TransactionID");
+            entity.Property(e => e.ProductId).HasColumnName("ProductID");
 
             entity.HasOne(d => d.AssignedToNavigation).WithMany(p => p.Complaints)
                 .HasForeignKey(d => d.AssignedTo)
@@ -2126,6 +2129,28 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.Notes).HasMaxLength(150);
             entity.Property(e => e.WarehouseName).HasMaxLength(100);
         });
+        modelBuilder.Entity<ComplaintAttachment>(entity =>
+{
+    entity.HasKey(e => e.AttachmentId);
+    entity.ToTable("ComplaintAttachments");
+
+    entity.Property(e => e.FileName).HasMaxLength(255);
+    entity.Property(e => e.OriginalFileName).HasMaxLength(255);
+    entity.Property(e => e.FilePath).HasMaxLength(500);
+    entity.Property(e => e.MimeType).HasMaxLength(100);
+    entity.Property(e => e.UploadedAt)
+        .HasDefaultValueSql("(getdate())")
+        .HasColumnType("datetime");
+
+    entity.HasOne(d => d.Complaint).WithMany(p => p.ComplaintAttachments)
+        .HasForeignKey(d => d.ComplaintId)
+        .OnDelete(DeleteBehavior.Cascade)
+        .HasConstraintName("FK_Attachments_Complaint");
+
+    entity.HasOne(d => d.UploadedBy).WithMany()
+        .HasForeignKey(d => d.UploadedByUserId)
+        .HasConstraintName("FK_Attachments_User");
+});
 
         OnModelCreatingPartial(modelBuilder);
     }

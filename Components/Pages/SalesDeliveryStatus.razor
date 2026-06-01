@@ -5,158 +5,451 @@
 @using COCOBOLOERPNEW.Components.Shared
 @using MudBlazor
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
 
 @inject ISalesDeliveryStatusService DeliveryService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject ILogger<SalesDeliveryStatus> Logger
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+
 @attribute [Authorize]
+@implements IDisposable
 
 <PageTitle>متابعة التسليمات</PageTitle>
 
-@code {
-    private const string StatusPending = "جارى";
-    private const string StatusDelivered = "تم التسليم";
-    private const string StatusOverdue = "متأخر";
-}
-
 <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
 
-    <div Style="background:linear-gradient(135deg,#1a237e,#283593); padding:20px; border-radius:12px; color:white; margin-bottom:16px;">
-        <MudStack Row="true" Justify="Justify.SpaceBetween">
-            <MudText Typo="Typo.h5">
-                <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Class="me-2" Style="color:#ffd700;" />
-                متابعة التسليمات
-            </MudText>
-            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Color="Color.Inherit" OnClick="Refresh" />
+    @* ── Header ────────────────────────────────────────────── *@
+    <MudPaper Elevation="0"
+              Class="pa-4 mb-4 rounded-lg"
+              Style="background:linear-gradient(135deg,#1a237e,#283593); color:white;">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Style="color:#ffd700; font-size:2rem;" />
+                <div>
+                    <MudText Typo="Typo.h5">متابعة التسليمات</MudText>
+                    @if (_canSeeAmounts)
+                    {
+                        <MudText Typo="Typo.caption" Style="opacity:.85;">
+                            الإجمالي: @_summary.TotalGrandTotal.ToString("N2") ج |
+                            المدفوع: @_summary.TotalPaidAmount.ToString("N2") ج |
+                            المتبقي: @_summary.TotalRemaining.ToString("N2") ج
+                        </MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Style="opacity:.85;">
+                            عدد الفواتير: @_summary.TotalCount
+                        </MudText>
+                    }
+                </div>
+            </MudStack>
+            <MudStack Row="true" Spacing="1">
+                <MudTooltip Text="تحديث">
+                    <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                   Color="Color.Inherit"
+                                   Disabled="_loading"
+                                   OnClick="RefreshAsync" />
+                </MudTooltip>
+            </MudStack>
         </MudStack>
-    </div>
+    </MudPaper>
 
+    @* ── Summary Cards (Quick Filters) ─────────────────────── *@
     <MudGrid Spacing="2" Class="mb-4">
-        <MudItem xs="3">
-            <MudPaper Style="padding:16px; border-radius:12px; text-align:center; background:#667eea; color:white; cursor:pointer;" OnClick="(() => SetStatus(null))">
-                <MudText>الكل</MudText>
-                <MudText Typo="Typo.h4">@_summary.TotalCount</MudText>
-            </MudPaper>
-        </MudItem>
-        <MudItem xs="3">
-            <MudPaper Style="padding:16px; border-radius:12px; text-align:center; background:#f5576c; color:white; cursor:pointer;" OnClick="(() => SetStatus(StatusPending))">
-                <MudText>@StatusPending</MudText>
-                <MudText Typo="Typo.h4">@_summary.PendingCount</MudText>
-            </MudPaper>
-        </MudItem>
-        <MudItem xs="3">
-            <MudPaper Style="padding:16px; border-radius:12px; text-align:center; background:#43e97b; color:white; cursor:pointer;" OnClick="(() => SetStatus(StatusDelivered))">
-                <MudText>@StatusDelivered</MudText>
-                <MudText Typo="Typo.h4">@_summary.DeliveredCount</MudText>
-            </MudPaper>
-        </MudItem>
-        <MudItem xs="3">
-            <MudPaper Style="padding:16px; border-radius:12px; text-align:center; background:#ff9800; color:white; cursor:pointer;" OnClick="(() => SetStatus(StatusOverdue))">
-                <MudText>@StatusOverdue</MudText>
-                <MudText Typo="Typo.h4">@_summary.OverdueCount</MudText>
-            </MudPaper>
-        </MudItem>
+        @foreach (var card in BuildCards())
+        {
+            <MudItem xs="6" md="3">
+                <MudPaper Elevation="@(card.IsActive ? 6 : 1)"
+                          Class="@($"pa-4 rounded-lg cursor-pointer status-card {(card.IsActive ? "status-card--active" : "")}")"
+                          Style="@($"background:{card.Color}; color:white; transition:all .2s;")"
+                          @onclick="(() => SetStatusAsync(card.Status))">
+                    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                        <div>
+                            <MudText Typo="Typo.body2" Style="opacity:.9;">@card.Label</MudText>
+                            <MudText Typo="Typo.h4">@card.Count</MudText>
+                        </div>
+                        <MudIcon Icon="@card.Icon" Style="font-size:2.5rem; opacity:.4;" />
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+        }
     </MudGrid>
 
-    <MudPaper Style="padding:16px; margin-bottom:16px;">
-        <MudGrid>
+    @* ── Filters ───────────────────────────────────────────── *@
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudGrid Spacing="2">
             <MudItem xs="12" sm="6" md="3">
-                <MudDatePicker @bind-Date="_from" Label="من" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudDatePicker @bind-Date="_from"
+                               Label="من"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Clearable="true"
+                               MaxDate="_to ?? DateTime.Today" />
             </MudItem>
             <MudItem xs="12" sm="6" md="3">
-                <MudDatePicker @bind-Date="_to" Label="إلى" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudDatePicker @bind-Date="_to"
+                               Label="إلى"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Clearable="true"
+                               MinDate="_from" />
             </MudItem>
             <MudItem xs="12" sm="6" md="3">
-                <MudTextField T="string" @bind-Value="_search" Label="العميل" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudTextField T="string"
+                              @bind-Value="_search"
+                              @bind-Value:after="OnSearchChangedAsync"
+                              Label="العميل"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              DebounceInterval="400"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Immediate="true"
+                              Clearable="true" />
             </MudItem>
             <MudItem xs="12" sm="6" md="3">
-                <MudStack Row="true">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Search">بحث</MudButton>
-                    <MudButton Variant="Variant.Outlined" OnClick="Clear">مسح</MudButton>
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Search"
+                               OnClick="RefreshAsync"
+                               Disabled="_loading">بحث</MudButton>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Default"
+                               StartIcon="@Icons.Material.Filled.Clear"
+                               OnClick="ClearAsync"
+                               Disabled="_loading">مسح</MudButton>
                 </MudStack>
             </MudItem>
         </MudGrid>
     </MudPaper>
 
-    <MudTable Items="_items" Dense="true" Hover="true" Loading="_loading" OnRowClick="OpenDetail" RowsPerPage="20">
-        <HeaderContent>
-            <MudTh>رقم</MudTh>
-            <MudTh>التاريخ</MudTh>
-            <MudTh>العميل</MudTh>
-            <MudTh>المندوب</MudTh>
-            <MudTh>الإجمالي</MudTh>
-            <MudTh>الحالة</MudTh>
-        </HeaderContent>
-        <RowTemplate>
-            <MudTd>@context.TransactionId</MudTd>
-            <MudTd>@context.TransactionDate.ToString("yyyy/MM/dd")</MudTd>
-            <MudTd>@context.PartyName</MudTd>
-            <MudTd>@(context.DeliveryEmployeeName ?? "-")</MudTd>
-            <MudTd>@context.GrandTotal.ToString("N0") ج</MudTd>
-            <MudTd>
-                <MudChip T="string" Size="Size.Small" Color="@GetColor(context.DeliveryStatus)">@context.DeliveryStatus</MudChip>
-            </MudTd>
-        </RowTemplate>
-    </MudTable>
+    @* ── Data Table ────────────────────────────────────────── *@
+    <MudPaper Elevation="1">
+        <MudTable T="VwSalesDeliveryStatus"
+                  Items="_items"
+                  Dense="true"
+                  Hover="true"
+                  Striped="true"
+                  Loading="_loading"
+                  LoadingProgressColor="Color.Primary"
+                  Breakpoint="Breakpoint.Sm"
+                  Elevation="0">
+            <NoRecordsContent>
+                <AppEmpty Icon="@Icons.Material.Filled.LocalShipping"
+                          Message="لا توجد فواتير مطابقة"
+                          Description="جرّب تغيير الفلاتر أو الفترة الزمنية" />
+            </NoRecordsContent>
+            <HeaderContent>
+                <MudTh>رقم</MudTh>
+                <MudTh>التاريخ</MudTh>
+                <MudTh>الاستحقاق</MudTh>
+                <MudTh>العميل</MudTh>
+                <MudTh>المندوب</MudTh>
+                @if (_canSeeAmounts)
+                {
+                    <MudTh Style="text-align:end;">الإجمالي</MudTh>
+                    <MudTh Style="text-align:end;">المتبقي</MudTh>
+                }
+                <MudTh>الحالة</MudTh>
+                <MudTh Style="text-align:center;">إجراءات</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="رقم">@context.TransactionId</MudTd>
+                <MudTd DataLabel="التاريخ">@context.TransactionDate.ToString("yyyy/MM/dd")</MudTd>
+                <MudTd DataLabel="الاستحقاق">
+                    @if (context.DueDate.HasValue)
+                    {
+                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                            <span>@context.DueDate.Value.ToString("yyyy/MM/dd")</span>
+                            @if (context.DaysRemaining.HasValue && context.DeliveryStatus != StatusDelivered)
+                            {
+                                var d = context.DaysRemaining.Value;
+                                <MudChip T="string" Size="Size.Small"
+                                         Color="@(d < 0 ? Color.Error : d <= 2 ? Color.Warning : Color.Default)">
+                                    @(d < 0 ? $"متأخر {Math.Abs(d)} يوم" : $"باقي {d} يوم")
+                                </MudChip>
+                            }
+                        </MudStack>
+                    }
+                    else { <span>—</span> }
+                </MudTd>
+                <MudTd DataLabel="العميل">@context.PartyName</MudTd>
+                <MudTd DataLabel="المندوب">@(string.IsNullOrWhiteSpace(context.DeliveryEmployeeName) ? "—" : context.DeliveryEmployeeName)</MudTd>
+
+                @if (_canSeeAmounts)
+                {
+                    <MudTd DataLabel="الإجمالي" Style="text-align:end;">@context.GrandTotal.ToString("N2")</MudTd>
+                    <MudTd DataLabel="المتبقي" Style="text-align:end;">
+                        @{ var remaining = context.GrandTotal - context.PaidAmount; }
+                        <span style="@(remaining > 0 ? "color:#d32f2f; font-weight:600;" : "color:#388e3c;")">
+                            @remaining.ToString("N2")
+                        </span>
+                    </MudTd>
+                }
+
+                <MudTd DataLabel="الحالة">
+                    <MudChip T="string"
+                             Size="Size.Small"
+                             Variant="Variant.Filled"
+                             Icon="@GetStatusIcon(context.DeliveryStatus)"
+                             Color="@GetStatusColor(context.DeliveryStatus)">
+                        @context.DeliveryStatus
+                    </MudChip>
+                </MudTd>
+                <MudTd DataLabel="إجراءات" Style="text-align:center;">
+                    <MudStack Row="true" Spacing="0" Justify="Justify.Center">
+                        <MudTooltip Text="فتح التفاصيل الكاملة">
+                            <MudIconButton Icon="@Icons.Material.Filled.OpenInFull"
+                                           Size="Size.Small"
+                                           Color="Color.Primary"
+                                           OnClick="@(() => OpenFullPage(context.TransactionId))" />
+                        </MudTooltip>
+                        @if (_canEditFull)
+                        {
+                            <MudTooltip Text="تعديل سريع">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                               Size="Size.Small"
+                                               Color="Color.Secondary"
+                                               OnClick="@(() => OpenDialogAsync(context.TransactionId))" />
+                            </MudTooltip>
+                        }
+                        @if (_canConfirmDelivery && context.DeliveryStatus != StatusDelivered)
+                        {
+                            <MudTooltip Text="تأكيد التسليم">
+                                <MudIconButton Icon="@Icons.Material.Filled.CheckCircle"
+                                               Size="Size.Small"
+                                               Color="Color.Success"
+                                               OnClick="@(() => QuickConfirmDeliveryAsync(context))" />
+                            </MudTooltip>
+                        }
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="@(new int[] { 10, 25, 50, 100 })"
+                               RowsPerPageString="عدد الصفوف"
+                               InfoFormat="{first_item}-{last_item} من {all_items}" />
+            </PagerContent>
+        </MudTable>
+    </MudPaper>
 
 </MudContainer>
 
-@code {
-    private List<VwSalesDeliveryStatus> _items = new();
-    private DeliverySummaryDto _summary = new();
-    private bool _loading = true;
-    private DateTime? _from;
-    private DateTime? _to;
-    private string? _search;
-    private string? _status;
+<style>
+    .status-card { user-select:none; }
+    .status-card:hover { transform: translateY(-2px); }
+    .status-card--active { outline: 3px solid rgba(255,255,255,.9); outline-offset: -3px; }
+    .cursor-pointer { cursor: pointer; }
+</style>
 
+@code {
+    // ─── Constants ─────────────────────────────────────────
+    private const string StatusPending   = "جارى";
+    private const string StatusDelivered = "تم التسليم";
+    private const string StatusOverdue   = "متأخر";
+
+    // ─── State ─────────────────────────────────────────────
+    private List<VwSalesDeliveryStatus> _items   = new();
+    private DeliverySummaryDto          _summary = new();
+    private bool        _loading = true;
+    private DateTime?   _from;
+    private DateTime?   _to;
+    private string?     _search;
+    private string?     _status;
+
+    // ─── Permissions ───────────────────────────────────────
+    private bool _canSeeAmounts;
+    private bool _canEditFull;
+    private bool _canConfirmDelivery;
+    private string _currentUserName = "system";
+
+    private CancellationTokenSource? _cts;
+
+    // ─── Lifecycle ─────────────────────────────────────────
     protected override async Task OnInitializedAsync()
     {
-        await Refresh();
+        await LoadPermissionsAsync();
+        await RefreshAsync();
     }
 
-    private async Task Refresh()
+    private async Task LoadPermissionsAsync()
     {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        if (!DeliveryPermissions.CanView(user))
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+
+        _currentUserName    = user.Identity?.Name ?? "system";
+        _canSeeAmounts      = DeliveryPermissions.CanSeeAmounts(user);
+        _canEditFull        = DeliveryPermissions.CanEditFull(user);
+        _canConfirmDelivery = DeliveryPermissions.CanConfirmDelivery(user);
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+
+    // ─── Data Loading ──────────────────────────────────────
+    private async Task RefreshAsync()
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+
         _loading = true;
-        var t1 = DeliveryService.GetFilteredAsync(_from, _to, _search, _status);
-        var t2 = DeliveryService.GetSummaryAsync(_from, _to, _search, _status);
-        await Task.WhenAll(t1, t2);
-        _items = t1.Result;
-        _summary = t2.Result;
-        _loading = false;
+        StateHasChanged();
+
+        try
+        {
+            var itemsTask   = DeliveryService.GetFilteredAsync(_from, _to, _search, _status);
+            var summaryTask = DeliveryService.GetSummaryAsync(_from, _to, _search, _status);
+
+            await Task.WhenAll(itemsTask, summaryTask);
+
+            if (token.IsCancellationRequested) return;
+
+            _items   = await itemsTask;
+            _summary = await summaryTask;
+        }
+        catch (OperationCanceledException) { /* normal */ }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load deliveries");
+            Snackbar.Add("تعذّر تحميل البيانات: " + ex.Message, Severity.Error);
+            _items = new();
+            _summary = new();
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
     }
 
-    private async Task Search() => await Refresh();
-    
-    private async Task Clear() 
-    { 
-        _from = null; 
-        _to = null; 
-        _search = null; 
-        _status = null; 
-        await Refresh(); 
-    }
-    
-    private async Task SetStatus(string? s) 
-    { 
-        _status = s; 
-        await Refresh(); 
-    }
+    private Task OnSearchChangedAsync() => RefreshAsync();
 
-    private async Task OpenDetail(TableRowClickEventArgs<VwSalesDeliveryStatus> e)
+    private async Task ClearAsync()
     {
-        var parameters = new DialogParameters<DeliveryDetailDialog>();
-        parameters.Add("TransactionId", e.Item.TransactionId);
-        var dialog = await DialogService.ShowAsync<DeliveryDetailDialog>("تفاصيل التسليم", parameters, new DialogOptions { MaxWidth = MaxWidth.Medium });
+        _from = null; _to = null; _search = null; _status = null;
+        await RefreshAsync();
+    }
+
+    private async Task SetStatusAsync(string? status)
+    {
+        _status = (_status == status) ? null : status;
+        await RefreshAsync();
+    }
+
+    // ─── Actions ───────────────────────────────────────────
+    private void OpenFullPage(int transactionId)
+        => Nav.NavigateTo($"/sales-delivery-status/{transactionId}");
+
+    private async Task OpenDialogAsync(int transactionId)
+    {
+        var parameters = new DialogParameters<DeliveryDetailDialog>
+        {
+            { x => x.TransactionId, transactionId }
+        };
+
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseOnEscapeKey = true,
+            BackdropClick = false
+        };
+
+        var dialog = await DialogService.ShowAsync<DeliveryDetailDialog>("تفاصيل التسليم", parameters, options);
         var result = await dialog.Result;
-        if (result != null && !result.Canceled) await Refresh();
+
+        if (result is not null && !result.Canceled && result.Data is true)
+            await RefreshAsync();
     }
 
-    private Color GetColor(string s) => s switch
+    private async Task QuickConfirmDeliveryAsync(VwSalesDeliveryStatus item)
     {
-        "جارى" => Color.Warning,
-        "متأخر" => Color.Error,
-        "تم التسليم" => Color.Success,
-        _ => Color.Default
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Title,      "تأكيد التسليم" },
+            { x => x.Message,    $"هل تريد تأكيد تسليم الفاتورة رقم {item.TransactionId} للعميل {item.PartyName}؟" },
+            { x => x.YesText,    "نعم، تم التسليم" },
+            { x => x.CancelText, "إلغاء" }
+        };
+
+        var msgDialog = await DialogService.ShowAsync<MudMessageBox>(
+            "تأكيد التسليم", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+
+        var msgResult = await msgDialog.Result;
+        if (msgResult is null || msgResult.Canceled) return;
+
+        try
+        {
+            var dto = new DeliveryUpdateDto
+            {
+                TransactionId        = item.TransactionId,
+                Status               = StatusDelivered,
+                DeliveryEmployeeName = string.IsNullOrWhiteSpace(item.DeliveryEmployeeName)
+                                       ? _currentUserName
+                                       : item.DeliveryEmployeeName,
+                DeliveredAt          = DateTime.Now,
+                Notes                = item.DeliveredNotes,
+                UserName             = _currentUserName
+            };
+
+            var (success, message) = await DeliveryService.UpdateDeliveryStatusAsync(dto);
+
+            if (success)
+            {
+                Snackbar.Add(message, Severity.Success);
+                await RefreshAsync();
+            }
+            else
+            {
+                Snackbar.Add(message, Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Quick confirm delivery failed for {Id}", item.TransactionId);
+            Snackbar.Add("حدث خطأ أثناء تأكيد التسليم: " + ex.Message, Severity.Error);
+        }
+    }
+
+    // ─── UI Helpers ────────────────────────────────────────
+    private record CardModel(string Label, string? Status, int Count, string Color, string Icon, bool IsActive);
+
+    private IEnumerable<CardModel> BuildCards() => new[]
+    {
+        new CardModel("الكل",           null,             _summary.TotalCount,     "#667eea", Icons.Material.Filled.ListAlt,    _status is null),
+        new CardModel(StatusPending,    StatusPending,    _summary.PendingCount,   "#f5576c", Icons.Material.Filled.Pending,    _status == StatusPending),
+        new CardModel(StatusDelivered,  StatusDelivered,  _summary.DeliveredCount, "#43e97b", Icons.Material.Filled.CheckCircle,_status == StatusDelivered),
+        new CardModel(StatusOverdue,    StatusOverdue,    _summary.OverdueCount,   "#ff9800", Icons.Material.Filled.Warning,    _status == StatusOverdue),
+    };
+
+    private static Color GetStatusColor(string? status) => status switch
+    {
+        StatusPending   => Color.Warning,
+        StatusOverdue   => Color.Error,
+        StatusDelivered => Color.Success,
+        _               => Color.Default
+    };
+
+    private static string GetStatusIcon(string? status) => status switch
+    {
+        StatusPending   => Icons.Material.Filled.Pending,
+        StatusOverdue   => Icons.Material.Filled.Warning,
+        StatusDelivered => Icons.Material.Filled.CheckCircle,
+        _               => Icons.Material.Filled.HelpOutline
     };
 }

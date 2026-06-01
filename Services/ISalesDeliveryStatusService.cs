@@ -43,13 +43,3 @@ public interface ISalesDeliveryStatusService
     Task<byte[]> GenerateDeliveryPdfAsync(int transactionId);
 }
 
-
-
-public class EmployeeLookupDto
-{
-    public int EmployeeId { get; set; }
-    public string FullName { get; set; } = "";
-    public string? MobilePhone { get; set; }
-    public string? JobTitle { get; set; }
-}
-

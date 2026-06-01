@@ -81,6 +81,7 @@ public class DeliveryUpdateDto
     public int TransactionId { get; set; }
     
     public string Status { get; set; } = "";  // تم التسليم | متأخر | مرتجع
+    public int? DeliveryEmployeeId { get; set; }
     
     public string? DeliveryEmployeeName { get; set; }
     

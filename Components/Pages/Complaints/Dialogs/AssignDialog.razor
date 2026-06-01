@@ -1,0 +1,85 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject IComplaintService ComplaintService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog>
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.PersonPin" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">إسناد الشكوى</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressCircular Indeterminate="true" />
+        }
+        else
+        {
+            <MudSelect T="int?"
+                       @bind-Value="_assignedTo"
+                       Label="المُسند إليه"
+                       Variant="Variant.Outlined"
+                       Clearable="true">
+                @foreach (var e in _employees)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)e.EmployeeId)">
+                        @e.FullName @if (!string.IsNullOrWhiteSpace(e.JobTitle)) { <span style="color:#94a3b8;font-size:11px;"> — @e.JobTitle</span> }
+                    </MudSelectItem>
+                }
+            </MudSelect>
+            <MudText Typo="Typo.caption" Class="mt-2 d-block">
+                لو الحالة "جديدة" — هتتحول لـ "قيد الحل" تلقائياً عند الإسناد.
+            </MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   OnClick="Save" Disabled="_saving">
+            @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+            else { <span>حفظ</span> }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter, EditorRequired] public int ComplaintId { get; set; }
+    [Parameter] public int? CurrentAssignedTo { get; set; }
+
+    private bool _loading = true;
+    private bool _saving;
+    private int? _assignedTo;
+    private List<EmployeeLookupItemDto> _employees = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _assignedTo = CurrentAssignedTo;
+        _employees = await ComplaintService.GetEmployeesAsync();
+        _loading = false;
+    }
+
+    private async Task Save()
+    {
+        _saving = true;
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User.Identity?.Name ?? "system";
+
+        var (ok, msg) = await ComplaintService.AssignAsync(new AssignComplaintDto
+        {
+            ComplaintId = ComplaintId,
+            AssignedTo  = _assignedTo
+        }, user);
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        _saving = false;
+        if (ok) MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

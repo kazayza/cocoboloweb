@@ -1,0 +1,584 @@
+@page "/sales-delivery-status/{TransactionId:int}"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+@using COCOBOLOERPNEW.Components.Shared
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.ComponentModel.DataAnnotations
+
+@inject ISalesDeliveryStatusService DeliveryService
+@inject ISnackbar Snackbar
+@inject ILogger<DeliveryDetail> Logger
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+
+@attribute [Authorize]
+
+<PageTitle>تفاصيل التسليم #@TransactionId</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
+
+    @* ── Header مع زرار رجوع ─────────────────────────────── *@
+    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+        <MudButton Variant="Variant.Text"
+                   StartIcon="@Icons.Material.Filled.ArrowBack"
+                   OnClick="@(() => Nav.NavigateTo("/sales-delivery-status"))">
+            رجوع للقائمة
+        </MudButton>
+
+        <MudStack Row="true" Spacing="1">
+            @if (_canPrint && _detail is not null)
+            {
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Default"
+                           StartIcon="@Icons.Material.Filled.Print"
+                           OnClick="PrintAsync">طباعة</MudButton>
+            }
+        </MudStack>
+    </MudStack>
+
+    @if (_loading)
+    {
+        <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Style="min-height:400px;" Spacing="2">
+            <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+            <MudText Typo="Typo.body2" Color="Color.Secondary">جارٍ التحميل...</MudText>
+        </MudStack>
+    }
+    else if (_detail is null)
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+            لا توجد بيانات لهذه الفاتورة (رقم @TransactionId)
+        </MudAlert>
+    }
+    else
+    {
+        @* ── Hero Header ────────────────────────────────── *@
+        <MudPaper Class="pa-4 mb-3 rounded-lg"
+                  Style="background:linear-gradient(135deg,#1a237e,#283593); color:white;"
+                  Elevation="2">
+            <MudGrid AlignItems="Center">
+                <MudItem xs="12" md="8">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Style="font-size:3rem; color:#ffd700;" />
+                        <div>
+                            <MudText Typo="Typo.h4">فاتورة #@_detail.TransactionId</MudText>
+                            <MudText Typo="Typo.body2" Style="opacity:.9;">
+                                @_detail.TransactionDate.ToString("yyyy/MM/dd")
+                                @if (_detail.DueDate.HasValue)
+                                {
+                                    <span> • استحقاق: @_detail.DueDate.Value.ToString("yyyy/MM/dd")</span>
+                                }
+                            </MudText>
+                        </div>
+                    </MudStack>
+                </MudItem>
+                <MudItem xs="12" md="4" Class="text-end">
+                    <MudChip T="string"
+                             Variant="Variant.Filled"
+                             Color="@GetChipColor(_detail.DeliveryStatus)"
+                             Icon="@GetStatusIcon(_detail.DeliveryStatus)"
+                             Size="Size.Large">
+                        @_detail.DeliveryStatus
+                    </MudChip>
+                    @if (_detail.DaysRemaining.HasValue && _detail.DeliveryStatus != "تم التسليم")
+                    {
+                        var d = _detail.DaysRemaining.Value;
+                        <MudText Typo="Typo.body2" Class="mt-1" Style="opacity:.9;">
+                            @(d < 0 ? $"متأخر {Math.Abs(d)} يوم" : $"باقي {d} يوم")
+                        </MudText>
+                    }
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        @* ── Customer / Salesman / Delivery Person Cards ── *@
+        <MudGrid Spacing="2" Class="mb-3">
+            <MudItem xs="12" md="4">
+                <MudPaper Class="pa-3" Elevation="1" Style="height:100%;">
+                    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Start">
+                        <MudIcon Icon="@Icons.Material.Filled.Person" Color="Color.Primary" Style="font-size:2rem;" />
+                        <div style="flex:1;">
+                            <MudText Typo="Typo.overline" Color="Color.Primary">العميل</MudText>
+                            <MudText Typo="Typo.h6">@_detail.PartyName</MudText>
+                            @if (!string.IsNullOrWhiteSpace(_detail.PartyPhone))
+                            {
+                                <MudText Typo="Typo.body2">
+                                    <MudIcon Icon="@Icons.Material.Filled.Phone" Size="Size.Small" /> @_detail.PartyPhone
+                                </MudText>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(_detail.PartyAddress))
+                            {
+                                <MudText Typo="Typo.body2">
+                                    <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" /> @_detail.PartyAddress
+                                </MudText>
+                            }
+                        </div>
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudPaper Class="pa-3" Elevation="1" Style="height:100%;">
+                    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Start">
+                        <MudIcon Icon="@Icons.Material.Filled.Badge" Color="Color.Secondary" Style="font-size:2rem;" />
+                        <div style="flex:1;">
+                            <MudText Typo="Typo.overline" Color="Color.Secondary">مندوب المبيعات</MudText>
+                            <MudText Typo="Typo.h6">@(_detail.SalesEmployeeName ?? "—")</MudText>
+                        </div>
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudPaper Class="pa-3" Elevation="1" Style="height:100%;">
+                    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Start">
+                        <MudIcon Icon="@Icons.Material.Filled.DeliveryDining" Color="Color.Tertiary" Style="font-size:2rem;" />
+                        <div style="flex:1;">
+                            <MudText Typo="Typo.overline" Color="Color.Tertiary">مندوب التسليم</MudText>
+                            <MudText Typo="Typo.h6">@(_detail.DeliveryEmployeeName ?? "لم يُحدد")</MudText>
+                            @if (_detail.DeliveredAt.HasValue)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Success">
+                                    سُلّمت في @_detail.DeliveredAt.Value.ToString("yyyy/MM/dd HH:mm")
+                                </MudText>
+                            }
+                        </div>
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+        @* ── Products with Images Gallery ─────────────── *@
+        <MudPaper Class="pa-4 mb-3" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-3">
+                <MudIcon Icon="@Icons.Material.Filled.Inventory2" /> المنتجات (@_detail.Products.Count)
+            </MudText>
+
+            @if (_detail.Products.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info">لا توجد منتجات</MudAlert>
+            }
+            else
+            {
+                <MudGrid Spacing="2">
+                    @foreach (var p in _detail.Products)
+                    {
+                        <MudItem xs="12" sm="6" md="4">
+                            <MudPaper Elevation="2" Class="product-card" Style="overflow:hidden; cursor:pointer;"
+                                      @onclick="@(async () => await OpenImagePreview(p))">
+                                <div style="position:relative; width:100%; padding-top:75%; background:#f5f5f5; overflow:hidden;">
+                                    <img src="/api/product-images/@p.ProductId"
+                                         alt="@p.ProductName"
+                                         loading="lazy"
+                                         onerror="this.onerror=null;this.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 75%22><rect fill=%22%23eee%22 width=%22100%22 height=%2275%22/><text x=%2250%22 y=%2240%22 text-anchor=%22middle%22 font-size=%228%22 fill=%22%23999%22>لا توجد صورة</text></svg>';"
+                                         style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; transition:transform .3s;" />
+                                </div>
+                                <div style="padding:10px;">
+                                    <MudText Typo="Typo.body1" Style="font-weight:600; min-height:48px;">
+                                        @p.ProductName
+                                    </MudText>
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween" Class="mt-1">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Info">
+                                            @p.Quantity.ToString("N2") @p.UnitName
+                                        </MudChip>
+                                        @if (_canSeeAmounts)
+                                        {
+                                            <MudText Typo="Typo.body2" Color="Color.Primary" Style="font-weight:700;">
+                                                @p.TotalAmount.ToString("N2") ج
+                                            </MudText>
+                                        }
+                                    </MudStack>
+                                    @if (_canSeeAmounts && p.UnitPrice.HasValue)
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            سعر الوحدة: @p.UnitPrice.Value.ToString("N2") ج
+                                        </MudText>
+                                    }
+                                </div>
+                            </MudPaper>
+                        </MudItem>
+                    }
+                </MudGrid>
+            }
+        </MudPaper>
+
+        @* ── Financial Summary (مخفي عن User) ───────────── *@
+        @if (_canSeeAmounts)
+        {
+            <MudPaper Class="pa-4 mb-3" Elevation="1">
+                <MudText Typo="Typo.h6" Class="mb-3">
+                    <MudIcon Icon="@Icons.Material.Filled.AccountBalance" /> الملخص المالي
+                </MudText>
+                <MudGrid>
+                    <MudItem xs="6" md="3">
+                        <MudPaper Class="pa-3 text-center" Elevation="0" Style="background:#e3f2fd;">
+                            <MudText Typo="Typo.caption">الإجمالي</MudText>
+                            <MudText Typo="Typo.h5" Color="Color.Primary">@_detail.GrandTotal.ToString("N2")</MudText>
+                            <MudText Typo="Typo.caption">ج.م</MudText>
+                        </MudPaper>
+                    </MudItem>
+                    <MudItem xs="6" md="3">
+                        <MudPaper Class="pa-3 text-center" Elevation="0" Style="background:#e8f5e9;">
+                            <MudText Typo="Typo.caption">المدفوع</MudText>
+                            <MudText Typo="Typo.h5" Color="Color.Success">@_detail.PaidAmount.ToString("N2")</MudText>
+                            <MudText Typo="Typo.caption">ج.م</MudText>
+                        </MudPaper>
+                    </MudItem>
+                    <MudItem xs="6" md="3">
+                        <MudPaper Class="pa-3 text-center" Elevation="0"
+                                  Style="@($"background:{(_detail.RemainingAmount > 0 ? "#ffebee" : "#e8f5e9")};")">
+                            <MudText Typo="Typo.caption">المتبقي</MudText>
+                            <MudText Typo="Typo.h5"
+                                     Color="@(_detail.RemainingAmount > 0 ? Color.Error : Color.Success)">
+                                @_detail.RemainingAmount.ToString("N2")
+                            </MudText>
+                            <MudText Typo="Typo.caption">ج.م</MudText>
+                        </MudPaper>
+                    </MudItem>
+                    <MudItem xs="6" md="3">
+                        <MudPaper Class="pa-3 text-center" Elevation="0" Style="background:#fff3e0;">
+                            <MudText Typo="Typo.caption">نسبة السداد</MudText>
+                            @{
+                                var paidPct = _detail.GrandTotal > 0
+                                    ? (decimal)(_detail.PaidAmount / _detail.GrandTotal * 100)
+                                    : 0m;
+                            }
+                            <MudText Typo="Typo.h5" Color="Color.Warning">@paidPct.ToString("N0")%</MudText>
+                            <MudProgressLinear Value="@((double)paidPct)" Color="Color.Warning" Class="mt-1" />
+                        </MudPaper>
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+        }
+
+        @* ── Update / Confirm Section ──────────────────── *@
+        <MudPaper Class="pa-4 mb-3" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-3">
+                <MudIcon Icon="@Icons.Material.Filled.Edit" /> تحديث حالة التسليم
+            </MudText>
+
+            @if (!_canEditFull && !_canConfirmDelivery)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+                    ليس لديك صلاحية لتعديل بيانات التسليم.
+                </MudAlert>
+            }
+            else
+            {
+                <MudForm @ref="_form" Model="@_model">
+                    <MudGrid Spacing="2">
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="string"
+                                       @bind-Value="_model.Status"
+                                       Label="الحالة"
+                                       Variant="Variant.Outlined"
+                                       Required="true"
+                                       Disabled="@(!_canEditFull)"
+                                       AdornmentIcon="@GetStatusIcon(_model.Status)"
+                                       Adornment="Adornment.Start">
+                                <MudSelectItem T="string" Value='"جارى"'>جارى</MudSelectItem>
+                                <MudSelectItem T="string" Value='"متأخر"'>متأخر</MudSelectItem>
+                                <MudSelectItem T="string" Value='"تم التسليم"'>تم التسليم</MudSelectItem>
+                                <MudSelectItem T="string" Value='"مرتجع"'>مرتجع</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="6">
+                            <MudAutocomplete T="EmployeeLookupDto"
+                                             @bind-Value="_selectedEmployee"
+                                             SearchFunc="SearchEmployeesAsync"
+                                             ToStringFunc="@(e => e?.FullName ?? "")"
+                                             Label="مندوب التسليم"
+                                             Variant="Variant.Outlined"
+                                             Clearable="true"
+                                             Disabled="@(!_canEditFull)"
+                                             Required="@(_canEditFull && _model.Status == "تم التسليم")"
+                                             AdornmentIcon="@Icons.Material.Filled.DeliveryDining"
+                                             Adornment="Adornment.Start" />
+                        </MudItem>
+                        @if (_canEditFull && _model.Status == "تم التسليم")
+                        {
+                            <MudItem xs="12" md="6">
+                                <MudDatePicker @bind-Date="_model.DeliveredAt"
+                                               Label="تاريخ التسليم"
+                                               Variant="Variant.Outlined"
+                                               MaxDate="DateTime.Today" />
+                            </MudItem>
+                        }
+                        <MudItem xs="12">
+                            <MudTextField T="string"
+                                          @bind-Value="_model.Notes"
+                                          Label="ملاحظات التسليم"
+                                          Variant="Variant.Outlined"
+                                          Lines="3"
+                                          MaxLength="500"
+                                          Counter="500" />
+                        </MudItem>
+                    </MudGrid>
+
+                    <MudStack Row="true" Spacing="2" Class="mt-3" Justify="Justify.FlexEnd">
+                        @if (_canEditFull)
+                        {
+                            <MudButton Variant="Variant.Outlined"
+                                       StartIcon="@Icons.Material.Filled.Restore"
+                                       OnClick="ResetForm"
+                                       Disabled="_saving">إعادة تعيين</MudButton>
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.Save"
+                                       OnClick="SaveAsync"
+                                       Disabled="_saving">
+                                @if (_saving)
+                                {
+                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                                }
+                                حفظ التعديلات
+                            </MudButton>
+                        }
+                        @if (_canConfirmDelivery && _detail.DeliveryStatus != "تم التسليم")
+                        {
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Success"
+                                       Size="Size.Large"
+                                       StartIcon="@Icons.Material.Filled.CheckCircle"
+                                       OnClick="ConfirmDeliveryQuickAsync"
+                                       Disabled="_saving">
+                                تم التسليم
+                            </MudButton>
+                        }
+                    </MudStack>
+                </MudForm>
+            }
+        </MudPaper>
+    }
+
+</MudContainer>
+
+<style>
+    .product-card { transition: transform .2s, box-shadow .2s; }
+    .product-card:hover { transform: translateY(-4px); box-shadow: 0 6px 16px rgba(0,0,0,.15); }
+    .product-card:hover img { transform: scale(1.05); }
+    .text-end { text-align: end; }
+
+    @@media print {
+        .mud-button, .mud-icon-button, .mud-paper:has(.mud-form) { display: none !important; }
+    }
+</style>
+
+@code {
+    [Parameter] public int TransactionId { get; set; }
+
+    private DeliveryDetailDto? _detail;
+    private MudForm?           _form;
+    private bool               _loading = true;
+    private bool               _saving  = false;
+
+    private List<EmployeeLookupDto> _employees = new();
+    private EmployeeLookupDto?      _selectedEmployee;
+
+    private UpdateModel _model = new();
+
+    // ─── Permissions ───────────────────────────────────────
+    private bool   _canSeeAmounts;
+    private bool   _canEditFull;
+    private bool   _canConfirmDelivery;
+    private bool   _canPrint;
+    private string _currentUserName = "system";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPermissionsAsync();
+        await Task.WhenAll(SafeLoadDetailAsync(), SafeLoadEmployeesAsync());
+        if (_detail is not null) BindFromDetail();
+        _loading = false;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // لو الـ TransactionId اتغير من URL
+        if (!_loading && _detail is not null && _detail.TransactionId != TransactionId)
+        {
+            _loading = true;
+            await Task.WhenAll(SafeLoadDetailAsync(), Task.CompletedTask);
+            if (_detail is not null) BindFromDetail();
+            _loading = false;
+        }
+    }
+
+    private async Task LoadPermissionsAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        if (!DeliveryPermissions.CanView(user))
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+
+        _currentUserName    = user.Identity?.Name ?? "system";
+        _canSeeAmounts      = DeliveryPermissions.CanSeeAmounts(user);
+        _canEditFull        = DeliveryPermissions.CanEditFull(user);
+        _canConfirmDelivery = DeliveryPermissions.CanConfirmDelivery(user);
+        _canPrint           = DeliveryPermissions.CanPrint(user);
+    }
+
+    private async Task SafeLoadDetailAsync()
+    {
+        try { _detail = await DeliveryService.GetDeliveryDetailsAsync(TransactionId); }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load delivery {Id}", TransactionId);
+            Snackbar.Add("تعذّر تحميل تفاصيل التسليم: " + ex.Message, Severity.Error);
+            _detail = null;
+        }
+    }
+
+    private async Task SafeLoadEmployeesAsync()
+    {
+        try { _employees = await DeliveryService.GetDeliveryEmployeesAsync(); }
+        catch (Exception ex) { Logger.LogError(ex, "Failed loading employees"); _employees = new(); }
+    }
+
+    private void BindFromDetail()
+    {
+        if (_detail is null) return;
+        _model = new UpdateModel
+        {
+            Status      = _detail.DeliveryStatus,
+            Notes       = _detail.DeliveredNotes ?? "",
+            DeliveredAt = _detail.DeliveredAt ?? DateTime.Today
+        };
+        _selectedEmployee = _employees.FirstOrDefault(e => e.EmployeeId == _detail.DeliveryEmployeeId)
+                         ?? _employees.FirstOrDefault(e => e.FullName == _detail.DeliveryEmployeeName);
+    }
+
+    private void ResetForm() => BindFromDetail();
+
+    private Task<IEnumerable<EmployeeLookupDto>> SearchEmployeesAsync(string? value, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult<IEnumerable<EmployeeLookupDto>>(_employees);
+        var filtered = _employees
+            .Where(e => e.FullName.Contains(value, StringComparison.OrdinalIgnoreCase)
+                     || (e.JobTitle?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false));
+        return Task.FromResult(filtered);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!_canEditFull) { Snackbar.Add("ليس لديك صلاحية", Severity.Warning); return; }
+        if (_form is null || _detail is null) return;
+
+        await _form.ValidateAsync();
+        if (!_form.IsValid) return;
+
+        await DoUpdateAsync(_model.Status, _selectedEmployee?.FullName,
+                            _model.Status == "تم التسليم" ? (_model.DeliveredAt ?? DateTime.Now) : (DateTime?)null,
+                            _model.Notes);
+    }
+
+    private async Task ConfirmDeliveryQuickAsync()
+    {
+        if (!_canConfirmDelivery) { Snackbar.Add("ليس لديك صلاحية", Severity.Warning); return; }
+        if (_detail is null) return;
+
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Title,      "تأكيد التسليم" },
+            { x => x.Message,    $"هل تريد تأكيد تسليم الفاتورة رقم {_detail.TransactionId} للعميل {_detail.PartyName}؟" },
+            { x => x.YesText,    "نعم، تم التسليم" },
+            { x => x.CancelText, "إلغاء" }
+        };
+
+        var msgDialog = await DialogService.ShowAsync<MudMessageBox>(
+            "تأكيد التسليم", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+
+        var msgResult = await msgDialog.Result;
+        if (msgResult is null || msgResult.Canceled) return;
+
+        var employeeName = _selectedEmployee?.FullName
+                        ?? _detail.DeliveryEmployeeName
+                        ?? _currentUserName;
+
+        await DoUpdateAsync("تم التسليم", employeeName, DateTime.Now, _model.Notes);
+    }
+
+    private async Task DoUpdateAsync(string status, string? employeeName, DateTime? deliveredAt, string? notes)
+    {
+        _saving = true;
+        try
+        {
+            var dto = new DeliveryUpdateDto
+            {
+                TransactionId        = TransactionId,
+                Status               = status,
+                DeliveryEmployeeName = employeeName,
+                DeliveredAt          = deliveredAt,
+                Notes                = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim(),
+                UserName             = _currentUserName
+            };
+
+            var (success, message) = await DeliveryService.UpdateDeliveryStatusAsync(dto);
+
+            if (success)
+            {
+                Snackbar.Add(message, Severity.Success);
+                await SafeLoadDetailAsync();
+                if (_detail is not null) BindFromDetail();
+            }
+            else { Snackbar.Add(message, Severity.Error); }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Update delivery {Id} failed", TransactionId);
+            Snackbar.Add("حدث خطأ: " + ex.Message, Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task OpenImagePreview(DeliveryProductDto product)
+    {
+        var parameters = new DialogParameters
+        {
+            { "ImageUrl",    $"/api/product-images/{product.ProductId}" },
+            { "ProductName", product.ProductName }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseOnEscapeKey = true };
+        await DialogService.ShowAsync<ProductImagePreviewDialog>(product.ProductName, parameters, options);
+    }
+
+    private async Task PrintAsync()
+    {
+        // مرحلياً: طباعة المتصفح. مستقبلاً: QuestPDF
+        await JS.InvokeVoidAsync("window.print");
+        
+    }
+
+    private static Color GetChipColor(string? s) => s switch
+    {
+        "جارى"        => Color.Warning,
+        "متأخر"       => Color.Error,
+        "تم التسليم"  => Color.Success,
+        "مرتجع"       => Color.Dark,
+        _             => Color.Default
+    };
+
+    private static string GetStatusIcon(string? s) => s switch
+    {
+        "جارى"        => Icons.Material.Filled.Pending,
+        "متأخر"       => Icons.Material.Filled.Warning,
+        "تم التسليم"  => Icons.Material.Filled.CheckCircle,
+        "مرتجع"       => Icons.Material.Filled.AssignmentReturn,
+        _             => Icons.Material.Filled.HelpOutline
+    };
+
+    private class UpdateModel
+    {
+        [Required(ErrorMessage = "الحالة مطلوبة")]
+        public string Status { get; set; } = "جارى";
+        public DateTime? DeliveredAt { get; set; } = DateTime.Today;
+        [StringLength(500)] public string Notes { get; set; } = "";
+    }
+}

@@ -156,6 +156,7 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
         try
         {
             transaction.DeliveryEmployeeName = dto.DeliveryEmployeeName;
+            transaction.DeliveryEmployeeId   = dto.DeliveryEmployeeId;
             
             if (dto.Status == "تم التسليم")
             {
@@ -186,7 +187,7 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
 
         return await db.Employees
             .AsNoTracking()
-            .Where(e => e.Status == "Working" || e.Status == "Active")
+            .Where(e => e.Status == "نشط" || e.Status == "Working" || e.Status == "Active")
             .OrderBy(e => e.FullName)
             .Select(e => new EmployeeLookupDto
             {

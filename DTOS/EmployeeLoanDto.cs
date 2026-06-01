@@ -129,6 +129,7 @@ public class EmployeeLookupDto
     public string  FullName     { get; set; } = "";
     public string? Department   { get; set; }
     public string? JobTitle     { get; set; }
+    public string? MobilePhone  { get; set; }
     public string  DisplayText  => $"{FullName} - {Department ?? "بدون قسم"}";
 }
 

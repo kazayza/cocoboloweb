@@ -1,0 +1,968 @@
+@page "/complaints/list"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject IComplaintService ComplaintService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
+@inject ILogger<Index> Logger
+
+@attribute [Authorize]
+@implements IDisposable
+
+<PageTitle>الشكاوى</PageTitle>
+
+<!-- ═════════════════════════════════════════════════════════════════ -->
+<!-- ⭐ LOADING STATE                                                    -->
+<!-- ═════════════════════════════════════════════════════════════════ -->
+@if (_isInitialLoading)
+{
+    <div class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-spinner-box">
+                <MudProgressCircular Color="Color.Secondary" Size="Size.Large" Indeterminate="true" />
+            </div>
+            <MudText Typo="Typo.h6" Class="loading-text">جاري تحميل الشكاوى...</MudText>
+            <div class="loading-dots">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+<div dir="rtl" class="cmp-page">
+
+    <!-- ═════════════════════════════════════════════════════════════ -->
+    <!-- ⭐ BACKGROUND DECORATIONS                                      -->
+    <!-- ═════════════════════════════════════════════════════════════ -->
+    <div class="page-bg-decorations">
+        <div class="bg-orb bg-orb-1"></div>
+        <div class="bg-orb bg-orb-2"></div>
+        <div class="bg-orb bg-orb-3"></div>
+    </div>
+
+    <!-- ⭐ TOP ACCENT BAR -->
+    <div class="top-accent-bar">
+        <div class="accent-shimmer"></div>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════════════ -->
+    <!-- ⭐ PREMIUM HEADER                                              -->
+    <!-- ═════════════════════════════════════════════════════════════ -->
+    <div class="cmp-header">
+        <div class="header-bg">
+            <div class="header-gradient"></div>
+            <div class="header-orbs">
+                <div class="header-orb orb-1"></div>
+                <div class="header-orb orb-2"></div>
+                <div class="header-orb orb-3"></div>
+            </div>
+            <div class="header-grid"></div>
+        </div>
+
+        <div class="header-content">
+            <div class="header-top">
+                <div class="header-info">
+                    <div class="header-icon-wrapper">
+                        <div class="header-icon-glow"></div>
+                        <div class="header-icon">
+                            <MudIcon Icon="@Icons.Material.Filled.SupportAgent" Size="Size.Large" />
+                        </div>
+                        <div class="header-icon-badge">
+                            <MudIcon Icon="@Icons.Material.Filled.Verified" />
+                        </div>
+                    </div>
+                    <div class="header-text">
+                        <div class="header-title-row">
+                            <MudText Typo="Typo.h4" Class="header-title">نظام الشكاوى</MudText>
+                            <div class="header-badge">
+                                <span>@_totalCount شكوى</span>
+                            </div>
+                        </div>
+                        <MudText Typo="Typo.body2" Class="header-subtitle">
+                            متابعة وحل شكاوى العملاء باحترافية
+                        </MudText>
+                    </div>
+                </div>
+
+                <div class="header-actions">
+                    @if (_canCreate)
+                    {
+                        <MudButton Variant="Variant.Filled"
+                                   Class="btn-add-premium"
+                                   StartIcon="@Icons.Material.Filled.Add"
+                                   OnClick="GoToNew">
+                            شكوى جديدة
+                        </MudButton>
+                    }
+                    @if (_canExport)
+                    {
+                        <MudButton Variant="Variant.Outlined"
+                                   Class="btn-export-premium"
+                                   StartIcon="@Icons.Material.Filled.FileDownload"
+                                   OnClick="ExportAsync"
+                                   Disabled="_isExporting">
+                            @if (_isExporting)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-1" />
+                                <span>جاري التصدير...</span>
+                            }
+                            else
+                            {
+                                <span>Excel</span>
+                            }
+                        </MudButton>
+                    }
+                </div>
+            </div>
+
+            <!-- ═══ STATS CARDS ═══ -->
+            <div class="stats-grid">
+                <div class="stat-card stat-total animate-card" style="--delay: 0.05s"
+                     @onclick="@(() => SetStatusFilter(null))">
+                    <div class="stat-glow"></div>
+                    <div class="stat-accent"></div>
+                    <div class="stat-content">
+                        <div class="stat-icon-box">
+                            <MudIcon Icon="@Icons.Material.Filled.ListAlt" />
+                        </div>
+                        <div class="stat-data">
+                            <div class="stat-label">إجمالي الشكاوى</div>
+                            <div class="stat-value">@_totalCount</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stat-card stat-new animate-card" style="--delay: 0.1s"
+                     @onclick="@(() => SetStatusFilter(ComplaintStatus.New))">
+                    <div class="stat-glow"></div>
+                    <div class="stat-accent"></div>
+                    <div class="stat-content">
+                        <div class="stat-icon-box">
+                            <MudIcon Icon="@Icons.Material.Filled.FiberNew" />
+                        </div>
+                        <div class="stat-data">
+                            <div class="stat-label">جديدة</div>
+                            <div class="stat-value">@_newCount</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stat-card stat-progress animate-card" style="--delay: 0.15s"
+                     @onclick="@(() => SetStatusFilter(ComplaintStatus.InProgress))">
+                    <div class="stat-glow"></div>
+                    <div class="stat-accent"></div>
+                    <div class="stat-content">
+                        <div class="stat-icon-box">
+                            <MudIcon Icon="@Icons.Material.Filled.HourglassTop" />
+                        </div>
+                        <div class="stat-data">
+                            <div class="stat-label">قيد الحل</div>
+                            <div class="stat-value">@_inProgressCount</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stat-card stat-resolved animate-card" style="--delay: 0.2s"
+                     @onclick="@(() => SetStatusFilter(ComplaintStatus.Resolved))">
+                    <div class="stat-glow"></div>
+                    <div class="stat-accent"></div>
+                    <div class="stat-content">
+                        <div class="stat-icon-box">
+                            <MudIcon Icon="@Icons.Material.Filled.TaskAlt" />
+                        </div>
+                        <div class="stat-data">
+                            <div class="stat-label">تم الحل</div>
+                            <div class="stat-value">@_resolvedCount</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stat-card stat-escalated animate-card" style="--delay: 0.25s"
+                     @onclick="@(() => SetStatusFilter(ComplaintStatus.Escalated))">
+                    <div class="stat-glow"></div>
+                    <div class="stat-accent"></div>
+                    <div class="stat-content">
+                        <div class="stat-icon-box">
+                            <MudIcon Icon="@Icons.Material.Filled.PriorityHigh" />
+                        </div>
+                        <div class="stat-data">
+                            <div class="stat-label">مصعدة</div>
+                            <div class="stat-value">@_escalatedCount</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════════════ -->
+    <!-- ⭐ FILTERS PANEL                                               -->
+    <!-- ═════════════════════════════════════════════════════════════ -->
+    <div class="filters-panel">
+        <div class="filters-header">
+            <div class="filters-title-box">
+                <MudIcon Icon="@Icons.Material.Filled.FilterAlt" />
+                <span>الفلاتر والبحث</span>
+            </div>
+            @if (HasActiveFilters)
+            {
+                <MudButton Variant="Variant.Text"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Clear"
+                           OnClick="ClearFilters">
+                    مسح الفلاتر
+                </MudButton>
+            }
+        </div>
+        <div class="filters-content">
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="6" md="3">
+                    <MudTextField T="string"
+                                  @bind-Value="_filter.SearchText"
+                                  @bind-Value:after="OnFilterChangedAsync"
+                                  Placeholder="بحث برقم/موضوع/عميل/تليفون..."
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search"
+                                  DebounceInterval="400"
+                                  Immediate="true"
+                                  Clearable="true" />
+                </MudItem>
+                <MudItem xs="12" sm="6" md="2">
+                    <MudSelect T="byte?"
+                               @bind-Value="_filter.Status"
+                               @bind-Value:after="OnFilterChangedAsync"
+                               Label="الحالة"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Clearable="true">
+                        <MudSelectItem T="byte?" Value="@((byte?)1)">جديدة</MudSelectItem>
+                        <MudSelectItem T="byte?" Value="@((byte?)2)">قيد الحل</MudSelectItem>
+                        <MudSelectItem T="byte?" Value="@((byte?)3)">انتظار العميل</MudSelectItem>
+                        <MudSelectItem T="byte?" Value="@((byte?)4)">تم الحل</MudSelectItem>
+                        <MudSelectItem T="byte?" Value="@((byte?)5)">مرفوضة</MudSelectItem>
+                        <MudSelectItem T="byte?" Value="@((byte?)6)">مصعدة</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="2">
+                    <MudSelect T="byte?"
+                               @bind-Value="_filter.Priority"
+                               @bind-Value:after="OnFilterChangedAsync"
+                               Label="الأولوية"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Clearable="true">
+                        <MudSelectItem T="byte?" Value="@((byte?)1)">عالية جداً 🔥</MudSelectItem>
+                        <MudSelectItem T="byte?" Value="@((byte?)2)">عالية 🔴</MudSelectItem>
+                        <MudSelectItem T="byte?" Value="@((byte?)3)">متوسطة 🟡</MudSelectItem>
+                        <MudSelectItem T="byte?" Value="@((byte?)4)">منخفضة 🟢</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="2">
+                    <MudSelect T="int?"
+                               @bind-Value="_filter.TypeId"
+                               @bind-Value:after="OnFilterChangedAsync"
+                               Label="النوع"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Clearable="true">
+                        @foreach (var t in _types)
+                        {
+                            <MudSelectItem T="int?" Value="@((int?)t.TypeId)">
+                                @(t.TypeNameAr ?? t.TypeName)
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="6" md="1">
+                    <MudDatePicker @bind-Date="_filter.DateFrom"
+                                   @bind-Date:after="OnFilterChangedAsync"
+                                   Label="من"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   Clearable="true" />
+                </MudItem>
+                <MudItem xs="6" md="1">
+                    <MudDatePicker @bind-Date="_filter.DateTo"
+                                   @bind-Date:after="OnFilterChangedAsync"
+                                   Label="إلى"
+                                   Variant="Variant.Outlined"
+                                   Margin="Margin.Dense"
+                                   Clearable="true" />
+                </MudItem>
+                <MudItem xs="12" md="1">
+                    <MudSwitch T="bool"
+                               @bind-Value="_filter.OpenOnly"
+                               @bind-Value:after="OnFilterChangedAsync"
+                               Color="Color.Warning"
+                               Label="المفتوحة فقط"
+                               Class="mt-1" />
+                </MudItem>
+            </MudGrid>
+        </div>
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════════════ -->
+    <!-- ⭐ DATA TABLE                                                  -->
+    <!-- ═════════════════════════════════════════════════════════════ -->
+    <div class="data-card">
+        <MudTable Items="_items"
+                  T="ComplaintListItemDto"
+                  Hover="true"
+                  Striped="true"
+                  Loading="_isLoading"
+                  LoadingProgressColor="Color.Secondary"
+                  Dense="true"
+                  Class="premium-table"
+                  Breakpoint="Breakpoint.Sm"
+                  Elevation="0">
+            <NoRecordsContent>
+                <div class="empty-state">
+                    <MudIcon Icon="@Icons.Material.Filled.SearchOff"
+                             Size="Size.Large"
+                             Class="empty-icon" />
+                    <MudText Typo="Typo.h6">لا توجد شكاوى مطابقة</MudText>
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                        جرّب تعديل الفلاتر أو ابدأ بإضافة شكوى جديدة
+                    </MudText>
+                </div>
+            </NoRecordsContent>
+            <HeaderContent>
+                <MudTh>الرقم</MudTh>
+                <MudTh>التاريخ</MudTh>
+                <MudTh>العميل</MudTh>
+                <MudTh>النوع</MudTh>
+                <MudTh>الموضوع</MudTh>
+                <MudTh>الأولوية</MudTh>
+                <MudTh>الحالة</MudTh>
+                <MudTh>المُسند</MudTh>
+                <MudTh Style="text-align:center">أيام</MudTh>
+                <MudTh Style="text-align:center">📎</MudTh>
+                <MudTh Style="text-align:center">📋</MudTh>
+                <MudTh Style="text-align:center">إجراءات</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="الرقم">
+                    <span class="cell-id">#@context.ComplaintId</span>
+                </MudTd>
+                <MudTd DataLabel="التاريخ">
+                    <span class="cell-date">@(context.ComplaintDate?.ToString("yyyy/MM/dd") ?? "—")</span>
+                </MudTd>
+                <MudTd DataLabel="العميل">
+                    <div class="cell-client">
+                        <strong>@context.ClientName</strong>
+                        @if (!string.IsNullOrWhiteSpace(context.ClientPhone))
+                        {
+                            <small>@context.ClientPhone</small>
+                        }
+                    </div>
+                </MudTd>
+                <MudTd DataLabel="النوع">@context.ComplaintType</MudTd>
+                <MudTd DataLabel="الموضوع" Style="max-width:250px;">
+                    <span class="cell-subject" title="@context.Subject">@context.Subject</span>
+                </MudTd>
+                <MudTd DataLabel="الأولوية">
+                    <span class="@GetPriorityClass(context.Priority)">@context.PriorityName</span>
+                </MudTd>
+                <MudTd DataLabel="الحالة">
+                    <span class="@GetStatusClass(context.Status)">@context.StatusName</span>
+                </MudTd>
+                <MudTd DataLabel="المُسند">@(context.EmployeeName ?? "—")</MudTd>
+                <MudTd DataLabel="أيام" Style="text-align:center">
+                    @if (context.DaysOpen.HasValue)
+                    {
+                        <span class="@GetDaysClass(context.DaysOpen.Value, context.Status)">
+                            @context.DaysOpen
+                        </span>
+                    }
+                </MudTd>
+                <MudTd DataLabel="مرفقات" Style="text-align:center">
+                    @if (context.AttachmentsCount > 0)
+                    {
+                        <span class="count-badge">@context.AttachmentsCount</span>
+                    }
+                    else { <span class="count-zero">0</span> }
+                </MudTd>
+                <MudTd DataLabel="متابعات" Style="text-align:center">
+                    @if (context.FollowUpsCount > 0)
+                    {
+                        <span class="count-badge count-badge-blue">@context.FollowUpsCount</span>
+                    }
+                    else { <span class="count-zero">0</span> }
+                </MudTd>
+                <MudTd DataLabel="إجراءات" Style="text-align:center">
+                    <div class="actions-cell">
+                        <MudTooltip Text="عرض التفاصيل">
+                            <MudIconButton Icon="@Icons.Material.Filled.Visibility"
+                                           Size="Size.Small"
+                                           Color="Color.Info"
+                                           OnClick="@(() => GoToDetail(context.ComplaintId))" />
+                        </MudTooltip>
+                        @if (_canEdit && !ComplaintStatus.IsClosed(context.Status))
+                        {
+                            <MudTooltip Text="تعديل">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                               Size="Size.Small"
+                                               Color="Color.Warning"
+                                               OnClick="@(() => GoToEdit(context.ComplaintId))" />
+                            </MudTooltip>
+                        }
+                        @if (_canDelete)
+                        {
+                            <MudTooltip Text="حذف">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => DeleteAsync(context))" />
+                            </MudTooltip>
+                        }
+                    </div>
+                </MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="@(new int[] { 10, 25, 50, 100 })"
+                               RowsPerPageString="عدد الصفوف"
+                               InfoFormat="{first_item}-{last_item} من {all_items}" />
+            </PagerContent>
+        </MudTable>
+    </div>
+
+</div>
+}
+
+<style>
+    /* ═════════════════ LOADING SCREEN ═════════════════ */
+    .loading-screen {
+        position: fixed; inset: 0;
+        background: linear-gradient(135deg, #0f1a2e 0%, #1a2842 100%);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 9999;
+    }
+    .loading-content { text-align: center; }
+    .loading-spinner-box {
+        background: rgba(212,175,55,0.1);
+        padding: 24px; border-radius: 50%;
+        border: 2px solid rgba(212,175,55,0.3);
+        margin-bottom: 16px;
+        display: inline-block;
+    }
+    .loading-text { color: #d4af37 !important; margin-bottom: 8px; }
+    .loading-dots {
+        display: inline-flex; gap: 6px; justify-content: center;
+    }
+    .loading-dots span {
+        width: 8px; height: 8px; border-radius: 50%;
+        background: #d4af37; animation: bounce 1.4s infinite ease-in-out both;
+    }
+    .loading-dots span:nth-child(2) { animation-delay: 0.16s; }
+    .loading-dots span:nth-child(3) { animation-delay: 0.32s; }
+    @@keyframes bounce {
+        0%, 80%, 100% { transform: scale(0); opacity: 0.5; }
+        40% { transform: scale(1); opacity: 1; }
+    }
+
+    /* ═════════════════ PAGE ═════════════════ */
+    .cmp-page {
+        position: relative;
+        min-height: 100vh;
+        padding: 12px;
+        background: linear-gradient(180deg, #f8f9fa 0%, #ffffff 100%);
+    }
+
+    /* ═════════════════ BG DECORATIONS ═════════════════ */
+    .page-bg-decorations {
+        position: absolute; inset: 0;
+        pointer-events: none; overflow: hidden;
+    }
+    .bg-orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(80px);
+        opacity: 0.25;
+    }
+    .bg-orb-1 {
+        width: 300px; height: 300px;
+        background: radial-gradient(circle, #d4af37, transparent);
+        top: -100px; right: -50px;
+    }
+    .bg-orb-2 {
+        width: 400px; height: 400px;
+        background: radial-gradient(circle, #3b82f6, transparent);
+        top: 30%; left: -100px;
+    }
+    .bg-orb-3 {
+        width: 250px; height: 250px;
+        background: radial-gradient(circle, #10b981, transparent);
+        bottom: 10%; right: 20%;
+    }
+
+    /* ═════════════════ TOP ACCENT BAR ═════════════════ */
+    .top-accent-bar {
+        position: relative;
+        height: 4px;
+        background: linear-gradient(90deg, #d4af37, #e8c855, #d4af37);
+        border-radius: 2px;
+        margin-bottom: 12px;
+        overflow: hidden;
+    }
+    .accent-shimmer {
+        position: absolute; inset: 0;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+        animation: shimmer 3s infinite;
+    }
+    @@keyframes shimmer {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+    }
+
+    /* ═════════════════ HEADER ═════════════════ */
+    .cmp-header {
+        position: relative;
+        background: linear-gradient(135deg, #1a2842 0%, #2c3e5f 100%);
+        border-radius: 16px;
+        overflow: hidden;
+        margin-bottom: 16px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+    .header-bg { position: absolute; inset: 0; overflow: hidden; }
+    .header-gradient {
+        position: absolute; inset: 0;
+        background: linear-gradient(135deg, rgba(212,175,55,0.05) 0%, transparent 50%);
+    }
+    .header-orbs { position: absolute; inset: 0; }
+    .header-orb {
+        position: absolute; border-radius: 50%;
+        filter: blur(40px); opacity: 0.4;
+    }
+    .header-orb.orb-1 { width: 200px; height: 200px; background: #d4af37; top: -50px; right: 10%; }
+    .header-orb.orb-2 { width: 150px; height: 150px; background: #3b82f6; bottom: -30px; left: 20%; }
+    .header-orb.orb-3 { width: 100px; height: 100px; background: #10b981; top: 40%; right: 40%; }
+    .header-grid {
+        position: absolute; inset: 0;
+        background-image:
+            linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+        background-size: 30px 30px;
+    }
+    .header-content { position: relative; padding: 20px; z-index: 1; }
+    .header-top {
+        display: flex; justify-content: space-between;
+        align-items: center; gap: 16px;
+        margin-bottom: 20px; flex-wrap: wrap;
+    }
+    .header-info { display: flex; gap: 16px; align-items: center; }
+    .header-icon-wrapper {
+        position: relative;
+        width: 64px; height: 64px;
+    }
+    .header-icon-glow {
+        position: absolute; inset: -4px;
+        background: radial-gradient(circle, rgba(212,175,55,0.5), transparent);
+        border-radius: 50%; filter: blur(10px);
+        animation: pulse 2s infinite;
+    }
+    @@keyframes pulse {
+        0%, 100% { opacity: 0.5; transform: scale(1); }
+        50% { opacity: 1; transform: scale(1.1); }
+    }
+    .header-icon {
+        position: relative;
+        width: 100%; height: 100%;
+        background: linear-gradient(135deg, #d4af37, #b8941f);
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        color: white;
+        box-shadow: 0 8px 24px rgba(212,175,55,0.4);
+    }
+    .header-icon-badge {
+        position: absolute; bottom: -2px; left: -2px;
+        background: #10b981; border-radius: 50%;
+        width: 24px; height: 24px;
+        display: flex; align-items: center; justify-content: center;
+        color: white; font-size: 14px;
+        box-shadow: 0 2px 8px rgba(16,185,129,0.5);
+    }
+    .header-title { color: white !important; font-weight: 700; margin: 0; }
+    .header-title-row {
+        display: flex; align-items: center; gap: 12px;
+    }
+    .header-badge {
+        background: rgba(212,175,55,0.2);
+        color: #d4af37;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        border: 1px solid rgba(212,175,55,0.4);
+        font-weight: 600;
+    }
+    .header-subtitle { color: rgba(255,255,255,0.7) !important; margin-top: 4px; }
+    .header-actions { display: flex; gap: 8px; }
+
+    .btn-add-premium {
+        background: linear-gradient(135deg, #d4af37, #b8941f) !important;
+        color: white !important;
+        padding: 10px 20px !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        box-shadow: 0 4px 12px rgba(212,175,55,0.4);
+        transition: all 0.3s;
+    }
+    .btn-add-premium:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(212,175,55,0.6);
+    }
+    .btn-export-premium {
+        color: white !important;
+        border-color: rgba(255,255,255,0.3) !important;
+        padding: 10px 20px !important;
+        border-radius: 10px !important;
+    }
+
+    /* ═════════════════ STATS CARDS ═════════════════ */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+    }
+    .stat-card {
+        position: relative;
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 12px;
+        padding: 14px;
+        cursor: pointer;
+        overflow: hidden;
+        transition: all 0.3s;
+        animation: slideIn 0.5s ease both;
+        animation-delay: var(--delay);
+    }
+    @@keyframes slideIn {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .stat-card:hover {
+        background: rgba(255,255,255,0.1);
+        transform: translateY(-3px);
+        border-color: rgba(212,175,55,0.3);
+    }
+    .stat-glow {
+        position: absolute; top: -50%; right: -50%;
+        width: 100%; height: 100%;
+        background: radial-gradient(circle, rgba(212,175,55,0.3), transparent);
+        opacity: 0; transition: opacity 0.3s;
+    }
+    .stat-card:hover .stat-glow { opacity: 1; }
+    .stat-accent {
+        position: absolute; top: 0; left: 0; right: 0; height: 3px;
+        background: linear-gradient(90deg, transparent, #d4af37, transparent);
+    }
+    .stat-new .stat-accent { background: linear-gradient(90deg, transparent, #3b82f6, transparent); }
+    .stat-progress .stat-accent { background: linear-gradient(90deg, transparent, #f59e0b, transparent); }
+    .stat-resolved .stat-accent { background: linear-gradient(90deg, transparent, #10b981, transparent); }
+    .stat-escalated .stat-accent { background: linear-gradient(90deg, transparent, #ef4444, transparent); }
+
+    .stat-content {
+        position: relative;
+        display: flex; gap: 10px; align-items: center;
+    }
+    .stat-icon-box {
+        width: 40px; height: 40px;
+        background: rgba(212,175,55,0.15);
+        border-radius: 10px;
+        display: flex; align-items: center; justify-content: center;
+        color: #d4af37;
+    }
+    .stat-new .stat-icon-box { background: rgba(59,130,246,0.15); color: #3b82f6; }
+    .stat-progress .stat-icon-box { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .stat-resolved .stat-icon-box { background: rgba(16,185,129,0.15); color: #10b981; }
+    .stat-escalated .stat-icon-box { background: rgba(239,68,68,0.15); color: #ef4444; }
+
+    .stat-label {
+        color: rgba(255,255,255,0.7);
+        font-size: 12px;
+        margin-bottom: 2px;
+    }
+    .stat-value {
+        color: white;
+        font-size: 22px;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+    /* ═════════════════ FILTERS PANEL ═════════════════ */
+    .filters-panel {
+        background: white;
+        border-radius: 12px;
+        padding: 14px;
+        margin-bottom: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        border: 1px solid #e5e7eb;
+    }
+    .filters-header {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 12px;
+    }
+    .filters-title-box {
+        display: flex; gap: 8px; align-items: center;
+        color: #1a2842; font-weight: 600;
+    }
+
+    /* ═════════════════ DATA TABLE ═════════════════ */
+    .data-card {
+        background: white;
+        border-radius: 12px;
+        padding: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        border: 1px solid #e5e7eb;
+    }
+    .premium-table {
+        border-radius: 8px;
+    }
+    .premium-table .mud-table-head {
+        background: linear-gradient(135deg, #1a2842, #2c3e5f);
+    }
+    .premium-table .mud-table-head .mud-table-cell {
+        color: white !important;
+        font-weight: 600;
+        font-size: 13px;
+    }
+    .premium-table .mud-table-row:hover {
+        background: rgba(212,175,55,0.05) !important;
+    }
+
+    .cell-id { font-weight: 700; color: #d4af37; }
+    .cell-date { font-size: 12px; color: #64748b; }
+    .cell-client { display: flex; flex-direction: column; }
+    .cell-client strong { color: #1a2842; font-size: 13px; }
+    .cell-client small { color: #64748b; font-size: 11px; }
+    .cell-subject {
+        display: inline-block; max-width: 230px;
+        overflow: hidden; text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .actions-cell { display: flex; gap: 2px; justify-content: center; }
+
+    /* ═════════════════ STATUS BADGES ═════════════════ */
+    .badge-priority, .badge-status {
+        display: inline-block; padding: 3px 10px;
+        border-radius: 12px; font-size: 12px;
+        font-weight: 600; white-space: nowrap;
+    }
+    .priority-1 { background: #fee2e2; color: #b91c1c; }
+    .priority-2 { background: #fed7aa; color: #c2410c; }
+    .priority-3 { background: #fef3c7; color: #92400e; }
+    .priority-4 { background: #d1fae5; color: #047857; }
+    .status-1 { background: #dbeafe; color: #1e40af; }
+    .status-2 { background: #fef3c7; color: #92400e; }
+    .status-3 { background: #ede9fe; color: #6d28d9; }
+    .status-4 { background: #d1fae5; color: #047857; }
+    .status-5 { background: #f3f4f6; color: #4b5563; }
+    .status-6 { background: #fecaca; color: #991b1b; }
+
+    .days-normal { color: #10b981; font-weight: 600; }
+    .days-warning { color: #f59e0b; font-weight: 600; }
+    .days-critical { color: #ef4444; font-weight: 700; }
+
+    .count-badge {
+        display: inline-block;
+        min-width: 24px; padding: 2px 8px;
+        background: #d4af37; color: white;
+        border-radius: 12px; font-size: 12px;
+        font-weight: 600;
+    }
+    .count-badge-blue { background: #3b82f6; }
+    .count-zero { color: #cbd5e1; font-size: 14px; }
+
+    /* ═════════════════ EMPTY STATE ═════════════════ */
+    .empty-state {
+        text-align: center;
+        padding: 50px 20px;
+    }
+    .empty-icon {
+        font-size: 64px !important;
+        color: #cbd5e1;
+        margin-bottom: 12px;
+    }
+</style>
+
+@code {
+    // ───── State ─────
+    private bool _isInitialLoading = true;
+    private bool _isLoading       = false;
+    private bool _isExporting     = false;
+
+    private ComplaintFilterDto _filter = new() { PageSize = 25 };
+    private List<ComplaintListItemDto> _items = new();
+    private List<ComplaintTypeDto>     _types = new();
+
+    private int _totalCount, _newCount, _inProgressCount, _resolvedCount, _escalatedCount;
+
+    // ───── Permissions ─────
+    private bool _canCreate, _canEdit, _canDelete, _canExport;
+    private string _currentUserName = "system";
+
+    private CancellationTokenSource? _cts;
+    private bool HasActiveFilters =>
+        !string.IsNullOrWhiteSpace(_filter.SearchText)
+        || _filter.Status.HasValue
+        || _filter.Priority.HasValue
+        || _filter.TypeId.HasValue
+        || _filter.DateFrom.HasValue
+        || _filter.DateTo.HasValue
+        || _filter.OpenOnly;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPermissionsAsync();
+        _types = await ComplaintService.GetTypesAsync();
+        await LoadDataAsync();
+        _isInitialLoading = false;
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+
+    private async Task LoadPermissionsAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _currentUserName = user.Identity?.Name ?? "system";
+        _canCreate = ComplaintPermissions.CanCreate(user);
+        _canEdit   = ComplaintPermissions.CanEdit(user);
+        _canDelete = ComplaintPermissions.CanDelete(user);
+        _canExport = ComplaintPermissions.CanExport(user);
+    }
+
+    // ───── Data Loading ─────
+    private async Task LoadDataAsync()
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        _isLoading = true;
+
+        try
+        {
+            var result = await ComplaintService.GetComplaintsAsync(_filter, _currentUserName);
+            _items = result.Items;
+            _totalCount = result.TotalCount;
+
+            // إحصائيات بسيطة من الصفحة الحالية (لاحقاً نضيف dashboard endpoint)
+            var allItems = result.Items;
+            _newCount        = allItems.Count(i => i.Status == ComplaintStatus.New);
+            _inProgressCount = allItems.Count(i => i.Status == ComplaintStatus.InProgress);
+            _resolvedCount   = allItems.Count(i => i.Status == ComplaintStatus.Resolved);
+            _escalatedCount  = allItems.Count(i => i.Status == ComplaintStatus.Escalated);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Load complaints failed");
+            Snackbar.Add("تعذّر تحميل الشكاوى: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task OnFilterChangedAsync()
+    {
+        _filter.Page = 1;
+        await LoadDataAsync();
+    }
+
+    private async Task ClearFilters()
+    {
+        _filter = new ComplaintFilterDto { PageSize = _filter.PageSize };
+        await LoadDataAsync();
+    }
+
+    private async Task SetStatusFilter(byte? status)
+    {
+        _filter.Status = _filter.Status == status ? null : status;
+        await OnFilterChangedAsync();
+    }
+
+    // ───── Navigation ─────
+    private void GoToNew()       => Navigation.NavigateTo("/complaints/form");
+    private void GoToEdit(int id) => Navigation.NavigateTo($"/complaints/form/{id}");
+    private void GoToDetail(int id) => Navigation.NavigateTo($"/complaints/{id}");
+
+    // ───── Delete ─────
+    private async Task DeleteAsync(ComplaintListItemDto item)
+    {
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Title,      "تأكيد الحذف" },
+            { x => x.Message,    $"هل تريد حذف الشكوى رقم #{item.ComplaintId} للعميل {item.ClientName}؟" },
+            { x => x.YesText,    "نعم، احذف" },
+            { x => x.CancelText, "إلغاء" }
+        };
+
+        var dialog = await DialogService.ShowAsync<MudMessageBox>(
+            "تأكيد الحذف", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        var (ok, msg) = await ComplaintService.DeleteAsync(item.ComplaintId);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadDataAsync();
+    }
+
+    // ───── Export ─────
+    private async Task ExportAsync()
+    {
+        _isExporting = true;
+        try
+        {
+            var bytes = await ComplaintService.ExportToExcelAsync(_filter);
+            var fileName = $"complaints_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
+            await JS.InvokeVoidAsync("downloadFile", fileName,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                Convert.ToBase64String(bytes));
+            Snackbar.Add("تم تصدير الملف بنجاح", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Export failed");
+            Snackbar.Add("فشل التصدير: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isExporting = false;
+        }
+    }
+
+    // ───── UI Helpers ─────
+    private string GetPriorityClass(byte? p) =>
+        $"badge-priority priority-{p ?? 0}";
+
+    private string GetStatusClass(byte? s) =>
+        $"badge-status status-{s ?? 0}";
+
+    private string GetDaysClass(int days, byte? status)
+    {
+        if (ComplaintStatus.IsClosed(status)) return "days-normal";
+        return days switch
+        {
+            <= 1  => "days-normal",
+            <= 3  => "days-warning",
+            _     => "days-critical"
+        };
+    }
+}

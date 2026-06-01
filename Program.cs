@@ -122,6 +122,7 @@ builder.Services.AddScoped<IQuotationService, QuotationService>();
 builder.Services.AddSingleton<ShareTokenService>();
 builder.Services.AddScoped<IQuotationExportService, QuotationExportService>();
 builder.Services.AddScoped<ISalesDeliveryStatusService, SalesDeliveryStatusService>();
+builder.Services.AddScoped<IComplaintService, ComplaintService>();
 
 
 var app = builder.Build();
