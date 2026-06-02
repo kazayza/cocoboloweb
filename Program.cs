@@ -125,6 +125,7 @@ builder.Services.AddScoped<ISalesDeliveryStatusService, SalesDeliveryStatusServi
 builder.Services.AddScoped<IComplaintService, ComplaintService>();
 builder.Services.AddScoped<IPasswordService, PasswordService>();
 builder.Services.AddScoped<ICompanyInfoService, CompanyInfoService>();
+builder.Services.AddScoped<GlobalSearchService>();
 
 
 var app = builder.Build();

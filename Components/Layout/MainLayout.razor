@@ -9,6 +9,7 @@
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject IJSRuntime JS
+@inject GlobalSearchService SearchService
 
 <MudThemeProvider Theme="_theme"
                   @bind-IsDarkMode="_isDarkMode"
@@ -44,14 +45,79 @@
 
             <!-- وسط: البحث -->
             <div class="tb-center">
-                <div class="search-wrapper">
+                <div class="search-wrapper @(_showResults ? "search-active" : "")" @onclick:stopPropagation="true">
                     <MudIcon Icon="@Icons.Material.Rounded.Search" Class="search-icon" />
                     <input type="text"
-                           @bind="_searchText"
-                           @bind:event="oninput"
-                           placeholder="بحث سريع..."
-                           class="search-input" />
+       value="@_searchText"
+       @oninput="OnSearchInput"
+       @onfocus="OnSearchFocus"
+       placeholder="بحث في المنتجات، العملاء، الفواتير..."
+       class="search-input"
+       autocomplete="off" />
+                    @if (!string.IsNullOrWhiteSpace(_searchText))
+                    {
+                        <button class="search-clear-btn" @onclick="ClearSearch">
+                            <MudIcon Icon="@Icons.Material.Rounded.Close" Size="Size.Small" />
+                        </button>
+                    }
+                    @if (_isSearching)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="search-spinner" />
+                    }
                 </div>
+
+                @if (_showResults)
+                {
+                    <div class="search-overlay" @onclick="CloseSearch"></div>
+                    <div class="search-results-panel" @onclick:stopPropagation="true">
+                        @if (_isSearching)
+                        {
+                            <div class="sr-loading">
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
+                                <span>جاري البحث...</span>
+                            </div>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(_searchText) && _searchText.Length >= 2 && !_searchResults.Any())
+                        {
+                            <div class="sr-empty">
+                                <MudIcon Icon="@Icons.Material.Rounded.SearchOff" />
+                                <span>لا توجد نتائج لـ "@_searchText"</span>
+                            </div>
+                        }
+                        else if (_searchResults.Any())
+                        {
+                            @foreach (var group in _searchResults.GroupBy(r => r.CategoryAr))
+                            {
+                                <div class="sr-group">
+                                    <div class="sr-group-header">
+                                        @group.First().CategoryAr
+                                        <span class="sr-group-count">@group.Count()</span>
+                                    </div>
+                                    @foreach (var item in group)
+                                    {
+                                        <div class="sr-item" @onclick="() => NavigateTo(item.Url)">
+                                            <div class="sr-item-icon" style="background:@(item.Color + "22");color:@item.Color">
+                                                <MudIcon Icon="@item.Icon" Size="Size.Small" />
+                                            </div>
+                                            <div class="sr-item-text">
+                                                <span class="sr-item-title">@item.Title</span>
+                                                <span class="sr-item-sub">@item.SubTitle</span>
+                                            </div>
+                                            <MudIcon Icon="@Icons.Material.Rounded.ArrowBack" Size="Size.Small" Class="sr-item-arrow" />
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="sr-hint">
+                                <MudIcon Icon="@Icons.Material.Rounded.Lightbulb" />
+                                <span>ابحث عن منتج، عميل، فاتورة، أو موظف...</span>
+                            </div>
+                        }
+                    </div>
+                }
             </div>
 
             <!-- يسار: أزرار + المستخدم -->
@@ -175,6 +241,13 @@
     private bool _isDarkMode;
     private bool _userMenuOpen;
     private string _searchText = "";
+
+    // ── Global Search ──────────────────────────────────
+    private bool                _showResults  = false;
+    private bool                _isSearching  = false;
+    private List<SearchResult>  _searchResults = new();
+    private CancellationTokenSource? _searchCts;
+    private List<string>        _userPermissions = new();
     private string _currentUserName = "";
     private string _currentUserRole = "";
     private string _avatarLetter = "U";
@@ -353,6 +426,12 @@
             _avatarLetter = string.IsNullOrEmpty(_currentUserName)
                 ? "U"
                 : _currentUserName[..1].ToUpper();
+
+            // جمع صلاحيات المستخدم للبحث
+            _userPermissions = _currentUser.Claims
+                .Where(c => c.Type == "Permission")
+                .Select(c => c.Value)
+                .ToList();
         }
 
         UpdateBreadcrumbs();
@@ -448,6 +527,77 @@ public async Task OnIdleTimeout()
         Navigation.NavigateTo("/login", forceLoad: true);
     }
 }
+
+    // ── Global Search Methods ───────────────────────────
+    private async Task OnSearchInput(ChangeEventArgs e)
+    {
+        _searchText  = e.Value?.ToString() ?? "";
+        _showResults = true;
+
+        // إلغاء البحث السابق
+        _searchCts?.Cancel();
+        _searchCts = new CancellationTokenSource();
+        var token  = _searchCts.Token;
+
+        if (_searchText.Length < 2)
+        {
+            _searchResults = new();
+            _isSearching   = false;
+            StateHasChanged();
+            return;
+        }
+
+        _isSearching = true;
+        StateHasChanged();
+
+        try
+        {
+            // Debounce 350ms
+            await Task.Delay(350, token);
+            if (token.IsCancellationRequested) return;
+
+            _searchResults = await SearchService.SearchAsync(
+                _searchText,
+                _userPermissions,
+                maxPerCategory: 5);
+        }
+        catch (TaskCanceledException) { }
+        catch { _searchResults = new(); }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _isSearching = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void OnSearchFocus()
+    {
+        _showResults = true;
+        StateHasChanged();
+    }
+
+    private void CloseSearch()
+    {
+        _showResults = false;
+        StateHasChanged();
+    }
+
+    private void ClearSearch()
+    {
+        _searchText    = "";
+        _searchResults = new();
+        _showResults   = false;
+        StateHasChanged();
+    }
+
+    private void NavigateTo(string url)
+    {
+        CloseSearch();
+        Navigation.NavigateTo(url);
+    }
 
     private void ToggleDrawer()   => _drawerOpen   = !_drawerOpen;
 
