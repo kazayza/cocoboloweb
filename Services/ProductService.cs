@@ -28,6 +28,7 @@ public class ProductService : IProductService
                         PricingType = p.PricingType,
                         PricingStatusId = p.PricingStatusId,
                         SuggestedSalePrice = p.SuggestedSalePrice,
+                        SuggestedSalePriceElite = p.SuggestedSalePriceElite,
                         PdfPath = p.PdfPath // ✅ إضافة مسار الـ PDF الجديد
                     };
 

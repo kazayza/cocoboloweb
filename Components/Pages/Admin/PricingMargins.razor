@@ -1,0 +1,678 @@
+@page "/admin/pricing-margins"
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject IAuditService AuditService
+
+<PageTitle>إدارة نسب الأرباح</PageTitle>
+
+@if (!_authorized)
+{
+    <div style="display:flex;align-items:center;justify-content:center;height:60vh;flex-direction:column;gap:1rem;">
+        <MudIcon Icon="@Icons.Material.Filled.Lock" Style="font-size:4rem;color:#ef4444;opacity:.5" />
+        <MudText Typo="Typo.h6" Color="Color.Error">غير مصرح بالوصول</MudText>
+    </div>
+    return;
+}
+
+<div class="pm-page">
+
+    <!-- ===== HEADER ===== -->
+    <div class="pm-header">
+        <div class="pm-header-left">
+            <div class="pm-header-icon">
+                <MudIcon Icon="@Icons.Material.Filled.Percent" />
+            </div>
+            <div>
+                <h1>إدارة نسب الأرباح</h1>
+                <p>تحديد هوامش الربح المطبقة على تسعير المنتجات</p>
+            </div>
+        </div>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Edit"
+                   OnClick="OpenEditDialog"
+                   Class="pm-edit-btn">
+            تعديل النسب
+        </MudButton>
+    </div>
+
+    @if (_isLoading)
+    {
+        <div class="pm-loading">
+            <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" />
+            <p>جاري التحميل...</p>
+        </div>
+    }
+    else
+    {
+        <!-- ===== CURRENT MARGIN CARDS ===== -->
+        @if (_activeMargin != null)
+        {
+            <div class="pm-current-section">
+                <div class="pm-section-title">
+                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Style="color:#10b981" />
+                    <span>النسبة المفعّلة حالياً</span>
+                    <div class="pm-active-badge">مفعّلة</div>
+                </div>
+
+                <div class="pm-cards-row">
+                    <!-- Premium Card -->
+                    <div class="pm-margin-card premium-card">
+                        <div class="pm-card-icon">
+                            <MudIcon Icon="@Icons.Material.Filled.Star" />
+                        </div>
+                        <div class="pm-card-body">
+                            <span class="pm-card-label">هامش ربح Premium</span>
+                            <span class="pm-card-value">@_activeMargin.PremiumMargin.ToString("N1")%</span>
+                            @if (_activeMargin.PreviousPremium.HasValue)
+                            {
+                                <span class="pm-card-prev">
+                                    كانت @_activeMargin.PreviousPremium.Value.ToString("N1")%
+                                    @if (_activeMargin.PremiumMargin > _activeMargin.PreviousPremium.Value)
+                                    {
+                                        <span class="pm-trend up">↑</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="pm-trend down">↓</span>
+                                    }
+                                </span>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- Elite Card -->
+                    <div class="pm-margin-card elite-card">
+                        <div class="pm-card-icon">
+                            <MudIcon Icon="@Icons.Material.Filled.WorkspacePremium" />
+                        </div>
+                        <div class="pm-card-body">
+                            <span class="pm-card-label">هامش ربح Elite ✦</span>
+                            <span class="pm-card-value elite-val">@_activeMargin.EliteMargin.ToString("N1")%</span>
+                            @if (_activeMargin.PreviousElite.HasValue)
+                            {
+                                <span class="pm-card-prev">
+                                    كانت @_activeMargin.PreviousElite.Value.ToString("N1")%
+                                    @if (_activeMargin.EliteMargin > _activeMargin.PreviousElite.Value)
+                                    {
+                                        <span class="pm-trend up">↑</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="pm-trend down">↓</span>
+                                    }
+                                </span>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- Info Card -->
+                    <div class="pm-margin-card info-card">
+                        <div class="pm-card-icon">
+                            <MudIcon Icon="@Icons.Material.Filled.Info" />
+                        </div>
+                        <div class="pm-card-body">
+                            <span class="pm-card-label">آخر تعديل</span>
+                            <span class="pm-card-date">@_activeMargin.ChangedAt.ToString("yyyy/MM/dd")</span>
+                            <span class="pm-card-by">بواسطة: @_activeMargin.ChangedBy</span>
+                            @if (!string.IsNullOrWhiteSpace(_activeMargin.ChangeReason))
+                            {
+                                <span class="pm-card-reason">"@_activeMargin.ChangeReason"</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===== PREVIEW CALCULATOR ===== -->
+                <div class="pm-preview-section">
+                    <div class="pm-preview-title">
+                        <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" />
+                        <span>حاسبة الأسعار — معاينة سريعة</span>
+                    </div>
+                    <div class="pm-preview-body">
+                        <div class="pm-preview-input">
+                            <label>أدخل التكلفة</label>
+                            <MudNumericField T="decimal"
+                                            @bind-Value="_previewCost"
+                                            Variant="Variant.Outlined"
+                                            Adornment="Adornment.End"
+                                            AdornmentText="ج.م"
+                                            Margin="Margin.Dense"
+                                            Min="0" />
+                        </div>
+                        <div class="pm-preview-results">
+                            <div class="pm-preview-result premium-result">
+                                <span class="pr-label">سعر البيع Premium</span>
+                                <span class="pr-value">@((_previewCost * (1 + _activeMargin.PremiumMargin / 100)).ToString("N0")) ج.م</span>
+                                <span class="pr-profit">ربح: @((_previewCost * _activeMargin.PremiumMargin / 100).ToString("N0")) ج.م</span>
+                            </div>
+                            <div class="pm-preview-result elite-result">
+                                <span class="pr-label">سعر البيع Elite ✦</span>
+                                <span class="pr-value elite-val">@((_previewCost * (1 + _activeMargin.EliteMargin / 100)).ToString("N0")) ج.م</span>
+                                <span class="pr-profit">ربح: @((_previewCost * _activeMargin.EliteMargin / 100).ToString("N0")) ج.م</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="pm-no-margin">
+                <MudIcon Icon="@Icons.Material.Filled.Warning" Style="font-size:4rem;color:#f59e0b;opacity:.6" />
+                <h3>لا توجد نسبة ربح مفعّلة!</h3>
+                <p>يجب إضافة نسبة ربح حتى يتمكن النظام من حساب أسعار البيع تلقائياً</p>
+                <MudButton Variant="Variant.Filled" Color="Color.Warning" OnClick="OpenEditDialog">
+                    إضافة نسبة ربح الآن
+                </MudButton>
+            </div>
+        }
+
+        <!-- ===== HISTORY TABLE ===== -->
+        <div class="pm-history-section">
+            <div class="pm-section-title">
+                <MudIcon Icon="@Icons.Material.Filled.History" />
+                <span>سجل التغييرات</span>
+                <span class="pm-history-count">@_allMargins.Count سجل</span>
+            </div>
+
+            @if (_allMargins.Any())
+            {
+                <MudTable Items="@_allMargins"
+                          Hover="true"
+                          Elevation="0"
+                          Class="pm-table"
+                          Breakpoint="Breakpoint.Sm">
+                    <HeaderContent>
+                        <MudTh>الحالة</MudTh>
+                        <MudTh>Premium %</MudTh>
+                        <MudTh>Elite %</MudTh>
+                        <MudTh>التغيير</MudTh>
+                        <MudTh>سبب التغيير</MudTh>
+                        <MudTh>بواسطة</MudTh>
+                        <MudTh>التاريخ</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            @if (context.IsActive)
+                            {
+                                <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Filled">مفعّلة</MudChip>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Color="Color.Default" Size="Size.Small" Variant="Variant.Outlined">قديمة</MudChip>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <span class="pm-table-pct premium-pct">@context.PremiumMargin.ToString("N1")%</span>
+                        </MudTd>
+                        <MudTd>
+                            <span class="pm-table-pct elite-pct">@context.EliteMargin.ToString("N1")%</span>
+                        </MudTd>
+                        <MudTd>
+                            @if (context.PreviousPremium.HasValue)
+                            {
+                                <div class="pm-table-diff">
+                                    <span>P: @context.PreviousPremium.Value.ToString("N1")% → @context.PremiumMargin.ToString("N1")%</span>
+                                    <span>E: @context.PreviousElite?.ToString("N1")% → @context.EliteMargin.ToString("N1")%</span>
+                                </div>
+                            }
+                            else
+                            {
+                                <span style="color:#94a3b8;font-style:italic;">إضافة أولى</span>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <span class="pm-table-reason">@(context.ChangeReason ?? "-")</span>
+                        </MudTd>
+                        <MudTd>
+                            <span class="pm-table-user">@context.ChangedBy</span>
+                        </MudTd>
+                        <MudTd>
+                            <span class="pm-table-date">@context.ChangedAt.ToString("yyyy/MM/dd HH:mm")</span>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+            else
+            {
+                <div class="pm-empty-history">
+                    <MudIcon Icon="@Icons.Material.Filled.HistoryToggleOff" Style="font-size:3rem;opacity:.2" />
+                    <p>لا يوجد سجل تغييرات بعد</p>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+<!-- ===== EDIT DIALOG ===== -->
+@if (_editDialogOpen)
+{
+    <MudOverlay ZIndex="1000" OnClick="CloseDialog" />
+    <div class="pm-dialog-wrap">
+        <MudPaper Class="pm-dialog" Elevation="24">
+
+            <div class="pm-dialog-header">
+                <div class="pm-dialog-title">
+                    <MudIcon Icon="@Icons.Material.Filled.Percent" />
+                    <span>@(_activeMargin == null ? "إضافة نسبة ربح جديدة" : "تعديل نسب الأرباح")</span>
+                </div>
+                <MudIconButton Icon="@Icons.Material.Filled.Close"
+                               OnClick="CloseDialog"
+                               Color="Color.Inherit"
+                               Size="Size.Small" />
+            </div>
+
+            <div class="pm-dialog-body">
+
+                @if (!string.IsNullOrEmpty(_dialogError))
+                {
+                    <MudAlert Severity="Severity.Error" Class="mb-3" ShowCloseIcon="true"
+                              CloseIconClicked="() => _dialogError = null">
+                        @_dialogError
+                    </MudAlert>
+                }
+
+                <!-- حقول النسب -->
+                <div class="pm-dialog-fields">
+                    <div class="pm-dialog-field">
+                        <div class="pm-field-header premium-header">
+                            <MudIcon Icon="@Icons.Material.Filled.Star" Size="Size.Small" />
+                            <span>هامش ربح Premium</span>
+                            @if (_activeMargin != null)
+                            {
+                                <span class="pm-field-current">الحالية: @_activeMargin.PremiumMargin.ToString("N1")%</span>
+                            }
+                        </div>
+                        <MudNumericField T="decimal"
+                                         @bind-Value="_newPremium"
+                                         Variant="Variant.Outlined"
+                                         Adornment="Adornment.End"
+                                         AdornmentText="%"
+                                         Min="0"
+                                         Max="500"
+                                         Format="N1"
+                                         Label="نسبة Premium"
+                                         Required="true" />
+                    </div>
+
+                    <div class="pm-dialog-field">
+                        <div class="pm-field-header elite-header">
+                            <MudIcon Icon="@Icons.Material.Filled.WorkspacePremium" Size="Size.Small" />
+                            <span>هامش ربح Elite ✦</span>
+                            @if (_activeMargin != null)
+                            {
+                                <span class="pm-field-current">الحالية: @_activeMargin.EliteMargin.ToString("N1")%</span>
+                            }
+                        </div>
+                        <MudNumericField T="decimal"
+                                         @bind-Value="_newElite"
+                                         Variant="Variant.Outlined"
+                                         Adornment="Adornment.End"
+                                         AdornmentText="%"
+                                         Min="0"
+                                         Max="500"
+                                         Format="N1"
+                                         Label="نسبة Elite"
+                                         Required="true" />
+                    </div>
+                </div>
+
+                <!-- سبب التغيير -->
+                <div class="pm-dialog-reason">
+                    <MudTextField @bind-Value="_newReason"
+                                  Label="سبب التغيير *"
+                                  Variant="Variant.Outlined"
+                                  Lines="2"
+                                  Placeholder="اكتب سبب تعديل النسب..."
+                                  Required="true"
+                                  RequiredError="سبب التغيير مطلوب" />
+                </div>
+
+                <!-- Preview داخل الـ Dialog -->
+                <div class="pm-dialog-preview">
+                    <div class="pm-dp-title">
+                        <MudIcon Icon="@Icons.Material.Filled.Visibility" Size="Size.Small" />
+                        <span>معاينة على تكلفة 1,000 ج.م</span>
+                    </div>
+                    <div class="pm-dp-results">
+                        <div class="pm-dp-item premium-dp">
+                            <span>Premium</span>
+                            <span class="pm-dp-val">@((1000m * (1 + _newPremium / 100)).ToString("N0")) ج.م</span>
+                            <span class="pm-dp-profit">ربح: @((1000m * _newPremium / 100).ToString("N0")) ج.م</span>
+                        </div>
+                        <div class="pm-dp-item elite-dp">
+                            <span>Elite ✦</span>
+                            <span class="pm-dp-val elite-val">@((1000m * (1 + _newElite / 100)).ToString("N0")) ج.م</span>
+                            <span class="pm-dp-profit">ربح: @((1000m * _newElite / 100).ToString("N0")) ج.م</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- تحذير -->
+                <MudAlert Severity="Severity.Warning" Dense="true">
+                    <strong>تنبيه:</strong> النسبة الجديدة ستطبق على المنتجات الجديدة فقط من لحظة التفعيل. المنتجات المسعّرة حالياً لن تتأثر.
+                </MudAlert>
+            </div>
+
+            <div class="pm-dialog-footer">
+                <MudButton Variant="Variant.Outlined" OnClick="CloseDialog" Disabled="_isSaving">إلغاء</MudButton>
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Save"
+                           OnClick="SaveMargin"
+                           Disabled="_isSaving">
+                    @if (_isSaving)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="ml-2" />
+                        <span>جاري الحفظ...</span>
+                    }
+                    else
+                    {
+                        <span>حفظ وتفعيل</span>
+                    }
+                </MudButton>
+            </div>
+
+        </MudPaper>
+    </div>
+}
+
+<style>
+    .pm-page { padding: 2rem; max-width: 1400px; margin: 0 auto; direction: rtl; }
+
+    /* Header */
+    .pm-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 20px; padding: 2rem; margin-bottom: 2rem;
+        display: flex; justify-content: space-between; align-items: center;
+        box-shadow: 0 10px 40px rgba(102,126,234,.3);
+    }
+    .pm-header-left { display: flex; align-items: center; gap: 1.25rem; }
+    .pm-header-icon {
+        width: 60px; height: 60px;
+        background: rgba(255,255,255,.2); border-radius: 16px;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .pm-header-icon .mud-icon-root { font-size: 2rem; color: white; }
+    .pm-header h1 { color: white; font-size: 1.8rem; font-weight: 800; margin: 0 0 .3rem; }
+    .pm-header p { color: rgba(255,255,255,.85); margin: 0; font-size: .95rem; }
+    .pm-edit-btn { font-weight: 700 !important; }
+
+    .pm-loading { display: flex; flex-direction: column; align-items: center; padding: 4rem; gap: 1rem; color: #64748b; }
+
+    /* Section Title */
+    .pm-section-title {
+        display: flex; align-items: center; gap: .75rem;
+        font-size: 1.1rem; font-weight: 700; color: #1e293b;
+        margin-bottom: 1.25rem;
+    }
+    .pm-active-badge {
+        background: #10b981; color: white;
+        font-size: .7rem; font-weight: 700; padding: .2rem .6rem;
+        border-radius: 20px; letter-spacing: .5px;
+    }
+    .pm-history-count {
+        background: #f1f5f9; color: #64748b;
+        font-size: .75rem; padding: .2rem .6rem; border-radius: 20px;
+    }
+
+    /* Cards Row */
+    .pm-current-section { margin-bottom: 2rem; }
+    .pm-cards-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 1.25rem; margin-bottom: 1.5rem; }
+
+    .pm-margin-card {
+        border-radius: 16px; padding: 1.5rem;
+        display: flex; align-items: flex-start; gap: 1rem;
+        box-shadow: 0 2px 12px rgba(0,0,0,.06);
+    }
+    .premium-card { background: rgba(16,185,129,.06); border: 2px solid rgba(16,185,129,.2); }
+    .elite-card   { background: rgba(197,163,70,.07); border: 2px solid rgba(197,163,70,.25); }
+    .info-card    { background: #f8fafc; border: 2px solid #e2e8f0; }
+
+    .pm-card-icon {
+        width: 48px; height: 48px; border-radius: 12px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .premium-card .pm-card-icon { background: rgba(16,185,129,.15); color: #10b981; }
+    .elite-card   .pm-card-icon { background: rgba(197,163,70,.15); color: #b8860b; }
+    .info-card    .pm-card-icon { background: #e2e8f0; color: #64748b; }
+
+    .pm-card-body { display: flex; flex-direction: column; gap: .3rem; flex: 1; }
+    .pm-card-label { font-size: .8rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .5px; }
+    .pm-card-value { font-size: 2.2rem; font-weight: 800; color: #10b981; line-height: 1; }
+    .elite-val { background: linear-gradient(135deg,#b8860b,#f5d76e,#c9a84c); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .pm-card-prev { font-size: .78rem; color: #94a3b8; }
+    .pm-trend { font-weight: 800; }
+    .pm-trend.up   { color: #10b981; }
+    .pm-trend.down { color: #ef4444; }
+    .pm-card-date  { font-size: 1.1rem; font-weight: 700; color: #1e293b; }
+    .pm-card-by    { font-size: .82rem; color: #64748b; }
+    .pm-card-reason { font-size: .8rem; color: #94a3b8; font-style: italic; }
+
+    /* Preview Calculator */
+    .pm-preview-section {
+        background: var(--mud-palette-surface);
+        border-radius: 16px; padding: 1.25rem;
+        box-shadow: 0 2px 12px rgba(0,0,0,.05);
+    }
+    .pm-preview-title { display: flex; align-items: center; gap: .5rem; font-weight: 700; color: #1e293b; margin-bottom: 1rem; }
+    .pm-preview-body { display: flex; align-items: flex-end; gap: 1.5rem; flex-wrap: wrap; }
+    .pm-preview-input { display: flex; flex-direction: column; gap: .4rem; min-width: 180px; }
+    .pm-preview-input label { font-size: .85rem; font-weight: 600; color: #64748b; }
+    .pm-preview-results { display: flex; gap: 1rem; flex: 1; flex-wrap: wrap; }
+    .pm-preview-result {
+        flex: 1; min-width: 160px; border-radius: 12px; padding: 1rem;
+        display: flex; flex-direction: column; gap: .3rem;
+    }
+    .premium-result { background: rgba(16,185,129,.07); border: 1.5px solid rgba(16,185,129,.2); }
+    .elite-result   { background: rgba(197,163,70,.07); border: 1.5px solid rgba(197,163,70,.25); }
+    .pr-label  { font-size: .75rem; font-weight: 700; color: #64748b; text-transform: uppercase; }
+    .pr-value  { font-size: 1.5rem; font-weight: 800; color: #10b981; }
+    .pr-profit { font-size: .78rem; color: #94a3b8; }
+    .elite-result .pr-value { background: linear-gradient(135deg,#b8860b,#f5d76e,#c9a84c); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+    /* History Table */
+    .pm-history-section {
+        background: var(--mud-palette-surface);
+        border-radius: 16px; padding: 1.5rem;
+        box-shadow: 0 2px 12px rgba(0,0,0,.05);
+    }
+    .pm-table { background: transparent !important; }
+    .pm-table-pct { font-weight: 700; font-size: 1rem; }
+    .premium-pct { color: #10b981; }
+    .elite-pct   { background: linear-gradient(135deg,#b8860b,#c9a84c); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .pm-table-diff { display: flex; flex-direction: column; gap: .2rem; font-size: .8rem; color: #64748b; }
+    .pm-table-reason { font-size: .85rem; color: #64748b; font-style: italic; }
+    .pm-table-user { font-weight: 600; color: #1e293b; font-size: .85rem; }
+    .pm-table-date { font-size: .82rem; color: #94a3b8; }
+    .pm-empty-history { text-align: center; padding: 3rem; color: #94a3b8; }
+    .pm-empty-history p { margin: .5rem 0 0; }
+
+    /* No Margin */
+    .pm-no-margin { text-align: center; padding: 4rem; background: var(--mud-palette-surface); border-radius: 16px; margin-bottom: 2rem; }
+    .pm-no-margin h3 { margin: 1rem 0 .5rem; color: #1e293b; }
+    .pm-no-margin p { color: #64748b; margin-bottom: 1.5rem; }
+
+    /* Dialog */
+    .pm-dialog-wrap { position: fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:1001; }
+    .pm-dialog { border-radius: 20px !important; width: 580px; max-width: 95vw; overflow: hidden; }
+    .pm-dialog-header {
+        background: linear-gradient(135deg,#667eea,#764ba2);
+        padding: 1.25rem; display: flex; justify-content: space-between; align-items: center;
+    }
+    .pm-dialog-title { display: flex; align-items: center; gap: .75rem; color: white; font-weight: 700; font-size: 1.05rem; }
+    .pm-dialog-title .mud-icon-root { color: white; }
+    .pm-dialog-body { padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem; }
+    .pm-dialog-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+    .pm-dialog-field { display: flex; flex-direction: column; gap: .5rem; }
+    .pm-field-header { display: flex; align-items: center; gap: .4rem; font-weight: 700; font-size: .85rem; }
+    .premium-header { color: #10b981; }
+    .elite-header   { color: #b8860b; }
+    .pm-field-current { font-size: .75rem; color: #94a3b8; margin-right: auto; }
+
+    /* Preview in dialog */
+    .pm-dialog-preview {
+        background: #f8fafc; border-radius: 12px; padding: 1rem;
+        border: 1px solid #e2e8f0;
+    }
+    .pm-dp-title { display: flex; align-items: center; gap: .5rem; font-weight: 600; font-size: .85rem; color: #64748b; margin-bottom: .75rem; }
+    .pm-dp-results { display: flex; gap: 1rem; }
+    .pm-dp-item { flex: 1; border-radius: 10px; padding: .75rem; display: flex; flex-direction: column; gap: .2rem; }
+    .premium-dp { background: rgba(16,185,129,.08); border: 1.5px solid rgba(16,185,129,.2); }
+    .elite-dp   { background: rgba(197,163,70,.08); border: 1.5px solid rgba(197,163,70,.25); }
+    .pm-dp-item span:first-child { font-size: .72rem; font-weight: 700; color: #64748b; text-transform: uppercase; }
+    .pm-dp-val  { font-size: 1.2rem; font-weight: 800; color: #10b981; }
+    .elite-dp .pm-dp-val { background: linear-gradient(135deg,#b8860b,#f5d76e,#c9a84c); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .pm-dp-profit { font-size: .75rem; color: #94a3b8; }
+
+    .pm-dialog-reason { }
+    .pm-dialog-footer { padding: 1rem 1.5rem; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: .75rem; }
+
+    @@media(max-width:768px) {
+        .pm-page { padding: 1rem; }
+        .pm-cards-row { grid-template-columns: 1fr; }
+        .pm-dialog-fields { grid-template-columns: 1fr; }
+        .pm-preview-body { flex-direction: column; }
+        .pm-header { flex-direction: column; gap: 1rem; align-items: flex-start; }
+        .pm-dp-results { flex-direction: column; }
+    }
+</style>
+
+@code {
+    private bool _authorized = false;
+    private bool _isLoading = true;
+    private bool _editDialogOpen = false;
+    private bool _isSaving = false;
+    private string? _dialogError;
+    private string? _currentUserName;
+
+    private PricingMargin? _activeMargin;
+    private List<PricingMargin> _allMargins = new();
+
+    // حقول الـ Dialog
+    private decimal _newPremium;
+    private decimal _newElite;
+    private string _newReason = "";
+
+    // حاسبة المعاينة
+    private decimal _previewCost = 1000;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var role = auth.User.FindFirst(ClaimTypes.Role)?.Value;
+        _currentUserName = auth.User.Identity?.Name;
+
+        _authorized = role is "Admin" or "AccountManager";
+        if (!_authorized) return;
+
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+        StateHasChanged();
+        try
+        {
+            _allMargins = await Db.PricingMargins
+                .OrderByDescending(m => m.ChangedAt)
+                .ToListAsync();
+
+            _activeMargin = _allMargins.FirstOrDefault(m => m.IsActive);
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OpenEditDialog()
+    {
+        _newPremium = _activeMargin?.PremiumMargin ?? 0;
+        _newElite   = _activeMargin?.EliteMargin   ?? 0;
+        _newReason  = "";
+        _dialogError = null;
+        _editDialogOpen = true;
+    }
+
+    private void CloseDialog()
+    {
+        if (_isSaving) return;
+        _editDialogOpen = false;
+    }
+
+    private async Task SaveMargin()
+    {
+        // Validation
+        if (string.IsNullOrWhiteSpace(_newReason))
+        {
+            _dialogError = "سبب التغيير مطلوب";
+            return;
+        }
+        if (_newPremium <= 0 || _newElite <= 0)
+        {
+            _dialogError = "يجب أن تكون النسب أكبر من صفر";
+            return;
+        }
+
+        _isSaving = true;
+        _dialogError = null;
+        StateHasChanged();
+
+        try
+        {
+            // 1. نعمل الـ records القديمة inactive
+            var oldActive = await Db.PricingMargins.Where(m => m.IsActive).ToListAsync();
+            foreach (var old in oldActive)
+                old.IsActive = false;
+
+            // 2. نضيف record جديد
+            var newMargin = new PricingMargin
+            {
+                PremiumMargin   = _newPremium,
+                EliteMargin     = _newElite,
+                IsActive        = true,
+                PreviousPremium = _activeMargin?.PremiumMargin,
+                PreviousElite   = _activeMargin?.EliteMargin,
+                ChangeReason    = _newReason.Trim(),
+                ChangedBy       = _currentUserName ?? "System",
+                ChangedAt       = DateTime.Now
+            };
+            Db.PricingMargins.Add(newMargin);
+            await Db.SaveChangesAsync();
+
+            // 3. Audit
+            await AuditService.LogAsync(
+                "PricingMargins",
+                "تعديل نسب الأرباح",
+                newMargin.MarginId.ToString(),
+                _activeMargin,
+                newMargin,
+                _currentUserName ?? "System"
+            );
+
+            Snackbar.Add("✅ تم حفظ نسب الأرباح الجديدة وتفعيلها بنجاح", Severity.Success);
+            _editDialogOpen = false;
+            await LoadData();
+        }
+        catch (Exception ex)
+        {
+            _dialogError = $"خطأ أثناء الحفظ: {ex.Message}";
+        }
+        finally
+        {
+            _isSaving = false;
+            StateHasChanged();
+        }
+    }
+}

@@ -1,0 +1,578 @@
+@page "/sales/price-requests"
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject IProductService ProductService
+@inject ISnackbar Snackbar
+@inject IAuditService AuditService
+@inject NavigationManager Navigation
+
+<PageTitle>طلبات تعديل أسعار البيع</PageTitle>
+
+@if (!_authorized)
+{
+    <div style="display:flex;align-items:center;justify-content:center;height:60vh;flex-direction:column;gap:1rem;">
+        <MudIcon Icon="@Icons.Material.Filled.Lock" Style="font-size:4rem;color:#ef4444;opacity:.5" />
+        <MudText Typo="Typo.h6" Color="Color.Error">غير مصرح بالوصول</MudText>
+    </div>
+    return;
+}
+
+<div class="pcr-page">
+
+    <!-- ===== HEADER ===== -->
+    <div class="pcr-header">
+        <div class="pcr-header-left">
+            <div class="pcr-header-icon">
+                <MudIcon Icon="@Icons.Material.Filled.PriceChange" />
+            </div>
+            <div>
+                <h1>طلبات تعديل أسعار البيع</h1>
+                <p>مراجعة والبت في طلبات تعديل أسعار البيع المقدمة من فريق المبيعات</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== STATS ===== -->
+    <div class="pcr-stats">
+        <div class="pcr-stat-card pending-stat">
+            <MudIcon Icon="@Icons.Material.Filled.HourglassEmpty" />
+            <div>
+                <span class="pcr-stat-num">@_pendingCount</span>
+                <span class="pcr-stat-label">في الانتظار</span>
+            </div>
+        </div>
+        <div class="pcr-stat-card approved-stat">
+            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" />
+            <div>
+                <span class="pcr-stat-num">@_approvedCount</span>
+                <span class="pcr-stat-label">تمت الموافقة</span>
+            </div>
+        </div>
+        <div class="pcr-stat-card rejected-stat">
+            <MudIcon Icon="@Icons.Material.Filled.Cancel" />
+            <div>
+                <span class="pcr-stat-num">@_rejectedCount</span>
+                <span class="pcr-stat-label">مرفوضة</span>
+            </div>
+        </div>
+        <div class="pcr-stat-card total-stat">
+            <MudIcon Icon="@Icons.Material.Filled.List" />
+            <div>
+                <span class="pcr-stat-num">@_allRequests.Count</span>
+                <span class="pcr-stat-label">الإجمالي</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== FILTER + SEARCH ===== -->
+    <div class="pcr-controls">
+        <div class="pcr-search">
+            <MudTextField @bind-Value="_searchText"
+                          Immediate="true"
+                          Placeholder="ابحث باسم المنتج أو اسم مقدم الطلب..."
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense" />
+        </div>
+        <div class="pcr-filter-btns">
+            <button class="pcr-filter-btn @(_statusFilter == null ? "active" : "")"
+                    @onclick='() => SetFilter(null)'>
+                الكل (@_allRequests.Count)
+            </button>
+            <button class="pcr-filter-btn pending-btn @(_statusFilter == "Pending" ? "active" : "")"
+                    @onclick='() => SetFilter("Pending")'>
+                في الانتظار (@_pendingCount)
+            </button>
+            <button class="pcr-filter-btn approved-btn @(_statusFilter == "Approved" ? "active" : "")"
+                    @onclick='() => SetFilter("Approved")'>
+                موافق عليها (@_approvedCount)
+            </button>
+            <button class="pcr-filter-btn rejected-btn @(_statusFilter == "Rejected" ? "active" : "")"
+                    @onclick='() => SetFilter("Rejected")'>
+                مرفوضة (@_rejectedCount)
+            </button>
+        </div>
+    </div>
+
+    <!-- ===== TABLE ===== -->
+    <div class="pcr-table-wrap">
+        @if (_isLoading)
+        {
+            <div class="pcr-loading">
+                <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" />
+                <p>جاري التحميل...</p>
+            </div>
+        }
+        else if (!_filtered.Any())
+        {
+            <div class="pcr-empty">
+                <MudIcon Icon="@Icons.Material.Filled.Inbox" Style="font-size:4rem;opacity:.2" />
+                <h3>لا توجد طلبات</h3>
+                <p>لم يتم العثور على طلبات تعديل أسعار مطابقة</p>
+            </div>
+        }
+        else
+        {
+            <MudTable Items="@_filtered"
+                      Hover="true"
+                      Elevation="0"
+                      Class="pcr-table"
+                      Breakpoint="Breakpoint.Sm">
+                <HeaderContent>
+                    <MudTh>المنتج</MudTh>
+                    <MudTh>نوع السعر</MudTh>
+                    <MudTh>السعر الحالي</MudTh>
+                    <MudTh>السعر المطلوب</MudTh>
+                    <MudTh>الفرق</MudTh>
+                    <MudTh>مقدم الطلب</MudTh>
+                    <MudTh>التاريخ</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh Style="text-align:center">الإجراءات</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="المنتج">
+                        <div class="pcr-product-cell">
+                            <span class="pcr-product-name">@context.ProductName</span>
+                            <span class="pcr-product-desc">@context.GroupName</span>
+                        </div>
+                    </MudTd>
+                    <MudTd DataLabel="نوع السعر">
+                        <span class="pcr-type-badge @(context.PriceType == "Elite" ? "elite-badge" : "premium-badge")">
+                            @(context.PriceType == "Elite" ? "✦ Elite" : "★ Premium")
+                        </span>
+                    </MudTd>
+                    <MudTd DataLabel="السعر الحالي">
+                        <span class="pcr-price">@context.CurrentPrice.ToString("N0") ج.م</span>
+                    </MudTd>
+                    <MudTd DataLabel="السعر المطلوب">
+                        <span class="pcr-price requested">@context.RequestedPrice.ToString("N0") ج.م</span>
+                    </MudTd>
+                    <MudTd DataLabel="الفرق">
+                        @{
+                            var diff = context.RequestedPrice - context.CurrentPrice;
+                            var pct  = context.CurrentPrice > 0 ? (diff / context.CurrentPrice * 100) : 0;
+                        }
+                        <div class="pcr-diff @(diff >= 0 ? "diff-up" : "diff-down")">
+                            <span>@(diff >= 0 ? "+" : "")@diff.ToString("N0") ج.م</span>
+                            <span class="pcr-diff-pct">(@(diff >= 0 ? "+" : "")@pct.ToString("N1")%)</span>
+                        </div>
+                    </MudTd>
+                    <MudTd DataLabel="مقدم الطلب">
+                        <span class="pcr-requester">@context.RequestedBy</span>
+                    </MudTd>
+                    <MudTd DataLabel="التاريخ">
+                        <span class="pcr-date">@context.RequestedAt.ToString("yyyy/MM/dd")</span>
+                    </MudTd>
+                    <MudTd DataLabel="الحالة">
+                        @if (context.Status == "Pending")
+                        {
+                            <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Filled">في الانتظار</MudChip>
+                        }
+                        else if (context.Status == "Approved")
+                        {
+                            <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Filled">تمت الموافقة</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Color="Color.Error" Size="Size.Small" Variant="Variant.Filled">مرفوض</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="الإجراءات">
+                        <div class="pcr-actions">
+                            @if (context.Status == "Pending")
+                            {
+                                <MudTooltip Text="موافقة">
+                                    <MudIconButton Icon="@Icons.Material.Filled.CheckCircle"
+                                                   Color="Color.Success"
+                                                   Size="Size.Small"
+                                                   OnClick="() => OpenDecision(context, true)" />
+                                </MudTooltip>
+                                <MudTooltip Text="رفض">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Cancel"
+                                                   Color="Color.Error"
+                                                   Size="Size.Small"
+                                                   OnClick="() => OpenDecision(context, false)" />
+                                </MudTooltip>
+                            }
+                            <MudTooltip Text="عرض المنتج">
+                                <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                               Color="Color.Info"
+                                               Size="Size.Small"
+                                               OnClick="@(() => Navigation.NavigateTo($"/products/form/{context.ProductId}"))" />
+                            </MudTooltip>
+                            @if (context.Status != "Pending" && !string.IsNullOrWhiteSpace(context.ReviewNotes))
+{
+    var noteTooltip = "ملاحظة: " + context.ReviewNotes;
+    <MudTooltip Text="@noteTooltip">
+        <MudIconButton Icon="@Icons.Material.Filled.StickyNote2"
+                       Color="Color.Default"
+                       Size="Size.Small" />
+    </MudTooltip>
+}
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </div>
+</div>
+
+<!-- ===== DECISION DIALOG ===== -->
+@if (_decisionDialogOpen && _selectedRequest != null)
+{
+    <MudOverlay ZIndex="1000" OnClick="CloseDecision" />
+    <div class="pcr-dialog-wrap">
+        <MudPaper Class="pcr-dialog" Elevation="24">
+
+            <div class="pcr-dialog-header @(_isApproving ? "approve-header" : "reject-header")">
+                <div class="pcr-dialog-title">
+                    <MudIcon Icon="@(_isApproving ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Cancel)" />
+                    <span>@(_isApproving ? "تأكيد الموافقة" : "تأكيد الرفض")</span>
+                </div>
+                <MudIconButton Icon="@Icons.Material.Filled.Close"
+                               OnClick="CloseDecision"
+                               Color="Color.Inherit"
+                               Size="Size.Small" />
+            </div>
+
+            <div class="pcr-dialog-body">
+
+                @if (!string.IsNullOrEmpty(_decisionError))
+                {
+                    <MudAlert Severity="Severity.Error" Class="mb-3">@_decisionError</MudAlert>
+                }
+
+                <!-- ملخص الطلب -->
+                <div class="pcr-decision-summary">
+                    <div class="pcr-ds-row">
+                        <span class="pcr-ds-label">المنتج</span>
+                        <span class="pcr-ds-value">@_selectedRequest.ProductName</span>
+                    </div>
+                    <div class="pcr-ds-row">
+                        <span class="pcr-ds-label">نوع السعر</span>
+                        <span class="pcr-type-badge @(_selectedRequest.PriceType == "Elite" ? "elite-badge" : "premium-badge")">
+                            @_selectedRequest.PriceType
+                        </span>
+                    </div>
+                    <div class="pcr-ds-row">
+                        <span class="pcr-ds-label">السعر الحالي</span>
+                        <span class="pcr-ds-value">@_selectedRequest.CurrentPrice.ToString("N0") ج.م</span>
+                    </div>
+                    <div class="pcr-ds-row">
+                        <span class="pcr-ds-label">السعر المطلوب</span>
+                        <span class="pcr-ds-value pcr-requested-val">@_selectedRequest.RequestedPrice.ToString("N0") ج.م</span>
+                    </div>
+                    @{
+                        var d = _selectedRequest.RequestedPrice - _selectedRequest.CurrentPrice;
+                        var p = _selectedRequest.CurrentPrice > 0 ? (d / _selectedRequest.CurrentPrice * 100) : 0;
+                    }
+                    <div class="pcr-ds-row">
+                        <span class="pcr-ds-label">الفرق</span>
+                        <span class="@(d >= 0 ? "diff-up" : "diff-down")">
+                            @(d >= 0 ? "+" : "")@d.ToString("N0") ج.م (@(d >= 0 ? "+" : "")@p.ToString("N1")%)
+                        </span>
+                    </div>
+                    <div class="pcr-ds-row">
+                        <span class="pcr-ds-label">مقدم الطلب</span>
+                        <span class="pcr-ds-value">@_selectedRequest.RequestedBy</span>
+                    </div>
+                </div>
+
+                <!-- ملاحظة -->
+                <MudTextField @bind-Value="_decisionNote"
+                              Label="@(_isApproving ? "ملاحظة (اختياري)" : "سبب الرفض *")"
+                              Variant="Variant.Outlined"
+                              Lines="2"
+                              Placeholder="@(_isApproving ? "أضف ملاحظة إن أردت..." : "اكتب سبب الرفض...")" />
+
+                @if (_isApproving)
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true">
+                        بالموافقة سيتم تحديث سعر البيع للمنتج فوراً وإشعار البائع.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true">
+                        بالرفض سيعود المنتج لحالة "تم التسعير" وسيتم إشعار البائع.
+                    </MudAlert>
+                }
+            </div>
+
+            <div class="pcr-dialog-footer">
+                <MudButton Variant="Variant.Outlined" OnClick="CloseDecision" Disabled="_isProcessing">إلغاء</MudButton>
+                <MudButton Variant="Variant.Filled"
+                           Color="@(_isApproving ? Color.Success : Color.Error)"
+                           StartIcon="@(_isApproving ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Cancel)"
+                           OnClick="ConfirmDecision"
+                           Disabled="_isProcessing">
+                    @if (_isProcessing)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="ml-2" />
+                        <span>جاري التنفيذ...</span>
+                    }
+                    else
+                    {
+                        <span>@(_isApproving ? "تأكيد الموافقة" : "تأكيد الرفض")</span>
+                    }
+                </MudButton>
+            </div>
+
+        </MudPaper>
+    </div>
+}
+
+<style>
+    .pcr-page { padding: 2rem; max-width: 1500px; margin: 0 auto; direction: rtl; }
+
+    /* Header */
+    .pcr-header {
+        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        border-radius: 20px; padding: 2rem; margin-bottom: 1.5rem;
+        display: flex; justify-content: space-between; align-items: center;
+        box-shadow: 0 10px 40px rgba(245,158,11,.25);
+    }
+    .pcr-header-left { display: flex; align-items: center; gap: 1.25rem; }
+    .pcr-header-icon {
+        width: 60px; height: 60px;
+        background: rgba(255,255,255,.2); border-radius: 16px;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .pcr-header-icon .mud-icon-root { font-size: 2rem; color: white; }
+    .pcr-header h1 { color: white; font-size: 1.7rem; font-weight: 800; margin: 0 0 .3rem; }
+    .pcr-header p { color: rgba(255,255,255,.85); margin: 0; font-size: .9rem; }
+
+    /* Stats */
+    .pcr-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    .pcr-stat-card {
+        background: var(--mud-palette-surface); border-radius: 14px; padding: 1.25rem;
+        display: flex; align-items: center; gap: 1rem;
+        box-shadow: 0 2px 10px rgba(0,0,0,.05); border: 2px solid transparent;
+    }
+    .pcr-stat-card .mud-icon-root { font-size: 2rem; }
+    .pending-stat  { border-color: rgba(245,158,11,.25); }
+    .pending-stat  .mud-icon-root { color: #f59e0b; }
+    .approved-stat { border-color: rgba(16,185,129,.25); }
+    .approved-stat .mud-icon-root { color: #10b981; }
+    .rejected-stat { border-color: rgba(239,68,68,.25); }
+    .rejected-stat .mud-icon-root { color: #ef4444; }
+    .total-stat    { border-color: rgba(102,126,234,.25); }
+    .total-stat    .mud-icon-root { color: #667eea; }
+    .pcr-stat-num   { display: block; font-size: 1.8rem; font-weight: 800; color: #1e293b; line-height: 1; }
+    .pcr-stat-label { display: block; font-size: .8rem; color: #64748b; font-weight: 600; margin-top: .2rem; }
+
+    /* Controls */
+    .pcr-controls { display: flex; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap; align-items: center; }
+    .pcr-search { flex: 1; min-width: 260px; }
+    .pcr-filter-btns { display: flex; gap: .5rem; flex-wrap: wrap; }
+    .pcr-filter-btn {
+        padding: .45rem 1rem; border-radius: 20px; border: 1.5px solid #e2e8f0;
+        background: transparent; cursor: pointer; font-size: .82rem; font-weight: 600;
+        color: #64748b; transition: all .2s ease;
+    }
+    .pcr-filter-btn:hover { background: #f1f5f9; }
+    .pcr-filter-btn.active { background: #667eea; border-color: #667eea; color: white; }
+    .pending-btn.active  { background: #f59e0b; border-color: #f59e0b; }
+    .approved-btn.active { background: #10b981; border-color: #10b981; }
+    .rejected-btn.active { background: #ef4444; border-color: #ef4444; }
+
+    /* Table */
+    .pcr-table-wrap { background: var(--mud-palette-surface); border-radius: 16px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,.05); }
+    .pcr-table { background: transparent !important; }
+    .pcr-loading, .pcr-empty { display: flex; flex-direction: column; align-items: center; padding: 4rem; gap: 1rem; color: #94a3b8; text-align: center; }
+    .pcr-empty h3 { color: #1e293b; margin: 0; }
+
+    /* Table Cells */
+    .pcr-product-cell { display: flex; flex-direction: column; gap: .15rem; }
+    .pcr-product-name { font-weight: 700; font-size: .9rem; color: #1e293b; }
+    .pcr-product-desc { font-size: .75rem; color: #94a3b8; }
+    .pcr-type-badge { padding: .25rem .65rem; border-radius: 20px; font-size: .75rem; font-weight: 700; }
+    .premium-badge { background: rgba(139,92,246,.1); color: #8b5cf6; }
+    .elite-badge   { background: rgba(197,163,70,.12); color: #b8860b; }
+    .pcr-price { font-weight: 700; color: #1e293b; }
+    .pcr-price.requested { color: #667eea; }
+    .pcr-diff { display: flex; flex-direction: column; gap: .1rem; font-weight: 700; font-size: .85rem; }
+    .diff-up   { color: #10b981; }
+    .diff-down { color: #ef4444; }
+    .pcr-diff-pct { font-size: .75rem; opacity: .8; }
+    .pcr-requester { font-size: .85rem; font-weight: 600; color: #1e293b; }
+    .pcr-date { font-size: .8rem; color: #94a3b8; }
+    .pcr-actions { display: flex; gap: .25rem; justify-content: center; }
+
+    /* Dialog */
+    .pcr-dialog-wrap { position: fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:1001; }
+    .pcr-dialog { border-radius: 20px !important; width: 520px; max-width: 95vw; overflow: hidden; }
+    .pcr-dialog-header { padding: 1.25rem; display: flex; justify-content: space-between; align-items: center; }
+    .approve-header { background: linear-gradient(135deg,#10b981,#059669); }
+    .reject-header  { background: linear-gradient(135deg,#ef4444,#dc2626); }
+    .pcr-dialog-title { display: flex; align-items: center; gap: .75rem; color: white; font-weight: 700; font-size: 1.05rem; }
+    .pcr-dialog-title .mud-icon-root { color: white; }
+    .pcr-dialog-body { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+    .pcr-dialog-footer { padding: 1rem 1.5rem; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: .75rem; }
+
+    .pcr-decision-summary {
+        background: #f8fafc; border-radius: 12px; padding: 1rem;
+        display: flex; flex-direction: column; gap: .6rem;
+        border: 1px solid #e2e8f0;
+    }
+    .pcr-ds-row { display: flex; justify-content: space-between; align-items: center; font-size: .88rem; }
+    .pcr-ds-label { color: #64748b; font-weight: 600; }
+    .pcr-ds-value { font-weight: 700; color: #1e293b; }
+    .pcr-requested-val { color: #667eea; font-size: 1.1rem; }
+
+    @@media(max-width:768px) {
+        .pcr-page { padding: 1rem; }
+        .pcr-stats { grid-template-columns: repeat(2,1fr); }
+        .pcr-controls { flex-direction: column; }
+        .pcr-search { width: 100%; }
+    }
+</style>
+
+@code {
+    private bool _authorized = false;
+    private bool _isLoading = true;
+    private string? _currentUserName;
+    private string? _currentRole;
+
+    private List<VwPriceChangeRequest> _allRequests = new();
+    private List<VwPriceChangeRequest> _filtered    = new();
+    private string? _statusFilter;
+    private string  _searchText = "";
+
+    private int _pendingCount  => _allRequests.Count(r => r.Status == "Pending");
+    private int _approvedCount => _allRequests.Count(r => r.Status == "Approved");
+    private int _rejectedCount => _allRequests.Count(r => r.Status == "Rejected");
+
+    // Decision Dialog
+    private bool _decisionDialogOpen = false;
+    private bool _isApproving        = false;
+    private bool _isProcessing       = false;
+    private string _decisionNote     = "";
+    private string? _decisionError;
+    private VwPriceChangeRequest? _selectedRequest;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        _currentRole     = auth.User.FindFirst(ClaimTypes.Role)?.Value;
+        _currentUserName = auth.User.Identity?.Name;
+
+        _authorized = _currentRole is "Admin" or "AccountManager" or "SalesManager";
+        if (!_authorized) return;
+
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+        StateHasChanged();
+        try
+        {
+            _allRequests = await Db.VwPriceChangeRequests
+                .OrderByDescending(r => r.RequestedAt)
+                .ToListAsync();
+            ApplyFilter();
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void SetFilter(string? status)
+    {
+        _statusFilter = status;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var q = _allRequests.AsEnumerable();
+
+        if (_statusFilter != null)
+            q = q.Where(r => r.Status == _statusFilter);
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var s = _searchText.Trim().ToLower();
+            q = q.Where(r =>
+                r.ProductName.ToLower().Contains(s) ||
+                r.RequestedBy.ToLower().Contains(s));
+        }
+
+        _filtered = q.ToList();
+        StateHasChanged();
+    }
+
+    private void OpenDecision(VwPriceChangeRequest req, bool approve)
+    {
+        _selectedRequest     = req;
+        _isApproving         = approve;
+        _decisionNote        = "";
+        _decisionError       = null;
+        _decisionDialogOpen  = true;
+    }
+
+    private void CloseDecision()
+    {
+        if (_isProcessing) return;
+        _decisionDialogOpen = false;
+    }
+
+    private async Task ConfirmDecision()
+    {
+        if (_selectedRequest == null) return;
+
+        if (!_isApproving && string.IsNullOrWhiteSpace(_decisionNote))
+        {
+            _decisionError = "سبب الرفض مطلوب";
+            return;
+        }
+
+        _isProcessing = true;
+        _decisionError = null;
+        StateHasChanged();
+
+        try
+        {
+            if (_isApproving)
+            {
+                await ProductService.ApproveSalePriceChangeAsync(
+                    _selectedRequest.ProductId,
+                    _currentUserName!);
+
+                Snackbar.Add("✅ تمت الموافقة على تعديل السعر بنجاح", Severity.Success);
+            }
+            else
+            {
+                await ProductService.RejectSalePriceChangeAsync(
+                    _selectedRequest.ProductId,
+                    _currentUserName!,
+                    _decisionNote.Trim());
+
+                Snackbar.Add("تم رفض طلب تعديل السعر", Severity.Info);
+            }
+
+            _decisionDialogOpen = false;
+            await LoadData();
+        }
+        catch (Exception ex)
+        {
+            _decisionError = $"خطأ: {ex.Message}";
+        }
+        finally
+        {
+            _isProcessing = false;
+            StateHasChanged();
+        }
+    }
+}
