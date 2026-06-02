@@ -145,7 +145,7 @@ public class ProductService : IProductService
             RecipientUser = product.CreatedBy,
             CreatedBy = currentUsername,
             CreatedAt = DateTime.Now,
-            FormName = "frm_Products"
+            FormName = "products/form"
         });
 
         await _context.SaveChangesAsync();
@@ -210,7 +210,7 @@ public class ProductService : IProductService
         RecipientUser = "SalesManager", // مؤقتًا – هنحسنها بعدين
         CreatedBy = currentUsername,
         CreatedAt = DateTime.Now,
-        FormName = "frm_Products"
+        FormName = "products/form"
     });
 
     await _context.SaveChangesAsync();
@@ -293,7 +293,7 @@ public async Task ApproveSalePriceChangeAsync(
         RecipientUser = product.CreatedBy,
         CreatedBy = currentUsername,
         CreatedAt = DateTime.Now,
-        FormName = "frm_Products"
+        FormName = "products/form"
     });
 
     await _context.SaveChangesAsync();
@@ -343,7 +343,7 @@ public async Task RejectSalePriceChangeAsync(
         RecipientUser = product.CreatedBy,
         CreatedBy = currentUsername,
         CreatedAt = DateTime.Now,
-        FormName = "frm_Products"
+        FormName = "products/form"
     });
 
     await _context.SaveChangesAsync();
@@ -377,7 +377,7 @@ public async Task RequestCostChangeAsync(
         RecipientUser = "factory", // مؤقتًا
         CreatedBy = currentUsername,
         CreatedAt = DateTime.Now,
-        FormName = "frm_Products"
+        FormName = "products/form"
     });
 
     await _context.SaveChangesAsync();
@@ -469,7 +469,7 @@ public async Task ApproveCostChangeAsync(
         RecipientUser = product.CreatedBy,
         CreatedBy = currentUsername,
         CreatedAt = DateTime.Now,
-        FormName = "frm_Products"
+        FormName = "products/form"
     });
 
     await _context.SaveChangesAsync();

@@ -19,6 +19,20 @@ window.downloadFile = function (fileName, contentType, base64) {
 };
 window.printPage = function () { window.print(); };
 
+// ═══════════════════════════════════════════
+// ⭐ Notification Sound - تشغيل صوت الإشعارات
+// ═══════════════════════════════════════════
+window.playNotificationSound = function () {
+    try {
+        const audio = new Audio('/sounds/notification.mp3');
+        audio.play().catch(err => {
+            console.warn('⚠️ Audio playback failed: Browser autoplay policy may be blocking it.', err);
+        });
+    } catch (error) {
+        console.error('❌ Error playing notification sound:', error);
+    }
+};
+
 
 // ═══════════════════════════════════════════
 // ⭐ Idle Logout - تسجيل خروج تلقائي

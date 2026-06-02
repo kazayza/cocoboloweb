@@ -9,6 +9,7 @@
 
 @inject NotificationService NotificationService
 @inject IAuditService AuditService
+@inject IProductService ProductService
 @inject db24804Context Db
 @inject NavigationManager Navigation
 @inject IWebHostEnvironment Env
@@ -748,7 +749,40 @@ else
     </DialogActions>
 </MudDialog>
 
-<!-- Unsaved Changes Dialog -->
+<!-- Decision Dialog for Price Change -->
+<MudDialog @bind-Visible="_showDecisionDialog" Options="_decisionDialogOptions">
+    <TitleContent>
+        <div class="dialog-title">
+            <MudIcon Icon="@Icons.Material.Filled.QuestionAnswer" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">اتخاذ قرار بشأن تعديل السعر</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <div class="decision-content">
+            <div class="price-comparison">
+                <div class="price-box old">
+                    <span class="label">السعر الحالي</span>
+                    <span class="value">@_model.SuggestedSalePrice</span>
+                </div>
+                <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Class="compare-icon" />
+                <div class="price-box requested">
+                    <span class="label">السعر المطلوب</span>
+                    <span class="value">@_requestedPrice</span>
+                </div>
+            </div>
+            <MudTextField @bind-Value="_decisionNotes" 
+                          Label="ملاحظات / سبب القرار" 
+                          Variant="Variant.Outlined" 
+                          Lines="3" 
+                          Class="mt-4" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CloseDecisionDialog" Variant="Variant.Text">إلغاء</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="() => HandleDecision(false)">رفض الطلب</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled" OnClick="() => HandleDecision(true)">موافقة على الطلب</MudButton>
+    </DialogActions>
+</MudDialog>
 <MudDialog @bind-Visible="_showUnsavedDialog">
     <TitleContent>
         <div class="dialog-title warning">
@@ -1818,6 +1852,9 @@ else
     private bool _formIsValid      = false;
     private bool _showHistoryDialog = false;
     private bool _showUnsavedDialog = false;
+    private bool _showDecisionDialog = false;
+    private decimal _requestedPrice = 0;
+    private string _decisionNotes = "";
 
     private MudForm? _form;
 
@@ -1828,7 +1865,15 @@ else
         CloseOnEscapeKey = true,
         CloseButton     = true
     };
-    // ⭐ Image Preview
+
+    private readonly DialogOptions _decisionDialogOptions = new()
+    {
+        MaxWidth        = MaxWidth.Small,
+        FullWidth       = true,
+        CloseOnEscapeKey = true,
+        CloseButton     = true
+    };
+// ⭐ Image Preview
 private readonly DialogOptions _imagePreviewOptions = new()
 {
     MaxWidth = MaxWidth.Large,
@@ -2312,34 +2357,116 @@ private void SetPreviewAsPrimary()
     {
         try
         {
-            if (newStatusId == StatusIds.Priced) TrackStatusPricing();
-            else                                  TrackStatusChange(newStatusId);
-
-                        // ✅ جلب البيانات قبل التعديل
+            // 1. جلب البيانات الحالية قبل التعديل فقط لأغراض المراجعة (Audit)
             var oldForAudit = await Db.Products.AsNoTracking()
                 .FirstOrDefaultAsync(p => p.ProductId == _model.ProductId);
 
-            _model.PricingStatusId = newStatusId;
-            Db.Products.Update(_model);
-            await Db.SaveChangesAsync();
+            string auditAction = "UPDATE"; 
 
-            // ✅ تسجيل تغيير الحالة في المراجعة
+            // 2. تنفيذ المنطق من خلال السيرفيس
+            if (newStatusId == StatusIds.SalePriceChangeRequested)
+            {
+                await ProductService.RequestSalePriceChangeAsync(
+                    _model.ProductId, 
+                    _model.SuggestedSalePrice ?? 0, 
+                    _model.SuggestedSalePriceElite, 
+                    _currentUserName!);
+                
+                auditAction = "طلب تعديل سعر البيع";
+            }
+            else if (newStatusId == StatusIds.CostChangeRequested)
+            {
+                await ProductService.RequestCostChangeAsync(_model.ProductId, _currentUserName!);
+                auditAction = "طلب تعديل التكلفة";
+            }
+            else if (newStatusId == StatusIds.Priced && _model.PricingStatusId == StatusIds.SalePriceChangeRequested)
+            {
+                // 🚨 بدلاً من الموافقة التلقائية، نفتح نافذة القرار
+                _requestedPrice = _model.SuggestedSalePrice ?? 0;
+                _decisionNotes = "";
+                _showDecisionDialog = true;
+                return; // نتوقف هنا حتى يتم اتخاذ القرار من النافذة
+            }
+            else if (newStatusId == StatusIds.Priced && _model.PricingStatusId == StatusIds.CostChangeRequested)
+            {
+                await ProductService.ApproveCostChangeAsync(
+                    _model.ProductId, 
+                    _model.PurchasePrice, 
+                    _model.PurchasePriceElite, 
+                    _currentUserName!);
+                
+                // ✅ تخصيص سجل المصنع: هل هو إدخال أول مرة أم تعديل؟
+                auditAction = (oldForAudit?.PurchasePrice == null || oldForAudit?.PurchasePrice == 0) 
+                               ? "إدخال سعر التكلفة لأول مرة" 
+                               : "تعديل سعر التكلفة";
+            }
+            else
+            {
+                _model.PricingStatusId = newStatusId;
+                Db.Products.Update(_model);
+                await Db.SaveChangesAsync();
+            }
+
+            // 3. تسجيل الإجراء في المراجعة
             await AuditService.LogAsync(
                 "Products",
-                "UPDATE",
+                auditAction,
                 _model.ProductId.ToString(),
                 oldForAudit,
                 _model,
                 _currentUserName ?? "System"
             );
 
-            Snackbar.Add("تم تغيير الحالة بنجاح", Severity.Success);
+            Snackbar.Add("تم تنفيذ الإجراء بنجاح", Severity.Success);
             GoBack();
         }
         catch (Exception ex)
         {
-            ShowError("خطأ في تغيير الحالة");
+            ShowError($"خطأ أثناء تنفيذ الإجراء: {ex.Message}");
             Console.WriteLine($"[ProductForm] Status Error: {ex}");
+        }
+    }
+
+    private void CloseDecisionDialog() => _showDecisionDialog = false;
+
+    private async Task HandleDecision(bool approved)
+    {
+        try
+        {
+            var oldForAudit = await Db.Products.AsNoTracking()
+                .FirstOrDefaultAsync(p => p.ProductId == _model.ProductId);
+            
+            string auditAction;
+
+            if (approved)
+            {
+                await ProductService.ApproveSalePriceChangeAsync(_model.ProductId, _currentUserName!);
+                auditAction = "موافقة على تعديل سعر البيع";
+            }
+            else
+            {
+                await ProductService.RejectSalePriceChangeAsync(_model.ProductId, _currentUserName!, _decisionNotes);
+                auditAction = "رفض تعديل سعر البيع";
+            }
+
+            _model.PricingStatusId = StatusIds.Priced;
+
+            await AuditService.LogAsync(
+                "Products",
+                auditAction,
+                _model.ProductId.ToString(),
+                oldForAudit,
+                _model,
+                _currentUserName ?? "System"
+            );
+
+            _showDecisionDialog = false;
+            Snackbar.Add(approved ? "تم قبول الطلب" : "تم رفض الطلب", Severity.Info);
+            GoBack();
+        }
+        catch (Exception ex)
+        {
+            ShowError($"خطأ أثناء تنفيذ القرار: {ex.Message}");
         }
     }
 
