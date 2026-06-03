@@ -126,6 +126,10 @@ builder.Services.AddScoped<IComplaintService, ComplaintService>();
 builder.Services.AddScoped<IPasswordService, PasswordService>();
 builder.Services.AddScoped<ICompanyInfoService, CompanyInfoService>();
 builder.Services.AddScoped<GlobalSearchService>();
+builder.Services.AddScoped<ICrmDashboardService, CrmDashboardService>();
+builder.Services.AddScoped<IOpportunityService, OpportunityService>();
+builder.Services.AddScoped<IInteractionService, InteractionService>();
+builder.Services.AddScoped<ITaskService, TaskService>();
 
 
 var app = builder.Build();

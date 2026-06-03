@@ -1,0 +1,377 @@
+@page "/crm/opportunities"
+
+@using ApexCharts
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Web
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@using MudVariant = MudBlazor.Variant
+
+@inject IOpportunityService OppService
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject IDialogService Dialog
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>الفرص البيعية — CRM</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="loading-screen"><MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" /><MudText Typo="Typo.h6" Class="loading-text">جاري تحميل الفرص...</MudText></div>
+}
+else
+{
+<div dir="rtl" class="opp-page">
+
+    @* ════════════ PREMIUM HEADER ════════════ *@
+    <div class="opp-header">
+        <div class="h-bg"><div class="h-gradient"></div><div class="h-orb h-orb1"></div><div class="h-orb h-orb2"></div><div class="h-grid"></div></div>
+        <div class="h-content">
+            <div class="h-row">
+                <div class="h-info">
+                    <div class="h-icon-wrap"><div class="h-icon-glow"></div><div class="h-icon"><MudIcon Icon="@Icons.Material.Rounded.TrackChanges" Style="font-size:2rem" /></div><div class="h-badge"><MudIcon Icon="@Icons.Material.Filled.AutoAwesome" Style="font-size:0.85rem" /></div></div>
+                    <div class="h-text"><h1>الفرص البيعية</h1><p>خط أنابيب المبيعات — @_stats.TotalCount فرصة</p></div>
+                </div>
+                <div class="h-actions">
+                    <div class="view-toggles">
+                        <MudIconButton Icon="@Icons.Material.Rounded.ViewKanban" Size="MudSize.Medium" OnClick="() => SetView(ViewMode.Kanban)" Class="@(_viewMode==ViewMode.Kanban?"vt-active":"")" Title="Kanban" />
+                        <MudIconButton Icon="@Icons.Material.Rounded.GridView" Size="MudSize.Medium" OnClick="() => SetView(ViewMode.Grid)" Class="@(_viewMode==ViewMode.Grid?"vt-active":"")" Title="بطاقات" />
+                        <MudIconButton Icon="@Icons.Material.Rounded.ViewList" Size="MudSize.Medium" OnClick="() => SetView(ViewMode.Table)" Class="@(_viewMode==ViewMode.Table?"vt-active":"")" Title="جدول" />
+                    </div>
+                    @if (_canAdd)
+                    {
+                        <MudButton Variant="MudVariant.Filled" StartIcon="@Icons.Material.Rounded.Add" OnClick="GoToNew" Color="MudColor.Primary" Style="background:rgba(255,255,255,.2)!important;backdrop-filter:blur(10px);color:#fff!important;font-weight:700">فرصة جديدة</MudButton>
+                    }
+                </div>
+            </div>
+            @* KPI Cards *@
+            <div class="kpi-row">
+                <div class="kpi kpi-all"><div class="kpi-bar"></div><span class="kpi-num">@_stats.TotalCount</span><span class="kpi-lbl">إجمالي الفرص</span></div>
+                <div class="kpi kpi-open"><div class="kpi-bar"></div><span class="kpi-num">@_stats.OpenCount</span><span class="kpi-lbl">مفتوحة</span></div>
+                <div class="kpi kpi-won"><div class="kpi-bar"></div><span class="kpi-num">@_stats.WonCount</span><span class="kpi-lbl">مربوحة</span></div>
+                <div class="kpi kpi-lost"><div class="kpi-bar"></div><span class="kpi-num">@_stats.LostCount</span><span class="kpi-lbl">مفقودة</span></div>
+                <div class="kpi kpi-over"><div class="kpi-bar"></div><span class="kpi-num">@_stats.OverdueFollowUpCount</span><span class="kpi-lbl">⭐ متابعة متأخرة</span></div>
+                <div class="kpi kpi-pipe"><div class="kpi-bar"></div><span class="kpi-num">@FormatMoney(_stats.PipelineValue)</span><span class="kpi-lbl">Pipeline</span></div>
+            </div>
+        </div>
+    </div>
+
+    @* ════════════ ADVANCED FILTERS ════════════ *@
+    <div class="filter-section">
+        <div class="filter-row">
+            @* Client Autocomplete *@
+            <MudTextField T="string" Label="🔍 بحث بالاسم أو الهاتف" Variant="MudVariant.Outlined"
+                          @bind-Value="_filter.SearchText" Dense="true" Class="filter-ac" Immediate="true" />
+            <MudSelect T="int?" Label="المرحلة" Variant="MudVariant.Outlined" @bind-Value="_filter.StageId" Dense="true" Class="filter-sel" Clearable="true" AnchorOrigin="Origin.BottomCenter">
+                @foreach (var s in _stages) { <MudSelectItem Value="@((int?)s.StageId)"><span style="color:@(s.StageColor??"#666")">●</span> @(s.StageNameAr ?? s.StageName)</MudSelectItem> }
+            </MudSelect>
+            <MudSelect T="int?" Label="👤 الموظف" Variant="MudVariant.Outlined" @bind-Value="_filter.EmployeeId" Dense="true" Class="filter-sel" Clearable="true" AnchorOrigin="Origin.BottomCenter">
+                @foreach (var e in _activeEmployees) { <MudSelectItem Value="@((int?)e.EmployeeId)">@e.FullName</MudSelectItem> }
+            </MudSelect>
+            <MudSelect T="int?" Label="📡 المصدر" Variant="MudVariant.Outlined" @bind-Value="_filter.SourceId" Dense="true" Class="filter-sel" Clearable="true" AnchorOrigin="Origin.BottomCenter">
+                @foreach (var s in _sources) { <MudSelectItem Value="@((int?)s.SourceId)">@(s.SourceNameAr ?? s.SourceName)</MudSelectItem> }
+            </MudSelect>
+        </div>
+        <div class="filter-row">
+            <MudSelect T="int?" Label="📢 الحملة" Variant="MudVariant.Outlined" Dense="true" Class="filter-sel" Clearable="true" AnchorOrigin="Origin.BottomCenter">
+                @foreach (var a in _adTypes) { <MudSelectItem Value="@((int?)a.AdTypeId)">@(a.AdTypeNameAr ?? a.AdTypeName)</MudSelectItem> }
+            </MudSelect>
+            <MudSelect T="int?" Label="🎯 فئة الاهتمام" Variant="MudVariant.Outlined" @bind-Value="_filter.CategoryId" Dense="true" Class="filter-sel" Clearable="true" AnchorOrigin="Origin.BottomCenter">
+                @foreach (var c in _categories) { <MudSelectItem Value="@((int?)c.CategoryId)">@(c.CategoryNameAr ?? c.CategoryName)</MudSelectItem> }
+            </MudSelect>
+            <MudTextField T="decimal?" Label="💰 من قيمة" Variant="MudVariant.Outlined" @bind-Value="_filter.MinValue" Dense="true" Class="filter-val" />
+            <MudTextField T="decimal?" Label="💰 إلى قيمة" Variant="MudVariant.Outlined" @bind-Value="_filter.MaxValue" Dense="true" Class="filter-val" />
+            <MudDatePicker Label="📅 من تاريخ" Variant="MudVariant.Outlined" Date="_filter.DateFrom" DateChanged="d => _filter.DateFrom = d" Dense="true" Class="filter-date" />
+            <MudDatePicker Label="📅 إلى تاريخ" Variant="MudVariant.Outlined" Date="_filter.DateTo" DateChanged="d => _filter.DateTo = d" Dense="true" Class="filter-date" />
+        </div>
+        <div class="filter-actions">
+            <MudChipSet T="string">
+                <MudChip T="string" Variant="@(_filter.IsOverdueFollowUp==true?MudVariant.Filled:MudVariant.Outlined)" Color="@(_filter.IsOverdueFollowUp==true?MudColor.Warning:MudColor.Default)" Size="MudSize.Small" OnClick="TogO">⭐ متابعة متأخرة</MudChip>
+                <MudChip T="string" Variant="@(_filter.HasFollowUp==true?MudVariant.Filled:MudVariant.Outlined)" Color="@(_filter.HasFollowUp==true?MudColor.Info:MudColor.Default)" Size="MudSize.Small" OnClick="TogF">📅 لها متابعة</MudChip>
+            </MudChipSet>
+            <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" OnClick="ApplyFilters" StartIcon="@Icons.Material.Rounded.FilterList" Size="MudSize.Small">تصفية</MudButton>
+            @if (_hasFilters) { <MudButton Variant="MudVariant.Text" Color="MudColor.Error" OnClick="ResetFilters" Size="MudSize.Small">مسح الفلاتر</MudButton> }
+        </div>
+    </div>
+
+    @* ════════════ KANBAN VIEW ════════════ *@
+    @if (_viewMode == ViewMode.Kanban)
+    {
+        <div class="kanban-board">
+            @if (_kanban.Columns.Any())
+            {
+                @foreach (var col in _kanban.Columns)
+                {
+                    <div class="kanban-col" style="border-top:3px solid @(col.StageColor)">
+                        <div class="kcol-header">
+                            <span class="kcol-title" style="color:@(col.StageColor)">@col.StageNameAr</span>
+                            <span class="kcol-count">@col.Count · @FormatMoney(col.Value)</span>
+                        </div>
+                        <div class="kcol-cards">
+                            @foreach (var card in col.Cards)
+                            {
+                                <div class="kcard @(card.IsOverdue?"kcard-overdue":"")"
+                                     draggable="true" @ondragstart="() => _dragCard = card" @ondragend="() => _dragCard = null"
+                                     @onclick="() => GoToDetail(card.OpportunityId)">
+                                    <div class="kcard-name">@card.ClientName</div>
+                                    @if (!string.IsNullOrWhiteSpace(card.InterestedProduct))
+                                    { <div class="kcard-prod">@card.InterestedProduct</div> }
+                                    <div class="kcard-meta">
+                                        <span>💰 @FormatMoney(card.ExpectedValue??0)</span>
+                                        @if (card.NextFollowUpDate.HasValue)
+                                        { <span class="@(card.IsOverdue?"text-danger":"")">📅 @card.NextFollowUpDate.Value.ToString("dd/MM")</span> }
+                                    </div>
+                                    <div class="kcard-foot">
+                                        <span>👤 @(card.EmployeeName??"—")</span>
+                                        <span>💬@card.InteractionsCount 📋@card.TasksCount</span>
+                                    </div>
+                                </div>
+                            }
+@* Drop Zone *@
+                             <div class="kcol-drop" @ondrop="() => OnDrop(col.StageId)" @ondragover="HandleDragOver">
+                                 <span>📥 أسقط هنا لتغيير المرحلة</span>
+                             </div>
+                        </div>
+                    </div>
+                }
+            }
+            else { <div class="empty-kanban">لا توجد فرص تطابق الفلاتر</div> }
+        </div>
+    }
+
+    @* ════════════ GRID VIEW ════════════ *@
+    @if (_viewMode == ViewMode.Grid)
+    {
+        @if (_isLoadingData) { @if (_isLoadingData) { <div class="load-bar"></div> } }
+        <div class="opp-grid">
+            @foreach (var o in _pagedResult.Items)
+            {
+                <div class="opp-card" @onclick="() => GoToDetail(o.OpportunityId)">
+                    <div class="opp-card-accent" style="background:@(o.StageColor??"#94a3b8")"></div>
+                    <div class="opp-card-body">
+                        <div class="opp-name">@o.ClientName</div>
+                        @if (!string.IsNullOrWhiteSpace(o.InterestedProduct)) { <div class="opp-prod">🏷️ @o.InterestedProduct</div> }
+                        <div class="opp-meta">
+                            <span class="stage-badge" style="background:@(o.StageColor??"#94a3b8")20;color:@(o.StageColor??"#94a3b8");border:1px solid @(o.StageColor??"#94a3b8")">@(o.StageNameAr??o.StageName)</span>
+                            <span>👤 @(o.EmployeeName??"—")</span>
+                            @if (o.SourceName!=null) { <span>📡 @o.SourceName</span> }
+                        </div>
+                        <div class="opp-values">
+                            <span>💰 @FormatMoney(o.ExpectedValue??0) ج</span>
+                            <span class="@(o.FollowUpStatus=="Overdue"?"text-danger":"")">📅 @(o.NextFollowUpDate?.ToString("dd/MM")??"لا")</span>
+                            <span>💬@o.InteractionsCount 📋@o.TasksCount</span>
+                        </div>
+                    </div>
+                    <div class="opp-card-foot"><span>@o.CreatedAt.ToString("yyyy/MM/dd")</span><div class="opp-acts" @onclick:stopPropagation="true"><MudIconButton Icon="@Icons.Material.Rounded.Phone" Size="MudSize.Small" OnClick="() => CallPhone(o.Phone)" /><MudIconButton Icon="@Icons.Material.Rounded.Chat" Size="MudSize.Small" OnClick="() => OpenWhatsApp(o.Phone)" /><MudIconButton Icon="@Icons.Material.Rounded.Edit" Size="MudSize.Small" OnClick="() => GoToEdit(o.OpportunityId)" /></div></div>
+                </div>
+            }
+            @if (!_pagedResult.Items.Any()) { <div class="empty-state" style="grid-column:1/-1"><MudIcon Icon="@Icons.Material.Rounded.SearchOff" Size="MudSize.Large" /><span>لا توجد فرص</span></div> }
+        </div>
+        @if (_pagedResult.TotalPages > 1)
+        {
+            <div class="pag"><MudIconButton Icon="@Icons.Material.Rounded.ChevronRight" OnClick="()=>GoToPage(_filter.PageNumber-1)" Disabled="@(!_pagedResult.HasPrevious)" /><span>صفحة @_pagedResult.PageNumber من @_pagedResult.TotalPages · @_pagedResult.TotalCount فرصة</span><MudIconButton Icon="@Icons.Material.Rounded.ChevronLeft" OnClick="()=>GoToPage(_filter.PageNumber+1)" Disabled="@(!_pagedResult.HasNext)" /></div>
+        }
+    }
+
+    @* ════════════ TABLE VIEW ════════════ *@
+    @if (_viewMode == ViewMode.Table)
+    {
+        @if (_isLoadingData) { @if (_isLoadingData) { <div class="load-bar"></div> } }
+        <div class="table-wrap"><table class="data-table"><thead><tr><th>العميل</th><th>الهاتف</th><th>المرحلة</th><th>الموظف</th><th>المصدر</th><th>القيمة</th><th>المتابعة</th><th></th></tr></thead><tbody>
+        @foreach (var o in _pagedResult.Items) { <tr class="clickable" @onclick="()=>GoToDetail(o.OpportunityId)"><td><strong>@o.ClientName</strong>@if(!string.IsNullOrWhiteSpace(o.InterestedProduct)){<br/><small class="muted">@o.InterestedProduct</small>}</td><td class="ltr">@o.Phone</td><td><span class="stage-badge" style="background:@(o.StageColor??"#94a3b8")20;color:@(o.StageColor??"#94a3b8");border:1px solid @(o.StageColor??"#94a3b8")">@(o.StageNameAr??o.StageName)</span></td><td>@(o.EmployeeName??"—")</td><td>@(o.SourceName??"—")</td><td class="ltr">@FormatMoney(o.ExpectedValue??0)</td><td class="@(o.FollowUpStatus=="Overdue"?"text-danger":"")">@(o.NextFollowUpDate?.ToString("dd/MM")??"—")</td><td @onclick:stopPropagation="true"><MudIconButton Icon="@Icons.Material.Rounded.Chat" Size="MudSize.Small" OnClick="()=>OpenWhatsApp(o.Phone)" /><MudIconButton Icon="@Icons.Material.Rounded.Edit" Size="MudSize.Small" OnClick="()=>GoToEdit(o.OpportunityId)" /></td></tr> }
+        </tbody></table></div>
+        @if (_pagedResult.TotalPages > 1)
+        {
+            <div class="pag"><MudIconButton Icon="@Icons.Material.Rounded.ChevronRight" OnClick="()=>GoToPage(_filter.PageNumber-1)" Disabled="@(!_pagedResult.HasPrevious)" /><span>صفحة @_pagedResult.PageNumber من @_pagedResult.TotalPages · @_pagedResult.TotalCount فرصة</span><MudIconButton Icon="@Icons.Material.Rounded.ChevronLeft" OnClick="()=>GoToPage(_filter.PageNumber+1)" Disabled="@(!_pagedResult.HasNext)" /></div>
+        }
+    }
+
+</div>
+}
+
+@* ════════════════════ STYLES ════════════════════ *@
+<style>
+    .opp-page { padding: 0 1.5rem 3rem; }
+
+    /* ═══ HEADER ═══ */
+    .opp-header { position: relative; border-radius: 20px; overflow: hidden; margin-bottom: 1rem; }
+    .h-bg { position: absolute; inset: 0; }
+    .h-gradient { position: absolute; inset: 0; background: linear-gradient(135deg,#059669 0%,#10b981 40%,#34d399 60%,#6ee7b7 100%); }
+    .h-orb { position: absolute; border-radius: 50%; filter: blur(80px); }
+    .h-orb1 { width:200px;height:200px;background:rgba(255,255,255,.1);top:-50px;right:-50px; }
+    .h-orb2 { width:140px;height:140px;background:rgba(255,255,255,.07);bottom:-30px;left:15%; }
+    .h-grid { position: absolute; inset: 0; background: repeating-linear-gradient(0deg,transparent,transparent 1px,rgba(255,255,255,.03) 1px,rgba(255,255,255,.03) 2px),repeating-linear-gradient(90deg,transparent,transparent 1px,rgba(255,255,255,.03) 1px,rgba(255,255,255,.03) 2px); background-size: 40px 40px; }
+    .h-content { position: relative; z-index: 1; padding: 1.5rem 1.75rem 1rem; color: #fff; }
+    .h-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; }
+    .h-info { display: flex; align-items: center; gap: 0.85rem; }
+    .h-icon-wrap { position: relative; }
+    .h-icon-glow { position: absolute; inset: -10px; background: rgba(255,255,255,.12); border-radius: 50%; filter: blur(15px); }
+    .h-icon { width:52px;height:52px;background:rgba(255,255,255,.15);backdrop-filter:blur(10px);border-radius:14px;display:flex;align-items:center;justify-content:center;position:relative;z-index:1; }
+    .h-badge { position:absolute;bottom:-4px;right:-4px;width:22px;height:22px;background:#f59e0b;border-radius:50%;display:flex;align-items:center;justify-content:center;z-index:2;border:2px solid #059669; }
+    .h-text h1 { margin: 0; font-size: 1.35rem; font-weight: 800; letter-spacing: -0.3px; }
+    .h-text p { margin: 2px 0 0; font-size: 0.8rem; opacity: 0.85; }
+    .h-actions { display: flex; align-items: center; gap: 0.5rem; }
+    .view-toggles { display: flex; gap: 0.15rem; background: rgba(255,255,255,.1); border-radius: 10px; padding: 2px; }
+    .view-toggles .mud-icon-button { color: rgba(255,255,255,.5) !important; border-radius: 8px !important; }
+    .vt-active { background: rgba(255,255,255,.2) !important; color: #fff !important; }
+
+    /* ═══ KPI ═══ */
+    .kpi-row { display: grid; grid-template-columns: repeat(6,1fr); gap: 0.5rem; margin-top: 1rem; }
+    .kpi { background: rgba(255,255,255,.1); border-radius: 10px; padding: 0.55rem 0.7rem; position: relative; overflow: hidden; }
+    .kpi-bar { position: absolute; top: 0; left: 0; right: 0; height: 2px; border-radius: 10px 10px 0 0; }
+    .kpi-all .kpi-bar { background: #6366f1; } .kpi-open .kpi-bar { background: #3b82f6; }
+    .kpi-won .kpi-bar { background: #10b981; } .kpi-lost .kpi-bar { background: #ef4444; }
+    .kpi-over .kpi-bar { background: #f59e0b; } .kpi-pipe .kpi-bar { background: #8b5cf6; }
+    .kpi-num { font-weight: 800; font-size: 1.1rem; display: block; }
+    .kpi-lbl { font-size: 0.62rem; opacity: 0.75; }
+
+    /* ═══ FILTERS ═══ */
+    .filter-section { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 12px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+    .filter-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; align-items: center; }
+    .filter-ac { flex: 2; min-width: 200px; } .filter-sel { min-width: 140px; flex: 1; } .filter-val { min-width: 100px; width: 120px; } .filter-date { min-width: 130px; width: 140px; }
+    .filter-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+    /* ═══ KANBAN ═══ */
+    .kanban-board { display: flex; gap: 0.6rem; overflow-x: auto; padding-bottom: 1rem; min-height: 400px; }
+    .kanban-col { min-width: 270px; max-width: 320px; flex: 1; background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 14px; overflow: hidden; }
+    .kcol-header { padding: 0.65rem 0.85rem; display: flex; justify-content: space-between; align-items: center; }
+    .kcol-title { font-weight: 700; font-size: 0.85rem; }
+    .kcol-count { font-size: 0.68rem; color: var(--mud-palette-text-secondary); }
+    .kcol-cards { padding: 0 0.5rem 0.5rem; display: flex; flex-direction: column; gap: 0.4rem; max-height: 65vh; overflow-y: auto; }
+    .kcard { background: var(--mud-palette-background); border: 1px solid var(--mud-palette-lines-inputs); border-radius: 10px; padding: 0.65rem 0.75rem; cursor: grab; transition: box-shadow .15s, transform .1s; }
+    .kcard:hover { box-shadow: 0 4px 16px rgba(0,0,0,.1); transform: translateY(-1px); }
+    .kcard-overdue { border-right: 3px solid #ef4444; }
+    .kcard-name { font-weight: 700; font-size: 0.88rem; }
+    .kcard-prod { font-size: 0.72rem; color: var(--mud-palette-text-secondary); margin: 0.1rem 0 0.3rem; }
+    .kcard-meta { display: flex; gap: 0.6rem; font-size: 0.7rem; color: var(--mud-palette-text-secondary); margin-bottom: 0.25rem; }
+    .kcard-foot { display: flex; justify-content: space-between; font-size: 0.65rem; color: var(--mud-palette-text-disabled); border-top: 1px solid var(--mud-palette-lines-inputs); padding-top: 0.3rem; margin-top: 0.2rem; }
+    .kcol-drop { padding: 0.75rem; border: 2px dashed var(--mud-palette-lines-inputs); border-radius: 10px; text-align: center; color: var(--mud-palette-text-disabled); font-size: 0.72rem; margin: 0.25rem; transition: border-color .2s; }
+    .kcol-drop:hover { border-color: var(--mud-palette-primary); }
+    .load-bar { height:3px; background:linear-gradient(90deg,var(--mud-palette-primary),var(--mud-palette-primary-light),var(--mud-palette-primary)); animation:load-slide 1.5s infinite; border-radius:3px; margin-bottom:0.5rem; }
+    @@keyframes load-slide{0%{width:0}50%{width:70%}100%{width:100%}}
+    .empty-kanban { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 200px; color: var(--mud-palette-text-disabled); }
+
+    /* ═══ GRID ═══ */
+    .opp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 0.75rem; }
+    .opp-card { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 13px; overflow: hidden; cursor: pointer; transition: transform .15s, box-shadow .15s; }
+    .opp-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,.1); }
+    .opp-card-accent { height: 3px; }
+    .opp-card-body { padding: 0.85rem; }
+    .opp-name { font-weight: 700; font-size: 0.92rem; }
+    .opp-prod { font-size: 0.73rem; color: var(--mud-palette-text-secondary); margin: 0.15rem 0 0.35rem; }
+    .opp-meta { display: flex; gap: 0.4rem; flex-wrap: wrap; font-size: 0.7rem; margin-bottom: 0.4rem; align-items: center; }
+    .opp-values { display: flex; gap: 0.65rem; font-size: 0.72rem; color: var(--mud-palette-text-secondary); }
+    .opp-card-foot { display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.85rem; border-top: 1px solid var(--mud-palette-lines-inputs); background: var(--mud-palette-background); font-size: 0.68rem; }
+    .opp-acts { display: flex; gap: 0.05rem; }
+
+    /* ═══ TABLE ═══ */
+    .table-wrap { overflow-x: auto; border: 1px solid var(--mud-palette-lines-default); border-radius: 12px; background: var(--mud-palette-surface); }
+    .data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .data-table th { padding: 0.6rem 0.75rem; text-align: right; font-weight: 700; border-bottom: 2px solid var(--mud-palette-lines-inputs); white-space: nowrap; }
+    .data-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--mud-palette-lines-inputs); }
+    .data-table tr:last-child td { border-bottom: none; }
+    .clickable { cursor: pointer; } .clickable:hover { background: var(--mud-palette-action-hover); }
+    .ltr { direction: ltr; text-align: left; }
+    .muted { color: var(--mud-palette-text-secondary); font-size: 0.7rem; }
+    .text-danger { color: #ef4444 !important; font-weight: 600; }
+
+    .stage-badge { padding: 2px 7px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; white-space: nowrap; }
+    .empty-state { display: flex; flex-direction: column; align-items: center; padding: 3rem; color: var(--mud-palette-text-disabled); gap: 0.5rem; }
+    .pag { display: flex; align-items: center; justify-content: center; gap: 0.75rem; margin-top: 1.25rem; font-size: 0.85rem; color: var(--mud-palette-text-secondary); }
+
+    @@media (max-width:1400px) { .kpi-row { grid-template-columns: repeat(3,1fr); } }
+    @@media (max-width:900px) { .filter-row { flex-direction: column; } .filter-ac,.filter-sel,.filter-val,.filter-date { width:100%!important;min-width:100%!important; } .kpi-row { grid-template-columns: repeat(2,1fr); } .kanban-col { min-width: 240px; } .opp-page { padding: 0 0.4rem 2rem; } }
+    @@media (max-width:500px) { .h-content { padding: 1rem 1rem 0.75rem; } .h-text h1 { font-size: 1.1rem; } .kpi-row { grid-template-columns: 1fr 1fr; } }
+</style>
+
+@code {
+    private bool _isLoading = true, _isLoadingData, _canView, _canAdd, _canEdit, _canDelete;
+    private string? _currentUserName;
+    private OpportunityFilterDto _filter = new() { IsActive = true };
+    private PagedResult<OpportunityListDto> _pagedResult = new();
+    private KanbanBoardDto _kanban = new();
+    private OpportunityStatsDto _stats = new();
+    private List<SalesStage> _stages = new();
+    private List<ContactSource> _sources = new();
+    private List<InterestCategory> _categories = new();
+    private List<AdType> _adTypes = new();
+    private List<Employee> _activeEmployees = new();
+
+    private KanbanCardDto? _dragCard;
+    private enum ViewMode { Kanban, Grid, Table }
+    private ViewMode _viewMode = ViewMode.Kanban;
+    private bool _hasFilters => _filter.StageId.HasValue || _filter.EmployeeId.HasValue || _filter.SourceId.HasValue
+        || _filter.CategoryId.HasValue || _filter.MinValue.HasValue || _filter.MaxValue.HasValue
+        || _filter.DateFrom.HasValue || _filter.DateTo.HasValue || _filter.IsOverdueFollowUp == true
+        || _filter.HasFollowUp == true || !string.IsNullOrWhiteSpace(_filter.SearchText);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync(); var user = auth.User;
+            _currentUserName = user.Identity?.Name ?? "System";
+            _canView = user.HasClaim("Permission","frmOpportunities:View") || user.IsInRole("Admin");
+            _canAdd = user.HasClaim("Permission","frmOpportunities:Add") || user.IsInRole("Admin");
+            _canEdit = user.HasClaim("Permission","frmOpportunities:Edit") || user.IsInRole("Admin");
+            _canDelete = user.HasClaim("Permission","frmOpportunities:Delete") || user.IsInRole("Admin");
+            if (!_canView) { Navigation.NavigateTo("/"); return; }
+            _stages = await OppService.GetStagesAsync();
+            _sources = await OppService.GetSourcesAsync();
+            _categories = await OppService.GetCategoriesAsync();
+            _adTypes = await OppService.GetAdTypesAsync();
+            _activeEmployees = await OppService.GetActiveEmployeesAsync();
+            await RefreshAll();
+        }
+        catch (Exception ex) { Snackbar.Add($"خطأ: {ex.Message}", Severity.Error); }
+        finally { _isLoading = false; }
+    }
+
+    private async Task RefreshAll()
+    {
+        _isLoadingData = true; StateHasChanged();
+        try { _kanban = await OppService.GetKanbanBoardAsync(_filter); _pagedResult = await OppService.GetOpportunitiesAsync(_filter); _stats = await OppService.GetStatsAsync(_filter); }
+        catch { }
+        _isLoadingData = false; StateHasChanged();
+    }
+
+    private async Task ApplyFilters() { _filter.PageNumber = 1; await RefreshAll(); }
+    private async Task ResetFilters() { _filter = new() { IsActive = true }; await RefreshAll(); }
+    private async Task TogO() { _filter.IsOverdueFollowUp = _filter.IsOverdueFollowUp == true ? null : true; await RefreshAll(); }
+    private async Task TogF() { _filter.HasFollowUp = _filter.HasFollowUp == true ? null : true; await RefreshAll(); }
+    private async Task GoToPage(int p) { _filter.PageNumber = p; _isLoadingData = true; StateHasChanged(); _pagedResult = await OppService.GetOpportunitiesAsync(_filter); _isLoadingData = false; StateHasChanged(); }
+    private void SetView(ViewMode v) { _viewMode = v; if (v != ViewMode.Kanban) _ = RefreshAll(); else _ = RefreshKanban(); }
+    private async Task RefreshKanban() { _kanban = await OppService.GetKanbanBoardAsync(_filter); }
+
+    private async Task OnDrop(int newStageId)
+    {
+        if (_dragCard == null || _dragCard.StageId == newStageId) return;
+        var card = _dragCard;
+        var (ok, msg) = await OppService.MoveStageAsync(card.OpportunityId, newStageId, _currentUserName!);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) { _kanban = await OppService.GetKanbanBoardAsync(_filter); _stats = await OppService.GetStatsAsync(_filter); StateHasChanged(); }
+    }
+
+    private void HandleDragOver(DragEventArgs e) { e.DataTransfer.EffectAllowed = "move"; }
+
+    // Navigation
+    private void GoToNew() => Navigation.NavigateTo("/crm/opportunities/new");
+    private void GoToEdit(int id) => Navigation.NavigateTo($"/crm/opportunities/{id}");
+    private void GoToDetail(int id) => Navigation.NavigateTo($"/crm/opportunities/{id}");
+
+    private async Task OpenWhatsApp(string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return;
+        var clean = new string(phone.Where(char.IsDigit).ToArray());
+        if (clean.StartsWith("0")) clean = "2" + clean; if (!clean.StartsWith("2")) clean = "2" + clean;
+        await JS.InvokeVoidAsync("open", $"https://wa.me/{clean}", "_blank");
+    }
+    private async Task CallPhone(string? phone) { if (!string.IsNullOrWhiteSpace(phone)) await JS.InvokeVoidAsync("open", $"tel:{phone}", "_self"); }
+
+    private static string FormatMoney(decimal v) => v switch { >= 1_000_000 => $"{v/1_000_000:N1}M", >= 1_000 => $"{v/1_000:N1}K", _ => $"{v:N0}" };
+}

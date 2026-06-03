@@ -1,0 +1,166 @@
+@page "/crm/tasks"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@using MudVariant = MudBlazor.Variant
+
+@inject ITaskService TaskService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+
+<PageTitle>المهام — CRM</PageTitle>
+
+@if (_isLoading)
+{ <div class="loading-screen"><div class="loading-content"><MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" /><MudText Class="loading-text">جاري تحميل المهام...</MudText></div></div> }
+else
+{
+<div dir="rtl" class="list-page">
+    <div class="page-bg-decorations"><div class="bg-orb bg-orb-1"></div><div class="bg-orb bg-orb-2"></div></div>
+    <div class="top-accent-bar"><div class="accent-shimmer"></div></div>
+
+    <div class="list-header">
+        <div class="header-bg"><div class="header-gradient"></div><div class="header-orbs"><div class="header-orb orb-1"></div><div class="header-orb orb-2"></div></div><div class="header-grid"></div></div>
+        <div class="header-content">
+            <div class="header-info">
+                <div class="header-icon-wrapper"><div class="header-icon-glow"></div><div class="header-icon"><MudIcon Icon="@Icons.Material.Rounded.Assignment" Size="MudSize.Large" /></div></div>
+                <div class="header-text"><h1>المهام</h1><p>إدارة ومتابعة مهام CRM</p></div>
+            </div>
+        </div>
+    </div>
+
+    @* Filters *@
+    <div class="filter-bar">
+        <div class="search-box"><MudIcon Icon="@Icons.Material.Rounded.Search" Class="search-icon" /><input type="text" @bind="_searchText" @bind:event="oninput" placeholder="بحث..." class="search-input" /></div>
+        <MudSelect T="string" Label="الحالة" Variant="MudVariant.Outlined" @bind-Value="_filter.Status" Dense="true" Class="filter-pick" Clearable="true">
+            <MudSelectItem Value="@("Pending")">⏳ قيد الانتظار</MudSelectItem>
+            <MudSelectItem Value="@("InProgress")">🔄 جاري</MudSelectItem>
+            <MudSelectItem Value="@("Completed")">✅ مكتملة</MudSelectItem>
+        </MudSelect>
+        <MudSelect T="string" Label="الأولوية" Variant="MudVariant.Outlined" @bind-Value="_filter.Priority" Dense="true" Class="filter-pick" Clearable="true">
+            <MudSelectItem Value="@("High")">🔴 عالية</MudSelectItem>
+            <MudSelectItem Value="@("Medium")">🟡 متوسطة</MudSelectItem>
+            <MudSelectItem Value="@("Low")">🔵 منخفضة</MudSelectItem>
+        </MudSelect>
+        <MudChip T="string" Variant="@(_filter.IsOverdue == true ? MudVariant.Filled : MudVariant.Outlined)"
+                 Color="@(_filter.IsOverdue == true ? MudColor.Error : MudColor.Default)" Size="MudSize.Small"
+                 OnClick="() => { _filter.IsOverdue = _filter.IsOverdue == true ? null : true; _ = ApplyFilter(); }">متأخرة فقط</MudChip>
+        <MudButton Variant="MudVariant.Outlined" OnClick="ApplyFilter" StartIcon="@Icons.Material.Rounded.FilterList">تصفية</MudButton>
+    </div>
+
+    @if (_isTableLoading) { <MudLinearProgress Color="MudColor.Primary" Indeterminate="true" Class="load-bar" /> }
+
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead><tr><th>المهمة</th><th>العميل</th><th>المسؤول</th><th>الأولوية</th><th>الاستحقاق</th><th>الحالة</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var t in _pagedResult.Items)
+                {
+                    var isDone = t.Status == "Completed";
+                    var priColor = t.Priority switch { "High" => "#ef4444", "Medium" => "#f59e0b", _ => "#3b82f6" };
+                    <tr class="@(isDone ? "row-done" : t.TaskDueStatus == "Overdue" ? "row-overdue" : "clickable")"
+                        @onclick="() => { if (t.OpportunityId.HasValue) GoToOpportunity(t.OpportunityId.Value); }">
+                        <td><strong>@(t.TaskDescription ?? "—").Truncate(40)</strong></td>
+                        <td>@(t.ClientName ?? "—")</td>
+                        <td>@(t.AssignedToName ?? "—")</td>
+                        <td><span class="pri-badge" style="background:@(priColor + "20");color:@priColor">@(t.Priority == "High" ? "عالية" : t.Priority == "Medium" ? "متوسطة" : "منخفضة")</span></td>
+                        <td><span class="@(t.TaskDueStatus == "Overdue" ? "text-danger" : "")">@t.DueDate.ToString("yyyy/MM/dd")</span></td>
+                        <td>@(t.Status == "Completed" ? "✅ مكتملة" : t.Status == "InProgress" ? "🔄 جاري" : "⏳ قيد الانتظار")</td>
+                        <td @onclick:stopPropagation="true">
+                            @if (!isDone)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Rounded.CheckCircle" Size="MudSize.Small" OnClick="() => Complete(t.TaskId)" Class="action-green" />
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (!_pagedResult.Items.Any()) { <div class="empty-state"><MudIcon Icon="@Icons.Material.Rounded.CheckCircle" Size="MudSize.Large" /><span>لا توجد مهام</span></div> }
+
+    @if (_pagedResult.TotalPages > 1)
+    {
+        <div class="pagination-bar">
+            <MudIconButton Icon="@Icons.Material.Rounded.ChevronRight" OnClick="() => GoToPage(_filter.PageNumber - 1)" Disabled="@(!_pagedResult.HasPrevious)" />
+            <span>صفحة @_pagedResult.PageNumber من @_pagedResult.TotalPages — @_pagedResult.TotalCount مهمة</span>
+            <MudIconButton Icon="@Icons.Material.Rounded.ChevronLeft" OnClick="() => GoToPage(_filter.PageNumber + 1)" Disabled="@(!_pagedResult.HasNext)" />
+        </div>
+    }
+</div>
+}
+
+<style>
+    .list-page { padding: 0 1.5rem 3rem; }
+    .filter-bar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.6rem 1rem; background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 12px; }
+    .search-box { position: relative; flex: 1; min-width: 140px; }
+    .search-icon { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); }
+    .search-input { width: 100%; padding: 7px 30px 7px 10px; border: 1px solid var(--mud-palette-lines-inputs); border-radius: 8px; background: var(--mud-palette-background); }
+    .filter-pick { min-width: 120px; }
+    .load-bar { margin-bottom: 0.5rem; border-radius: 4px; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--mud-palette-lines-default); border-radius: 12px; background: var(--mud-palette-surface); }
+    .data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .data-table th { padding: 0.6rem 0.8rem; text-align: right; font-weight: 700; border-bottom: 2px solid var(--mud-palette-lines-inputs); }
+    .data-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--mud-palette-lines-inputs); }
+    .data-table tr:last-child td { border-bottom: none; }
+    .clickable { cursor: pointer; }
+    .clickable:hover { background: var(--mud-palette-action-hover); }
+    .row-done { opacity: 0.5; }
+    .row-done td:first-child { text-decoration: line-through; }
+    .row-overdue { background: #ef444403; }
+    .pri-badge { padding: 1px 6px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; }
+    .text-danger { color: #ef4444; font-weight: 600; }
+    .action-green { color: #10b981 !important; }
+    .empty-state { display: flex; flex-direction: column; align-items: center; padding: 3rem; color: var(--mud-palette-text-disabled); gap: 0.5rem; }
+    .pagination-bar { display: flex; align-items: center; justify-content: center; gap: 0.75rem; margin-top: 1.5rem; font-size: 0.85rem; color: var(--mud-palette-text-secondary); }
+
+    .list-header { position: relative; border-radius: 20px; overflow: hidden; margin-bottom: 0.75rem; }
+    .header-bg { position: absolute; inset: 0; }
+    .header-gradient { position: absolute; inset: 0; background: linear-gradient(135deg, #d97706 0%, #f59e0b 40%, #fbbf24 100%); }
+    .header-orbs { position: absolute; inset: 0; overflow: hidden; }
+    .header-orb { position: absolute; border-radius: 50%; filter: blur(60px); }
+    .orb-1 { width: 140px; height: 140px; background: rgba(255,255,255,.1); top: -20px; right: -20px; }
+    .orb-2 { width: 100px; height: 100px; background: rgba(255,255,255,.05); bottom: -20px; left: 10%; }
+    .header-grid { position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 1px, rgba(255,255,255,.02) 1px, rgba(255,255,255,.02) 2px), repeating-linear-gradient(90deg, transparent, transparent 1px, rgba(255,255,255,.02) 1px, rgba(255,255,255,.02) 2px); background-size: 40px 40px; }
+    .header-content { position: relative; z-index: 1; padding: 1.25rem 1.5rem; color: #fff; }
+    .header-info { display: flex; align-items: center; gap: 0.75rem; }
+    .header-icon-wrapper { position: relative; }
+    .header-icon-glow { position: absolute; inset: -6px; background: rgba(255,255,255,.12); border-radius: 50%; filter: blur(10px); }
+    .header-icon { width: 44px; height: 44px; background: rgba(255,255,255,.12); border-radius: 12px; display: flex; align-items: center; justify-content: center; }
+    .header-text h1 { margin: 0; font-size: 1.15rem; }
+    .header-text p { margin: 2px 0 0; font-size: 0.75rem; opacity: 0.75; }
+
+    @@media (max-width: 900px) { .filter-bar { flex-direction: column; } .filter-pick { width: 100%; } }
+</style>
+
+@code {
+    private bool _isLoading = true, _isTableLoading, _canView;
+    private string _searchText = "";
+    private TaskFilterDto _filter = new();
+    private PagedResult<TaskListDto> _pagedResult = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _canView = user.HasClaim("Permission", "frmTasks:View") || user.IsInRole("Admin");
+        if (!_canView) { Navigation.NavigateTo("/"); return; }
+
+        _isTableLoading = true; _pagedResult = await TaskService.GetTasksAsync(_filter); _isTableLoading = _isLoading = false; 
+    }
+
+    private async Task ApplyFilter()
+    { _filter.SearchText = _searchText; _filter.PageNumber = 1; _isTableLoading = true; StateHasChanged(); _pagedResult = await TaskService.GetTasksAsync(_filter); _isTableLoading = false; }
+
+    private async Task GoToPage(int page) { _filter.PageNumber = page; _isTableLoading = true; StateHasChanged(); _pagedResult = await TaskService.GetTasksAsync(_filter); _isTableLoading = false; }
+
+    private async Task Complete(int taskId)
+    { var (ok, msg) = await TaskService.CompleteAsync(taskId, "", "System"); Snackbar.Add(msg, ok ? Severity.Success : Severity.Error); if (ok) { _pagedResult = await TaskService.GetTasksAsync(_filter); } }
+
+    private void GoToOpportunity(int id) => Navigation.NavigateTo($"/crm/opportunities/{id}");
+}

@@ -49,6 +49,10 @@ namespace COCOBOLOERPNEW.Services
                         {
                             claims.Add(new Claim("Permission", perm));
                         }
+                        if (!string.IsNullOrEmpty(userData.CrmAccessFrom))
+                        {
+                            claims.Add(new Claim("CrmAccessFrom", userData.CrmAccessFrom));
+                        }
                         
                         var identity = new ClaimsIdentity(claims, "Cookies");
                         _cachedUser = new ClaimsPrincipal(identity);
@@ -82,7 +86,8 @@ namespace COCOBOLOERPNEW.Services
                         Permissions = user.Claims
                             .Where(c => c.Type == "Permission")
                             .Select(c => c.Value)
-                            .ToList()
+                            .ToList(),
+                        CrmAccessFrom = user.FindFirst("CrmAccessFrom")?.Value
                     };
                     
                     var json = JsonSerializer.Serialize(userData);
@@ -109,6 +114,7 @@ namespace COCOBOLOERPNEW.Services
             public string Role { get; set; } = "User";
             public int UserId { get; set; }
             public List<string> Permissions { get; set; } = new();
+            public string? CrmAccessFrom { get; set; }
         }
     }
 }

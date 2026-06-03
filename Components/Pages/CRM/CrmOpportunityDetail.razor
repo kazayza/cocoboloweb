@@ -1,0 +1,370 @@
+@page "/crm/opportunities/{Id:int}"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Models
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@using MudVariant = MudBlazor.Variant
+
+@inject IOpportunityService OppService
+@inject IInteractionService InteractionService
+@inject ITaskService TaskService
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>تفاصيل الفرصة — CRM</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="loading-screen"><div class="loading-content"><MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" /><MudText Typo="Typo.h6" Class="loading-text">جاري تحميل التفاصيل...</MudText></div></div>
+}
+else
+{
+<div dir="rtl" class="detail-page">
+
+    @* ═════════ HEADER ═════════ *@
+    <div class="detail-header">
+        <div class="header-bg">
+            <div class="header-gradient"></div>
+            <div class="header-orbs"><div class="header-orb orb-1"></div><div class="header-orb orb-2"></div></div>
+            <div class="header-grid"></div>
+        </div>
+        <div class="header-content">
+            <div class="header-top">
+                <button class="back-btn" @onclick="GoBack"><MudIcon Icon="@Icons.Material.Rounded.ArrowBack" /></button>
+                <div class="header-icon"><MudIcon Icon="@Icons.Material.Rounded.TrackChanges" Size="MudSize.Large" /></div>
+                <div class="header-text">
+                    <h1>@_opp.ClientName</h1>
+                    <p>
+                        <span class="stage-badge" style="background:@(_opp.StageColor ?? "#94a3b8")20;color:@(_opp.StageColor ?? "#94a3b8");border:1px solid @(_opp.StageColor ?? "#94a3b8")">@(_opp.StageNameAr ?? _opp.StageName)</span>
+                        <span>📞 @(string.IsNullOrWhiteSpace(_opp.Phone) ? "—" : _opp.Phone)</span>
+                        <span>📅 @_opp.CreatedAt.ToString("yyyy/MM/dd")</span>
+                    </p>
+                </div>
+            </div>
+
+            @* Key Values *@
+            <div class="kv-row">
+                <div class="kv-card"><span class="kv-label">القيمة المتوقعة</span><span class="kv-value">@(_opp.ExpectedValue?.ToString("N0") ?? "—") ج</span></div>
+                <div class="kv-card"><span class="kv-label">الموظف</span><span class="kv-value">@(_opp.EmployeeName ?? "—")</span></div>
+                <div class="kv-card"><span class="kv-label">المصدر</span><span class="kv-value">@(_opp.SourceName ?? "—")</span></div>
+                <div class="kv-card"><span class="kv-label">المنتج</span><span class="kv-value">@(_opp.InterestedProduct ?? "—")</span></div>
+                <div class="kv-card"><span class="kv-label">المتابعة القادمة</span><span class="kv-value @(_opp.NextFollowUpDate.HasValue && _opp.NextFollowUpDate.Value < DateTime.Today ? "text-danger" : "")">@(_opp.NextFollowUpDate?.ToString("yyyy/MM/dd") ?? "—")</span></div>
+                <div class="kv-card"><span class="kv-label">تفاعلات</span><span class="kv-value">@_interactions.Count</span></div>
+            </div>
+
+            @* Notes *@
+            @if (!string.IsNullOrWhiteSpace(_opp.Notes))
+            { <div class="notes-box"><strong>📝 ملاحظات:</strong> @_opp.Notes</div> }
+            @if (!string.IsNullOrWhiteSpace(_opp.Guidance))
+            { <div class="notes-box guidance"><strong>💡 توجيه:</strong> @_opp.Guidance</div> }
+        </div>
+    </div>
+
+    @* ═════════ STAGE CHANGE ═════════ *@
+    <div class="stage-bar">
+        <span class="stage-label">تغيير المرحلة:</span>
+        <div class="stage-buttons">
+            @foreach (var stage in _stages)
+            {
+                var isCurrent = stage.StageId == _opp.StageId;
+                <MudChip T="string"
+                         Variant="@(isCurrent ? MudVariant.Filled : MudVariant.Outlined)"
+                         Color="@(isCurrent ? MudColor.Primary : MudColor.Default)"
+                         Size="MudSize.Small"
+                         Style="@(isCurrent ? "" : "border-color:" + (stage.StageColor ?? "#94a3b8") + ";color:" + (stage.StageColor ?? "#94a3b8"))"
+                         OnClick="() => ChangeStage(stage.StageId)">
+                    <span style="color:@(stage.StageColor ?? "#666")">●</span> @(stage.StageNameAr ?? stage.StageName)
+                </MudChip>
+            }
+        </div>
+    </div>
+
+    @* ═════════ QUICK ADD INTERACTION ═════════ *@
+    <div class="quick-add-section">
+        <h3><MudIcon Icon="@Icons.Material.Rounded.AddComment" Size="MudSize.Small" /> إضافة تفاعل سريع</h3>
+        <div class="quick-form">
+            <MudTextField T="string" Label="ملخص التفاعل" Variant="MudVariant.Outlined"
+                          @bind-Value="_newInteraction.Summary" Lines="2" Class="flex-grow" Immediate="true" />
+            <MudDatePicker T="DateTime?" Label="المتابعة القادمة" Variant="MudVariant.Outlined"
+                           Date="_newInteraction.NextFollowUpDate"
+                           DateChanged="d => _newInteraction.NextFollowUpDate = d ?? _newInteraction.NextFollowUpDate" Dense="true" Class="date-pick" />
+            <MudSelect T="int?" Label="المرحلة بعد التفاعل" Variant="MudVariant.Outlined"
+                       @bind-Value="_newInteraction.StageAfterId" Dense="true" Class="stage-pick" Clearable="true">
+                @foreach (var s in _stages)
+                { <MudSelectItem Value="@((int?)s.StageId)">@(s.StageNameAr ?? s.StageName)</MudSelectItem> }
+            </MudSelect>
+            <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary"
+                       OnClick="AddInteraction" StartIcon="@Icons.Material.Rounded.Send" Disabled="_addingInteraction">
+                @(_addingInteraction ? "جاري..." : "حفظ")
+            </MudButton>
+        </div>
+    </div>
+
+    @* ═════════ INTERACTIONS LIST ═════════ *@
+    <MudPaper Class="section-card" Elevation="0">
+        <div class="section-header"><h3><MudIcon Icon="@Icons.Material.Rounded.Chat" Size="MudSize.Small" /> سجل التفاعلات (@_interactions.Count)</h3></div>
+        <div class="timeline">
+            @if (_interactions.Any())
+            {
+                @foreach (var i in _interactions)
+                {
+                    <div class="tl-item">
+                        <div class="tl-dot" style="background:@(i.StageAfterId.HasValue ? (_stages.FirstOrDefault(s => s.StageId == i.StageAfterId)?.StageColor ?? "#94a3b8") : "#94a3b8")"></div>
+                        <div class="tl-content">
+                            <div class="tl-header">
+                                <strong>@(i.EmployeeName ?? i.CreatedBy ?? "—")</strong>
+                                <span class="tl-date">@i.InteractionDate.ToString("yyyy/MM/dd HH:mm")</span>
+                            </div>
+                            @if (i.StageBeforeId != i.StageAfterId)
+                            { <div class="tl-stage">🔄 @(i.StageBeforeName ?? "—") → <strong>@(i.StageAfterName ?? "—")</strong></div> }
+                            @if (!string.IsNullOrWhiteSpace(i.Summary))
+                            { <div class="tl-summary">@i.Summary</div> }
+                            @if (!string.IsNullOrWhiteSpace(i.Notes))
+                            { <div class="tl-notes">📌 @i.Notes</div> }
+                            @if (i.NextFollowUpDate.HasValue)
+                            { <div class="tl-followup">📅 المتابعة: @i.NextFollowUpDate.Value.ToString("yyyy/MM/dd")</div> }
+                        </div>
+                    </div>
+                }
+            }
+            else
+            { <div class="empty-state">لا توجد تفاعلات بعد</div> }
+        </div>
+    </MudPaper>
+
+    @* ═════════ TASKS ═════════ *@
+    <div class="quick-add-section">
+        <h3><MudIcon Icon="@Icons.Material.Rounded.AddTask" Size="MudSize.Small" /> إضافة مهمة</h3>
+        <div class="quick-form">
+            <MudTextField T="string" Label="وصف المهمة" Variant="MudVariant.Outlined"
+                          @bind-Value="_newTask.TaskDescription" Class="flex-grow" Immediate="true" />
+            <MudDatePicker T="DateTime?" Label="تاريخ الاستحقاق" Variant="MudVariant.Outlined"
+                           Date="_newTask.DueDate"
+                           DateChanged="d => _newTask.DueDate = d ?? _newTask.DueDate" Dense="true" Class="date-pick" />
+            <MudSelect T="int" Label="أسند إلى" Variant="MudVariant.Outlined"
+                       @bind-Value="_newTask.AssignedTo" Dense="true" Class="stage-pick">
+                @foreach (var e in _employees)
+                { <MudSelectItem Value="@(e.EmployeeId)">@e.FullName</MudSelectItem> }
+            </MudSelect>
+            <MudSelect T="string" Label="الأولوية" Variant="MudVariant.Outlined"
+                       @bind-Value="_newTask.Priority" Dense="true" Class="priority-pick">
+                <MudSelectItem Value="@("High")">🔴 عالية</MudSelectItem>
+                <MudSelectItem Value="@("Medium")">🟡 متوسطة</MudSelectItem>
+                <MudSelectItem Value="@("Low")">🔵 منخفضة</MudSelectItem>
+            </MudSelect>
+            <MudButton Variant="MudVariant.Filled" Color="MudColor.Success"
+                       OnClick="AddTask" StartIcon="@Icons.Material.Rounded.Add" Disabled="_addingTask">
+                @(_addingTask ? "جاري..." : "إضافة")
+            </MudButton>
+        </div>
+    </div>
+
+    <MudPaper Class="section-card" Elevation="0">
+        <div class="section-header"><h3><MudIcon Icon="@Icons.Material.Rounded.Assignment" Size="MudSize.Small" /> المهام (@_tasks.Count)</h3></div>
+        @if (_tasks.Any())
+        {
+            <div class="task-list-detail">
+                @foreach (var t in _tasks)
+                {
+                    var isDone = t.Status == "Completed";
+                    var priColor = t.Priority switch { "High" => "#ef4444", "Medium" => "#f59e0b", _ => "#3b82f6" };
+                    <div class="task-item @(isDone ? "task-done" : "") @(t.TaskDueStatus == "Overdue" ? "task-overdue" : "")">
+                        <div class="task-pri" style="background:@priColor"></div>
+                        <div class="task-body">
+                            <span class="task-desc">@t.TaskDescription</span>
+                            <span class="task-meta">
+                                👤 @t.AssignedToName · 📅 @t.DueDate.ToString("yyyy/MM/dd")
+                                @if (t.TaskDueStatus == "Overdue") { <span class="text-danger"> · متأخرة</span> }
+                                @if (isDone) { <span class="text-success"> · ✅ مكتملة @t.CompletedDate?.ToString("yyyy/MM/dd")</span> }
+                            </span>
+                        </div>
+                        @if (!isDone)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Rounded.CheckCircle" Size="MudSize.Small"
+                                           OnClick="() => CompleteTask(t.TaskId)" Class="action-green" />
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else
+        { <div class="empty-state">لا توجد مهام</div> }
+    </MudPaper>
+
+</div>
+}
+
+<style>
+    .detail-page { padding: 0 1.5rem 3rem; }
+    .flex-grow { flex: 2; min-width: 160px; }
+    .date-pick, .stage-pick { flex: 1; min-width: 130px; }
+    .priority-pick { flex: 1; min-width: 110px; }
+
+    .detail-header { position: relative; border-radius: 20px; overflow: hidden; margin-bottom: 1rem; }
+    .header-bg { position: absolute; inset: 0; }
+    .header-gradient { position: absolute; inset: 0; background: linear-gradient(135deg, #7c3aed 0%, #a78bfa 40%, #8b5cf6 100%); }
+    .header-orbs { position: absolute; inset: 0; overflow: hidden; }
+    .header-orb { position: absolute; border-radius: 50%; filter: blur(60px); }
+    .orb-1 { width: 160px; height: 160px; background: rgba(255,255,255,.1); top: -30px; right: -30px; }
+    .orb-2 { width: 120px; height: 120px; background: rgba(255,255,255,.06); bottom: -20px; left: 10%; }
+    .header-grid { position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 1px, rgba(255,255,255,.02) 1px, rgba(255,255,255,.02) 2px), repeating-linear-gradient(90deg, transparent, transparent 1px, rgba(255,255,255,.02) 1px, rgba(255,255,255,.02) 2px); background-size: 40px 40px; }
+    .header-content { position: relative; z-index: 1; padding: 1.5rem; color: #fff; }
+    .header-top { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+    .back-btn { background: rgba(255,255,255,.15); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 10px; padding: 6px 10px; cursor: pointer; backdrop-filter: blur(5px); }
+    .back-btn:hover { background: rgba(255,255,255,.25); }
+    .header-icon { width: 48px; height: 48px; background: rgba(255,255,255,.12); border-radius: 12px; display: flex; align-items: center; justify-content: center; }
+    .header-text h1 { margin: 0; font-size: 1.2rem; }
+    .header-text p { margin: 4px 0 0; font-size: 0.78rem; opacity: 0.85; display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+    .stage-badge { padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; }
+    .kv-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+    .kv-card { background: rgba(255,255,255,.1); border-radius: 8px; padding: 0.5rem 0.75rem; min-width: 90px; }
+    .kv-label { font-size: 0.62rem; opacity: 0.7; display: block; }
+    .kv-value { font-size: 0.85rem; font-weight: 700; }
+    .notes-box { margin-top: 0.75rem; padding: 0.6rem 0.8rem; background: rgba(255,255,255,.08); border-radius: 8px; font-size: 0.78rem; }
+    .guidance { background: rgba(251,191,36,.15); }
+    .text-danger { color: #fca5a5 !important; }
+    .text-success { color: #86efac !important; }
+
+    .stage-bar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.6rem 1rem; background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 12px; }
+    .stage-label { font-size: 0.8rem; font-weight: 600; }
+    .stage-buttons { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+
+    .quick-add-section { margin-bottom: 1rem; }
+    .quick-add-section h3 { font-size: 0.9rem; margin: 0 0 0.5rem; display: flex; align-items: center; gap: 0.4rem; }
+    .quick-form { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-start; }
+
+    .section-card { border-radius: 14px; border: 1px solid var(--mud-palette-lines-default); overflow: hidden; margin-bottom: 1rem; }
+    .section-header { padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--mud-palette-lines-inputs); }
+    .section-header h3 { margin: 0; font-size: 0.88rem; display: flex; align-items: center; gap: 0.4rem; }
+    .empty-state { padding: 2rem; text-align: center; color: var(--mud-palette-text-disabled); }
+
+    .timeline { padding: 0.5rem 1.25rem; }
+    .tl-item { display: flex; gap: 0.75rem; padding: 0.75rem 0; border-bottom: 1px solid var(--mud-palette-lines-inputs); }
+    .tl-item:last-child { border-bottom: none; }
+    .tl-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
+    .tl-content { flex: 1; }
+    .tl-header { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.2rem; }
+    .tl-date { font-size: 0.7rem; color: var(--mud-palette-text-secondary); }
+    .tl-stage { font-size: 0.72rem; margin-bottom: 0.15rem; }
+    .tl-summary { font-size: 0.82rem; margin-bottom: 0.1rem; }
+    .tl-notes, .tl-followup { font-size: 0.7rem; color: var(--mud-palette-text-secondary); }
+
+    .task-list-detail { padding: 0.25rem 1.25rem; }
+    .task-item { display: flex; gap: 0.6rem; padding: 0.6rem 0; border-bottom: 1px solid var(--mud-palette-lines-inputs); align-items: center; }
+    .task-item:last-child { border-bottom: none; }
+    .task-pri { width: 4px; height: 36px; border-radius: 2px; flex-shrink: 0; }
+    .task-body { flex: 1; }
+    .task-desc { font-size: 0.82rem; display: block; }
+    .task-meta { font-size: 0.7rem; color: var(--mud-palette-text-secondary); }
+    .task-done { opacity: 0.6; }
+    .task-done .task-desc { text-decoration: line-through; }
+    .task-overdue { background: #ef444405; }
+    .action-green { color: #10b981 !important; }
+
+    @@media (max-width: 900px) { .quick-form { flex-direction: column; } .date-pick, .stage-pick, .priority-pick { width: 100%; } }
+    @@media (max-width: 500px) { .detail-page { padding: 0 0.3rem 2rem; } .kv-row { flex-direction: column; } }
+</style>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private bool _isLoading = true, _addingInteraction, _addingTask;
+    private OpportunityListDto _opp = new();
+    private List<InteractionListDto> _interactions = new();
+    private List<TaskListDto> _tasks = new();
+    private List<SalesStage> _stages = new();
+    private List<Employee> _employees = new();
+    private QuickInteractionDto _newInteraction = new();
+    private QuickTaskDto _newTask = new() { DueDate = DateTime.Today.AddDays(1), Priority = "Medium" };
+    private string? _currentUserName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            _currentUserName = auth.User.Identity?.Name ?? "System";
+        }
+        catch { }
+
+        try
+        {
+            _stages = await OppService.GetStagesAsync();
+            _employees = await OppService.GetActiveEmployeesAsync();
+
+            var detail = await OppService.GetOpportunityForEditAsync(Id);
+            if (detail == null) { Navigation.NavigateTo("/crm/opportunities"); return; }
+
+            var result = await OppService.GetOpportunitiesAsync(new OpportunityFilterDto { StageId = detail.StageId, PageSize = 200 });
+            _opp = result.Items.FirstOrDefault(o => o.OpportunityId == Id) ?? new();
+
+            _interactions = await InteractionService.GetByOpportunityAsync(Id);
+            _tasks = await TaskService.GetByOpportunityAsync(Id);
+
+            _newInteraction.OpportunityId = Id;
+            _newInteraction.PartyId = _opp.PartyId;
+            _newTask.OpportunityId = Id;
+            _newTask.PartyId = _opp.PartyId;
+            _newTask.AssignedTo = _opp.EmployeeId ?? 0;
+        }
+        catch (Exception ex) { Snackbar.Add($"خطأ: {ex.Message}", Severity.Error); }
+        finally { _isLoading = false; }
+    }
+
+    private async Task AddInteraction()
+    {
+        if (string.IsNullOrWhiteSpace(_newInteraction.Summary)) { Snackbar.Add("اكتب ملخص التفاعل", Severity.Warning); return; }
+        _addingInteraction = true;
+        var (ok, msg) = await InteractionService.AddQuickAsync(_newInteraction, _currentUserName!);
+        _addingInteraction = false;
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+        {
+            _interactions = await InteractionService.GetByOpportunityAsync(Id);
+            _opp.StageId = _newInteraction.StageAfterId ?? _opp.StageId;
+            _opp.NextFollowUpDate = _newInteraction.NextFollowUpDate ?? _opp.NextFollowUpDate;
+            _newInteraction = new() { OpportunityId = Id, PartyId = _opp.PartyId };
+            StateHasChanged();
+        }
+    }
+
+    private async Task AddTask()
+    {
+        if (string.IsNullOrWhiteSpace(_newTask.TaskDescription)) { Snackbar.Add("اكتب وصف المهمة", Severity.Warning); return; }
+        if (_newTask.AssignedTo == 0) { Snackbar.Add("اختر المسؤول", Severity.Warning); return; }
+        _addingTask = true;
+        var (ok, msg) = await TaskService.AddQuickAsync(_newTask, _currentUserName!);
+        _addingTask = false;
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+        {
+            _tasks = await TaskService.GetByOpportunityAsync(Id);
+            _newTask = new() { OpportunityId = Id, PartyId = _opp.PartyId, DueDate = DateTime.Today.AddDays(1), Priority = "Medium", AssignedTo = _newTask.AssignedTo };
+        }
+    }
+
+    private async Task CompleteTask(int taskId)
+    {
+        var (ok, msg) = await TaskService.CompleteAsync(taskId, "", _currentUserName!);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) _tasks = await TaskService.GetByOpportunityAsync(Id);
+    }
+
+    private async Task ChangeStage(int stageId)
+    {
+        var dto = await OppService.GetOpportunityForEditAsync(Id);
+        if (dto == null) return;
+        dto.StageId = stageId;
+        var (ok, msg, _) = await OppService.SaveOpportunityAsync(dto, _currentUserName!);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) _opp.StageId = stageId;
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/crm/opportunities");
+}
