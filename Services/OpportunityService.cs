@@ -99,28 +99,121 @@ public class OpportunityService : IOpportunityService
     // ════════════════════ GET ALL EMPLOYEES ════════════════════
     public async Task<List<Employee>> GetEmployeesAsync()
     {
-        return await _db.Employees.AsNoTracking().Where(e => e.Status == "نشط" || e.Status == "Active").ToListAsync();
+        return await _db.Employees.AsNoTracking()
+            .Where(e =>  e.Status == "نشط")
+            .Select(e => new Employee { EmployeeId = e.EmployeeId, FullName = e.FullName })
+            .ToListAsync();
     }
 
     // ════════════════════ STATS ════════════════════
-    public async Task<OpportunityStatsDto> GetStatsAsync(OpportunityFilterDto filter)
+    // ✅ الكود المعدل
+public async Task<OpportunityStatsDto> GetStatsAsync(OpportunityFilterDto filter)
+{
+    try
     {
-        try
+        // ═══ 1. CRM Access Date ═══
+        var crmAccess = _http.GetCrmAccessFrom();
+        
+        var stages = await _db.SalesStages
+            .AsNoTracking()
+            .Where(s => s.IsActive)
+            .ToListAsync();
+
+        var wonIds = stages
+            .Where(s => WonKeywords.Any(k => 
+                (s.StageNameAr ?? "").Contains(k) || 
+                (s.StageName ?? "").Contains(k)))
+            .Select(s => s.StageId)
+            .ToHashSet();
+
+        var lostIds = stages
+            .Where(s => LostKeywords.Any(k => 
+                (s.StageNameAr ?? "").Contains(k) || 
+                (s.StageName ?? "").Contains(k)))
+            .Select(s => s.StageId)
+            .ToHashSet();
+        lostIds.ExceptWith(wonIds);
+
+        // ═══ 2. Base Query مع كل الفلاتر ═══
+        var q = _db.SalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.IsActive == (filter.IsActive ?? true));
+
+        // ⭐ فلتر التاريخ حسب صلاحية المستخدم
+        if (crmAccess.HasValue)
+            q = q.Where(o => o.CreatedAt >= crmAccess.Value);
+
+        // ⭐ كل الفلاتر المتقدمة
+        q = ApplyStatsFilters(q, filter);
+
+        var opps = await q
+            .Select(o => new 
+            { 
+                o.StageId, 
+                o.ExpectedValue, 
+                o.NextFollowUpDate 
+            })
+            .ToListAsync();
+
+        var today = DateTime.Today;
+        var tomorrow = today.AddDays(1);
+
+        return new OpportunityStatsDto
         {
-            var stages = await _db.SalesStages.AsNoTracking().Where(s => s.IsActive).ToListAsync();
-            var wonIds  = stages.Where(s => WonKeywords.Any(k => (s.StageNameAr ?? "").Contains(k) || (s.StageName ?? "").Contains(k))).Select(s => s.StageId).ToHashSet();
-            var lostIds = stages.Where(s => LostKeywords.Any(k => (s.StageNameAr ?? "").Contains(k) || (s.StageName ?? "").Contains(k))).Select(s => s.StageId).ToHashSet();
-            lostIds.ExceptWith(wonIds);
-            var q = _db.SalesOpportunities.AsNoTracking().AsQueryable();
-            if (filter.StageId.HasValue) q = q.Where(o => o.StageId == filter.StageId.Value);
-            if (filter.EmployeeId.HasValue) q = q.Where(o => o.EmployeeId == filter.EmployeeId.Value);
-            if (filter.IsActive.HasValue) q = q.Where(o => o.IsActive == filter.IsActive.Value);
-            var opps = await q.Select(o => new { o.StageId, o.ExpectedValue, o.NextFollowUpDate }).ToListAsync();
-            var today = DateTime.Today; var tomorrow = today.AddDays(1);
-            return new OpportunityStatsDto { TotalCount = opps.Count, OpenCount = opps.Count(o => !wonIds.Contains(o.StageId) && !lostIds.Contains(o.StageId)), WonCount = opps.Count(o => wonIds.Contains(o.StageId)), LostCount = opps.Count(o => lostIds.Contains(o.StageId)), PipelineValue = opps.Where(o => !wonIds.Contains(o.StageId) && !lostIds.Contains(o.StageId)).Sum(o => o.ExpectedValue ?? 0), OverdueFollowUpCount = opps.Count(o => o.NextFollowUpDate.HasValue && o.NextFollowUpDate.Value < today), TodayFollowUpCount = opps.Count(o => o.NextFollowUpDate.HasValue && o.NextFollowUpDate.Value >= today && o.NextFollowUpDate.Value < tomorrow) };
-        }
-        catch { return new(); }
+            TotalCount = opps.Count,
+            OpenCount = opps.Count(o => 
+                !wonIds.Contains(o.StageId) && 
+                !lostIds.Contains(o.StageId)),
+            WonCount = opps.Count(o => wonIds.Contains(o.StageId)),
+            LostCount = opps.Count(o => lostIds.Contains(o.StageId)),
+            PipelineValue = opps
+                .Where(o => !wonIds.Contains(o.StageId) && 
+                            !lostIds.Contains(o.StageId))
+                .Sum(o => o.ExpectedValue ?? 0),
+            OverdueFollowUpCount = opps.Count(o => 
+                o.NextFollowUpDate.HasValue && 
+                o.NextFollowUpDate.Value < today),
+            TodayFollowUpCount = opps.Count(o => 
+                o.NextFollowUpDate.HasValue && 
+                o.NextFollowUpDate.Value >= today && 
+                o.NextFollowUpDate.Value < tomorrow)
+        };
     }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "GetStatsAsync failed");
+        return new();
+    }
+}
+
+// ═══ Helper Method جديدة ═══
+private static IQueryable<SalesOpportunity> ApplyStatsFilters(
+    IQueryable<SalesOpportunity> q, OpportunityFilterDto f)
+{
+    if (f.StageId.HasValue)
+        q = q.Where(o => o.StageId == f.StageId.Value);
+    if (f.EmployeeId.HasValue)
+        q = q.Where(o => o.EmployeeId == f.EmployeeId.Value);
+    if (f.SourceId.HasValue)
+        q = q.Where(o => o.SourceId == f.SourceId.Value);
+    if (f.CategoryId.HasValue)
+        q = q.Where(o => o.CategoryId == f.CategoryId.Value);
+    if (f.MinValue.HasValue)
+        q = q.Where(o => o.ExpectedValue >= f.MinValue.Value);
+    if (f.MaxValue.HasValue)
+        q = q.Where(o => o.ExpectedValue <= f.MaxValue.Value);
+    if (f.DateFrom.HasValue)
+        q = q.Where(o => o.CreatedAt >= f.DateFrom.Value);
+    if (f.DateTo.HasValue)
+        q = q.Where(o => o.CreatedAt <= f.DateTo.Value);
+    if (f.IsOverdueFollowUp == true)
+        q = q.Where(o => o.NextFollowUpDate.HasValue && 
+                         o.NextFollowUpDate.Value < DateTime.Today);
+    if (f.HasFollowUp == true)
+        q = q.Where(o => o.NextFollowUpDate.HasValue);
+    
+    return q;
+}
 
     // ════════════════════ SAVE ════════════════════
     public async Task<(bool Success, string Message, int OpportunityId)> SaveOpportunityAsync(OpportunityFormDto dto, string userName)

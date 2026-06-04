@@ -17,10 +17,6 @@ public partial class SalesStage
 
     public bool IsActive { get; set; }
 
-    public bool IsWon { get; set; }
-
-    public bool IsLost { get; set; }
-
     public string? CreatedBy { get; set; }
 
     public DateTime? CreatedAt { get; set; }

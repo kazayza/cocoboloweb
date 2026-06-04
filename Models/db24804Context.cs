@@ -1896,11 +1896,11 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.LastLogin).HasColumnType("datetime");
             entity.Property(e => e.Password).HasMaxLength(100);
             entity.Property(e => e.HashedPassword).HasMaxLength(500);
-            entity.Property(e => e.CrmAccessFromDate).HasColumnType("date");
             entity.Property(e => e.Role)
                 .HasMaxLength(50)
                 .HasDefaultValue("User");
             entity.Property(e => e.Username).HasMaxLength(50);
+            entity.Property(e => e.CrmAccessFromDate).HasColumnType("date");
         });
 
         modelBuilder.Entity<UserPermission>(entity =>

@@ -13,11 +13,12 @@ public class CrmDashboardService : ICrmDashboardService
 {
     private readonly db24804Context _db;
     private readonly IHttpContextAccessor _http;
+    private readonly ILogger<CrmDashboardService> _logger;
 
     private static readonly HashSet<string> WonKeywords  = new() { "تم البيع", "بيع", "Closed Deal" };
     private static readonly HashSet<string> LostKeywords = new() { "خسارة", "Lost", "غير مهتم", "Not Interested" };
 
-    public CrmDashboardService(db24804Context db, IHttpContextAccessor http) => (_db, _http) = (db, http);
+    public CrmDashboardService(db24804Context db, IHttpContextAccessor http, ILogger<CrmDashboardService> logger) => (_db, _http, _logger) = (db, http, logger);
 
     public async Task<CrmDashboardDto> GetDashboardAsync(
         string currentUserName, string? role, CrmDashboardFilterDto filter)
@@ -63,7 +64,7 @@ public class CrmDashboardService : ICrmDashboardService
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"CRM Dashboard error: {ex.Message}");
+            _logger.LogError(ex, "CRM Dashboard load failed: {Msg}", ex.Message);
         }
         return dto;
     }

@@ -309,6 +309,10 @@ app.MapPost("/auth/login", async (
         new(ClaimTypes.Role, string.IsNullOrWhiteSpace(user.Role) ? "User" : user.Role),
         new("UserId", user.UserId.ToString())
     };
+    
+    // ⭐ CRM Data Scoping — تاريخ بدء الاطلاع للمستخدم
+    if (user.CrmAccessFromDate.HasValue)
+        claims.Add(new Claim("CrmAccessFrom", user.CrmAccessFromDate.Value.ToString("yyyy-MM-dd")));
 
     var permissions = await (
         from up in db.UserPermissions.AsNoTracking()
