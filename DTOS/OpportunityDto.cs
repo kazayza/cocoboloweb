@@ -73,6 +73,8 @@ public class OpportunityFilterDto
     public bool? IsActive { get; set; } = true;
     public bool? HasFollowUp { get; set; }
     public bool? IsOverdueFollowUp { get; set; }
+    public int? StatusId { get; set; }
+    public bool? IsNew { get; set; }
     public decimal? MinValue { get; set; }
     public decimal? MaxValue { get; set; }
     public DateTime? DateFrom { get; set; }
@@ -105,6 +107,7 @@ public class OpportunityFormDto
     public int OpportunityId { get; set; }
     public int PartyId { get; set; }
     public string? PartyName { get; set; }
+    public string? Phone { get; set; }
     public int? EmployeeId { get; set; }
     public int? SourceId { get; set; }
     public int? AdTypeId { get; set; }
@@ -113,6 +116,7 @@ public class OpportunityFormDto
     public string? StageNameAr { get; set; }
     public string? StageColor { get; set; }
     public int? StatusId { get; set; }
+       
     public int? CategoryId { get; set; }
     public string? InterestedProduct { get; set; }
     public decimal? ExpectedValue { get; set; }

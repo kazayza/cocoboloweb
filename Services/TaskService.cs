@@ -141,4 +141,27 @@ public class TaskService : ITaskService
             return (false, $"خطأ: {ex.Message}");
         }
     }
+        public async Task<(bool Success, string Message)> CloseAllTasksForOpportunityAsync(
+        int opportunityId, string status, string notes, string userName)
+    {
+        var tasks = await _db.CrmTasks
+            .Where(t => t.OpportunityId == opportunityId
+                     && (t.Status == "Pending" || t.Status == "In Progress"))
+            .ToListAsync();
+
+        if (!tasks.Any())
+            return (true, "لا توجد مهام مفتوحة");
+
+        var now = DateTime.Now;
+        foreach (var t in tasks)
+        {
+            t.Status = status;
+            t.CompletedDate = now;
+            t.CompletedBy = userName;
+            t.CompletionNotes = notes;
+        }
+
+        await _db.SaveChangesAsync();
+        return (true, $"تم إغلاق {tasks.Count} مهمة");
+    }
 }

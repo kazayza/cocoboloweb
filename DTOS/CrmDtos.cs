@@ -78,6 +78,12 @@ public class QuickInteractionDto
     public int PartyId { get; set; }
     public string? Summary { get; set; }
     public int? StageAfterId { get; set; }
+    public int? StageBeforeId { get; set; }      // ← جديد
+    public int? StatusId { get; set; }            // ← جديد
+    public int? SourceId { get; set; }            // ← جديد
+    public int? EmployeeId { get; set; }          // ← جديد
+    public int? LostReasonId { get; set; }        // ← جديد
+    public string? LostNotes { get; set; }        // ← جديد
     public DateTime? NextFollowUpDate { get; set; }
     public string? Notes { get; set; }
 }
@@ -87,9 +93,10 @@ public class QuickInteractionDto
 // ═══════════════════════════════════════════════════════════════
 public class QuickTaskDto
 {
-    public int? OpportunityId { get; set; }
+     public int? OpportunityId { get; set; }
     public int? PartyId { get; set; }
     public int AssignedTo { get; set; }
+    public int? TaskTypeId { get; set; }          // ← جديد
     public string? TaskDescription { get; set; }
     public DateTime DueDate { get; set; } = DateTime.Today.AddDays(1);
     public string Priority { get; set; } = "Medium";

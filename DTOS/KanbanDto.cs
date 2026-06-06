@@ -37,4 +37,5 @@ public class KanbanCardDto
     public int InteractionsCount { get; set; }
     public int TasksCount { get; set; }
     public bool IsOverdue { get; set; }
+    public DateTime CreatedAt { get; set; }
 }

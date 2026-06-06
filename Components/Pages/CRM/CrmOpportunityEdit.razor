@@ -4,6 +4,7 @@
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Models
 @using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
 @using MudColor = MudBlazor.Color
 @using MudSize = MudBlazor.Size
 @using MudVariant = MudBlazor.Variant
@@ -11,148 +12,964 @@
 @inject IOpportunityService OppService
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
+@inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthProvider
 
-<PageTitle>@(_isNew ? "فرصة جديدة" : "تعديل الفرصة") — CRM</PageTitle>
+<PageTitle>@(_isEdit ? "تعديل الفرصة" : "فرصة بيع جديدة") — CRM</PageTitle>
 
-@if (_isLoading)
-{
-    <div class="loading-screen">
-        <MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" />
-        <MudText Typo="Typo.h6" Class="loading-text">جاري التحميل...</MudText>
-    </div>
-}
-else
-{
-<div dir="rtl" class="edit-page">
-    <MudPaper Class="form-card" Elevation="0">
+<div dir="rtl" class="opp-page">
+
+    @* ═══ LOADING ═══ *@
+    @if (_isLoading)
+    {
+        <div class="loading-screen">
+            <MudProgressCircular Color="MudColor.Primary" Size="MudSize.Large" Indeterminate="true" />
+            <MudText Typo="Typo.h6" Class="loading-text">جاري التحميل...</MudText>
+        </div>
+    }
+
+    @* ═══ SUCCESS ═══ *@
+    else if (_saveSuccess)
+    {
+        <div class="success-screen">
+            <div class="success-card">
+                <div class="success-icon">✅</div>
+                <h2 class="success-title">تم الحفظ بنجاح!</h2>
+                <p class="success-sub">فرصة #@_savedOpportunityId — @_savedClientName</p>
+                <div class="success-actions">
+                    @if (_canAdd)
+                    {
+                        <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary"
+                                   OnClick="GoToNew" StartIcon="@Icons.Material.Rounded.Add">
+                            تسجيل تواصل جديد
+                        </MudButton>
+                    }
+                    <MudButton Variant="MudVariant.Outlined" Color="MudColor.Primary"
+                               OnClick="() => GoToDetail(_savedOpportunityId)" StartIcon="@Icons.Material.Rounded.Visibility">
+                        عرض الفرصة
+                    </MudButton>
+                    <MudButton Variant="MudVariant.Text" Color="MudColor.Default"
+                               OnClick="GoToKanban" StartIcon="@Icons.Material.Rounded.ViewKanban">
+                        العودة للكانبان
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+    }
+
+    @* ═══ FORM ═══ *@
+    else
+    {
+        @* === HEADER === *@
         <div class="form-header">
-            <MudIcon Icon="@Icons.Material.Rounded.TrackChanges" Size="MudSize.Large" />
-            <h2>@(_isNew ? "إنشاء فرصة بيع جديدة" : "تعديل الفرصة")</h2>
+            <div class="fh-bg"></div>
+            <div class="fh-body">
+                <div class="fh-left">
+                    <MudIcon Icon="@(_isEdit ? Icons.Material.Rounded.Edit : Icons.Material.Rounded.AddCircle)" Style="font-size:1.8rem" />
+                    <div>
+                        <h1 class="fh-title">@(_isEdit ? $"تعديل الفرصة #{Id}" : "تسجيل تواصل جديد")</h1>
+                        <p class="fh-sub">فرصة بيعية — إدارة علاقات العملاء</p>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <div class="form-fields">
-            <MudTextField T="string" Label="اسم العميل" Variant="MudVariant.Outlined"
-                          @bind-Value="_form.PartyName" Immediate="true" />
-            
-            <MudSelect T="int" Label="المرحلة" Variant="MudVariant.Outlined" 
-                       @bind-Value="_form.StageId" Dense="true">
-                @foreach (var s in _stages)
-                {
-                    <MudSelectItem Value="@s.StageId">@(s.StageNameAr ?? s.StageName)</MudSelectItem>
-                }
-            </MudSelect>
-
-            <MudSelect T="int?" Label="الموظف" Variant="MudVariant.Outlined" 
-                       @bind-Value="_form.EmployeeId" Dense="true" Clearable="true">
-                @foreach (var e in _employees)
-                {
-                    <MudSelectItem Value="@((int?)e.EmployeeId)">@e.FullName</MudSelectItem>
-                }
-            </MudSelect>
-
-            <MudSelect T="int?" Label="المصدر" Variant="MudVariant.Outlined" 
-                       @bind-Value="_form.SourceId" Dense="true" Clearable="true">
-                @foreach (var s in _sources)
-                {
-                    <MudSelectItem Value="@((int?)s.SourceId)">@(s.SourceNameAr ?? s.SourceName)</MudSelectItem>
-                }
-            </MudSelect>
-
-            <MudTextField T="string" Label="المنتج المهتم به" Variant="MudVariant.Outlined"
-                          @bind-Value="_form.InterestedProduct" Immediate="true" />
-
-            <MudTextField T="decimal?" Label="القيمة المتوقعة" Variant="MudVariant.Outlined"
-                          @bind-Value="_form.ExpectedValue" />
-
-            <MudDatePicker Label="تاريخ أول تواصل" Variant="MudVariant.Outlined"
-                           Date="_form.FirstContactDate"
-                           DateChanged="OnFirstContactDateChanged" />
-
-            <MudDatePicker Label="موعد المتابعة القادمة" Variant="MudVariant.Outlined"
-                           Date="_form.NextFollowUpDate"
-                           DateChanged="OnNextFollowUpDateChanged" />
-
-            <MudTextField T="string" Label="الملاحظات" Variant="MudVariant.Outlined"
-                          @bind-Value="_form.Notes" Lines="3" Immediate="true" />
-
-            <MudTextField T="string" Label="التوجيه" Variant="MudVariant.Outlined"
-                          @bind-Value="_form.Guidance" Lines="2" Immediate="true" />
+        @* === STEPS INDICATOR === *@
+        <div class="steps-bar">
+            <div class="step @(_step >= 1 ? "step-active" : "") @(_step > 1 ? "step-done" : "")">
+                <div class="step-circle">
+                    @if (_step > 1)
+                    {
+                        <MudIcon Icon="@Icons.Material.Rounded.Check" Style="font-size:0.9rem" />
+                    }
+                    else
+                    {
+                        <span>1</span>
+                    }
+                </div>
+                <span class="step-label">العميل</span>
+            </div>
+            <div class="step-line @(_step > 1 ? "line-active" : "")"></div>
+            <div class="step @(_step >= 2 ? "step-active" : "") @(_step > 2 ? "step-done" : "")">
+                <div class="step-circle">
+                    @if (_step > 2)
+                    {
+                        <MudIcon Icon="@Icons.Material.Rounded.Check" Style="font-size:0.9rem" />
+                    }
+                    else
+                    {
+                        <span>2</span>
+                    }
+                </div>
+                <span class="step-label">التواصل</span>
+            </div>
+            <div class="step-line @(_step > 2 ? "line-active" : "")"></div>
+            <div class="step @(_step >= 3 ? "step-active" : "")">
+                <div class="step-circle"><span>3</span></div>
+                <span class="step-label">المتابعة</span>
+            </div>
         </div>
 
-        <div class="form-actions">
-            <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary"
-                       OnClick="Save" Disabled="_isSaving">
-                @(_isSaving ? "جاري الحفظ..." : (_isNew ? "إنشاء الفرصة" : "حفظ التعديل"))
-            </MudButton>
-            <MudButton Variant="MudVariant.Text" OnClick="GoBack">إلغاء</MudButton>
-        </div>
-    </MudPaper>
+        @* === STEP 1: العميل === *@
+        @if (_step == 1)
+        {
+            <MudPaper Class="form-card" Elevation="2">
+                <div class="sec-head">
+                    <div class="sec-num" style="background:#e0f2fe;color:#0284c7">1</div>
+                    <div>
+                        <div class="sec-title">نوع العميل</div>
+                        <div class="sec-sub">اختر عميل موجود أو سجل عميل جديد</div>
+                    </div>
+                </div>
+
+                @if (!_isEdit)
+                {
+                    <MudRadioGroup T="bool" @bind-Value="_model.IsNewClient" OnChange="OnClientTypeChanged" Class="mb-4">
+                        <MudStack Row Spacing="4">
+                            <MudRadio Value="false" Color="MudColor.Primary">👤 عميل موجود</MudRadio>
+                            <MudRadio Value="true" Color="MudColor.Secondary">✨ عميل جديد</MudRadio>
+                        </MudStack>
+                    </MudRadioGroup>
+                }
+
+                @* --- عميل موجود --- *@
+                @if (!_model.IsNewClient && !_isEdit)
+                {
+                    <MudAutocomplete T="PartySearchDto"
+                                     Label="🔍 ابحث بالاسم أو رقم الهاتف"
+                                     Placeholder="مثال: أحمد محمد أو 01012345678"
+                                     Variant="MudVariant.Outlined"
+                                     SearchFunc="SearchPartiesWrapper"
+                                     ToStringFunc="PartyToString"
+                                     Value="_selectedParty"
+                                     ValueChanged="OnPartySelected"
+                                     Dense="false" Class="f-wide mb-3"
+                                     Clearable="true" ResetValueOnEmptyText="true"
+                                     DebounceInterval="300" />
+
+                    @if (_isSearching)
+                    {
+                        <MudProgressLinear Color="MudColor.Primary" Indeterminate="true" Class="mb-3" />
+                    }
+
+                    @* --- بيانات العميل المختار --- *@
+                    @if (_selectedParty != null)
+                    {
+                        <div class="client-info-card">
+                            <div class="ci-left">
+                                <MudIcon Icon="@Icons.Material.Rounded.CheckCircle" Color="MudColor.Success" Style="font-size:1.5rem" />
+                                <div>
+                                    <div class="ci-name">@_selectedParty.PartyName</div>
+                                    <div class="ci-phone">📞 @_selectedParty.Phone</div>
+                                </div>
+                            </div>
+                            <MudButton Variant="MudVariant.Text" Color="MudColor.Error" Size="MudSize.Small"
+                                       OnClick="ClearClient">تغيير</MudButton>
+                        </div>
+                    }
+
+                    @* --- فرصة مفتوحة --- *@
+                    @if (_model.HasActiveOpportunity)
+                    {
+                        <div class="opp-alert">
+                            <div class="oa-left">
+                                <MudIcon Icon="@Icons.Material.Rounded.Bolt" Style="font-size:1.2rem;color:#d97706" />
+                                <div>
+                                    <div class="oa-title">يوجد فرصة بيع مفتوحة لهذا العميل</div>
+                                    <div class="oa-sub">آخر مرحلة: <strong>@_selectedParty?.LastStageName</strong> — سيتم الإضافة على نفس الفرصة</div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+
+                @* --- عميل جديد --- *@
+                @if (_model.IsNewClient && !_isEdit)
+                {
+                    <div class="new-client-form">
+                        <MudGrid Spacing="3">
+                            <MudItem xs="12" md="4">
+                                <MudTextField T="string" Label="اسم العميل *"
+                                              @bind-Value="_model.NewClientName"
+                                              Variant="MudVariant.Outlined" />
+                            </MudItem>
+                            <MudItem xs="12" md="4">
+                                <MudTextField T="string" Label="رقم الهاتف *"
+                                              @bind-Value="_model.NewPhone"
+                                              Variant="MudVariant.Outlined"
+                                              OnBlur="CheckPhoneDuplicate" />
+                            </MudItem>
+                            <MudItem xs="12" md="4">
+                                <MudTextField T="string" Label="العنوان"
+                                              @bind-Value="_model.NewAddress"
+                                              Variant="MudVariant.Outlined" />
+                            </MudItem>
+                        </MudGrid>
+                    </div>
+                }
+
+                @* --- في حالة التعديل --- *@
+                @if (_isEdit && _editPartyName != null)
+                {
+                    <div class="client-info-card">
+                        <div class="ci-left">
+                            <MudIcon Icon="@Icons.Material.Rounded.Person" Color="MudColor.Primary" Style="font-size:1.5rem" />
+                            <div>
+                                <div class="ci-name">@_editPartyName</div>
+                                <div class="ci-phone">📞 @_editPartyPhone</div>
+                            </div>
+                        </div>
+                        <MudChip T="string" Color="MudColor.Info" Size="MudSize.Small">تعديل</MudChip>
+                    </div>
+                }
+
+                <div class="step-nav">
+                    <div></div>
+                    <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary"
+                               OnClick="NextStep" EndIcon="@Icons.Material.Rounded.ArrowBack">
+                        التالي
+                    </MudButton>
+                </div>
+            </MudPaper>
+        }
+
+        @* === STEP 2: التواصل === *@
+        @if (_step == 2)
+        {
+            <MudPaper Class="form-card" Elevation="2">
+                <div class="sec-head">
+                    <div class="sec-num" style="background:#dcfce7;color:#16a34a">2</div>
+                    <div>
+                        <div class="sec-title">بيانات التواصل</div>
+                        <div class="sec-sub">مصدر التواصل والحالة والمنتج</div>
+                    </div>
+                </div>
+
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" md="4">
+                        <MudSelect T="int?" Label="مصدر التواصل *" Variant="MudVariant.Outlined"
+                                   Value="_model.SourceId" Clearable="true"
+                                   ValueChanged="OnSourceChanged">
+                            @foreach (var s in _sources)
+                            {
+                                <MudSelectItem Value="@((int?)s.SourceId)">
+                                    @(s.SourceIcon) @(s.SourceNameAr ?? s.SourceName)
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="4">
+                        <MudSelect T="int?" Label="الحملة الإعلانية" Variant="MudVariant.Outlined"
+                                   @bind-Value="_model.AdTypeId" Clearable="true"
+                                   Visible="@(_model.SourceId.HasValue)">
+                            @foreach (var a in _adTypes)
+                            {
+                                <MudSelectItem Value="@((int?)a.AdTypeId)">@(a.AdTypeNameAr ?? a.AdTypeName)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="4">
+                        <MudSelect T="int?" Label="حالة التواصل *" Variant="MudVariant.Outlined"
+                                   @bind-Value="_model.StatusId" Clearable="true">
+                            @foreach (var s in _statuses)
+                            {
+                                <MudSelectItem Value="@((int?)s.StatusId)">@(s.StatusNameAr ?? s.StatusName)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="4">
+                        <MudSelect T="int?" Label="الموظف المسؤول" Variant="MudVariant.Outlined"
+                                   @bind-Value="_model.EmployeeId" Clearable="true">
+                            @foreach (var e in _employees)
+                            {
+                                <MudSelectItem Value="@((int?)e.EmployeeId)">@e.FullName</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="4">
+                        <MudDatePicker Label="تاريخ أول تواصل *"
+                                       @bind-Date="_model.FirstContactDate"
+                                       Variant="MudVariant.Outlined" />
+                    </MudItem>
+                    <MudItem xs="12" md="4">
+                        <MudSelect T="int?" Label="فئة المنتج" Variant="MudVariant.Outlined"
+                                   @bind-Value="_model.CategoryId" Clearable="true">
+                            @foreach (var c in _categories)
+                            {
+                                <MudSelectItem Value="@((int?)c.CategoryId)">@(c.CategoryNameAr ?? c.CategoryName)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudTextField T="string" Label="المنتج المهتم به"
+                                      @bind-Value="_model.InterestedProduct"
+                                      Variant="MudVariant.Outlined"
+                                      Adornment="MudBlazor.Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Rounded.ShoppingBag" />
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudTextField T="string" Label="الموقع"
+                                      @bind-Value="_model.Location"
+                                      Variant="MudVariant.Outlined"
+                                      Adornment="MudBlazor.Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Rounded.LocationOn" />
+                    </MudItem>
+                </MudGrid>
+
+                @* --- Social Media Icon --- *@
+                @if (_model.SourceId.HasValue)
+                {
+                    var src = _sources.FirstOrDefault(s => s.SourceId == _model.SourceId.Value);
+                    if (src != null)
+                    {
+                        <div class="source-badge">
+                            <span>@src.SourceIcon</span>
+                            <span>@(src.SourceNameAr ?? src.SourceName)</span>
+                            @if (_clientPhone != null)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Rounded.Phone"
+                                               Size="MudSize.Small" OnClick="() => CallPhone(_clientPhone)" />
+                                <MudIconButton Icon="@Icons.Custom.Brands.WhatsApp"
+                                               Size="MudSize.Small" OnClick="() => OpenWhatsApp(_clientPhone)" />
+                            }
+                        </div>
+                    }
+                }
+
+                <div class="step-nav">
+                    <MudButton Variant="MudVariant.Outlined" Color="MudColor.Default"
+                               OnClick="PrevStep" StartIcon="@Icons.Material.Rounded.ArrowForward">
+                        السابق
+                    </MudButton>
+                    <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary"
+                               OnClick="NextStep" EndIcon="@Icons.Material.Rounded.ArrowBack">
+                        التالي
+                    </MudButton>
+                </div>
+            </MudPaper>
+        }
+
+        @* === STEP 3: المتابعة === *@
+        @if (_step == 3)
+        {
+            <MudPaper Class="form-card" Elevation="2">
+                <div class="sec-head">
+                    <div class="sec-num" style="background:#fef3c7;color:#d97706">3</div>
+                    <div>
+                        <div class="sec-title">المرحلة والمتابعة</div>
+                        <div class="sec-sub">حدد المرحلة وملاحظات التواصل</div>
+                    </div>
+                </div>
+
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" md="6">
+                        <MudSelect T="int?" Label="المرحلة *" Variant="MudVariant.Outlined"
+                                   Value="_model.StageId" Clearable="true"
+                                   ValueChanged="OnStageChanged">
+                            @foreach (var s in _stages)
+                            {
+                                <MudSelectItem Value="@((int?)s.StageId)">
+                                    <span style="display:inline-flex;align-items:center;gap:6px">
+                                        <span style="width:10px;height:10px;border-radius:50%;background:@(s.StageColor ?? "#94a3b8");display:inline-block"></span>
+                                        @(s.StageNameAr ?? s.StageName)
+                                    </span>
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                </MudGrid>
+
+                @* --- سبب الخسارة --- *@
+                @if (_showLostFields)
+                {
+                    <div class="lost-section">
+                        <div class="lost-header">
+                            <MudIcon Icon="@Icons.Material.Rounded.Warning" Color="MudColor.Error" />
+                            <span>تأكد: سيتم إلغاء جميع المهام المعلقة تلقائياً</span>
+                        </div>
+                        <MudGrid Spacing="3">
+                            <MudItem xs="12" md="4">
+                                <MudSelect T="int?" Label="سبب الخسارة *" Variant="MudVariant.Outlined"
+                                           @bind-Value="_model.LostReasonId" Clearable="true">
+                                    @foreach (var r in _lostReasons)
+                                    {
+                                        <MudSelectItem Value="@((int?)r.LostReasonId)">@(r.ReasonNameAr ?? r.ReasonName)</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" md="8">
+                                <MudTextField T="string" Label="تفاصيل سبب الخسارة"
+                                              @bind-Value="_model.LostNotes"
+                                              Variant="MudVariant.Outlined" Lines="3" />
+                            </MudItem>
+                        </MudGrid>
+                        <MudCheckBox T="bool" @bind-Value="_copyLostToSummary"
+                                     Label="📋 نسخ تفاصيل الخسارة للملخص" Color="MudColor.Primary" />
+                    </div>
+                }
+
+                @* --- المتابعة --- *@
+                @if (_showFollowUp)
+                {
+                    <MudGrid Spacing="3" Class="mt-2">
+                        <MudItem xs="12" md="4">
+                            <MudDatePicker Label="تاريخ المتابعة القادمة"
+                                           @bind-Date="_model.NextFollowUpDate"
+                                           Variant="MudVariant.Outlined"
+                                           MinDate="DateTime.Today" />
+                        </MudItem>
+                        <MudItem xs="12" md="4">
+                            <MudSelect T="int?" Label="نوع المهمة" Variant="MudVariant.Outlined"
+                                       @bind-Value="_model.TaskTypeId" Clearable="true">
+                                @foreach (var t in _taskTypes)
+                                {
+                                    <MudSelectItem Value="@((int?)t.TaskTypeId)">@(t.TaskTypeNameAr ?? t.TaskTypeName)</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                    </MudGrid>
+                    @if (_model.NextFollowUpDate.HasValue && _model.NextFollowUpDate.Value > DateTime.Today)
+                    {
+                        <div class="task-preview">
+                            <MudIcon Icon="@Icons.Material.Rounded.TaskAlt" Style="color:#059669" />
+                            <span>✅ سيتم إنشاء مهمة متابعة تلقائياً — ❌ سيتم إغلاق المهام القديمة</span>
+                        </div>
+                    }
+                }
+
+                <MudDivider Class="my-4" />
+
+                <MudGrid Spacing="3">
+                    <MudItem xs="12">
+                        <MudTextField T="string" Label="ملخص التواصل *"
+                                      @bind-Value="_model.Summary"
+                                      Variant="MudVariant.Outlined" Lines="3"
+                                      Placeholder="مثال: العميل استفسر عن غرفة النوم، طلب كتالوج..." />
+                    </MudItem>
+                    <MudItem xs="12">
+                        <MudTextField T="string" Label="التوجيهات / ملاحظات المتابعة"
+                                      @bind-Value="_model.Guidance"
+                                      Variant="MudVariant.Outlined" Lines="2" />
+                    </MudItem>
+                </MudGrid>
+
+                @* --- ملخص سريع --- *@
+                <div class="summary-bar">
+                    <span>👤 @(_clientName ?? "—")</span>
+                    <span>🎯 @(_stages.FirstOrDefault(s => s.StageId == _model.StageId)?.StageNameAr ?? "—")</span>
+                    <span>📅 @(_model.NextFollowUpDate?.ToString("dd/MM/yyyy") ?? "—")</span>
+                </div>
+
+                <div class="step-nav">
+                    <MudButton Variant="MudVariant.Outlined" Color="MudColor.Default"
+                               OnClick="PrevStep" StartIcon="@Icons.Material.Rounded.ArrowForward">
+                        السابق
+                    </MudButton>
+                    <MudStack Row Spacing="2">
+                        @if (_isEdit ? _canEdit : _canAdd)
+                        {
+                            <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary"
+                                       OnClick="SaveAndClose" Disabled="@_isSaving"
+                                       StartIcon="@Icons.Material.Rounded.Save">
+                                @if (_isSaving)
+                                {
+                                    <MudProgressCircular Size="MudSize.Small" Indeterminate="true" />
+                                }
+                                حفظ وإغلاق
+                            </MudButton>
+                            <MudButton Variant="MudVariant.Outlined" Color="MudColor.Primary"
+                                       OnClick="SaveAndNew" Disabled="@_isSaving"
+                                       StartIcon="@Icons.Material.Rounded.Add">
+                                حفظ وجديد
+                            </MudButton>
+                        }
+                        <MudButton Variant="MudVariant.Text" Color="MudColor.Default"
+                                   OnClick="Cancel">إلغاء</MudButton>
+                    </MudStack>
+                </div>
+            </MudPaper>
+        }
+    }
 </div>
-}
 
 <style>
-    .edit-page { padding: 1rem 1.5rem 3rem; }
-    .form-card { padding: 2rem; border-radius: 16px; border: 1px solid var(--mud-palette-lines-default); }
-    .form-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid var(--mud-palette-lines-inputs); }
-    .form-header h2 { margin: 0; font-size: 1.25rem; font-weight: 700; }
-    .form-fields { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
-    .form-actions { display: flex; gap: 1rem; margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--mud-palette-lines-inputs); }
-    
-    @@media (max-width: 900px) {
-        .edit-page { padding: 0.5rem; }
-        .form-card { padding: 1rem; }
-        .form-fields { grid-template-columns: 1fr; }
+    .opp-page { padding:0 1.5rem 3rem; }
+    .loading-screen { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:60vh; gap:1rem; }
+    .loading-text { color:var(--mud-palette-text-secondary); }
+
+    .success-screen { display:flex; align-items:center; justify-content:center; min-height:60vh; }
+    .success-card { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-lines-default); border-radius:20px; padding:3rem 4rem; text-align:center; box-shadow:0 8px 32px rgba(0,0,0,0.08); }
+    .success-icon { font-size:4rem; margin-bottom:1rem; }
+    .success-title { font-size:1.5rem; font-weight:800; margin:0 0 0.5rem; color:var(--mud-palette-text-primary); }
+    .success-sub { color:var(--mud-palette-text-secondary); margin-bottom:1.5rem; font-size:0.95rem; }
+    .success-actions { display:flex; gap:0.75rem; justify-content:center; flex-wrap:wrap; }
+
+    .form-header { position:relative; border-radius:20px; overflow:hidden; margin-bottom:1rem; }
+    .fh-bg { position:absolute; inset:0; background:linear-gradient(135deg,#1e293b 0%,#1e3a8a 50%,#2563eb 100%); }
+    .fh-body { position:relative; z-index:1; padding:1.5rem 1.75rem; color:#fff; display:flex; align-items:center; justify-content:space-between; }
+    .fh-left { display:flex; align-items:center; gap:0.85rem; }
+    .fh-title { margin:0; font-size:1.4rem; font-weight:800; }
+    .fh-sub { margin:3px 0 0; font-size:0.88rem; opacity:0.85; }
+
+    .steps-bar { display:flex; align-items:center; justify-content:center; gap:0; margin-bottom:1.25rem; padding:1rem 0; }
+    .step { display:flex; flex-direction:column; align-items:center; gap:0.3rem; }
+    .step-circle { width:40px; height:40px; border-radius:50%; background:var(--mud-palette-lines-default); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:0.95rem; color:var(--mud-palette-text-disabled); transition:all 0.3s; }
+    .step-active .step-circle { background:var(--mud-palette-primary); color:#fff; box-shadow:0 4px 12px rgba(5,150,105,0.3); }
+    .step-done .step-circle { background:#059669; color:#fff; }
+    .step-label { font-size:0.78rem; font-weight:600; color:var(--mud-palette-text-disabled); }
+    .step-active .step-label { color:var(--mud-palette-primary); font-weight:700; }
+    .step-done .step-label { color:#059669; }
+    .step-line { width:80px; height:3px; background:var(--mud-palette-lines-default); border-radius:2px; margin:0 0.5rem; margin-bottom:1.5rem; transition:background 0.3s; }
+    .line-active { background:var(--mud-palette-primary); }
+
+    .form-card { padding:1.5rem; border-radius:16px; max-width:900px; margin:0 auto; }
+    .sec-head { display:flex; align-items:center; gap:0.75rem; margin-bottom:1.25rem; }
+    .sec-num { width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:0.95rem; flex-shrink:0; }
+    .sec-title { font-size:1.05rem; font-weight:800; color:var(--mud-palette-text-primary); }
+    .sec-sub { font-size:0.8rem; color:var(--mud-palette-text-secondary); margin-top:2px; }
+
+    .client-info-card { display:flex; align-items:center; justify-content:space-between; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:12px; padding:0.85rem 1rem; margin-bottom:0.75rem; }
+    .ci-left { display:flex; align-items:center; gap:0.75rem; }
+    .ci-name { font-weight:800; font-size:1rem; }
+    .ci-phone { font-size:0.85rem; color:var(--mud-palette-text-secondary); font-weight:600; }
+
+    .opp-alert { display:flex; align-items:center; gap:0.75rem; background:#fffbeb; border:1px solid #fde68a; border-radius:12px; padding:0.85rem 1rem; margin-bottom:0.75rem; }
+    .oa-left { display:flex; align-items:center; gap:0.65rem; }
+    .oa-title { font-weight:800; font-size:0.9rem; color:#92400e; }
+    .oa-sub { font-size:0.8rem; color:#a16207; margin-top:2px; }
+
+    .new-client-form { background:#f0fdf4; border:1px solid #bbf7d0; border-radius:12px; padding:1rem; }
+
+    .source-badge { display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.85rem; background:var(--mud-palette-background); border-radius:8px; margin-top:0.5rem; font-weight:600; font-size:0.88rem; }
+
+    .lost-section { background:rgba(239,68,68,0.04); border:1px dashed rgba(239,68,68,0.3); border-radius:12px; padding:1rem; margin:1rem 0; }
+    .lost-header { display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem; font-weight:700; font-size:0.88rem; color:#dc2626; }
+
+    .task-preview { display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.85rem; background:rgba(5,150,105,0.06); border-radius:8px; margin-top:0.5rem; font-size:0.82rem; font-weight:600; color:var(--mud-palette-text-secondary); }
+
+    .summary-bar { display:flex; gap:1.5rem; padding:0.65rem 1rem; background:var(--mud-palette-background); border-radius:8px; margin-top:1rem; font-size:0.85rem; font-weight:600; color:var(--mud-palette-text-secondary); }
+
+    .step-nav { display:flex; justify-content:space-between; align-items:center; margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--mud-palette-lines-inputs); }
+
+    .f-wide { width:100%; }
+
+    @@media (max-width:768px) {
+        .opp-page { padding:0 0.5rem 2rem; }
+        .form-card { padding:1rem; }
+        .step-line { width:40px; }
+        .success-card { padding:2rem 1.5rem; }
+        .success-actions { flex-direction:column; }
     }
 </style>
 
 @code {
     [Parameter] public int Id { get; set; }
 
-    private bool _isLoading = true, _isSaving, _isNew = true;
-    private OpportunityFormDto _form = new() { FirstContactDate = DateTime.Today };
+    private bool _isLoading = true;
+    private bool _isSaving = false;
+    private bool _isEdit = false;
+    private bool _saveSuccess = false;
+    private bool _isSearching = false;
+    private bool _copyLostToSummary = false;
+    private int _step = 1;
+    private int _savedOpportunityId;
+    private string? _savedClientName;
+    private string? _currentUserName;
+    private string? _editPartyName;
+    private string? _editPartyPhone;
+    private string? _clientName;
+    private string? _clientPhone;
+
+    // Permissions
+    private bool _canView, _canAdd, _canEdit;
+
+    private OpportunityWorkflowDto _model = new();
+    private PartySearchDto? _selectedParty;
+
+    private bool _showLostFields => _model.StageId == 4 || _model.StageId == 5;
+    private bool _showFollowUp => !_showLostFields;
+
+    // Lookup data
     private List<SalesStage> _stages = new();
     private List<ContactSource> _sources = new();
+    private List<AdType> _adTypes = new();
+    private List<ContactStatus> _statuses = new();
+    private List<InterestCategory> _categories = new();
     private List<Employee> _employees = new();
-    private string? _currentUserName;
+    private List<TaskType> _taskTypes = new();
+    private List<LostReason> _lostReasons = new();
 
     protected override async Task OnInitializedAsync()
     {
         try
         {
             var auth = await AuthProvider.GetAuthenticationStateAsync();
-            _currentUserName = auth.User.Identity?.Name ?? "System";
+            var user = auth.User;
+            _currentUserName = user.Identity?.Name ?? "System";
+
+            _canView  = user.HasClaim("Permission", "frmNewInteraction:View")   || user.IsInRole("Admin");
+            _canAdd   = user.HasClaim("Permission", "frmNewInteraction:Add")    || user.IsInRole("Admin");
+            _canEdit  = user.HasClaim("Permission", "frmNewInteraction:Edit")   || user.IsInRole("Admin");
+
+            if (!_canView)
+            {
+                Navigation.NavigateTo("/");
+                return;
+            }
+
+            if (Id == 0 && !_canAdd)
+            {
+                Snackbar.Add("غير مصرح لك بإضافة فرصة جديدة", Severity.Error);
+                Navigation.NavigateTo("/crm/opportunities");
+                return;
+            }
+
+            if (Id > 0 && !_canEdit)
+            {
+                Snackbar.Add("غير مصرح لك بتعديل الفرصة", Severity.Error);
+                Navigation.NavigateTo("/crm/opportunities");
+                return;
+            }
 
             _stages = await OppService.GetStagesAsync();
             _sources = await OppService.GetSourcesAsync();
-            _employees = await OppService.GetEmployeesAsync();
+            _adTypes = await OppService.GetAdTypesAsync();
+            _statuses = await OppService.GetContactStatusesAsync();
+            _categories = await OppService.GetCategoriesAsync();
+            _employees = await OppService.GetActiveEmployeesAsync();
+            _taskTypes = await OppService.GetTaskTypesAsync();
+            _lostReasons = await OppService.GetLostReasonsAsync();
 
             if (Id > 0)
             {
-                _isNew = false;
-                var editDto = await OppService.GetOpportunityForEditAsync(Id);
-                if (editDto == null) { Snackbar.Add("الفرصة غير موجودة", Severity.Error); Navigation.NavigateTo("/crm/opportunities"); return; }
-                _form = editDto;
+                _isEdit = true;
+                await LoadForEdit();
             }
         }
-        catch (Exception ex) { Snackbar.Add($"خطأ: {ex.Message}", Severity.Error); }
-        finally { _isLoading = false; }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
     }
 
-    private void OnFirstContactDateChanged(DateTime? d) => _form.FirstContactDate = d ?? DateTime.Today;
-    private void OnNextFollowUpDateChanged(DateTime? d) => _form.NextFollowUpDate = d;
+    // ═══ ToString Helper ═══
+    private static string PartyToString(PartySearchDto? p) => p?.PartyName ?? string.Empty;
 
-    private async Task Save()
+    // ═══ Search Wrapper ═══
+    private async Task<IEnumerable<PartySearchDto>> SearchPartiesWrapper(string search, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(_form.PartyName)) { Snackbar.Add("أدخل اسم العميل", Severity.Warning); return; }
-        
-        _isSaving = true;
-        var (ok, msg, oppId) = await OppService.SaveOpportunityAsync(_form, _currentUserName!);
-        _isSaving = false;
+        if (string.IsNullOrWhiteSpace(search) || search.Length < 2)
+            return new List<PartySearchDto>();
 
-        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-        if (ok) { Navigation.NavigateTo("/crm/opportunities"); }
+        _isSearching = true;
+        StateHasChanged();
+        try
+        {
+            return await OppService.SearchPartiesAsync(search);
+        }
+        catch
+        {
+            return new List<PartySearchDto>();
+        }
+        finally
+        {
+            _isSearching = false;
+            StateHasChanged();
+        }
     }
 
-    private void GoBack() => Navigation.NavigateTo("/crm/opportunities");
+    // ═══ تحميل للتعديل ═══
+    private async Task LoadForEdit()
+    {
+        var form = await OppService.GetOpportunityForEditAsync(Id);
+        if (form == null)
+        {
+            Snackbar.Add("الفرصة غير موجودة", Severity.Error);
+            Navigation.NavigateTo("/crm/opportunities");
+            return;
+        }
+
+        _model = new OpportunityWorkflowDto
+        {
+            OpportunityId = form.OpportunityId,
+            IsNewClient = false,
+            ExistingPartyId = form.PartyId,
+            EmployeeId = form.EmployeeId,
+            SourceId = form.SourceId,
+            AdTypeId = form.AdTypeId,
+            StageId = form.StageId,
+            StatusId = form.StatusId,
+            CategoryId = form.CategoryId,
+            InterestedProduct = form.InterestedProduct,
+            FirstContactDate = form.FirstContactDate,
+            NextFollowUpDate = form.NextFollowUpDate,
+            Location = form.Location,
+            LostReasonId = form.LostReasonId,
+            LostNotes = form.LostNotes,
+            Summary = form.Notes,
+            Guidance = form.Guidance,
+            StageBeforeId = form.StageId
+        };
+
+        _editPartyName = form.PartyName;
+        _editPartyPhone = form.Phone;
+        _clientName = form.PartyName;
+        _clientPhone = form.Phone;
+        _step = 2;
+    }
+
+    // ═══ Step Navigation ═══
+    private void NextStep()
+    {
+        if (_step == 1 && !ValidateStep1()) return;
+        if (_step == 2 && !ValidateStep2()) return;
+        if (_step < 3) _step++;
+    }
+
+    private void PrevStep()
+    {
+        if (_step > 1) _step--;
+    }
+
+    private bool ValidateStep1()
+    {
+        if (_isEdit) return true;
+
+        if (_model.IsNewClient)
+        {
+            if (string.IsNullOrWhiteSpace(_model.NewClientName))
+            { Snackbar.Add("برجاء إدخال اسم العميل", Severity.Warning); return false; }
+            if (string.IsNullOrWhiteSpace(_model.NewPhone))
+            { Snackbar.Add("برجاء إدخال رقم الهاتف", Severity.Warning); return false; }
+        }
+        else
+        {
+            if (!_model.ExistingPartyId.HasValue)
+            { Snackbar.Add("برجاء اختيار العميل", Severity.Warning); return false; }
+        }
+        return true;
+    }
+
+    private bool ValidateStep2()
+    {
+        if (!_model.SourceId.HasValue)
+        { Snackbar.Add("برجاء اختيار مصدر التواصل", Severity.Warning); return false; }
+        if (!_model.StatusId.HasValue)
+        { Snackbar.Add("برجاء اختيار حالة التواصل", Severity.Warning); return false; }
+        if (!_model.FirstContactDate.HasValue)
+        { Snackbar.Add("برجاء إدخال تاريخ أول تواصل", Severity.Warning); return false; }
+        return true;
+    }
+
+    private bool ValidateStep3()
+    {
+        if (!_model.StageId.HasValue)
+        { Snackbar.Add("برجاء اختيار المرحلة", Severity.Warning); return false; }
+        if (_showLostFields && !_model.LostReasonId.HasValue)
+        { Snackbar.Add("برجاء اختيار سبب الخسارة", Severity.Warning); return false; }
+        if (string.IsNullOrWhiteSpace(_model.Summary))
+        { Snackbar.Add("برجاء إدخال ملخص التواصل", Severity.Warning); return false; }
+        return true;
+    }
+
+    // ═══ Client Type Changed ═══
+    private void OnClientTypeChanged()
+    {
+        _model.ExistingPartyId = null;
+        _model.NewClientName = null;
+        _model.NewPhone = null;
+        _model.NewAddress = null;
+        _model.OpportunityId = null;
+        _model.HasActiveOpportunity = false;
+        _selectedParty = null;
+        _clientName = null;
+        _clientPhone = null;
+    }
+
+    // ═══ Party Selected ═══
+    private async Task OnPartySelected(PartySearchDto? party)
+    {
+        if (party == null) return;
+
+        _model.ExistingPartyId = party.PartyId;
+        _model.ExistingPartyPhone = party.Phone;
+        _clientName = party.PartyName;
+        _clientPhone = party.Phone;
+
+        try
+        {
+            var existing = await OppService.GetActiveOpportunityByPartyAsync(party.PartyId);
+            if (existing != null)
+            {
+                _model.OpportunityId = existing.OpportunityId;
+                _model.StageBeforeId = existing.StageId ?? 0;
+                _model.EmployeeId = existing.EmployeeId ?? _model.EmployeeId;
+                _model.SourceId = existing.SourceId ?? _model.SourceId;
+                _model.AdTypeId = existing.AdTypeId ?? _model.AdTypeId;
+                _model.StageId = existing.StageId;
+                _model.StatusId = existing.StatusId ?? _model.StatusId;
+                _model.CategoryId = existing.CategoryId ?? _model.CategoryId;
+                _model.InterestedProduct = existing.InterestedProduct ?? _model.InterestedProduct;
+                _model.FirstContactDate = existing.FirstContactDate ?? _model.FirstContactDate;
+                _model.NextFollowUpDate = existing.NextFollowUpDate ?? _model.NextFollowUpDate;
+                _model.LostReasonId = existing.LostReasonId;
+                _model.LostNotes = existing.LostNotes;
+                _model.HasActiveOpportunity = true;
+            }
+            else
+            {
+                _model.OpportunityId = null;
+                _model.HasActiveOpportunity = false;
+            }
+        }
+        catch { }
+    }
+
+    private void ClearClient()
+    {
+        _selectedParty = null;
+        _model.ExistingPartyId = null;
+        _model.ExistingPartyPhone = null;
+        _model.OpportunityId = null;
+        _model.HasActiveOpportunity = false;
+        _clientName = null;
+        _clientPhone = null;
+    }
+
+    // ═══ Phone Duplicate Check ═══
+    private async Task CheckPhoneDuplicate()
+    {
+        if (string.IsNullOrWhiteSpace(_model.NewPhone)) return;
+        try
+        {
+            var exists = await OppService.CheckPhoneExistsAsync(_model.NewPhone);
+            if (exists)
+            {
+                Snackbar.Add("رقم الهاتف مسجل مسبقاً — ابحث عن العميل أولاً", Severity.Warning);
+                _model.NewPhone = "";
+            }
+        }
+        catch { }
+    }
+
+    // ═══ Source Changed ═══
+    private void OnSourceChanged(int? sourceId)
+    {
+        _model.SourceId = sourceId;
+    }
+
+    // ═══ Stage Changed ═══
+    private void OnStageChanged(int? stageId)
+    {
+        _model.StageId = stageId;
+
+        if (stageId == 4 || stageId == 5)
+        {
+            _model.NextFollowUpDate = null;
+            _model.TaskTypeId = null;
+        }
+        else
+        {
+            _model.LostReasonId = null;
+            _model.LostNotes = null;
+            if (_model.NextFollowUpDate == null || _model.NextFollowUpDate <= DateTime.Today)
+                _model.NextFollowUpDate = DateTime.Today.AddDays(1);
+        }
+    }
+
+    // ═══ Save ═══
+    private async Task SaveAndClose()
+    {
+        if (!ValidateStep3()) return;
+        await DoSave(false);
+    }
+
+    private async Task SaveAndNew()
+    {
+        if (!ValidateStep3()) return;
+        await DoSave(true);
+    }
+
+    private async Task DoSave(bool andNew)
+    {
+        _isSaving = true;
+        StateHasChanged();
+
+        try
+        {
+            if (_copyLostToSummary && !string.IsNullOrWhiteSpace(_model.LostNotes))
+                _model.Summary = _model.LostNotes;
+
+            var (ok, msg, oppId) = await OppService.SaveWorkflowAsync(_model, _currentUserName!);
+
+            if (ok)
+            {
+                _savedOpportunityId = oppId;
+                _savedClientName = _clientName ?? _model.NewClientName;
+
+                if (andNew)
+                {
+                    Snackbar.Add(msg, Severity.Success);
+                    ResetForm();
+                }
+                else
+                {
+                    _saveSuccess = true;
+                }
+            }
+            else
+            {
+                Snackbar.Add(msg, Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ResetForm()
+    {
+        _model = new OpportunityWorkflowDto
+        {
+            IsNewClient = false,
+            FirstContactDate = DateTime.Today,
+            NextFollowUpDate = DateTime.Today.AddDays(1)
+        };
+        _selectedParty = null;
+        _clientName = null;
+        _clientPhone = null;
+        _step = 1;
+        _copyLostToSummary = false;
+    }
+
+    // ═══ Navigation ═══
+    private void GoToNew() => Navigation.NavigateTo("/crm/opportunities/new", forceLoad: true);
+    private void GoToDetail(int id) => Navigation.NavigateTo($"/crm/opportunities/{id}");
+    private void GoToKanban() => Navigation.NavigateTo("/crm/opportunities");
+    private void Cancel() => Navigation.NavigateTo("/crm/opportunities");
+
+    private async Task OpenWhatsApp(string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return;
+        var digits = new string(phone.Where(char.IsDigit).ToArray());
+        if (digits.StartsWith("0")) digits = "20" + digits[1..];
+        else if (!digits.StartsWith("20")) digits = "20" + digits;
+        await JS.InvokeVoidAsync("open", $"https://wa.me/{digits}", "_blank");
+    }
+
+    private async Task CallPhone(string? phone)
+    {
+        if (!string.IsNullOrWhiteSpace(phone))
+            await JS.InvokeVoidAsync("open", $"tel:{phone}", "_self");
+    }
 }

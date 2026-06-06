@@ -81,12 +81,41 @@ public class OpportunityService : IOpportunityService
 
     // ════════════════════ GET FOR EDIT ════════════════════
     public async Task<OpportunityFormDto?> GetOpportunityForEditAsync(int opportunityId)
+{
+    var opp = await _db.SalesOpportunities.AsNoTracking().FirstOrDefaultAsync(o => o.OpportunityId == opportunityId);
+    if (opp == null) return null;
+    
+    var partyInfo = await _db.Parties.AsNoTracking()
+        .Where(p => p.PartyId == opp.PartyId)
+        .Select(p => new { p.PartyName, p.Phone })
+        .FirstOrDefaultAsync();
+
+    return new OpportunityFormDto
     {
-        var opp = await _db.SalesOpportunities.AsNoTracking().FirstOrDefaultAsync(o => o.OpportunityId == opportunityId);
-        if (opp == null) return null;
-        var partyName = await _db.Parties.AsNoTracking().Where(p => p.PartyId == opp.PartyId).Select(p => p.PartyName).FirstOrDefaultAsync();
-        return new OpportunityFormDto { OpportunityId = opp.OpportunityId, PartyId = opp.PartyId, PartyName = partyName, EmployeeId = opp.EmployeeId, SourceId = opp.SourceId, AdTypeId = opp.AdTypeId, StageId = opp.StageId, StatusId = opp.StatusId, CategoryId = opp.CategoryId, InterestedProduct = opp.InterestedProduct, ExpectedValue = opp.ExpectedValue, Location = opp.Location, FirstContactDate = opp.FirstContactDate, NextFollowUpDate = opp.NextFollowUpDate, LostReasonId = opp.LostReasonId, LostNotes = opp.LostNotes, Notes = opp.Notes, Guidance = opp.Guidance, IsActive = opp.IsActive, CreatedBy = opp.CreatedBy, CreatedAt = opp.CreatedAt };
-    }
+        OpportunityId = opp.OpportunityId,
+        PartyId = opp.PartyId,
+        PartyName = partyInfo?.PartyName,
+        Phone = partyInfo?.Phone,
+        EmployeeId = opp.EmployeeId,
+        SourceId = opp.SourceId,
+        AdTypeId = opp.AdTypeId,
+        StageId = opp.StageId,
+        StatusId = opp.StatusId,
+        CategoryId = opp.CategoryId,
+        InterestedProduct = opp.InterestedProduct,
+        ExpectedValue = opp.ExpectedValue,
+        Location = opp.Location,
+        FirstContactDate = opp.FirstContactDate,
+        NextFollowUpDate = opp.NextFollowUpDate,
+        LostReasonId = opp.LostReasonId,
+        LostNotes = opp.LostNotes,
+        Notes = opp.Notes,
+        Guidance = opp.Guidance,
+        IsActive = opp.IsActive,
+        CreatedBy = opp.CreatedBy,
+        CreatedAt = opp.CreatedAt
+    };
+}
 
     // ════════════════════ GET OPPORTUNITY DETAIL ════════════════════
     public async Task<OpportunityListDto?> GetOpportunityDetailAsync(int opportunityId)
@@ -293,5 +322,349 @@ private static IQueryable<SalesOpportunity> ApplyStatsFilters(
         var ic = (await _db.CustomerInteractions.AsNoTracking().Where(ci => oppIds.Contains(ci.OpportunityId)).GroupBy(ci => ci.OpportunityId).Select(g => new { g.Key, Count = g.Count() }).ToListAsync()).ToDictionary(x => x.Key, x => x.Count);
         var tc = (await _db.CrmTasks.AsNoTracking().Where(t => t.OpportunityId != null && oppIds.Contains(t.OpportunityId.Value)).GroupBy(t => t.OpportunityId!.Value).Select(g => new { g.Key, Count = g.Count() }).ToListAsync()).ToDictionary(x => x.Key, x => x.Count);
         foreach (var item in items) { item.InteractionsCount = ic.TryGetValue(item.OpportunityId, out var a) ? a : 0; item.TasksCount = tc.TryGetValue(item.OpportunityId, out var b) ? b : 0; }
+    }
+
+        public async Task<List<ContactStatus>> GetContactStatusesAsync()
+    {
+        return await _db.ContactStatuses
+            .Where(s => s.IsActive)
+            .OrderBy(s => s.StatusNameAr)
+            .AsNoTracking()
+            .ToListAsync();
+    }
+
+    public async Task<List<TaskType>> GetTaskTypesAsync()
+    {
+        return await _db.TaskTypes
+            .Where(t => t.IsActive)
+            .OrderBy(t => t.TaskTypeNameAr)
+            .AsNoTracking()
+            .ToListAsync();
+    }
+        // ════════════════════ WORKFLOW — NEW ════════════════════
+
+    public async Task<OpportunityWorkflowDto?> GetActiveOpportunityByPartyAsync(int partyId)
+{
+    var opp = await _db.SalesOpportunities
+        .AsNoTracking()
+        .Where(o => o.PartyId == partyId && o.IsActive)
+        .Where(o => !LostKeywords.Any(k =>
+            (o.Stage.StageNameAr ?? "").Contains(k) ||
+            (o.Stage.StageName ?? "").Contains(k)))
+        .OrderByDescending(o => o.CreatedAt)
+        .FirstOrDefaultAsync();
+
+    if (opp == null) return null;
+
+    return new OpportunityWorkflowDto
+    {
+        OpportunityId = opp.OpportunityId,
+        EmployeeId = opp.EmployeeId,
+        SourceId = opp.SourceId,
+        AdTypeId = opp.AdTypeId,
+        StageId = opp.StageId,
+        StatusId = opp.StatusId,
+        CategoryId = opp.CategoryId,
+        InterestedProduct = opp.InterestedProduct,
+        FirstContactDate = opp.FirstContactDate,
+        NextFollowUpDate = opp.NextFollowUpDate,
+        LostReasonId = opp.LostReasonId,
+        LostNotes = opp.LostNotes,
+        StageBeforeId = opp.StageId,
+        HasActiveOpportunity = true
+    };
+}
+
+    public async Task<List<PartySearchDto>> SearchPartiesAsync(string searchText)
+    {
+        if (string.IsNullOrWhiteSpace(searchText) || searchText.Trim().Length < 2)
+            return new List<PartySearchDto>();
+
+        var search = searchText.Trim();
+
+        // Step 1: Basic DB search (name OR phone contains)
+        var candidates = await _db.Parties
+            .AsNoTracking()
+            .Where(p => p.IsActive == true)
+            .Where(p =>
+                (p.PartyName != null && p.PartyName.Contains(search)) ||
+                (p.Phone != null && p.Phone.Contains(search)) ||
+                (p.Phone2 != null && p.Phone2.Contains(search)))
+            .OrderBy(p => p.PartyName)
+            .Take(30)
+            .Select(p => new PartySearchDto
+            {
+                PartyId = p.PartyId,
+                PartyName = p.PartyName ?? "",
+                Phone = p.Phone,
+                Phone2 = p.Phone2
+            })
+            .ToListAsync();
+
+        if (!candidates.Any()) return candidates;
+
+        // Step 2: Arabic smart filter in memory
+        var normalized = NormalizeArabic(search);
+        var filtered = candidates
+            .Where(p =>
+                NormalizeArabic(p.PartyName).Contains(normalized) ||
+                NormalizeArabic(p.Phone).Contains(normalized) ||
+                NormalizeArabic(p.Phone2).Contains(normalized))
+            .ToList();
+
+        // Step 3: Enrich with last stage info
+        var partyIds = filtered.Select(p => p.PartyId).ToList();
+        var lastOpps = await _db.SalesOpportunities
+            .AsNoTracking()
+            .Where(o => partyIds.Contains(o.PartyId) && o.IsActive)
+            .GroupBy(o => o.PartyId)
+            .Select(g => new { g.Key, StageName = g.OrderByDescending(o => o.CreatedAt).FirstOrDefault().Stage.StageNameAr, LastContact = g.OrderByDescending(o => o.CreatedAt).FirstOrDefault().LastContactDate })
+            .ToDictionaryAsync(x => x.Key, x => new { Stage = x.StageName, LastContact = x.LastContact });
+
+        foreach (var p in filtered)
+        {
+            if (lastOpps.TryGetValue(p.PartyId, out var info))
+            {
+                p.LastStageName = info.Stage;
+                p.LastContactDate = info.LastContact;
+            }
+        }
+
+        return filtered.Take(20).ToList();
+    }
+
+    public async Task<bool> CheckPhoneExistsAsync(string phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return false;
+        var digits = new string(phone.Where(char.IsDigit).ToArray());
+        if (digits.Length < 8) return false;
+
+        return await _db.Parties
+            .AsNoTracking()
+            .AnyAsync(p =>
+                (p.Phone != null && p.Phone.Contains(digits)) ||
+                (p.Phone2 != null && p.Phone2.Contains(digits)));
+    }
+
+    public async Task<(bool Success, string Message, int OpportunityId)> SaveWorkflowAsync(
+        OpportunityWorkflowDto dto, string userName)
+    {
+        using var transaction = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            var now = DateTime.Now;
+            var partyId = 0;
+
+            // ═══ 1. حفظ العميل الجديد ═══
+            if (dto.IsNewClient)
+            {
+                if (string.IsNullOrWhiteSpace(dto.NewClientName))
+                    return (false, "برجاء إدخال اسم العميل", 0);
+                if (string.IsNullOrWhiteSpace(dto.NewPhone))
+                    return (false, "برجاء إدخال رقم الهاتف", 0);
+
+                var newParty = new Party
+                {
+                    PartyName = dto.NewClientName.Trim(),
+                    Phone = dto.NewPhone.Trim(),
+                    Address = dto.NewAddress?.Trim(),
+                    PartyType = 1,
+                    IsActive = true,
+                    ReferralSourceId = 2,
+                    CreatedBy = userName,
+                    CreatedAt = now
+                };
+                _db.Parties.Add(newParty);
+                await _db.SaveChangesAsync();
+                partyId = newParty.PartyId;
+            }
+            else
+            {
+                if (!dto.ExistingPartyId.HasValue)
+                    return (false, "برجاء اختيار العميل", 0);
+                partyId = dto.ExistingPartyId.Value;
+            }
+
+            // ═══ 2. إنشاء أو تحديث فرصة البيع ═══
+            int opportunityId;
+            int stageBefore = dto.StageBeforeId;
+
+            if (!dto.OpportunityId.HasValue || dto.OpportunityId == 0)
+            {
+                // إنشاء فرصة جديدة
+                var newOpp = new SalesOpportunity
+                {
+                    PartyId = partyId,
+                    EmployeeId = dto.EmployeeId,
+                    SourceId = dto.SourceId,
+                    AdTypeId = dto.AdTypeId,
+                    StageId = dto.StageId ?? 1,
+                    StatusId = dto.StatusId,
+                    CategoryId = dto.CategoryId,
+                    InterestedProduct = dto.InterestedProduct,
+                    FirstContactDate = dto.FirstContactDate ?? now,
+                    NextFollowUpDate = dto.NextFollowUpDate,
+                    Location = dto.Location,
+                    LostReasonId = dto.LostReasonId,
+                    LostNotes = dto.LostNotes,
+                    Notes = dto.Summary,
+                    Guidance = dto.Guidance,
+                    IsActive = true,
+                    CreatedBy = userName,
+                    CreatedAt = now
+                };
+                _db.SalesOpportunities.Add(newOpp);
+                await _db.SaveChangesAsync();
+                opportunityId = newOpp.OpportunityId;
+                stageBefore = 0;
+            }
+            else
+            {
+                // تحديث فرصة موجودة
+                var opp = await _db.SalesOpportunities.FindAsync(dto.OpportunityId.Value);
+                if (opp == null) return (false, "الفرصة غير موجودة", 0);
+
+                stageBefore = opp.StageId;
+
+                if (dto.StageId.HasValue) opp.StageId = dto.StageId.Value;
+                opp.StatusId = dto.StatusId ?? opp.StatusId;
+                opp.LostReasonId = dto.LostReasonId;
+                opp.LostNotes = dto.LostNotes;
+                opp.CategoryId = dto.CategoryId ?? opp.CategoryId;
+                opp.InterestedProduct = dto.InterestedProduct ?? opp.InterestedProduct;
+                opp.NextFollowUpDate = dto.NextFollowUpDate;
+                opp.LastContactDate = now;
+                opp.Notes = dto.Summary;
+                opp.Guidance = dto.Guidance;
+                opp.LastUpdatedBy = userName;
+                opp.LastUpdatedAt = now;
+
+                await _db.SaveChangesAsync();
+                opportunityId = opp.OpportunityId;
+            }
+
+            // ═══ 3. إضافة سجل التواصل ═══
+            var interaction = new CustomerInteraction
+            {
+                OpportunityId = opportunityId,
+                PartyId = partyId,
+                EmployeeId = dto.EmployeeId,
+                SourceId = dto.SourceId,
+                StatusId = dto.StatusId,
+                InteractionDate = now,
+                Summary = dto.Summary,
+                StageBeforeId = stageBefore == 0 ? (int?)null : stageBefore,
+                StageAfterId = dto.StageId,
+                NextFollowUpDate = dto.NextFollowUpDate,
+                Notes = dto.Guidance,
+                CreatedBy = userName,
+                CreatedAt = now
+            };
+            _db.CustomerInteractions.Add(interaction);
+
+            // ═══ 4. تحديث آخر تواصل للعميل ═══
+            var party = await _db.Parties.FindAsync(partyId);
+            if (party != null) party.LastContactDate = now;
+
+            await _db.SaveChangesAsync();
+
+            // ═══ 5. إدارة المهام ═══
+            var stageId = dto.StageId ?? 0;
+
+            if (stageId == 4 || stageId == 5)
+            {
+                // Lost / Not Interested → إلغاء كل المهام
+                var reasonText = stageId == 4 ? "Lost" : "Not Interested";
+                var tasks = await _db.CrmTasks
+                    .Where(t => t.OpportunityId == opportunityId
+                             && (t.Status == "Pending" || t.Status == "In Progress"))
+                    .ToListAsync();
+                foreach (var t in tasks)
+                {
+                    t.Status = "Completed";
+                    t.CompletedDate = now;
+                    t.CompletedBy = userName;
+                    t.CompletionNotes = $"تم الإلغاء تلقائياً — العميل {reasonText}";
+                }
+            }
+            else if (stageId == 3)
+            {
+                // Won → إغلاق كل المهام
+                var tasks = await _db.CrmTasks
+                    .Where(t => t.OpportunityId == opportunityId
+                             && (t.Status == "Pending" || t.Status == "In Progress"))
+                    .ToListAsync();
+                foreach (var t in tasks)
+                {
+                    t.Status = "Completed";
+                    t.CompletedDate = now;
+                    t.CompletedBy = userName;
+                    t.CompletionNotes = "تم الإغلاق تلقائياً — تم البيع بنجاح";
+                }
+            }
+            else if (dto.NextFollowUpDate.HasValue)
+            {
+                // مرحلة عادية + متابعة → إغلاق القديمة + إنشاء جديدة
+
+                // إغلاق القديمة
+                var oldTasks = await _db.CrmTasks
+                    .Where(t => t.OpportunityId == opportunityId
+                             && (t.Status == "Pending" || t.Status == "In Progress"))
+                    .ToListAsync();
+                foreach (var t in oldTasks)
+                {
+                    t.Status = "Completed";
+                    t.CompletedDate = now;
+                    t.CompletedBy = userName;
+                    t.CompletionNotes = "تم المتابعة وجدولة موعد جديد";
+                }
+
+                // إنشاء مهمة جديدة
+                if (dto.NextFollowUpDate.Value > DateTime.Today)
+                {
+                    var newTask = new CrmTask
+                    {
+                        OpportunityId = opportunityId,
+                        PartyId = partyId,
+                        AssignedTo = dto.EmployeeId ?? 0,
+                        TaskTypeId = dto.TaskTypeId,
+                        TaskDescription = dto.Guidance ?? "متابعة",
+                        DueDate = dto.NextFollowUpDate.Value,
+                        Priority = "Normal",
+                        Status = "Pending",
+                        ReminderEnabled = true,
+                        IsActive = true,
+                        CreatedBy = userName,
+                        CreatedAt = now
+                    };
+                    _db.CrmTasks.Add(newTask);
+                }
+            }
+
+            await _db.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            return (true, "تم الحفظ بنجاح", opportunityId);
+        }
+        catch (Exception ex)
+        {
+            await transaction.RollbackAsync();
+            _logger.LogError(ex, "SaveWorkflowAsync failed");
+            return (false, $"خطأ: {ex.InnerException?.Message ?? ex.Message}", 0);
+        }
+    }
+
+    // ═══ Arabic Normalization Helper ═══
+    private static string NormalizeArabic(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return "";
+        var s = input;
+        var diacritics = "\u064B\u064C\u064D\u064E\u064F\u0650\u0651\u0652\u0653\u0654\u0655\u0656";
+        s = new string(s.Where(c => !diacritics.Contains(c)).ToArray());
+        s = s.Replace('أ', 'ا').Replace('إ', 'ا').Replace('آ', 'ا').Replace('ٱ', 'ا');
+        s = s.Replace('ة', 'ه');
+        s = s.Replace('ى', 'ي');
+        s = s.Replace('\u0640', ' ');
+        return s.ToLower().Trim();
     }
 }

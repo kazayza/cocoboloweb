@@ -20,4 +20,10 @@ public interface IOpportunityService
     Task<List<LostReason>> GetLostReasonsAsync();
     Task<List<AdType>> GetAdTypesAsync();
     Task<List<Employee>> GetActiveEmployeesAsync();
+    Task<List<ContactStatus>> GetContactStatusesAsync();
+    Task<List<TaskType>> GetTaskTypesAsync();
+    Task<OpportunityWorkflowDto?> GetActiveOpportunityByPartyAsync(int partyId);
+    Task<List<PartySearchDto>> SearchPartiesAsync(string searchText);
+    Task<bool> CheckPhoneExistsAsync(string phone);
+    Task<(bool Success, string Message, int OpportunityId)> SaveWorkflowAsync(OpportunityWorkflowDto dto, string userName);
 }

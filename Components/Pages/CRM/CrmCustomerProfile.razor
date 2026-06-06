@@ -1,0 +1,237 @@
+@page "/crm/customers/{PartyId:int}"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.EntityFrameworkCore
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@using MudVariant = MudBlazor.Variant
+
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject IOpportunityService OppService
+@inject IInteractionService InteractionService
+@inject ITaskService TaskService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<PageTitle>بطاقة العميل — CRM</PageTitle>
+
+@if (_loading)
+{ <div class="loading-screen"><MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" /><MudText Typo="Typo.h6" Class="load-txt">جاري تحميل بيانات العميل...</MudText></div> }
+else
+{
+<div dir="rtl" class="cp">
+
+    @* ═══════════ PROFILE HEADER ═══════════ *@
+    <div class="cphdr">
+        <div class="cphdr-bg"><div class="cphdr-grad"></div><div class="cphdr-orb"></div><div class="cphdr-grid"></div></div>
+        <div class="cphdr-inr">
+            <button class="cph-back" @onclick="GoBack"><MudIcon Icon="@Icons.Material.Rounded.ArrowBack" /></button>
+            <div class="cph-av">@GetInitials(_party?.PartyName)</div>
+            <div class="cph-info">
+                <h1>@(_party?.PartyName??"—")</h1>
+                <div class="cph-meta">
+                    @if(!string.IsNullOrWhiteSpace(_party?.Phone)){<span>📞 <a href="tel:@_party.Phone" class="cph-link">@_party.Phone</a></span>}
+                                        @if(!string.IsNullOrWhiteSpace(_party?.Email)){<span>📧 @_party.Email</span>}
+                    @if(!string.IsNullOrWhiteSpace(_party?.City)){<span>📍 @_party.City</span>}
+                    @if(!string.IsNullOrWhiteSpace(_party?.CustomerStage)){<span class="cph-stg">🏷️ @_party.CustomerStage</span>}
+                </div>
+            </div>
+            <div class="cph-acts">
+                @if(!string.IsNullOrWhiteSpace(_party?.Phone)){<MudIconButton Icon="@Icons.Material.Rounded.Phone" OnClick="()=>Call(_party.Phone)" Class="cph-act" />}
+                @if(!string.IsNullOrWhiteSpace(_party?.Phone)){<MudIconButton Icon="@Icons.Material.Rounded.Chat" OnClick="()=>WA(_party.Phone)" Class="cph-act" />}
+                <MudIconButton Icon="@Icons.Material.Rounded.Edit" OnClick="EditCustomer" Class="cph-act" />
+            </div>
+        </div>
+        @* Quick Stats *@
+        <div class="cph-stats">
+            <div class="cph-st"><span class="cph-stn">@_stats?.TotalCount</span><span>فرصة</span></div>
+            <div class="cph-st cph-st-w"><span class="cph-stn">@_stats?.WonCount</span><span>مربوحة</span></div>
+            <div class="cph-st"><span class="cph-stn">@_stats?.PipelineValue.ToString("N0")</span><span>قيمة Pipeline</span></div>
+            <div class="cph-st"><span class="cph-stn">@_interactions?.Count</span><span>تفاعل</span></div>
+            <div class="cph-st"><span class="cph-stn">@_tasks?.Count</span><span>مهمة</span></div>
+        </div>
+    </div>
+
+    @* ═══════════ TABS ═══════════ *@
+    <div class="cptabs">
+        <MudChip T="string" Variant="@(_tab==0?MudVariant.Filled:MudVariant.Outlined)" Color="@(_tab==0?MudColor.Primary:MudColor.Default)" OnClick="()=>_tab=0">📊 الفرص (@_opportunities.Count)</MudChip>
+        <MudChip T="string" Variant="@(_tab==1?MudVariant.Filled:MudVariant.Outlined)" Color="@(_tab==1?MudColor.Primary:MudColor.Default)" OnClick="()=>_tab=1">💬 التواصلات (@_interactions.Count)</MudChip>
+        <MudChip T="string" Variant="@(_tab==2?MudVariant.Filled:MudVariant.Outlined)" Color="@(_tab==2?MudColor.Primary:MudColor.Default)" OnClick="()=>_tab=2">📝 المهام (@_tasks.Count)</MudChip>
+    </div>
+
+    @* ═══════════ TAB: OPPORTUNITIES ═══════════ *@
+    @if (_tab == 0)
+    {
+        <div class="cp-grid">
+            @foreach (var o in _opportunities)
+            {
+                <div class="cpo-cd" @onclick="() => OpenOpp(o.OpportunityId)">
+                    <div class="cpo-bar" style="background:@(o.StageColor??"#94a3b8")"></div>
+                    <div class="cpo-bd">
+                        <div class="cpo-st" style="color:@(o.StageColor??"#94a3b8");border:1px solid @(o.StageColor??"#94a3b8")">@(o.StageNameAr??o.StageName)</div>
+                        @if(!string.IsNullOrWhiteSpace(o.InterestedProduct)){<div class="cpo-pr">🏷️ @o.InterestedProduct</div>}
+                        <div class="cpo-mt"><span>👤 @(o.EmployeeName??"—")</span><span>📡 @(o.SourceName??"—")</span></div>
+                        <div class="cpo-vl"><strong>💰 @((o.ExpectedValue??0).ToString("N0")) ج</strong><span>📅 @(o.NextFollowUpDate?.ToString("yyyy/MM/dd")??"—")</span></div>
+                    </div>
+                </div>
+            }
+            @if (!_opportunities.Any()) { <div class="cp-empty">لا توجد فرص لهذا العميل</div> }
+        </div>
+    }
+
+    @* ═══════════ TAB: INTERACTIONS ═══════════ *@
+    @if (_tab == 1)
+    {
+        <div class="cp-tl">
+            @foreach (var i in _interactions)
+            {
+                <div class="cp-tli">
+                    <div class="cp-tld" style="background:@(i.StageAfterId.HasValue?(i.StageAfterName=="تم البيع"?"#27ae60":i.StageAfterName=="خسارة"?"#e74c3c":"#3b82f6"):"#94a3b8")"></div>
+                    <div class="cp-tlb">
+                        <div class="cp-tlh"><strong>@(i.EmployeeName??i.CreatedBy??"—")</strong><span>@i.InteractionDate.ToString("yyyy/MM/dd HH:mm")</span></div>
+                        @if(!string.IsNullOrWhiteSpace(i.Summary)){<div class="cp-tls">@i.Summary</div>}
+                        @if(i.NextFollowUpDate.HasValue){<div>📅 المتابعة: @i.NextFollowUpDate.Value.ToString("yyyy/MM/dd")</div>}
+                    </div>
+                </div>
+            }
+            @if (!_interactions.Any()) { <div class="cp-empty">لا توجد تواصلات</div> }
+        </div>
+    }
+
+    @* ═══════════ TAB: TASKS ═══════════ *@
+    @if (_tab == 2)
+    {
+        <div class="cp-tasks">
+            @foreach (var t in _tasks)
+            {
+                var isDone = t.Status == "Completed";
+                <div class="cp-tsk @(isDone?"cp-tsk-done":"") @(t.TaskDueStatus=="Overdue"?"cp-tsk-ov":"")">
+                    <div class="cp-tsk-p" style="background:@(t.Priority=="High"?"#ef4444":t.Priority=="Medium"?"#f59e0b":"#3b82f6")"></div>
+                    <div class="cp-tsk-b">
+                        <span class="cp-tsk-d">@t.TaskDescription</span>
+                        <span class="cp-tsk-m">👤 @t.AssignedToName · 📅 @t.DueDate.ToString("yyyy/MM/dd") @(isDone?"· ✅ مكتملة":"")</span>
+                    </div>
+                </div>
+            }
+            @if (!_tasks.Any()) { <div class="cp-empty">لا توجد مهام</div> }
+        </div>
+    }
+
+</div>
+}
+
+<style>
+    .cp{padding:0 1.5rem 3rem;max-width:1000px;margin:0 auto}
+    .load-txt{margin-top:.75rem}
+
+    .cphdr{position:relative;border-radius:20px;overflow:hidden;margin-bottom:1rem;box-shadow:0 12px 35px rgba(124,58,237,.25)}
+    .cphdr-bg{position:absolute;inset:0}
+    .cphdr-grad{position:absolute;inset:0;background:linear-gradient(135deg,#6d28d9 0%,#7c3aed 30%,#8b5cf6 60%,#a78bfa 100%)}
+    .cphdr-orb{position:absolute;width:220px;height:220px;background:rgba(255,255,255,.06);border-radius:50%;filter:blur(80px);top:-60px;right:-60px}
+    .cphdr-grid{position:absolute;inset:0;background:radial-gradient(circle,rgba(255,255,255,.03) 1px,transparent 1px);background-size:24px 24px}
+    .cphdr-inr{position:relative;z-index:1;padding:1.3rem 1.75rem;color:#fff;display:flex;align-items:center;gap:.85rem;flex-wrap:wrap}
+    .cph-back{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.2);color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer}
+    .cph-av{width:56px;height:56px;background:rgba(255,255,255,.2);backdrop-filter:blur(10px);border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.3rem;flex-shrink:0}
+    .cph-info h1{margin:0;font-size:1.3rem;font-weight:800}
+    .cph-meta{display:flex;gap:.6rem;flex-wrap:wrap;font-size:.75rem;margin-top:4px;opacity:.9}
+    .cph-stg{background:rgba(255,255,255,.15);padding:1px 8px;border-radius:8px}
+    .cph-link{color:#fde68a!important;text-decoration:none}
+    .cph-acts{display:flex;gap:.1rem;margin-right:auto}
+    .cph-act{color:rgba(255,255,255,.7)!important}
+    .cph-act:hover{color:#fff!important}
+
+    .cph-stats{position:relative;z-index:1;display:flex;gap:0;border-top:1px solid rgba(255,255,255,.1)}
+    .cph-st{flex:1;text-align:center;padding:.65rem .5rem;font-size:.72rem;opacity:.85}
+    .cph-stn{display:block;font-weight:800;font-size:1.05rem;margin-bottom:2px}
+    .cph-st-w{border-left:1px solid rgba(255,255,255,.1);border-right:1px solid rgba(255,255,255,.1)}
+
+    .cptabs{display:flex;gap:.4rem;margin-bottom:.85rem;flex-wrap:wrap}
+    .cp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:.65rem}
+    .cpo-cd{background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:12px;overflow:hidden;cursor:pointer;transition:transform .1s}
+    .cpo-cd:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.08)}
+    .cpo-bar{height:3px}
+    .cpo-bd{padding:.8rem}
+    .cpo-st{display:inline-block;padding:2px 8px;border-radius:8px;font-size:.7rem;font-weight:600;margin-bottom:.3rem}
+    .cpo-pr{font-size:.76rem;color:var(--mud-palette-primary);margin-bottom:.25rem}
+    .cpo-mt{display:flex;gap:.6rem;font-size:.7rem;color:var(--mud-palette-text-secondary);margin-bottom:.3rem}
+    .cpo-vl{display:flex;gap:.7rem;font-size:.78rem;align-items:center}
+
+    .cp-tl{display:flex;flex-direction:column;gap:0}
+    .cp-tli{display:flex;gap:.75rem;padding:.75rem 0;border-bottom:1px solid var(--mud-palette-lines-inputs)}
+    .cp-tld{width:10px;height:10px;border-radius:50%;margin-top:5px;flex-shrink:0}
+    .cp-tlb{flex:1}
+    .cp-tlh{display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:.15rem}
+    .cp-tls{font-size:.85rem;margin-bottom:.1rem}
+
+    .cp-tasks{display:flex;flex-direction:column;gap:.35rem}
+    .cp-tsk{display:flex;gap:.5rem;padding:.6rem .75rem;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:10px;align-items:center}
+    .cp-tsk-p{width:4px;height:28px;border-radius:2px;flex-shrink:0}
+    .cp-tsk-b{flex:1}
+    .cp-tsk-d{display:block;font-size:.82rem;font-weight:500}
+    .cp-tsk-m{font-size:.7rem;color:var(--mud-palette-text-secondary)}
+    .cp-tsk-done{opacity:.5}.cp-tsk-done .cp-tsk-d{text-decoration:line-through}
+    .cp-tsk-ov{background:#fef2f2}
+
+    .cp-empty{text-align:center;padding:3rem;color:var(--mud-palette-text-disabled)}
+
+    @@media(max-width:768px){.cp{padding:0 .3rem 2rem}.cphdr-inr{padding:1rem}.cph-stats{flex-wrap:wrap}.cph-st{flex:1 1 33%}.cp-grid{grid-template-columns:1fr}}
+</style>
+
+@code {
+    [Parameter] public int PartyId { get; set; }
+
+    private bool _loading=true;
+    private PartyListDto? _party;
+    private List<OpportunityListDto> _opportunities=new();
+    private List<InteractionListDto> _interactions=new();
+    private List<TaskListDto> _tasks=new();
+    private OpportunityStatsDto? _stats;
+    private int _tab;
+
+    protected override async Task OnInitializedAsync(){
+        try{
+            using var db = await DbFactory.CreateDbContextAsync();
+            _party = await db.Parties.AsNoTracking()
+                .Where(p => p.PartyId == PartyId)
+                .Select(p => new PartyListDto{PartyId=p.PartyId,PartyName=p.PartyName,Phone=p.Phone,Email=p.Email,City=p.City,CustomerStage=p.CustomerStage})
+                .FirstOrDefaultAsync();
+
+            if(_party==null){Snackbar.Add("العميل غير موجود",Severity.Error);Nav.NavigateTo("/crm/opportunities");return;}
+
+            var oppFilter = new OpportunityFilterDto{PageSize=200};
+            var result = await OppService.GetOpportunitiesAsync(oppFilter);
+            _opportunities = result.Items.Where(o=>o.PartyId==PartyId).ToList();
+
+            var intFilter = new InteractionFilterDto{PageSize=200};
+            var intResult = await InteractionService.GetInteractionsAsync(intFilter);
+            _interactions = intResult.Items.Where(i=>i.PartyId==PartyId).ToList();
+
+            var taskFilter = new TaskFilterDto{PageSize=200};
+            var taskResult = await TaskService.GetTasksAsync(taskFilter);
+            _tasks = taskResult.Items.Where(t=>t.PartyId==PartyId).ToList();
+
+            _stats = await OppService.GetStatsAsync(new OpportunityFilterDto());
+        }catch(Exception ex){Snackbar.Add($"خطأ: {ex.Message}",Severity.Error);}
+        finally{_loading=false;}
+    }
+
+    private static string GetInitials(string? n){
+        if(string.IsNullOrWhiteSpace(n))return "?";
+        var w=n.Trim().Split(' ',StringSplitOptions.RemoveEmptyEntries);
+        return w.Length>=2?$"{w[0][0]}{w[1][0]}":n[..1];
+    }
+
+    private async Task WA(string? p){
+        if(string.IsNullOrWhiteSpace(p))return;
+        var c=new string(p.Where(char.IsDigit).ToArray());
+        if(c.StartsWith("0"))c="2"+c;if(!c.StartsWith("2"))c="2"+c;
+        await JS.InvokeVoidAsync("open",$"https://wa.me/{c}","_blank");
+    }
+    private async Task Call(string? p){if(!string.IsNullOrWhiteSpace(p))await JS.InvokeVoidAsync("open",$"tel:{p}","_self");}
+    private void GoBack() => Nav.NavigateTo("/crm/opportunities");
+    private void EditCustomer() => Nav.NavigateTo($"/customers/form/{PartyId}");
+    private void OpenOpp(int id) => Nav.NavigateTo($"/crm/opportunities/{id}");
+}

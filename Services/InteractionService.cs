@@ -92,19 +92,35 @@ public class InteractionService : IInteractionService
 
             var interaction = new CustomerInteraction
             {
-                OpportunityId = dto.OpportunityId, PartyId = dto.PartyId,
-                Summary = dto.Summary, StageBeforeId = oldStageId,
+                OpportunityId = dto.OpportunityId,
+                PartyId = dto.PartyId,
+                EmployeeId = dto.EmployeeId,                          // ← كان ناقص
+                SourceId = dto.SourceId,                              // ← كان ناقص
+                StatusId = dto.StatusId,                              // ← كان ناقص
+                Summary = dto.Summary,
+                StageBeforeId = dto.StageBeforeId ?? oldStageId,      // ← كان ناقص
                 StageAfterId = dto.StageAfterId ?? oldStageId,
-                NextFollowUpDate = dto.NextFollowUpDate, Notes = dto.Notes,
-                InteractionDate = DateTime.Now, CreatedBy = userName, CreatedAt = DateTime.Now
+                NextFollowUpDate = dto.NextFollowUpDate,
+                Notes = dto.Notes,
+                InteractionDate = DateTime.Now,
+                CreatedBy = userName,
+                CreatedAt = DateTime.Now
             };
             _db.CustomerInteractions.Add(interaction);
 
-            // Update opportunity stage + followup
+            // Update opportunity stage + followup + lost info
             if (dto.StageAfterId.HasValue && dto.StageAfterId != oldStageId)
                 opp.StageId = dto.StageAfterId.Value;
+
             if (dto.NextFollowUpDate.HasValue)
                 opp.NextFollowUpDate = dto.NextFollowUpDate.Value;
+
+            if (dto.LostReasonId.HasValue)
+                opp.LostReasonId = dto.LostReasonId;
+
+            if (!string.IsNullOrWhiteSpace(dto.LostNotes))
+                opp.LostNotes = dto.LostNotes;
+
             opp.LastContactDate = DateTime.Now;
             opp.LastUpdatedBy = userName;
             opp.LastUpdatedAt = DateTime.Now;

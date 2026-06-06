@@ -130,6 +130,7 @@ builder.Services.AddScoped<ICrmDashboardService, CrmDashboardService>();
 builder.Services.AddScoped<IOpportunityService, OpportunityService>();
 builder.Services.AddScoped<IInteractionService, InteractionService>();
 builder.Services.AddScoped<ITaskService, TaskService>();
+builder.Services.AddScoped<ICrmSettingsService, CrmSettingsService>();
 
 
 var app = builder.Build();
