@@ -12,10 +12,15 @@ using COCOBOLOERPNEW.Helpers;
 using COCOBOLOERPNEW.Endpoints;
 using QuestPDF.Infrastructure;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Caching.Memory;
 QuestPDF.Settings.License = LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "DataProtection-Keys")))
+    .SetApplicationName("COCOBOLOERP");
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
@@ -93,6 +98,12 @@ options.Cookie.SameSite = builder.Environment.IsDevelopment()
                 return Task.CompletedTask;
             }
         };
+    });
+
+builder.Services.AddOptions<CookieAuthenticationOptions>(CookieAuthenticationDefaults.AuthenticationScheme)
+    .Configure<IMemoryCache>((options, cache) =>
+    {
+        options.SessionStore = new MemoryCacheTicketStore(cache);
     });
 
 builder.Services.AddAuthorization();
