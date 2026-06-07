@@ -1,139 +1,1154 @@
 @page "/crm/interactions"
 
 @using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
 @using COCOBOLOERPNEW.Services
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using ClosedXML.Excel
 @using MudColor = MudBlazor.Color
 @using MudSize = MudBlazor.Size
-@using MudVariant = MudBlazor.Variant
 
 @inject IInteractionService InteractionService
+@inject IOpportunityService OppService
 @inject NavigationManager Nav
 @inject ISnackbar Snackbar
+@inject IDialogService Dialog
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
+
+@implements IAsyncDisposable
 
 <PageTitle>سجل التواصلات — CRM</PageTitle>
 
+@* ═══════════════════════════════════════════════════ *@
+@* ═══ JAVASCRIPT INLINE ═══ *@
+@* ═══════════════════════════════════════════════════ *@
+<script suppress-error="BL9992">
+(function () {
+    if (window.__crmInteractionsReady) return;
+    window.__crmInteractionsReady = true;
+
+    /* ── Scroll Watcher ── */
+    var _ref = null, _fn = null, _tm = null;
+    window.setupScrollWatcher = function (dotNetRef) {
+        _ref = dotNetRef;
+        if (_fn) window.removeEventListener('scroll', _fn);
+        _fn = function () {
+            clearTimeout(_tm);
+            _tm = setTimeout(function () {
+                if (_ref) {
+                    try { _ref.invokeMethodAsync('OnScrollChanged', window.pageYOffset || document.documentElement.scrollTop || 0); }
+                    catch (e) { }
+                }
+            }, 80);
+        };
+        window.addEventListener('scroll', _fn, { passive: true });
+        setTimeout(_fn, 200);
+    };
+    window.removeScrollWatcher = function () {
+        if (_fn) window.removeEventListener('scroll', _fn);
+        _ref = null; _fn = null;
+    };
+    window.scrollToTopSmooth = function () {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
+    /* ── Download File from Base64 ── */
+    window.downloadFileFromBase64 = function (fileName, base64, contentType) {
+        try {
+            var raw = atob(base64);
+            var len = raw.length;
+            var uInt8 = new Uint8Array(len);
+            for (var i = 0; i < len; i++) uInt8[i] = raw.charCodeAt(i);
+            var blob = new Blob([uInt8], { type: contentType || 'application/octet-stream' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url; a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 300);
+            return true;
+        } catch (e) { console.error('Download error:', e); return false; }
+    };
+})();
+</script>
+
+@* ═══════════════════════════════════════════════════ *@
+@* ═══ LOADING ═══ *@
+@* ═══════════════════════════════════════════════════ *@
 @if (_loading)
-{ <div class="loading-screen"><MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" /><MudText Typo="Typo.h6" Class="load-txt">جاري تحميل التواصلات...</MudText></div> }
+{
+    <div class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-logo">
+                <MudIcon Icon="@Icons.Material.Rounded.Forum" Size="MudSize.Large" />
+                <div class="loading-ring"></div>
+                <div class="loading-ring ring-2"></div>
+            </div>
+            <MudText Typo="Typo.h5" Class="mt-4" Style="font-weight:800;color:var(--mud-palette-text-primary)">
+                جاري تحميل سجل التواصلات
+            </MudText>
+            <MudText Typo="Typo.body2" Class="mt-1" Style="opacity:.6">يتم تجهيز البيانات والإحصائيات...</MudText>
+            <MudProgressLinear Color="MudColor.Primary" Indeterminate="true" Class="mt-4"
+                               Style="max-width:300px;border-radius:8px" />
+        </div>
+    </div>
+}
 else
 {
-<div dir="rtl" class="ipg">
+<div dir="rtl" class="interactions-page" id="interactionsTop">
 
-    @* ═══ HEADER ═══ *@
-    <div class="ihdr">
-        <div class="ihdr-bg"><div class="ihdr-grad"></div></div>
-        <div class="ihdr-inr">
-            <div class="ihdr-icn"><MudIcon Icon="@Icons.Material.Rounded.Chat" Style="font-size:1.5rem" /></div>
-            <div class="ihdr-txt"><h1>سجل التواصلات</h1><p>سجل كامل للتفاعلات والتواصل مع العملاء — <strong>@_paged.TotalCount</strong> تفاعل</p></div>
+    @* ═══════════════════════════════════════════════════ *@
+    @* ═══ PREMIUM HEADER ═══ *@
+    @* ═══════════════════════════════════════════════════ *@
+    <div class="premium-header">
+        <div class="header-bg">
+            <div class="header-gradient"></div>
+            <div class="header-pattern"></div>
+            <div class="header-orb orb-1"></div>
+            <div class="header-orb orb-2"></div>
+            <div class="header-orb orb-3"></div>
+        </div>
+        <div class="header-content">
+            <div class="header-top">
+                <div class="header-title">
+                    <div class="title-icon-box">
+                        <MudIcon Icon="@Icons.Material.Rounded.Forum" Size="MudSize.Large" />
+                        <div class="icon-pulse-ring"></div>
+                    </div>
+                    <div class="title-text">
+                        <div class="title-badge-row">
+                            <span class="live-dot"></span>
+                            <span class="badge-text">CRM</span>
+                        </div>
+                        <h1>سجل التواصلات</h1>
+                        <p>إدارة كاملة لتفاعلات العملاء مع بحث ذكي وفلاتر متقدمة</p>
+                    </div>
+                </div>
+                <div class="header-btns">
+                    @if (_canExport)
+                    {
+                        <button class="export-btn" @onclick="ExportExcel" disabled="@_isExporting">
+                            @if (_isExporting)
+                            {
+                                <div class="btn-spinner"></div>
+                                <span>جاري التصدير...</span>
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@Icons.Material.Rounded.FileDownload" Size="MudSize.Small" />
+                                <span>تصدير Excel</span>
+                            }
+                        </button>
+                    }
+                    @if (_crmAccessFrom.HasValue)
+                    {
+                        <div class="access-badge">
+                            <MudIcon Icon="@Icons.Material.Rounded.Lock" Size="MudSize.Small" />
+                            <span>من @_crmAccessFrom.Value.ToString("yyyy/MM/dd")</span>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @* KPI CARDS *@
+            <div class="kpi-grid">
+                <div class="kpi-card">
+                    <div class="kpi-icon" style="background:rgba(99,102,241,.15);color:#818cf8">
+                        <MudIcon Icon="@Icons.Material.Rounded.ChatBubble" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.TotalInteractions.ToString("N0")</span>
+                        <span class="kpi-label">إجمالي التفاعلات</span>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon" style="background:rgba(52,211,153,.15);color:#34d399">
+                        <MudIcon Icon="@Icons.Material.Rounded.Today" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.TodayCount</span>
+                        <span class="kpi-label">اليوم</span>
+                    </div>
+                    @if (_stats.TodayCount > 0) { <span class="kpi-live-dot"></span> }
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon" style="background:rgba(96,165,250,.15);color:#60a5fa">
+                        <MudIcon Icon="@Icons.Material.Rounded.CalendarViewWeek" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.WeekCount</span>
+                        <span class="kpi-label">هذا الأسبوع</span>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon" style="background:rgba(251,191,36,.15);color:#fbbf24">
+                        <MudIcon Icon="@Icons.Material.Rounded.SwapHoriz" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.StageChanges</span>
+                        <span class="kpi-label">تغيير مرحلة</span>
+                    </div>
+                </div>
+                <div class="kpi-card @(_stats.NoFollowUp > 10 ? "kpi-alert" : "")">
+                    <div class="kpi-icon" style="background:rgba(248,113,113,.15);color:#f87171">
+                        <MudIcon Icon="@Icons.Material.Rounded.NotificationImportant" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.NoFollowUp</span>
+                        <span class="kpi-label">بدون متابعة</span>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon" style="background:rgba(167,139,250,.15);color:#a78bfa">
+                        <MudIcon Icon="@Icons.Material.Rounded.Groups" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.UniqueClients</span>
+                        <span class="kpi-label">عملاء مميزون</span>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
+    @* ═══════════════════════════════════════════════════ *@
     @* ═══ FILTERS ═══ *@
-    <div class="iflt">
-        <MudTextField T="string" Label="🔍 بحث عن عميل أو تفاعل" Variant="MudVariant.Outlined" @bind-Value="_s" Dense="true" Class="iflt-big" Immediate="true" />
-        <MudDatePicker Label="📅 من" Variant="MudVariant.Outlined" Date="_f.DateFrom" DateChanged="d=>_f.DateFrom=d" Dense="true" Class="iflt-sm" />
-        <MudDatePicker Label="📅 إلى" Variant="MudVariant.Outlined" Date="_f.DateTo" DateChanged="d=>_f.DateTo=d" Dense="true" Class="iflt-sm" />
-        <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" OnClick="DoFilter" Size="MudSize.Small">تصفية</MudButton>
-        @if (_hasF) { <MudButton Variant="MudVariant.Text" Color="MudColor.Error" OnClick="DoReset" Size="MudSize.Small">مسح</MudButton> }
+    @* ═══════════════════════════════════════════════════ *@
+    <MudPaper Class="filter-paper" Elevation="0">
+        <div class="filter-header" @onclick="ToggleFilters">
+            <div class="filter-title">
+                <div class="filter-icon-box">
+                    <MudIcon Icon="@Icons.Material.Rounded.FilterAlt" Size="MudSize.Small" />
+                </div>
+                <span>فلاتر متقدمة</span>
+                @if (_hasActiveFilters)
+                {
+                    <MudChip T="string" Size="MudSize.Small" Color="MudColor.Primary"
+                             Variant="Variant.Filled" Class="active-chip">@_activeFilterCount نشط</MudChip>
+                }
+            </div>
+            <div class="@GetFilterToggleClass()">
+                <MudIcon Icon="@Icons.Material.Rounded.KeyboardArrowDown" Size="MudSize.Small" />
+            </div>
+        </div>
+
+        @if (_filtersExpanded)
+        {
+            <div class="filter-body animate-in">
+                @* بحث *@
+                <div class="filter-section">
+                    <div class="section-label"><MudIcon Icon="@Icons.Material.Rounded.Search" Size="MudSize.Small" /> البحث</div>
+                    <div class="filter-grid cols-2">
+                        <MudAutocomplete T="PartySearchDto" Label="🔍 بحث بالعميل أو الهاتف"
+                                         @bind-Value="_selectedParty" SearchFunc="SearchParties"
+                                         ToStringFunc="@(p => p == null ? "" : p.DisplayText)"
+                                         Variant="Variant.Outlined" Dense="true" Clearable="true" Immediate="true"
+                                         AdornmentIcon="@Icons.Material.Rounded.PersonSearch"
+                                         OnClearButtonClick="ClearPartyFilter">
+                            <ItemTemplate Context="party">
+                                <div class="party-item">
+                                    <div class="party-avatar">@party.NameInitial</div>
+                                    <div class="party-info">
+                                        <div class="party-name">@party.PartyName</div>
+                                        <div class="party-phone">@party.PhoneDisplay</div>
+                                    </div>
+                                    <div class="party-days">@(party.LastInteractionDays == 0 ? "اليوم" : $"{party.LastInteractionDays} يوم")</div>
+                                </div>
+                            </ItemTemplate>
+                        </MudAutocomplete>
+                        <MudTextField T="string" Label="بحث في المحتوى" Variant="Variant.Outlined"
+                                      @bind-Value="_filter.SearchText" Dense="true"
+                                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Rounded.Search"
+                                      Immediate="true" DebounceInterval="400" OnDebounceIntervalElapsed="ApplyFilters" />
+                    </div>
+                </div>
+
+                @* تصنيف *@
+                <div class="filter-section">
+                    <div class="section-label"><MudIcon Icon="@Icons.Material.Rounded.Category" Size="MudSize.Small" /> التصنيف</div>
+                    <div class="filter-grid cols-4">
+                        <MudSelect T="int?" Label="المصدر" Variant="Variant.Outlined" @bind-Value="_filter.SourceId" Dense="true" Clearable="true">
+                            @foreach (var s in _sources) { <MudSelectItem Value="@((int?)s.SourceId)">@s.SourceName</MudSelectItem> }
+                        </MudSelect>
+                        <MudSelect T="int?" Label="الحملة الإعلانية" Variant="Variant.Outlined" @bind-Value="_filter.AdTypeId" Dense="true" Clearable="true">
+                            @foreach (var a in _adTypes) { <MudSelectItem Value="@((int?)a.AdTypeId)">@(a.AdTypeNameAr ?? a.AdTypeName)</MudSelectItem> }
+                        </MudSelect>
+                        <MudSelect T="int?" Label="طريقة التواصل" Variant="Variant.Outlined" @bind-Value="_filter.StatusId" Dense="true" Clearable="true">
+                            @foreach (var st in _statuses) { <MudSelectItem Value="@((int?)st.StatusId)">@(st.StatusNameAr ?? st.StatusName)</MudSelectItem> }
+                        </MudSelect>
+                        <MudSelect T="int?" Label="الموظف" Variant="Variant.Outlined" @bind-Value="_filter.EmployeeId" Dense="true" Clearable="true">
+                            @foreach (var e in _employees) { <MudSelectItem Value="@((int?)e.EmployeeId)">@e.FullName</MudSelectItem> }
+                        </MudSelect>
+                    </div>
+                </div>
+
+                @* مراحل وتاريخ *@
+                <div class="filter-section">
+                    <div class="section-label"><MudIcon Icon="@Icons.Material.Rounded.DateRange" Size="MudSize.Small" /> المراحل والتاريخ</div>
+                    <div class="filter-grid cols-4">
+                        <MudSelect T="int?" Label="المرحلة قبل" Variant="Variant.Outlined" @bind-Value="_filter.StageBeforeId" Dense="true" Clearable="true">
+                            @foreach (var s in _stages)
+                            {
+                                <MudSelectItem Value="@((int?)s.StageId)">
+                                    <div style="display:flex;align-items:center;gap:6px">
+                                        <span style="@GetStageDotStyle(s.StageColor)"></span>
+                                        @(s.StageNameAr ?? s.StageName)
+                                    </div>
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="int?" Label="المرحلة بعد" Variant="Variant.Outlined" @bind-Value="_filter.StageAfterId" Dense="true" Clearable="true">
+                            @foreach (var s in _stages)
+                            {
+                                <MudSelectItem Value="@((int?)s.StageId)">
+                                    <div style="display:flex;align-items:center;gap:6px">
+                                        <span style="@GetStageDotStyle(s.StageColor)"></span>
+                                        @(s.StageNameAr ?? s.StageName)
+                                    </div>
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudDatePicker Label="من تاريخ" Variant="Variant.Outlined" @bind-Date="_filter.DateFrom"
+                                       Dense="true" Clearable="@(!_crmAccessFrom.HasValue)" Placeholder="اختياري"
+                                       MinDate="@_crmAccessFrom" />
+                        <MudDatePicker Label="إلى تاريخ" Variant="Variant.Outlined" @bind-Date="_filter.DateTo"
+                                       Dense="true" Clearable="true" Placeholder="اختياري" />
+                    </div>
+                    @if (_crmAccessFrom.HasValue)
+                    {
+                        <div class="access-info">
+                            <MudIcon Icon="@Icons.Material.Rounded.Info" Size="MudSize.Small" />
+                            صلاحيتك تبدأ من @_crmAccessFrom.Value.ToString("yyyy/MM/dd")
+                        </div>
+                    }
+                </div>
+
+                @* أزرار *@
+                <div class="filter-actions">
+                    <div class="quick-filters">
+                        <span class="quick-label">اختصارات:</span>
+                        <MudChip T="string" OnClick="@(() => SetQuickDate(-1))" Variant="@(_quickDate==-1?Variant.Filled:Variant.Outlined)" Color="MudColor.Default" Size="MudSize.Small">الكل</MudChip>
+                        <MudChip T="string" OnClick="@(() => SetQuickDate(0))" Variant="@(_quickDate==0?Variant.Filled:Variant.Outlined)" Color="MudColor.Primary" Size="MudSize.Small">اليوم</MudChip>
+                        <MudChip T="string" OnClick="@(() => SetQuickDate(7))" Variant="@(_quickDate==7?Variant.Filled:Variant.Outlined)" Color="MudColor.Primary" Size="MudSize.Small">7 أيام</MudChip>
+                        <MudChip T="string" OnClick="@(() => SetQuickDate(30))" Variant="@(_quickDate==30?Variant.Filled:Variant.Outlined)" Color="MudColor.Primary" Size="MudSize.Small">30 يوم</MudChip>
+                        <MudChip T="string" OnClick="@(() => SetQuickDate(90))" Variant="@(_quickDate==90?Variant.Filled:Variant.Outlined)" Color="MudColor.Primary" Size="MudSize.Small">3 شهور</MudChip>
+                        <span class="quick-sep"></span>
+                        <MudChip T="string" OnClick="FilterStageChanges" Variant="@(_filterStageChange?Variant.Filled:Variant.Outlined)" Color="MudColor.Secondary" Size="MudSize.Small">تغيير مرحلة فقط</MudChip>
+                    </div>
+                    <div class="filter-btns">
+                        <MudButton Variant="Variant.Filled" Color="MudColor.Primary" OnClick="ApplyFilters" StartIcon="@Icons.Material.Rounded.Search" Class="btn-action">بحث</MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="MudColor.Default" OnClick="ResetFilters" StartIcon="@Icons.Material.Rounded.RestartAlt">إعادة تعيين</MudButton>
+                    </div>
+                </div>
+            </div>
+        }
+    </MudPaper>
+
+    @* ═══════════════════════════════════════════════════ *@
+    @* ═══ VIEW TOOLBAR ═══ *@
+    @* ═══════════════════════════════════════════════════ *@
+    <div class="view-toolbar">
+        <div class="view-tabs">
+            <button class="@GetViewTabClass(ViewMode.Timeline)" @onclick="@(() => SetView(ViewMode.Timeline))">
+                <MudIcon Icon="@Icons.Material.Rounded.Timeline" Size="MudSize.Small" /> تايملاين
+            </button>
+            <button class="@GetViewTabClass(ViewMode.Table)" @onclick="@(() => SetView(ViewMode.Table))">
+                <MudIcon Icon="@Icons.Material.Rounded.TableRows" Size="MudSize.Small" /> جدول
+            </button>
+            <button class="@GetViewTabClass(ViewMode.Cards)" @onclick="@(() => SetView(ViewMode.Cards))">
+                <MudIcon Icon="@Icons.Material.Rounded.GridView" Size="MudSize.Small" /> كروت
+            </button>
+        </div>
+        <div class="view-meta">
+            <span class="total-label"><strong>@_paged.TotalCount</strong> تفاعل</span>
+            <MudSelect T="int" Value="_filter.PageSize" ValueChanged="ChangePageSize" Dense="true" Variant="Variant.Outlined" Class="page-size-sel" Label="صفوف">
+                <MudSelectItem Value="25">25</MudSelectItem>
+                <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+            </MudSelect>
+        </div>
     </div>
 
-    @if (_busy) { <div class="busy-bar"></div> }
+    @if (_isLoadingData) { <MudProgressLinear Color="MudColor.Primary" Indeterminate="true" Class="mb-3" Style="border-radius:4px" /> }
 
-    @* ═══ TIMELINE ═══ *@
-    @if (_paged.Items.Any())
+    @* ═══════════════════════════════════════════════════ *@
+    @* ═══ TIMELINE VIEW ═══ *@
+    @* ═══════════════════════════════════════════════════ *@
+    @if (_viewMode == ViewMode.Timeline)
     {
-        <div class="itl">
-            @foreach (var i in _paged.Items)
+        <div class="timeline-view">
+            @if (_paged.Items.Any())
             {
-                <div class="itl-item" @onclick="()=>OpenOpp(i.OpportunityId)">
-                    <div class="itl-line"></div>
-                    <div class="itl-dot" style="background:@(GetStageColor(i))"></div>
-                    <div class="itl-body">
-                        <div class="itl-h">
-                            <strong>@i.ClientName</strong>
-                            <span class="itl-date">@i.InteractionDate.ToString("yyyy/MM/dd") @(i.InteractionTime?.ToString("HH:mm")??"")</span>
+                @foreach (var group in _groupedInteractions)
+                {
+                    <div class="tl-date-group">
+                        <div class="tl-date-header">
+                            <span class="tl-date-line"></span>
+                            <span class="tl-date-label">@FormatGroupDate(group.Key)</span>
+                            <span class="tl-date-count">@group.Count()</span>
+                            <span class="tl-date-line"></span>
                         </div>
-                        @if (i.StageBeforeId != i.StageAfterId && i.StageBeforeName != null)
+                        @foreach (var item in group)
                         {
-                            <div class="itl-stage">🔄 <span>@i.StageBeforeName</span> → <strong>@(i.StageAfterName??"—")</strong></div>
+                            <div class="tl-item" @onclick="@(() => OpenOpportunity(item.OpportunityId))">
+                                <div class="tl-rail">
+                                    <div class="tl-dot" style="@GetTimelineDotStyle(item)"></div>
+                                    <div class="tl-line"></div>
+                                </div>
+                                <div class="tl-card">
+                                    <div class="tl-card-header">
+                                        <div class="tl-client">
+                                            <div class="avatar" style="@GetAvatarStyle(item)">@GetInitials(item.ClientName)</div>
+                                            <div>
+                                                <div class="name">@item.ClientName</div>
+                                                <div class="phone">
+                                                    @item.Phone
+                                                    @if (HasExtraPhones(item)) { <span class="extra-phones">+@GetExtraPhoneCount(item)</span> }
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="tl-time">
+                                            @item.InteractionTime?.ToString(@"hh\:mm")
+                                            <MudIcon Icon="@GetStatusIcon(item.StatusName)" Size="MudSize.Small"
+                                                     Title="@item.StatusNameAr" Style="@GetStatusColorStyle(item.StatusName)" />
+                                        </div>
+                                    </div>
+
+                                    @if (!string.IsNullOrWhiteSpace(item.Summary))
+                                    { <div class="tl-summary">@item.Summary</div> }
+
+                                    @if (item.StageBeforeId != item.StageAfterId)
+                                    {
+                                        <div class="stage-flow">
+                                            <span class="sf-before" style="@GetStageBeforeStyle(item)">@(item.StageBeforeNameAr ?? item.StageBeforeName)</span>
+                                            <MudIcon Icon="@Icons.Material.Rounded.ArrowBack" Size="MudSize.Small" Style="color:var(--mud-palette-text-disabled)" />
+                                            <span class="sf-after" style="@GetStageAfterStyle(item)">@(item.StageAfterNameAr ?? item.StageAfterName)</span>
+                                        </div>
+                                    }
+
+                                    <div class="tl-footer">
+                                        <div class="tl-tags">
+                                            @if (item.SourceName != null) { <span class="tag src">📡 @item.SourceName</span> }
+                                            @if (item.AdTypeNameAr != null) { <span class="tag camp">🎯 @item.AdTypeNameAr</span> }
+                                            @if (item.NextFollowUpDate.HasValue)
+                                            { <span class="@GetFollowUpTagClass(item)">📅 @item.NextFollowUpDate.Value.ToString("dd/MM")</span> }
+                                        </div>
+                                        <span class="tl-user">👤 @item.EmployeeName</span>
+                                    </div>
+                                </div>
+                            </div>
                         }
-                        @if (!string.IsNullOrWhiteSpace(i.Summary))
-                        { <div class="itl-sum">@i.Summary</div> }
-                        <div class="itl-meta">
-                            <span>👤 @(i.EmployeeName??i.CreatedBy??"—")</span>
-                            @if (i.SourceName!=null) { <span>📡 @i.SourceName</span> }
-                            @if (i.NextFollowUpDate.HasValue) { <span>📅 المتابعة: @i.NextFollowUpDate.Value.ToString("yyyy/MM/dd")</span> }
-                        </div>
-                        @if (!string.IsNullOrWhiteSpace(i.Notes)) { <div class="itl-notes">📌 @i.Notes</div> }
                     </div>
+                }
+            }
+            else
+            {
+                <div class="empty-box">
+                    <div class="empty-circle"><MudIcon Icon="@Icons.Material.Rounded.SearchOff" Size="MudSize.Large" /></div>
+                    <h3>لا توجد تفاعلات</h3>
+                    <p>جرب تغيير الفلاتر أو توسيع نطاق البحث</p>
+                    <MudButton Variant="Variant.Outlined" Color="MudColor.Primary" OnClick="ResetFilters"
+                               StartIcon="@Icons.Material.Rounded.RestartAlt" Class="mt-3">إعادة تعيين</MudButton>
                 </div>
             }
         </div>
     }
-    else { <div class="empty"><MudIcon Icon="@Icons.Material.Rounded.Inbox" Size="MudSize.Large" /><span>لا توجد تواصلات</span></div> }
 
+    @* ═══════════════════════════════════════════════════ *@
+    @* ═══ TABLE VIEW ═══ *@
+    @* ═══════════════════════════════════════════════════ *@
+    @if (_viewMode == ViewMode.Table)
+    {
+        <MudPaper Class="tbl-paper" Elevation="0">
+            <div class="tbl-scroll">
+                <table class="tbl">
+                    <thead>
+                        <tr>
+                            <th>التاريخ</th><th>العميل</th><th>الهاتف</th><th>الملخص</th>
+                            <th>المرحلة</th><th>المصدر</th><th>الحملة</th><th>الموظف</th><th>المتابعة</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in _paged.Items)
+                        {
+                            <tr @onclick="@(() => OpenOpportunity(item.OpportunityId))">
+                                <td>
+                                    <div class="td-date">@item.InteractionDate.ToString("yyyy/MM/dd")</div>
+                                    <div class="td-time">@item.InteractionTime?.ToString(@"hh\:mm")</div>
+                                </td>
+                                <td><strong>@item.ClientName</strong></td>
+                                <td class="ltr">@item.Phone</td>
+                                <td><div class="td-summary">@Truncate(item.Summary, 60)</div></td>
+                                <td>
+                                    @if (item.StageBeforeId != item.StageAfterId)
+                                    {
+                                        <div class="td-stage-flow">
+                                            <span style="@GetStageColorStyle(item.StageBeforeColor)" class="td-stage-old">@(item.StageBeforeNameAr ?? "—")</span>
+                                            →
+                                            <span style="@GetStageColorBoldStyle(item.StageAfterColor)">@(item.StageAfterNameAr ?? item.StageAfterName)</span>
+                                        </div>
+                                    }
+                                    else { <span style="@GetStageColorStyle(item.StageAfterColor)">@(item.StageAfterNameAr ?? "—")</span> }
+                                </td>
+                                <td>@(item.SourceName ?? "—")</td>
+                                <td>@(item.AdTypeNameAr ?? "—")</td>
+                                <td>@(item.EmployeeName ?? "—")</td>
+                                <td>
+                                    @if (item.NextFollowUpDate.HasValue)
+                                    { <span class="@(item.NextFollowUpDate.Value.Date <= DateTime.Today ? "overdue" : "")">@item.NextFollowUpDate.Value.ToString("dd/MM")</span> }
+                                    else { <span class="muted">—</span> }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (!_paged.Items.Any())
+            { <div class="empty-box sm"><MudIcon Icon="@Icons.Material.Rounded.SearchOff" Size="MudSize.Large" /><h3>لا توجد نتائج</h3></div> }
+        </MudPaper>
+    }
+
+    @* ═══════════════════════════════════════════════════ *@
+    @* ═══ CARDS VIEW ═══ *@
+    @* ═══════════════════════════════════════════════════ *@
+    @if (_viewMode == ViewMode.Cards)
+    {
+        <div class="cards-grid">
+            @foreach (var item in _paged.Items)
+            {
+                <div class="i-card" @onclick="@(() => OpenOpportunity(item.OpportunityId))">
+                    <div class="i-card-accent" style="@GetCardAccentStyle(item)"></div>
+                    <div class="i-card-top">
+                        <div class="i-card-client">
+                            <div class="avatar sm" style="@GetAvatarStyle(item)">@GetInitials(item.ClientName)</div>
+                            <div>
+                                <div class="name">@item.ClientName</div>
+                                <div class="phone ltr">@item.Phone</div>
+                            </div>
+                        </div>
+                        <MudIcon Icon="@GetStatusIcon(item.StatusName)" Size="MudSize.Small" Style="@GetStatusColorStyle(item.StatusName)" />
+                    </div>
+                    <div class="i-card-body">
+                        @if (!string.IsNullOrWhiteSpace(item.Summary)) { <p>@Truncate(item.Summary, 100)</p> }
+                        @if (item.StageBeforeId != item.StageAfterId)
+                        {
+                            <div class="mini-stage">
+                                <span class="ms-old">@item.StageBeforeNameAr</span> →
+                                <strong style="@GetStageColorStyle(item.StageAfterColor)">@item.StageAfterNameAr</strong>
+                            </div>
+                        }
+                    </div>
+                    <div class="i-card-bottom">
+                        <span>📅 @item.InteractionDate.ToString("dd/MM") @item.InteractionTime?.ToString(@"hh\:mm")</span>
+                        <span>👤 @item.EmployeeName</span>
+                    </div>
+                </div>
+            }
+        </div>
+        @if (!_paged.Items.Any()) { <div class="empty-box"><MudIcon Icon="@Icons.Material.Rounded.SearchOff" Size="MudSize.Large" /><h3>لا توجد نتائج</h3></div> }
+    }
+
+    @* PAGINATION *@
     @if (_paged.TotalPages > 1)
-    { <div class="pag"><MudIconButton Icon="@Icons.Material.Rounded.ChevronRight" OnClick="()=>Pg(_f.PageNumber-1)" Disabled="!_paged.HasPrevious" /><span>@_paged.PageNumber / @_paged.TotalPages · @_paged.TotalCount</span><MudIconButton Icon="@Icons.Material.Rounded.ChevronLeft" OnClick="()=>Pg(_f.PageNumber+1)" Disabled="!_paged.HasNext" /></div> }
+    {
+        <div class="paging">
+            <MudPagination Count="_paged.TotalPages" Selected="_filter.PageNumber" SelectedChanged="GoToPage"
+                           Color="MudColor.Primary" Size="MudSize.Medium" ShowFirstButton="true" ShowLastButton="true"
+                           BoundaryCount="1" MiddleCount="3" />
+        </div>
+    }
+
+    @* SCROLL TOP *@
+    <div class="@GetScrollTopClass()" @onclick="ScrollToTop">
+        <div class="scroll-btn">
+            <MudIcon Icon="@Icons.Material.Rounded.KeyboardArrowUp" />
+        </div>
+    </div>
 
 </div>
 }
 
+@* ═══════════════════════════════════════════════════════════════ *@
+@* ═══ STYLES ═══ *@
+@* ═══════════════════════════════════════════════════════════════ *@
 <style>
-    .ipg{padding:0 1.5rem 3rem;max-width:900px;margin:0 auto}
-    .load-txt{margin-top:.75rem}
+    :root { --page-max: 1440px; --radius-lg: 22px; --radius-md: 14px; --radius-sm: 8px; --font-base: 0.9rem; }
 
-    .ihdr{position:relative;border-radius:18px;overflow:hidden;margin-bottom:1rem;box-shadow:0 10px 30px rgba(8,145,178,.2)}
-    .ihdr-bg{position:absolute;inset:0}
-    .ihdr-grad{position:absolute;inset:0;background:linear-gradient(135deg,#0891b2,#06b6d4,#22d3ee)}
-    .ihdr-inr{position:relative;z-index:1;padding:1.1rem 1.5rem;color:#fff;display:flex;align-items:center;gap:.75rem}
-    .ihdr-icn{width:44px;height:44px;background:rgba(255,255,255,.15);border-radius:12px;display:flex;align-items:center;justify-content:center}
-    .ihdr-txt h1{margin:0;font-size:1.2rem;font-weight:800}
-    .ihdr-txt p{margin:3px 0 0;font-size:.78rem;opacity:.85}
-    .ihdr-txt strong{color:#fde68a}
+    .interactions-page { padding: 0 1.5rem 3rem; max-width: var(--page-max); margin: 0 auto; font-size: var(--font-base); line-height: 1.6; }
 
-    .iflt{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.65rem .9rem;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:12px;margin-bottom:.85rem}
-    .iflt-big{flex:2;min-width:200px}.iflt-sm{min-width:130px}
+    /* ═══ LOADING ═══ */
+    .loading-screen { display:flex; align-items:center; justify-content:center; min-height:80vh; }
+    .loading-content { display:flex; flex-direction:column; align-items:center; text-align:center; }
+    .loading-logo { position:relative; width:80px; height:80px; display:flex; align-items:center; justify-content:center; color:var(--mud-palette-primary); }
+    .loading-ring { position:absolute; inset:-8px; border:3px solid transparent; border-top-color:var(--mud-palette-primary); border-radius:50%; animation:spin 1.2s linear infinite; }
+    .loading-ring.ring-2 { inset:-16px; border-top-color:var(--mud-palette-secondary); animation-duration:1.8s; animation-direction:reverse; }
+    @@keyframes spin { to{transform:rotate(360deg)} }
 
-    .busy-bar{height:3px;background:linear-gradient(90deg,var(--mud-palette-primary),#06b6d4);border-radius:3px;margin-bottom:.5rem;animation:busy 1.5s ease-in-out infinite;width:100%}
-    @@keyframes busy{0%,100%{opacity:.4}50%{opacity:1}}
+    /* ═══ HEADER ═══ */
+    .premium-header { position:relative; border-radius:var(--radius-lg); overflow:hidden; margin-bottom:1.5rem; box-shadow:0 12px 40px rgba(37,99,235,.22); }
+    .header-bg { position:absolute; inset:0; }
+    .header-gradient { position:absolute; inset:0; background:linear-gradient(135deg,#1e3a5f 0%,#1e40af 30%,#2563eb 60%,#3b82f6 85%,#60a5fa 100%); }
+    .header-pattern { position:absolute; inset:0; opacity:.06; background-image:radial-gradient(circle at 1px 1px,rgba(255,255,255,.5) 1px,transparent 0); background-size:28px 28px; }
+    .header-orb { position:absolute; border-radius:50%; filter:blur(70px); animation:orb-float 10s ease-in-out infinite; }
+    .orb-1 { width:260px; height:260px; background:rgba(147,197,253,.2); top:-80px; right:-40px; }
+    .orb-2 { width:180px; height:180px; background:rgba(99,102,241,.18); bottom:-50px; left:8%; animation-delay:-4s; }
+    .orb-3 { width:120px; height:120px; background:rgba(52,211,153,.12); top:40%; left:55%; animation-delay:-7s; }
+    @@keyframes orb-float { 0%,100%{transform:translate(0,0) scale(1)} 50%{transform:translate(15px,-10px) scale(1.08)} }
 
-    .itl{position:relative;padding-right:2rem}
-    .itl-item{position:relative;padding-bottom:1.5rem;cursor:pointer}
-    .itl-item:last-child{padding-bottom:0}
-    .itl-line{position:absolute;right:.55rem;top:1.4rem;bottom:0;width:2px;background:var(--mud-palette-lines-inputs)}
-    .itl-item:last-child .itl-line{display:none}
-    .itl-dot{position:absolute;right:.05rem;top:.35rem;width:12px;height:12px;border-radius:50%;border:2px solid var(--mud-palette-surface);box-shadow:0 0 0 2px currentColor;opacity:.8}
-    .itl-body{background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:12px;padding:.9rem 1rem}
-    .itl-body:hover{box-shadow:0 4px 16px rgba(0,0,0,.08)}
-    .itl-h{display:flex;justify-content:space-between;margin-bottom:.3rem;font-size:.85rem}
-    .itl-date{font-size:.72rem;color:var(--mud-palette-text-secondary)}
-    .itl-stage{font-size:.78rem;margin-bottom:.25rem;color:var(--mud-palette-primary)}
-    .itl-stage span{text-decoration:line-through;color:var(--mud-palette-text-disabled)}
-    .itl-sum{font-size:.88rem;margin-bottom:.3rem;line-height:1.4}
-    .itl-meta{display:flex;gap:.8rem;font-size:.7rem;color:var(--mud-palette-text-secondary)}
-    .itl-notes{font-size:.72rem;color:var(--mud-palette-text-disabled);margin-top:.2rem;border-top:1px solid var(--mud-palette-lines-inputs);padding-top:.2rem}
-    .empty{display:flex;flex-direction:column;align-items:center;padding:3rem;color:var(--mud-palette-text-disabled);gap:.5rem}
-    .pag{display:flex;align-items:center;justify-content:center;gap:.75rem;margin-top:1.25rem;font-size:.85rem;color:var(--mud-palette-text-secondary)}
+    .header-content { position:relative; z-index:2; padding:1.75rem 2rem; color:#fff; }
+    .header-top { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; margin-bottom:1.5rem; flex-wrap:wrap; }
+    .header-title { display:flex; gap:1rem; align-items:center; }
+    .title-icon-box { position:relative; width:52px; height:52px; background:rgba(255,255,255,.13); backdrop-filter:blur(12px); border-radius:16px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,.18); flex-shrink:0; }
+    .icon-pulse-ring { position:absolute; inset:-5px; border-radius:19px; border:2px solid rgba(255,255,255,.25); animation:pulse-ring 2.5s ease-out infinite; }
+    @@keyframes pulse-ring { 0%{transform:scale(1);opacity:.6} 100%{transform:scale(1.25);opacity:0} }
+    .title-text h1 { margin:0; font-size:1.65rem; font-weight:900; letter-spacing:-.3px; line-height:1.2; }
+    .title-text p { margin:.2rem 0 0; opacity:.85; font-size:.88rem; font-weight:400; }
+    .title-badge-row { display:flex; align-items:center; gap:6px; margin-bottom:.25rem; }
+    .live-dot { width:7px; height:7px; border-radius:50%; background:#34d399; box-shadow:0 0 8px #34d399; animation:blink 2s infinite; }
+    .badge-text { font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:1px; opacity:.8; }
+    @@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
 
-    @@media(max-width:768px){.ipg{padding:0 .4rem 2rem}.iflt{flex-direction:column}.iflt-big,.iflt-sm{width:100%!important}.itl-body{padding:.7rem}}
+    .header-btns { display:flex; flex-direction:column; align-items:flex-end; gap:.5rem; }
+    .export-btn { display:inline-flex; align-items:center; gap:8px; padding:9px 22px; background:rgba(255,255,255,.13); backdrop-filter:blur(10px); border:1px solid rgba(255,255,255,.22); border-radius:10px; color:#fff; font-weight:700; font-size:.88rem; cursor:pointer; transition:all .25s; font-family:inherit; }
+    .export-btn:hover:not(:disabled) { background:rgba(255,255,255,.22); transform:translateY(-1px); box-shadow:0 4px 14px rgba(0,0,0,.15); }
+    .export-btn:disabled { opacity:.5; cursor:not-allowed; }
+    .btn-spinner { width:18px; height:18px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; }
+    .access-badge { display:flex; align-items:center; gap:4px; font-size:.7rem; opacity:.7; padding:3px 10px; background:rgba(255,255,255,.08); border-radius:6px; }
+
+    /* KPI */
+    .kpi-grid { display:grid; grid-template-columns:repeat(6,1fr); gap:.65rem; }
+    .kpi-card { position:relative; background:rgba(255,255,255,.09); backdrop-filter:blur(14px); border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-md); padding:.85rem; display:flex; align-items:center; gap:.65rem; transition:all .25s; overflow:hidden; }
+    .kpi-card:hover { background:rgba(255,255,255,.15); transform:translateY(-2px); }
+    .kpi-icon { width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .kpi-data { display:flex; flex-direction:column; min-width:0; }
+    .kpi-value { font-size:1.35rem; font-weight:900; line-height:1; letter-spacing:-.3px; }
+    .kpi-label { font-size:.7rem; opacity:.75; margin-top:.15rem; white-space:nowrap; }
+    .kpi-live-dot { position:absolute; top:6px; left:6px; width:7px; height:7px; background:#34d399; border-radius:50%; box-shadow:0 0 8px #34d399; animation:blink 1.5s infinite; }
+    .kpi-alert { border-color:rgba(248,113,113,.3)!important; }
+
+    /* ═══ FILTERS ═══ */
+    .filter-paper { border-radius:var(--radius-md); border:1px solid var(--mud-palette-lines-default); margin-bottom:1rem; overflow:hidden; background:var(--mud-palette-surface); }
+    .filter-header { padding:.85rem 1.25rem; display:flex; justify-content:space-between; align-items:center; cursor:pointer; user-select:none; transition:background .2s; }
+    .filter-header:hover { background:var(--mud-palette-action-hover); }
+    .filter-title { display:flex; align-items:center; gap:.5rem; font-weight:700; font-size:.92rem; }
+    .filter-icon-box { width:28px; height:28px; border-radius:7px; background:var(--mud-palette-primary); color:#fff; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .active-chip { font-size:.65rem!important; height:20px!important; }
+    .filter-toggle-btn { width:26px; height:26px; border-radius:50%; background:var(--mud-palette-action-hover); display:flex; align-items:center; justify-content:center; transition:transform .3s; }
+    .filter-toggle-btn.expanded { transform:rotate(180deg); }
+    .filter-body { padding:0 1.25rem 1.25rem; }
+    .animate-in { animation:fadeSlide .25s ease-out; }
+    @@keyframes fadeSlide { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+    .filter-section { margin-bottom:.85rem; }
+    .section-label { display:flex; align-items:center; gap:.35rem; font-size:.76rem; font-weight:700; color:var(--mud-palette-text-secondary); margin-bottom:.45rem; text-transform:uppercase; letter-spacing:.5px; }
+    .filter-grid { display:grid; gap:.75rem; }
+    .cols-2 { grid-template-columns:2fr 1fr; }
+    .cols-4 { grid-template-columns:repeat(4,1fr); }
+    .filter-actions { display:flex; justify-content:space-between; align-items:center; margin-top:1rem; padding-top:1rem; border-top:1px solid var(--mud-palette-lines-default); flex-wrap:wrap; gap:.75rem; }
+    .quick-filters { display:flex; gap:.3rem; align-items:center; flex-wrap:wrap; }
+    .quick-label { font-size:.72rem; font-weight:600; color:var(--mud-palette-text-secondary); margin-left:.15rem; }
+    .quick-sep { width:1px; height:22px; background:var(--mud-palette-lines-default); margin:0 .15rem; }
+    .filter-btns { display:flex; gap:.4rem; }
+    .btn-action { font-weight:700!important; }
+    .access-info { display:flex; align-items:center; gap:5px; margin-top:.5rem; padding:5px 12px; background:rgba(37,99,235,.05); border:1px solid rgba(37,99,235,.12); border-radius:var(--radius-sm); font-size:.75rem; color:#2563eb; font-weight:600; }
+
+    .party-item { display:flex; align-items:center; gap:.6rem; padding:.35rem 0; }
+    .party-avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,#2563eb,#7c3aed); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:.78rem; flex-shrink:0; }
+    .party-info { flex:1; min-width:0; }
+    .party-name { font-weight:600; font-size:.86rem; }
+    .party-phone { font-size:.72rem; color:var(--mud-palette-text-secondary); direction:ltr; text-align:right; }
+    .party-days { font-size:.65rem; color:var(--mud-palette-text-disabled); white-space:nowrap; }
+
+    /* ═══ VIEW TOOLBAR ═══ */
+    .view-toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:.85rem; flex-wrap:wrap; gap:.5rem; }
+    .view-tabs { display:flex; background:var(--mud-palette-surface); border:1px solid var(--mud-palette-lines-default); border-radius:10px; padding:3px; gap:3px; }
+    .view-tab { display:flex; align-items:center; gap:5px; padding:7px 15px; border:none; background:transparent; border-radius:7px; font-size:.84rem; font-weight:600; cursor:pointer; color:var(--mud-palette-text-secondary); transition:all .2s; font-family:inherit; }
+    .view-tab:hover { background:var(--mud-palette-action-hover); }
+    .view-tab.active { background:var(--mud-palette-primary); color:#fff; box-shadow:0 2px 8px rgba(37,99,235,.3); }
+    .view-meta { display:flex; align-items:center; gap:.75rem; }
+    .total-label { font-size:.84rem; color:var(--mud-palette-text-secondary); }
+    .page-size-sel { width:82px; }
+
+    /* ═══ TIMELINE ═══ */
+    .timeline-view { position:relative; }
+    .tl-date-group { margin-bottom:1.75rem; }
+    .tl-date-header { display:flex; align-items:center; gap:.75rem; margin-bottom:1rem; position:sticky; top:0; background:var(--mud-palette-background); z-index:3; padding:.5rem 0; }
+    .tl-date-line { flex:1; height:1px; background:var(--mud-palette-lines-default); }
+    .tl-date-label { font-weight:800; font-size:.92rem; color:var(--mud-palette-primary); white-space:nowrap; }
+    .tl-date-count { font-size:.7rem; background:var(--mud-palette-primary); color:#fff; padding:2px 9px; border-radius:10px; font-weight:700; }
+
+    .tl-item { display:flex; gap:.85rem; padding-bottom:1rem; }
+    .tl-rail { display:flex; flex-direction:column; align-items:center; width:18px; flex-shrink:0; }
+    .tl-dot { width:13px; height:13px; border-radius:50%; border:2.5px solid var(--mud-palette-surface); box-shadow:0 0 0 2px currentColor; flex-shrink:0; z-index:1; transition:transform .2s; }
+    .tl-item:hover .tl-dot { transform:scale(1.35); }
+    .tl-line { flex:1; width:2px; background:var(--mud-palette-lines-default); margin-top:3px; }
+    .tl-item:last-child .tl-line { display:none; }
+
+    .tl-card { flex:1; border:1px solid var(--mud-palette-lines-default); border-radius:var(--radius-md); padding:1.1rem 1.2rem; cursor:pointer; transition:all .2s; background:var(--mud-palette-surface); }
+    .tl-card:hover { box-shadow:0 6px 24px rgba(0,0,0,.07); border-color:var(--mud-palette-primary-lighten); transform:translateX(-3px); }
+    .tl-card-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:.55rem; }
+    .tl-client { display:flex; gap:.65rem; align-items:center; }
+    .avatar { width:40px; height:40px; border-radius:50%; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:.86rem; flex-shrink:0; box-shadow:0 3px 10px rgba(0,0,0,.15); }
+    .avatar.sm { width:32px; height:32px; font-size:.72rem; }
+    .name { font-weight:700; font-size:.92rem; line-height:1.3; }
+    .phone { font-size:.78rem; color:var(--mud-palette-text-secondary); direction:ltr; display:flex; align-items:center; gap:3px; }
+    .extra-phones { background:var(--mud-palette-info-lighten); color:var(--mud-palette-info-darken); padding:1px 5px; border-radius:3px; font-size:.6rem; font-weight:700; }
+    .tl-time { display:flex; align-items:center; gap:.4rem; font-size:.78rem; color:var(--mud-palette-text-secondary); font-weight:500; }
+    .tl-summary { font-size:.88rem; line-height:1.6; margin-bottom:.55rem; color:var(--mud-palette-text-primary); }
+    .stage-flow { display:flex; align-items:center; gap:.4rem; margin-bottom:.55rem; flex-wrap:wrap; }
+    .sf-before,.sf-after { padding:3px 10px; border-radius:6px; font-weight:600; font-size:.78rem; }
+    .sf-before { text-decoration:line-through; opacity:.6; }
+    .tl-footer { display:flex; justify-content:space-between; align-items:center; padding-top:.55rem; border-top:1px solid var(--mud-palette-lines-inputs); flex-wrap:wrap; gap:.3rem; }
+    .tl-tags { display:flex; gap:.3rem; flex-wrap:wrap; }
+    .tag { font-size:.68rem; padding:2px 7px; border-radius:5px; font-weight:600; }
+    .src { background:rgba(59,130,246,.07); color:#3b82f6; }
+    .camp { background:rgba(139,92,246,.07); color:#8b5cf6; }
+    .tag-followup { background:rgba(16,185,129,.07); color:#10b981; }
+    .tag-overdue { background:rgba(239,68,68,.07)!important; color:#ef4444!important; }
+    .tl-user { font-size:.72rem; color:var(--mud-palette-text-secondary); }
+
+    /* ═══ TABLE ═══ */
+    .tbl-paper { border-radius:var(--radius-md); overflow:hidden; border:1px solid var(--mud-palette-lines-default); }
+    .tbl-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    .tbl { width:100%; border-collapse:collapse; font-size:.86rem; min-width:920px; }
+    .tbl thead { background:var(--mud-palette-background); }
+    .tbl th { padding:.75rem .9rem; text-align:right; font-weight:700; color:var(--mud-palette-text-secondary); border-bottom:2px solid var(--mud-palette-lines-default); white-space:nowrap; font-size:.76rem; text-transform:uppercase; letter-spacing:.3px; }
+    .tbl td { padding:.65rem .9rem; border-bottom:1px solid var(--mud-palette-lines-inputs); vertical-align:middle; }
+    .tbl tbody tr { cursor:pointer; transition:background .15s; }
+    .tbl tbody tr:hover { background:var(--mud-palette-action-hover); }
+    .td-date { font-weight:600; font-size:.84rem; }
+    .td-time { font-size:.72rem; color:var(--mud-palette-text-secondary); }
+    .td-summary { max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .td-stage-flow { display:flex; align-items:center; gap:3px; font-size:.78rem; }
+    .td-stage-old { opacity:.5; font-size:.72rem; text-decoration:line-through; }
+    .overdue { color:#ef4444; font-weight:700; }
+    .muted { color:var(--mud-palette-text-disabled); }
+
+    /* ═══ CARDS ═══ */
+    .cards-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(310px,1fr)); gap:.85rem; }
+    .i-card { position:relative; border:1px solid var(--mud-palette-lines-default); border-radius:var(--radius-md); padding:1.1rem; cursor:pointer; transition:all .25s; overflow:hidden; background:var(--mud-palette-surface); }
+    .i-card:hover { transform:translateY(-3px); box-shadow:0 8px 28px rgba(0,0,0,.08); border-color:var(--mud-palette-primary-lighten); }
+    .i-card-accent { position:absolute; top:0; right:0; left:0; height:3px; }
+    .i-card-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:.6rem; }
+    .i-card-client { display:flex; gap:.55rem; align-items:center; }
+    .i-card-client .name { font-weight:700; font-size:.88rem; }
+    .i-card-client .phone { font-size:.72rem; color:var(--mud-palette-text-secondary); }
+    .i-card-body p { font-size:.84rem; line-height:1.5; margin:0 0 .4rem; color:var(--mud-palette-text-secondary); }
+    .mini-stage { font-size:.72rem; padding:.2rem 0; display:flex; align-items:center; gap:3px; }
+    .ms-old { text-decoration:line-through; opacity:.5; }
+    .i-card-bottom { display:flex; justify-content:space-between; font-size:.7rem; color:var(--mud-palette-text-disabled); padding-top:.5rem; border-top:1px solid var(--mud-palette-lines-inputs); margin-top:.5rem; }
+
+    /* ═══ EMPTY ═══ */
+    .empty-box { text-align:center; padding:4.5rem 2rem; color:var(--mud-palette-text-disabled); }
+    .empty-box.sm { padding:2.5rem; }
+    .empty-circle { width:72px; height:72px; border-radius:50%; background:var(--mud-palette-action-hover); display:flex; align-items:center; justify-content:center; margin:0 auto .8rem; }
+    .empty-box h3 { margin:.4rem 0 .2rem; color:var(--mud-palette-text-secondary); font-size:1.1rem; font-weight:700; }
+    .empty-box p { font-size:.88rem; }
+
+    /* ═══ PAGINATION ═══ */
+    .paging { display:flex; justify-content:center; margin-top:1.75rem; }
+
+    /* ═══ SCROLL TOP ═══ */
+    .scroll-top-fab { position:fixed; bottom:24px; left:24px; z-index:9999; opacity:0; transform:translateY(20px) scale(.8); transition:all .35s cubic-bezier(.4,0,.2,1); pointer-events:none; }
+    .scroll-top-fab.visible { opacity:1; transform:translateY(0) scale(1); pointer-events:all; }
+    .scroll-btn { width:48px; height:48px; border-radius:50%; background:var(--mud-palette-primary); color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow:0 4px 18px rgba(37,99,235,.35); transition:all .2s; }
+    .scroll-btn:hover { transform:scale(1.12); box-shadow:0 6px 22px rgba(37,99,235,.45); }
+
+    .ltr { direction:ltr; text-align:left; }
+
+    /* ═══ RESPONSIVE ═══ */
+    @@media(max-width:1400px) { .kpi-grid{grid-template-columns:repeat(3,1fr)} }
+    @@media(max-width:1100px) { .cols-4{grid-template-columns:repeat(2,1fr)} }
+    @@media(max-width:900px) {
+        .interactions-page{padding:0 1rem 2rem}
+        .header-content{padding:1.25rem 1.5rem}
+        .header-top{flex-direction:column;gap:.75rem}
+        .header-btns{flex-direction:row;align-items:center}
+        .title-text h1{font-size:1.35rem}
+        .kpi-grid{grid-template-columns:repeat(3,1fr);gap:.5rem}
+        .kpi-card{padding:.7rem}
+        .kpi-value{font-size:1.15rem}
+        .cols-2{grid-template-columns:1fr}
+        .cols-4{grid-template-columns:1fr 1fr}
+        .view-toolbar{flex-direction:column;align-items:stretch;gap:.5rem}
+        .view-meta{justify-content:space-between}
+    }
+    @@media(max-width:640px) {
+        .interactions-page{padding:0 .65rem 1.5rem;font-size:.84rem}
+        .header-content{padding:1rem}
+        .title-text h1{font-size:1.2rem}
+        .title-text p{font-size:.78rem}
+        .kpi-grid{grid-template-columns:repeat(2,1fr);gap:.4rem}
+        .kpi-card{padding:.6rem;gap:.4rem}
+        .kpi-icon{width:32px;height:32px}
+        .kpi-value{font-size:1.05rem}
+        .kpi-label{font-size:.62rem}
+        .cols-2,.cols-4{grid-template-columns:1fr}
+        .filter-actions{flex-direction:column;align-items:stretch;gap:.6rem}
+        .quick-filters{justify-content:center}
+        .filter-btns{justify-content:center}
+        .cards-grid{grid-template-columns:1fr}
+        .tl-card{padding:.85rem}
+        .avatar{width:34px;height:34px;font-size:.76rem}
+        .name{font-size:.86rem}
+        .view-tabs{overflow-x:auto;-webkit-overflow-scrolling:touch}
+    }
+    @@media(max-width:400px) {
+        .kpi-grid{grid-template-columns:1fr 1fr}
+        .title-icon-box{width:42px;height:42px}
+        .export-btn{padding:7px 14px;font-size:.8rem}
+    }
 </style>
 
 @code {
-    private bool _loading=true,_busy;
-    private string _s="";
-    private InteractionFilterDto _f=new();
-    private PagedResult<InteractionListDto> _paged=new();
-    private bool _hasF=>!string.IsNullOrWhiteSpace(_s)||_f.DateFrom.HasValue||_f.DateTo.HasValue;
+    // ═══════════════════════════════════════
+    // STATE
+    // ═══════════════════════════════════════
+    private bool _loading = true;
+    private bool _isLoadingData;
+    private bool _isExporting;
+    private bool _filtersExpanded = true;
+    private bool _canExport;
+    private bool _showScrollTop;
+    private string? _currentUser;
+    private DateTime? _crmAccessFrom;
+    private DotNetObjectReference<CrmInteractions>? _dotNetRef;
 
-    protected override async Task OnInitializedAsync(){_paged=await InteractionService.GetInteractionsAsync(_f);_loading=false;}
+    private InteractionFilterDto _filter = new() { PageSize = 25 };
+    private PagedResult<InteractionListDto> _paged = new();
+    private InteractionStats _stats = new();
+    private PartySearchDto? _selectedParty;
 
-    async Task DoFilter(){_f.SearchText=_s?.Trim();_f.PageNumber=1;_busy=true;StateHasChanged();_paged=await InteractionService.GetInteractionsAsync(_f);_busy=false;StateHasChanged();}
-    async Task DoReset(){_s="";_f=new();await DoFilter();}
-    async Task Pg(int p){_f.PageNumber=p;_busy=true;StateHasChanged();_paged=await InteractionService.GetInteractionsAsync(_f);_busy=false;StateHasChanged();}
+    private List<ContactSource> _sources = new();
+    private List<AdType> _adTypes = new();
+    private List<ContactStatus> _statuses = new();
+    private List<Employee> _employees = new();
+    private List<SalesStage> _stages = new();
 
-    private void OpenOpp(int id) => Nav.NavigateTo($"/crm/opportunities/{id}");
-    private void GoToCust(int pid) => Nav.NavigateTo($"/crm/customers/{pid}");
-    private static string GetStageColor(InteractionListDto i){
-        if(i.StageAfterId.HasValue)return i.StageAfterName switch{"تم البيع"=>"#27ae60","خسارة"=>"#e74c3c","غير مهتم"=>"#95a5a6",_=>"#3b82f6"};
-        return "#94a3b8";
+    private int _quickDate = -1;
+    private bool _filterStageChange;
+
+    private enum ViewMode { Timeline, Table, Cards }
+    private ViewMode _viewMode = ViewMode.Timeline;
+
+    // ═══════════════════════════════════════
+    // COMPUTED
+    // ═══════════════════════════════════════
+    private bool _hasActiveFilters =>
+        _filter.SourceId.HasValue || _filter.AdTypeId.HasValue || _filter.StatusId.HasValue ||
+        _filter.EmployeeId.HasValue || _filter.StageBeforeId.HasValue || _filter.StageAfterId.HasValue ||
+        _filter.DateFrom.HasValue || _filter.DateTo.HasValue || _filter.PartyId.HasValue ||
+        !string.IsNullOrWhiteSpace(_filter.SearchText);
+
+    private int _activeFilterCount
+    {
+        get
+        {
+            int c = 0;
+            if (_filter.SourceId.HasValue) c++;
+            if (_filter.AdTypeId.HasValue) c++;
+            if (_filter.StatusId.HasValue) c++;
+            if (_filter.EmployeeId.HasValue) c++;
+            if (_filter.StageBeforeId.HasValue) c++;
+            if (_filter.StageAfterId.HasValue) c++;
+            if (_filter.PartyId.HasValue) c++;
+            if (_filter.DateFrom.HasValue) c++;
+            if (_filter.DateTo.HasValue) c++;
+            if (!string.IsNullOrWhiteSpace(_filter.SearchText)) c++;
+            return c;
+        }
     }
+
+    private IEnumerable<IGrouping<DateTime, InteractionListDto>> _groupedInteractions =>
+        _paged.Items.GroupBy(i => i.InteractionDate.Date).OrderByDescending(g => g.Key);
+
+    // ═══════════════════════════════════════
+    // STYLE HELPERS
+    // ═══════════════════════════════════════
+    private static string GetStatusColorStyle(string? s) => $"color:{GetStatusColor(s)}";
+    private static string GetStageColorStyle(string? c) => $"color:{c ?? "#999"}";
+    private static string GetStageColorBoldStyle(string? c) => $"color:{c ?? "#999"};font-weight:700";
+    private static string GetTimelineDotStyle(InteractionListDto i) => $"background:{i.StageAfterColor ?? i.StageBeforeColor ?? "#94a3b8"}";
+    private static string GetAvatarStyle(InteractionListDto i) { var c = i.StageAfterColor ?? "#2563eb"; return $"background:linear-gradient(135deg,{c},{c}cc)"; }
+    private static string GetCardAccentStyle(InteractionListDto i) { var c = i.StageAfterColor ?? "#2563eb"; return $"background:linear-gradient(90deg,{c},{c}88)"; }
+    private static string GetStageBeforeStyle(InteractionListDto i) { var c = i.StageBeforeColor ?? "#999"; return $"background:color-mix(in srgb,{c} 10%,transparent);color:{c}"; }
+    private static string GetStageAfterStyle(InteractionListDto i) { var c = i.StageAfterColor ?? "#999"; return $"background:color-mix(in srgb,{c} 12%,transparent);color:{c};border:1.5px solid color-mix(in srgb,{c} 25%,transparent)"; }
+    private static string GetStageDotStyle(string? c) => $"width:10px;height:10px;border-radius:50%;background:{c ?? "#999"};display:inline-block";
+    private string GetFilterToggleClass() => _filtersExpanded ? "filter-toggle-btn expanded" : "filter-toggle-btn";
+    private string GetViewTabClass(ViewMode m) => _viewMode == m ? "view-tab active" : "view-tab";
+    private string GetScrollTopClass() => _showScrollTop ? "scroll-top-fab visible" : "scroll-top-fab";
+    private static string GetFollowUpTagClass(InteractionListDto i) => i.NextFollowUpDate.HasValue && i.NextFollowUpDate.Value.Date <= DateTime.Today ? "tag tag-followup tag-overdue" : "tag tag-followup";
+    private static bool HasExtraPhones(InteractionListDto i) => !string.IsNullOrEmpty(i.AllPhones) && i.AllPhones != i.Phone;
+    private static int GetExtraPhoneCount(InteractionListDto i) => string.IsNullOrEmpty(i.AllPhones) ? 0 : i.AllPhones.Split(',').Length - 1;
+
+    // ═══════════════════════════════════════
+    // LIFECYCLE
+    // ═══════════════════════════════════════
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            _currentUser = user.Identity?.Name;
+            _canExport = user.HasClaim("Permission", "frmInteractions:Export") || user.IsInRole("Admin");
+
+            // صلاحية التاريخ
+            _crmAccessFrom = user.GetAccessFromDate();
+            if (_crmAccessFrom.HasValue)
+                _filter.DateFrom = _crmAccessFrom.Value;
+
+            // Lookups بالتسلسل
+            _sources = await OppService.GetSourcesAsync();
+            _adTypes = await OppService.GetAdTypesAsync();
+            _statuses = await OppService.GetContactStatusesAsync();
+            _employees = await OppService.GetActiveEmployeesAsync();
+            _stages = await OppService.GetStagesAsync();
+
+            await LoadData();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _dotNetRef = DotNetObjectReference.Create(this);
+                await JS.InvokeVoidAsync("setupScrollWatcher", _dotNetRef);
+            }
+            catch { }
+        }
+    }
+
+    // ═══════════════════════════════════════
+    // SCROLL
+    // ═══════════════════════════════════════
+    [JSInvokable]
+    public void OnScrollChanged(double scrollY)
+    {
+        var show = scrollY > 200;
+        if (show != _showScrollTop) { _showScrollTop = show; InvokeAsync(StateHasChanged); }
+    }
+
+    private async Task ScrollToTop()
+    {
+        try { await JS.InvokeVoidAsync("scrollToTopSmooth"); } catch { }
+    }
+
+    private void ToggleFilters() => _filtersExpanded = !_filtersExpanded;
+
+    // ═══════════════════════════════════════
+    // DATA
+    // ═══════════════════════════════════════
+    private async Task LoadData()
+    {
+        _isLoadingData = true;
+        StateHasChanged();
+        try
+        {
+            _paged = await InteractionService.GetInteractionsAsync(_filter);
+            await CalcStats();
+        }
+        catch (Exception ex) { Snackbar.Add($"خطأ: {ex.Message}", Severity.Error); }
+        finally { _isLoadingData = false; StateHasChanged(); }
+    }
+
+    private async Task CalcStats()
+    {
+        try
+        {
+            var sf = new InteractionFilterDto
+            {
+                PageSize = 5000, SearchText = _filter.SearchText, SourceId = _filter.SourceId,
+                AdTypeId = _filter.AdTypeId, StatusId = _filter.StatusId, EmployeeId = _filter.EmployeeId,
+                StageBeforeId = _filter.StageBeforeId, StageAfterId = _filter.StageAfterId,
+                PartyId = _filter.PartyId, DateFrom = _filter.DateFrom, DateTo = _filter.DateTo
+            };
+            var sd = await InteractionService.GetInteractionsAsync(sf);
+            var today = DateTime.Today;
+            _stats = new InteractionStats
+            {
+                TotalInteractions = sd.TotalCount,
+                TodayCount = sd.Items.Count(i => i.InteractionDate.Date == today),
+                WeekCount = sd.Items.Count(i => i.InteractionDate.Date >= today.AddDays(-7)),
+                StageChanges = sd.Items.Count(i => i.StageBeforeId != i.StageAfterId),
+                NoFollowUp = sd.Items.Count(i => !i.NextFollowUpDate.HasValue),
+                UniqueClients = sd.Items.Select(i => i.PartyId).Distinct().Count()
+            };
+        }
+        catch
+        {
+            var today = DateTime.Today;
+            _stats = new InteractionStats
+            {
+                TotalInteractions = _paged.TotalCount,
+                TodayCount = _paged.Items.Count(i => i.InteractionDate.Date == today),
+                WeekCount = _paged.Items.Count(i => i.InteractionDate.Date >= today.AddDays(-7)),
+                StageChanges = _paged.Items.Count(i => i.StageBeforeId != i.StageAfterId),
+                NoFollowUp = _paged.Items.Count(i => !i.NextFollowUpDate.HasValue),
+                UniqueClients = _paged.Items.Select(i => i.PartyId).Distinct().Count()
+            };
+        }
+    }
+
+    // ═══════════════════════════════════════
+    // FILTERS
+    // ═══════════════════════════════════════
+    private async Task ApplyFilters()
+    {
+        _filter.PageNumber = 1;
+        if (_selectedParty != null) _filter.PartyId = _selectedParty.PartyId;
+        // حماية صلاحية التاريخ
+        if (_crmAccessFrom.HasValue && (!_filter.DateFrom.HasValue || _filter.DateFrom.Value < _crmAccessFrom.Value))
+            _filter.DateFrom = _crmAccessFrom.Value;
+        await LoadData();
+    }
+
+    private async Task ResetFilters()
+    {
+        var ps = _filter.PageSize;
+        _filter = new InteractionFilterDto { PageSize = ps };
+        _selectedParty = null; _quickDate = -1; _filterStageChange = false;
+        if (_crmAccessFrom.HasValue) _filter.DateFrom = _crmAccessFrom.Value;
+        await LoadData();
+    }
+
+    private async Task SetQuickDate(int days)
+    {
+        _quickDate = days;
+        if (days == -1) { _filter.DateFrom = _crmAccessFrom; _filter.DateTo = null; }
+        else if (days == 0) { _filter.DateFrom = DateTime.Today; _filter.DateTo = DateTime.Today; }
+        else
+        {
+            var d = DateTime.Today.AddDays(-days);
+            if (_crmAccessFrom.HasValue && d < _crmAccessFrom.Value) d = _crmAccessFrom.Value;
+            _filter.DateFrom = d; _filter.DateTo = DateTime.Today;
+        }
+        await ApplyFilters();
+    }
+
+    private async Task FilterStageChanges() { _filterStageChange = !_filterStageChange; await ApplyFilters(); }
+
+    private async Task<IEnumerable<PartySearchDto>> SearchParties(string value, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length < 2) return Array.Empty<PartySearchDto>();
+        try
+        {
+            var n = NormalizeArabic(value);
+            var parties = await OppService.SearchPartiesAsync(value);
+            return parties.Where(p => NormalizeArabic(p.PartyName).Contains(n) ||
+                (p.Phone != null && p.Phone.Contains(value)) || (p.Phone2 != null && p.Phone2.Contains(value)))
+                .Take(10).Select(p => new PartySearchDto { PartyId = p.PartyId, PartyName = p.PartyName, Phone = p.Phone, Phone2 = p.Phone2,
+                    LastInteractionDays = (DateTime.Today - (p.LastContactDate ?? DateTime.Today)).Days });
+        }
+        catch { return Array.Empty<PartySearchDto>(); }
+    }
+
+    private void ClearPartyFilter() { _selectedParty = null; _filter.PartyId = null; }
+    private async Task ChangePageSize(int s) { _filter.PageSize = s; await ApplyFilters(); }
+    private async Task GoToPage(int p) { _filter.PageNumber = p; await LoadData(); await ScrollToTop(); }
+    private void SetView(ViewMode m) => _viewMode = m;
+    private void OpenOpportunity(int id) => Nav.NavigateTo($"/crm/opportunities/{id}");
+
+    // ═══════════════════════════════════════
+    // EXPORT EXCEL
+    // ═══════════════════════════════════════
+    private async Task ExportExcel()
+    {
+        if (_isExporting || !_canExport) return;
+        _isExporting = true; StateHasChanged();
+
+        try
+        {
+            var ef = new InteractionFilterDto
+            {
+                PageSize = 50000, SearchText = _filter.SearchText, SourceId = _filter.SourceId,
+                AdTypeId = _filter.AdTypeId, StatusId = _filter.StatusId, EmployeeId = _filter.EmployeeId,
+                StageBeforeId = _filter.StageBeforeId, StageAfterId = _filter.StageAfterId,
+                PartyId = _filter.PartyId, DateFrom = _filter.DateFrom, DateTo = _filter.DateTo
+            };
+            if (_crmAccessFrom.HasValue && (!ef.DateFrom.HasValue || ef.DateFrom.Value < _crmAccessFrom.Value))
+                ef.DateFrom = _crmAccessFrom.Value;
+
+            var data = await InteractionService.GetInteractionsAsync(ef);
+            if (!data.Items.Any()) { Snackbar.Add("لا توجد بيانات للتصدير", Severity.Warning); return; }
+
+            using var wb = new XLWorkbook();
+            var ws = wb.Worksheets.Add("التفاعلات");
+            var hdrs = new[] { "التاريخ", "الوقت", "العميل", "الهاتف", "الملخص", "المرحلة قبل", "المرحلة بعد", "المصدر", "الحملة", "طريقة التواصل", "الموظف", "المتابعة القادمة" };
+            for (int i = 0; i < hdrs.Length; i++)
+            {
+                var c = ws.Cell(1, i + 1); c.Value = hdrs[i]; c.Style.Font.Bold = true;
+                c.Style.Fill.BackgroundColor = XLColor.FromHtml("#1e40af"); c.Style.Font.FontColor = XLColor.White;
+                c.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+            }
+
+            int row = 2;
+            foreach (var it in data.Items)
+            {
+                ws.Cell(row, 1).Value = it.InteractionDate.ToString("yyyy/MM/dd");
+                ws.Cell(row, 2).Value = it.InteractionTime?.ToString(@"hh\:mm") ?? "";
+                ws.Cell(row, 3).Value = it.ClientName ?? "";
+                ws.Cell(row, 4).Value = it.Phone ?? "";
+                ws.Cell(row, 5).Value = it.Summary ?? "";
+                ws.Cell(row, 6).Value = it.StageBeforeNameAr ?? it.StageBeforeName ?? "";
+                ws.Cell(row, 7).Value = it.StageAfterNameAr ?? it.StageAfterName ?? "";
+                ws.Cell(row, 8).Value = it.SourceName ?? "";
+                ws.Cell(row, 9).Value = it.AdTypeNameAr ?? it.AdTypeName ?? "";
+                ws.Cell(row, 10).Value = it.StatusNameAr ?? it.StatusName ?? "";
+                ws.Cell(row, 11).Value = it.EmployeeName ?? "";
+                ws.Cell(row, 12).Value = it.NextFollowUpDate?.ToString("yyyy/MM/dd") ?? "";
+                if (row % 2 == 0) ws.Range(row, 1, row, hdrs.Length).Style.Fill.BackgroundColor = XLColor.FromHtml("#eff6ff");
+                row++;
+            }
+            ws.Columns().AdjustToContents(); ws.RightToLeft = true; ws.SheetView.FreezeRows(1);
+            var rng = ws.Range(1, 1, row - 1, hdrs.Length);
+            rng.Style.Border.InsideBorder = XLBorderStyleValues.Thin;
+            rng.Style.Border.InsideBorderColor = XLColor.FromHtml("#dbeafe");
+            rng.Style.Border.OutsideBorder = XLBorderStyleValues.Medium;
+
+            using var ms = new MemoryStream(); wb.SaveAs(ms);
+            var b64 = Convert.ToBase64String(ms.ToArray());
+            var fn = $"Interactions_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+
+            var ok = await JS.InvokeAsync<bool>("downloadFileFromBase64", fn, b64,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
+            if (ok) Snackbar.Add($"تم تصدير {data.Items.Count} تفاعل بنجاح ✓", Severity.Success);
+            else Snackbar.Add("فشل تحميل الملف - حاول مرة أخرى", Severity.Warning);
+        }
+        catch (Exception ex) { Snackbar.Add($"فشل التصدير: {ex.Message}", Severity.Error); }
+        finally { _isExporting = false; StateHasChanged(); }
+    }
+
+    // ═══════════════════════════════════════
+    // HELPERS
+    // ═══════════════════════════════════════
+    private static string NormalizeArabic(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return "";
+        var s = input.Trim().Replace('أ', 'ا').Replace('إ', 'ا').Replace('آ', 'ا').Replace('ٱ', 'ا')
+            .Replace('ة', 'ه').Replace('ى', 'ي').Replace('ئ', 'ي');
+        return new string(s.Where(c => !"\u064B\u064C\u064D\u064E\u064F\u0650\u0651\u0652".Contains(c)).ToArray()).ToLower();
+    }
+    private static string GetInitials(string? n) => string.IsNullOrWhiteSpace(n) ? "?" : string.Join("", n.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(w => w[0])).ToUpper();
+    private static string Truncate(string? s, int m) => string.IsNullOrEmpty(s) ? "" : s.Length <= m ? s : s[..m] + "...";
+    private static string FormatGroupDate(DateTime d) => d.Date == DateTime.Today ? "📅 اليوم" : d.Date == DateTime.Today.AddDays(-1) ? "📅 أمس" : d.ToString("dddd، d MMMM yyyy");
+    private static string GetStatusIcon(string? s) => s?.ToLower() switch { "call" or "مكالمة" => Icons.Material.Rounded.Phone, "whatsapp" or "واتساب" => Icons.Custom.Brands.WhatsApp, "visit" or "زيارة" => Icons.Material.Rounded.Place, "email" or "بريد" => Icons.Material.Rounded.Email, "meeting" or "اجتماع" => Icons.Material.Rounded.Groups, _ => Icons.Material.Rounded.Chat };
+    private static string GetStatusColor(string? s) => s?.ToLower() switch { "call" or "مكالمة" => "#3b82f6", "whatsapp" or "واتساب" => "#25d366", "visit" or "زيارة" => "#f59e0b", "email" or "بريد" => "#ef4444", "meeting" or "اجتماع" => "#8b5cf6", _ => "#94a3b8" };
+
+    // CLEANUP
+    public async ValueTask DisposeAsync() { try { await JS.InvokeVoidAsync("removeScrollWatcher"); } catch { } _dotNetRef?.Dispose(); }
+
+    // TYPES
+    private class InteractionStats { public int TotalInteractions { get; set; } public int TodayCount { get; set; } public int WeekCount { get; set; } public int StageChanges { get; set; } public int NoFollowUp { get; set; } public int UniqueClients { get; set; } }
+    public class PartySearchDto { public int PartyId { get; set; } public string PartyName { get; set; } = ""; public string? Phone { get; set; } public string? Phone2 { get; set; } public int LastInteractionDays { get; set; } public string DisplayText => $"{PartyName} - {PhoneDisplay}"; public string PhoneDisplay => Phone ?? Phone2 ?? ""; public string NameInitial => GetInitials(PartyName); }
 }

@@ -21,6 +21,7 @@ public class InteractionListDto
     public int PartyId { get; set; }
     public string ClientName { get; set; } = "";
     public string? Phone { get; set; }
+    public string? AllPhones { get; set; }
     public int? EmployeeId { get; set; }
     public string? EmployeeName { get; set; }
     public int? SourceId { get; set; }
@@ -28,13 +29,21 @@ public class InteractionListDto
     public string? SourceIcon { get; set; }
     public int? StatusId { get; set; }
     public string? StatusName { get; set; }
+    public string? StatusNameAr { get; set; }
     public DateTime InteractionDate { get; set; }
     public TimeOnly? InteractionTime { get; set; }
     public string? Summary { get; set; }
     public int? StageBeforeId { get; set; }
     public string? StageBeforeName { get; set; }
+    public string? StageBeforeNameAr { get; set; }
+    public string? StageBeforeColor { get; set; }
     public int? StageAfterId { get; set; }
     public string? StageAfterName { get; set; }
+    public string? StageAfterNameAr { get; set; }
+    public string? StageAfterColor { get; set; }
+    public int? AdTypeId { get; set; }
+    public string? AdTypeName { get; set; }
+    public string? AdTypeNameAr { get; set; }
     public DateTime? NextFollowUpDate { get; set; }
     public string? Notes { get; set; }
     public string? CreatedBy { get; set; }
@@ -52,6 +61,7 @@ public class TaskListDto
     public string? AssignedToName { get; set; }
     public int? TaskTypeId { get; set; }
     public string? TaskTypeName { get; set; }
+    public string? TaskTypeNameAr { get; set; }
     public string? TaskDescription { get; set; }
     public DateTime DueDate { get; set; }
     public TimeOnly? DueTime { get; set; }
@@ -111,6 +121,11 @@ public class InteractionFilterDto
     public int? OpportunityId { get; set; }
     public int? EmployeeId { get; set; }
     public int? SourceId { get; set; }
+    public int? AdTypeId { get; set; }
+    public int? StatusId { get; set; }
+    public int? StageBeforeId { get; set; }
+    public int? StageAfterId { get; set; }
+    public int? PartyId { get; set; }
     public DateTime? DateFrom { get; set; }
     public DateTime? DateTo { get; set; }
     public int PageNumber { get; set; } = 1;

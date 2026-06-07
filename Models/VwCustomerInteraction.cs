@@ -15,6 +15,8 @@ public partial class VwCustomerInteraction
 
     public string? Phone { get; set; }
 
+    public string? AllPhones { get; set; }
+
     public int? EmployeeId { get; set; }
 
     public string? EmployeeName { get; set; }
@@ -40,10 +42,18 @@ public partial class VwCustomerInteraction
     public int? StageBeforeId { get; set; }
 
     public string? StageBeforeName { get; set; }
+    public string? StageBeforeNameAr { get; set; }
+    public string? StageBeforeColor { get; set; }
 
     public int? StageAfterId { get; set; }
 
     public string? StageAfterName { get; set; }
+    public string? StageAfterNameAr { get; set; }
+    public string? StageAfterColor { get; set; }
+
+    public int? AdTypeId { get; set; }
+    public string? AdTypeName { get; set; }
+    public string? AdTypeNameAr { get; set; }
 
     public DateTime? NextFollowUpDate { get; set; }
 

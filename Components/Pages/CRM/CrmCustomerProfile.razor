@@ -1,3 +1,4 @@
+@page "/crm/customers"
 @page "/crm/customers/{PartyId:int}"
 
 @using COCOBOLOERPNEW.DTOs
@@ -15,223 +16,956 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
 
-<PageTitle>بطاقة العميل — CRM</PageTitle>
+<PageTitle>@(PartyId.HasValue ? "بطاقة العميل" : "بحث العملاء") — CRM</PageTitle>
 
 @if (_loading)
-{ <div class="loading-screen"><MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" /><MudText Typo="Typo.h6" Class="load-txt">جاري تحميل بيانات العميل...</MudText></div> }
+{
+    <div class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-logo">
+                <MudIcon Icon="@(PartyId.HasValue ? Icons.Material.Rounded.Person : Icons.Material.Rounded.Search)" Size="MudSize.Large" />
+                <div class="loading-ring"></div>
+                <div class="loading-ring ring-2"></div>
+            </div>
+            <MudText Typo="Typo.h6" Style="font-weight:700;margin-top:1rem">جاري التحميل...</MudText>
+            <MudProgressLinear Color="MudColor.Secondary" Indeterminate="true" Class="mt-3" Style="max-width:250px;border-radius:8px" />
+        </div>
+    </div>
+}
+else if (PartyId.HasValue && PartyId.Value > 0 && _party != null)
+{
+    @* ════════════════════════════════════════════════════════ *@
+    @* ═══ MODE: CUSTOMER PROFILE ═══ *@
+    @* ════════════════════════════════════════════════════════ *@
+    <div dir="rtl" class="cp-page">
+
+        @* SEARCH OVERLAY *@
+        @if (_showSearch)
+        {
+            <div class="cp-search-overlay" @onclick="ToggleSearch">
+                <div class="cp-search-box" @onclick:stopPropagation>
+                    <div class="cp-search-header">
+                        <MudIcon Icon="@Icons.Material.Rounded.Search" Style="color:var(--mud-palette-primary)" />
+                        <input type="text" class="cp-search-input" placeholder="ابحث بالاسم أو رقم التليفون..."
+                               @bind="_searchQuery" @bind:event="oninput" @onkeyup="OnSearchKey" />
+                        @if (_searching)
+                        { <div class="cp-search-spinner"></div> }
+                        <button class="cp-search-close" @onclick="ToggleSearch">
+                            <MudIcon Icon="@Icons.Material.Rounded.Close" Size="MudSize.Small" />
+                        </button>
+                    </div>
+                    @if (_searchResults.Any())
+                    {
+                        <div class="cp-search-results">
+                            @foreach (var c in _searchResults)
+                            {
+                                <div class="cp-search-item @(c.PartyId == PartyId ? "current" : "")"
+                                     @onclick="@(() => GoToCustomer(c.PartyId))">
+                                    <div class="cp-si-avatar" style="background:linear-gradient(135deg,#6d28d9,#8b5cf6)">
+                                        @GetInitials(c.PartyName)
+                                    </div>
+                                    <div class="cp-si-info">
+                                        <span class="cp-si-name">@c.PartyName</span>
+                                        <span class="cp-si-meta">
+                                            @if (!string.IsNullOrWhiteSpace(c.Phone))
+                                            { <span>📞 @c.Phone</span> }
+                                            @if (!string.IsNullOrWhiteSpace(c.City))
+                                            { <span>📍 @c.City</span> }
+                                        </span>
+                                    </div>
+                                    @if (c.PartyId == PartyId)
+                                    { <span class="cp-si-badge">الحالي</span> }
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(_searchQuery) && _searchQuery.Length >= 2 && !_searching)
+                    {
+                        <div class="cp-search-empty">لا توجد نتائج</div>
+                    }
+                    else
+                    {
+                        <div class="cp-search-hint">اكتب اسم العميل أو رقم التليفون (حرفين على الأقل)</div>
+                    }
+                </div>
+            </div>
+        }
+
+        @* HERO HEADER *@
+        <div class="cp-hero">
+            <div class="cp-hero-bg">
+                <div class="cp-hero-grad"></div>
+                <div class="cp-hero-pattern"></div>
+                <div class="cp-hero-orb orb-1"></div>
+                <div class="cp-hero-orb orb-2"></div>
+            </div>
+            <div class="cp-hero-content">
+                <div class="cp-hero-top">
+                    <button class="cp-back-btn" @onclick="GoBack">
+                        <MudIcon Icon="@Icons.Material.Rounded.ArrowBack" Size="MudSize.Small" />
+                        <span>العودة</span>
+                    </button>
+                    <div class="cp-hero-actions">
+                        <button class="cp-action-btn" @onclick="ToggleSearch">
+                            <MudIcon Icon="@Icons.Material.Rounded.Search" Size="MudSize.Small" />
+                        </button>
+                        @if (!string.IsNullOrWhiteSpace(_party.Phone))
+                        {
+                            <button class="cp-action-btn" @onclick="@(() => Call(_party.Phone))">
+                                <MudIcon Icon="@Icons.Material.Rounded.Phone" Size="MudSize.Small" />
+                            </button>
+                            <button class="cp-action-btn" @onclick="@(() => WA(_party.Phone))">
+                                <MudIcon Icon="@Icons.Material.Rounded.Chat" Size="MudSize.Small" />
+                            </button>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(_party.Email))
+                        {
+                            <button class="cp-action-btn" @onclick="@(() => Email(_party.Email))">
+                                <MudIcon Icon="@Icons.Material.Rounded.Email" Size="MudSize.Small" />
+                            </button>
+                        }
+                        <button class="cp-action-btn edit" @onclick="EditCustomer">
+                            <MudIcon Icon="@Icons.Material.Rounded.Edit" Size="MudSize.Small" />
+                            <span>تعديل</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="cp-hero-profile">
+                    <div class="cp-avatar">
+                        <span>@GetInitials(_party.PartyName)</span>
+                        <div class="cp-avatar-ring"></div>
+                    </div>
+                    <div class="cp-hero-info">
+                        <h1>@_party.PartyName</h1>
+                        <div class="cp-hero-meta">
+                            @if (!string.IsNullOrWhiteSpace(_party.Phone))
+                            { <span class="cp-meta-item">📞 @_party.Phone</span> }
+                            @if (!string.IsNullOrWhiteSpace(_party.Email))
+                            { <span class="cp-meta-item">📧 @_party.Email</span> }
+                            @if (!string.IsNullOrWhiteSpace(_party.City))
+                            { <span class="cp-meta-item">📍 @_party.City</span> }
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_party.CustomerStage))
+                        {
+                            <div class="cp-stage-badge">
+                                <span class="cp-stage-dot"></span>
+                                <span>@_party.CustomerStage</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="cp-hero-stats">
+                    <div class="cp-stat" @onclick="@(() => _tab = 0)">
+                        <div class="cp-stat-icon" style="background:rgba(99,102,241,.15);color:#818cf8">
+                            <MudIcon Icon="@Icons.Material.Rounded.Lightbulb" Size="MudSize.Small" />
+                        </div>
+                        <div class="cp-stat-data">
+                            <span class="cp-stat-val">@_opportunities.Count</span>
+                            <span class="cp-stat-lbl">فرصة</span>
+                        </div>
+                    </div>
+                    <div class="cp-stat" @onclick="@(() => _tab = 0)">
+                        <div class="cp-stat-icon" style="background:rgba(34,197,94,.15);color:#22c55e">
+                            <MudIcon Icon="@Icons.Material.Rounded.EmojiEvents" Size="MudSize.Small" />
+                        </div>
+                        <div class="cp-stat-data">
+                            <span class="cp-stat-val">@_wonCount</span>
+                            <span class="cp-stat-lbl">مربوحة</span>
+                        </div>
+                    </div>
+                    <div class="cp-stat">
+                        <div class="cp-stat-icon" style="background:rgba(245,158,11,.15);color:#f59e0b">
+                            <MudIcon Icon="@Icons.Material.Rounded.AttachMoney" Size="MudSize.Small" />
+                        </div>
+                        <div class="cp-stat-data">
+                            <span class="cp-stat-val">@_pipelineValue.ToString("N0")</span>
+                            <span class="cp-stat-lbl">Pipeline</span>
+                        </div>
+                    </div>
+                    <div class="cp-stat" @onclick="@(() => _tab = 1)">
+                        <div class="cp-stat-icon" style="background:rgba(59,130,246,.15);color:#3b82f6">
+                            <MudIcon Icon="@Icons.Material.Rounded.Forum" Size="MudSize.Small" />
+                        </div>
+                        <div class="cp-stat-data">
+                            <span class="cp-stat-val">@_interactions.Count</span>
+                            <span class="cp-stat-lbl">تفاعل</span>
+                        </div>
+                    </div>
+                    <div class="cp-stat" @onclick="@(() => _tab = 2)">
+                        <div class="cp-stat-icon" style="background:rgba(239,68,68,.15);color:#ef4444">
+                            <MudIcon Icon="@Icons.Material.Rounded.TaskAlt" Size="MudSize.Small" />
+                        </div>
+                        <div class="cp-stat-data">
+                            <span class="cp-stat-val">@_activeTaskCount</span>
+                            <span class="cp-stat-lbl">مهمة نشطة</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        @* INSIGHTS BAR *@
+        <div class="cp-insights">
+            <div class="cp-insight">
+                <MudIcon Icon="@Icons.Material.Rounded.Schedule" Size="MudSize.Small" Style="color:var(--mud-palette-text-secondary)" />
+                <span>آخر تواصل: <strong>@(_lastContactDate.HasValue ? _lastContactDate.Value.ToString("yyyy/MM/dd") : "—")</strong></span>
+            </div>
+            <div class="cp-insight-sep"></div>
+            <div class="cp-insight">
+                <MudIcon Icon="@Icons.Material.Rounded.Event" Size="MudSize.Small" Style="color:var(--mud-palette-primary)" />
+                <span>متابعة قادمة: <strong>@(_nextFollowUp.HasValue ? _nextFollowUp.Value.ToString("yyyy/MM/dd") : "—")</strong></span>
+            </div>
+            <div class="cp-insight-sep"></div>
+            <div class="cp-insight">
+                <MudIcon Icon="@Icons.Material.Rounded.TrendingUp" Size="MudSize.Small" Style="color:#22c55e" />
+                <span>نسبة الفوز: <strong>@_winRate%</strong></span>
+            </div>
+        </div>
+
+        @* QUICK ADD *@
+        <div class="cp-quick-add">
+            <span class="cp-qa-label">إضافة سريعة:</span>
+            <button class="cp-qa-btn" @onclick="AddOpportunity">
+                <MudIcon Icon="@Icons.Material.Rounded.Add" Size="MudSize.Small" /> فرصة
+            </button>
+            <button class="cp-qa-btn info" @onclick="AddInteraction">
+                <MudIcon Icon="@Icons.Material.Rounded.Add" Size="MudSize.Small" /> تفاعل
+            </button>
+            <button class="cp-qa-btn warn" @onclick="AddTask">
+                <MudIcon Icon="@Icons.Material.Rounded.Add" Size="MudSize.Small" /> مهمة
+            </button>
+        </div>
+
+        @* TABS *@
+        <div class="cp-tabs">
+            <button class="@(_tab==0?"cp-tab active":"cp-tab")" @onclick="@(() => _tab=0)">
+                <MudIcon Icon="@Icons.Material.Rounded.Lightbulb" Size="MudSize.Small" />
+                <span>الفرص</span>
+                <span class="cp-tab-count">@_opportunities.Count</span>
+            </button>
+            <button class="@(_tab==1?"cp-tab active":"cp-tab")" @onclick="@(() => _tab=1)">
+                <MudIcon Icon="@Icons.Material.Rounded.Forum" Size="MudSize.Small" />
+                <span>التواصلات</span>
+                <span class="cp-tab-count">@_interactions.Count</span>
+            </button>
+            <button class="@(_tab==2?"cp-tab active":"cp-tab")" @onclick="@(() => _tab=2)">
+                <MudIcon Icon="@Icons.Material.Rounded.TaskAlt" Size="MudSize.Small" />
+                <span>المهام</span>
+                <span class="cp-tab-count">@_tasks.Count</span>
+            </button>
+        </div>
+
+        @* TAB: OPPORTUNITIES *@
+        @if (_tab == 0)
+        {
+            @if (_opportunities.Any())
+            {
+                @if (_stageGroups.Any())
+                {
+                    <div class="cp-pipeline-bar">
+                        @foreach (var stage in _stageGroups)
+                        {
+                            <div class="cp-pipeline-seg" style="flex:@stage.Count;background:@stage.Color" title="@stage.Name: @stage.Count">
+                                @if (stage.Count > 0) { <span class="cp-pipeline-label">@stage.Count</span> }
+                            </div>
+                        }
+                    </div>
+                }
+                <div class="cp-opp-grid">
+                    @foreach (var o in _opportunities.OrderByDescending(o => o.CreatedAt))
+                    {
+                        <div class="cp-opp-card" @onclick="() => OpenOpp(o.OpportunityId)">
+                            <div class="cp-opp-color" style="background:@(o.StageColor ?? "#94a3b8")"></div>
+                            <div class="cp-opp-body">
+                                <div class="cp-opp-head">
+                                    <span class="cp-opp-stage" style="color:@(o.StageColor ?? "#94a3b8");background:@(o.StageColor ?? "#94a3b8")15">
+                                        @(o.StageNameAr ?? o.StageName ?? "—")
+                                    </span>
+                                    <span class="cp-opp-value">💰 @((o.ExpectedValue ?? 0).ToString("N0")) ج</span>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(o.InterestedProduct))
+                                {
+                                    <div class="cp-opp-product">🏷️ @o.InterestedProduct</div>
+                                }
+                                <div class="cp-opp-meta">
+                                    <span>👤 @(o.EmployeeName ?? "—")</span>
+                                    <span>📡 @(o.SourceName ?? "—")</span>
+                                </div>
+                                <div class="cp-opp-footer">
+                                    <span>📅 @o.CreatedAt.ToString("yyyy/MM/dd")</span>
+                                    @if (o.NextFollowUpDate.HasValue)
+                                    {
+                                        <span class="cp-opp-next">🔔 @o.NextFollowUpDate.Value.ToString("yyyy/MM/dd")</span>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="cp-empty">
+                    <div class="cp-empty-icon"><MudIcon Icon="@Icons.Material.Rounded.Lightbulb" Size="MudSize.Large" /></div>
+                    <h3>لا توجد فرص بعد</h3>
+                    <p>ابدأ بإضافة أول فرصة لهذا العميل</p>
+                    <MudButton Variant="Variant.Filled" Color="MudColor.Primary" OnClick="AddOpportunity" StartIcon="@Icons.Material.Rounded.Add">إضافة فرصة</MudButton>
+                </div>
+            }
+        }
+
+        @* TAB: INTERACTIONS *@
+        @if (_tab == 1)
+        {
+            @if (_interactions.Any())
+            {
+                <div class="cp-timeline">
+                    @foreach (var i in _interactions.OrderByDescending(i => i.InteractionDate))
+                    {
+                        <div class="cp-tl-item">
+                            <div class="cp-tl-line">
+                                <div class="cp-tl-dot">💬</div>
+                            </div>
+                            <div class="cp-tl-card">
+                                <div class="cp-tl-head">
+                                    <div class="cp-tl-user">
+                                        <div class="cp-tl-avatar" style="background:linear-gradient(135deg,#6366f1,#8b5cf6)">@GetInitials(i.EmployeeName ?? i.CreatedBy)</div>
+                                        <strong>@(i.EmployeeName ?? i.CreatedBy ?? "—")</strong>
+                                    </div>
+                                    <span class="cp-tl-date">@i.InteractionDate.ToString("yyyy/MM/dd hh:mm tt")</span>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(i.Summary))
+                                {
+                                    <div class="cp-tl-text">@i.Summary</div>
+                                }
+                                <div class="cp-tl-foot">
+                                    @if (i.NextFollowUpDate.HasValue)
+                                    {
+                                        <span class="cp-tl-follow">📅 متابعة: @i.NextFollowUpDate.Value.ToString("yyyy/MM/dd")</span>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="cp-empty">
+                    <div class="cp-empty-icon"><MudIcon Icon="@Icons.Material.Rounded.Forum" Size="MudSize.Large" /></div>
+                    <h3>لا توجد تواصلات</h3>
+                    <p>سجّل أول تفاعل مع هذا العميل</p>
+                    <MudButton Variant="Variant.Filled" Color="MudColor.Info" OnClick="AddInteraction" StartIcon="@Icons.Material.Rounded.Add">إضافة تفاعل</MudButton>
+                </div>
+            }
+        }
+
+        @* TAB: TASKS *@
+        @if (_tab == 2)
+        {
+            @if (_tasks.Any())
+            {
+                <div class="cp-tasks-list">
+                    @foreach (var t in _tasks.OrderByDescending(t => t.DueDate))
+                    {
+                        var isDone = t.Status == "Completed";
+                        var isOverdue = t.DueDate.Date < DateTime.Today && !isDone;
+                        var priColor = t.Priority == "High" ? "#ef4444" : (t.Priority == "Medium" || t.Priority == "Normal") ? "#f59e0b" : "#22c55e";
+                        <div class="cp-task-card @(isDone ? "done" : "") @(isOverdue ? "overdue" : "")">
+                            <div class="cp-task-pri" style="background:@priColor"></div>
+                            <div class="cp-task-body">
+                                <div class="cp-task-top">
+                                    <span class="cp-task-desc">@(t.TaskDescription ?? "بدون وصف")</span>
+                                    @if (!isDone)
+                                    {
+                                        <MudIconButton Icon="@Icons.Material.Rounded.CheckCircleOutline" Size="MudSize.Small" Color="MudColor.Success" OnClick="@(() => CompleteTask(t.TaskId))" Tooltip="إكمال" />
+                                    }
+                                    else
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Rounded.CheckCircle" Style="color:#22c55e" Size="MudSize.Small" />
+                                    }
+                                </div>
+                                <div class="cp-task-meta">
+                                    <span>👤 @(t.AssignedToName ?? "—")</span>
+                                    <span>📅 @t.DueDate.ToString("yyyy/MM/dd")</span>
+                                    @if (isOverdue)
+                                    { <span style="color:#ef4444;font-weight:700">⚠️ متأخرة</span> }
+                                    else if (isDone)
+                                    { <span style="color:#22c55e">✅ مكتملة</span> }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="cp-empty">
+                    <div class="cp-empty-icon"><MudIcon Icon="@Icons.Material.Rounded.TaskAlt" Size="MudSize.Large" /></div>
+                    <h3>لا توجد مهام</h3>
+                    <p>أنشئ مهمة متابعة لهذا العميل</p>
+                    <MudButton Variant="Variant.Filled" Color="MudColor.Warning" OnClick="AddTask" StartIcon="@Icons.Material.Rounded.Add">إضافة مهمة</MudButton>
+                </div>
+            }
+        }
+    </div>
+}
 else
 {
-<div dir="rtl" class="cp">
+    @* ════════════════════════════════════════════════════════ *@
+    @* ═══ MODE: SEARCH ═══ *@
+    @* ════════════════════════════════════════════════════════ *@
+    <div dir="rtl" class="cs-page">
 
-    @* ═══════════ PROFILE HEADER ═══════════ *@
-    <div class="cphdr">
-        <div class="cphdr-bg"><div class="cphdr-grad"></div><div class="cphdr-orb"></div><div class="cphdr-grid"></div></div>
-        <div class="cphdr-inr">
-            <button class="cph-back" @onclick="GoBack"><MudIcon Icon="@Icons.Material.Rounded.ArrowBack" /></button>
-            <div class="cph-av">@GetInitials(_party?.PartyName)</div>
-            <div class="cph-info">
-                <h1>@(_party?.PartyName??"—")</h1>
-                <div class="cph-meta">
-                    @if(!string.IsNullOrWhiteSpace(_party?.Phone)){<span>📞 <a href="tel:@_party.Phone" class="cph-link">@_party.Phone</a></span>}
-                                        @if(!string.IsNullOrWhiteSpace(_party?.Email)){<span>📧 @_party.Email</span>}
-                    @if(!string.IsNullOrWhiteSpace(_party?.City)){<span>📍 @_party.City</span>}
-                    @if(!string.IsNullOrWhiteSpace(_party?.CustomerStage)){<span class="cph-stg">🏷️ @_party.CustomerStage</span>}
-                </div>
+        @* SEARCH HEADER *@
+        <div class="cs-header">
+            <div class="cs-header-bg">
+                <div class="cs-grad"></div>
+                <div class="cs-orb"></div>
+                <div class="cs-pattern"></div>
             </div>
-            <div class="cph-acts">
-                @if(!string.IsNullOrWhiteSpace(_party?.Phone)){<MudIconButton Icon="@Icons.Material.Rounded.Phone" OnClick="()=>Call(_party.Phone)" Class="cph-act" />}
-                @if(!string.IsNullOrWhiteSpace(_party?.Phone)){<MudIconButton Icon="@Icons.Material.Rounded.Chat" OnClick="()=>WA(_party.Phone)" Class="cph-act" />}
-                <MudIconButton Icon="@Icons.Material.Rounded.Edit" OnClick="EditCustomer" Class="cph-act" />
+            <div class="cs-header-content">
+                <div class="cs-header-icon">
+                    <MudIcon Icon="@Icons.Material.Rounded.PersonSearch" Size="MudSize.Large" />
+                    <div class="cs-icon-ring"></div>
+                </div>
+                <h1>بحث العملاء</h1>
+                <p>ابحث بالاسم أو رقم التليفون</p>
             </div>
         </div>
-        @* Quick Stats *@
-        <div class="cph-stats">
-            <div class="cph-st"><span class="cph-stn">@_stats?.TotalCount</span><span>فرصة</span></div>
-            <div class="cph-st cph-st-w"><span class="cph-stn">@_stats?.WonCount</span><span>مربوحة</span></div>
-            <div class="cph-st"><span class="cph-stn">@_stats?.PipelineValue.ToString("N0")</span><span>قيمة Pipeline</span></div>
-            <div class="cph-st"><span class="cph-stn">@_interactions?.Count</span><span>تفاعل</span></div>
-            <div class="cph-st"><span class="cph-stn">@_tasks?.Count</span><span>مهمة</span></div>
+
+        @* SEARCH BOX *@
+        <div class="cs-search-wrap">
+            <MudTextField T="string"
+                          Placeholder="اكتب اسم العميل أو رقم التليفون..."
+                          Variant="Variant.Outlined"
+                          @bind-Value="_searchQuery"
+                          @bind:event="oninput"
+                          Immediate="true"
+                          DebounceInterval="300"
+                          OnDebounceIntervalElapsed="SearchCustomers"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Rounded.Search"
+                          FullWidth="true" />
+            @if (_searching)
+            {
+                <div class="cs-loading">
+                    <MudProgressCircular Size="MudSize.Small" Indeterminate="true" Color="MudColor.Primary" />
+                    <span>جاري البحث...</span>
+                </div>
+            }
         </div>
+
+        @* RESULTS COUNT *@
+        @if (!_searching && _searchResults.Any())
+        {
+            <div class="cs-count">تم العثور على <strong>@_searchResults.Count</strong> عميل</div>
+        }
+
+        @* RESULTS *@
+        <div class="cs-results">
+            @foreach (var c in _searchResults)
+            {
+                <div class="cs-card" @onclick="@(() => GoToCustomer(c.PartyId))">
+                    <div class="cs-card-avatar" style="background:linear-gradient(135deg,#6d28d9,#8b5cf6)">
+                        @GetInitials(c.PartyName)
+                    </div>
+                    <div class="cs-card-info">
+                        <span class="cs-card-name">@c.PartyName</span>
+                        <div class="cs-card-meta">
+                            @if (!string.IsNullOrWhiteSpace(c.Phone))
+                            { <span>📞 @c.Phone</span> }
+                            @if (!string.IsNullOrWhiteSpace(c.City))
+                            { <span>📍 @c.City</span> }
+                            @if (!string.IsNullOrWhiteSpace(c.CustomerStage))
+                            { <span class="cs-stage">🏷️ @c.CustomerStage</span> }
+                        </div>
+                    </div>
+                    <MudIcon Icon="@Icons.Material.Rounded.ChevronLeft" Style="color:var(--mud-palette-text-disabled)" />
+                </div>
+            }
+        </div>
+
+        @* EMPTY STATES *@
+        @if (!_searching && !string.IsNullOrWhiteSpace(_searchQuery) && _searchQuery.Length >= 2 && !_searchResults.Any())
+        {
+            <div class="cs-empty">
+                <div class="cs-empty-icon"><MudIcon Icon="@Icons.Material.Rounded.SearchOff" Size="MudSize.Large" /></div>
+                <h3>لا توجد نتائج</h3>
+                <p>جرب كلمة بحث مختلفة</p>
+            </div>
+        }
+        else if (string.IsNullOrWhiteSpace(_searchQuery) || _searchQuery.Length < 2)
+        {
+            <div class="cs-empty">
+                <div class="cs-empty-icon"><MudIcon Icon="@Icons.Material.Rounded.PersonSearch" Size="MudSize.Large" /></div>
+                <h3>ابدأ البحث</h3>
+                <p>اكتب حرفين على الأقل للبحث عن عميل</p>
+            </div>
+        }
     </div>
-
-    @* ═══════════ TABS ═══════════ *@
-    <div class="cptabs">
-        <MudChip T="string" Variant="@(_tab==0?MudVariant.Filled:MudVariant.Outlined)" Color="@(_tab==0?MudColor.Primary:MudColor.Default)" OnClick="()=>_tab=0">📊 الفرص (@_opportunities.Count)</MudChip>
-        <MudChip T="string" Variant="@(_tab==1?MudVariant.Filled:MudVariant.Outlined)" Color="@(_tab==1?MudColor.Primary:MudColor.Default)" OnClick="()=>_tab=1">💬 التواصلات (@_interactions.Count)</MudChip>
-        <MudChip T="string" Variant="@(_tab==2?MudVariant.Filled:MudVariant.Outlined)" Color="@(_tab==2?MudColor.Primary:MudColor.Default)" OnClick="()=>_tab=2">📝 المهام (@_tasks.Count)</MudChip>
-    </div>
-
-    @* ═══════════ TAB: OPPORTUNITIES ═══════════ *@
-    @if (_tab == 0)
-    {
-        <div class="cp-grid">
-            @foreach (var o in _opportunities)
-            {
-                <div class="cpo-cd" @onclick="() => OpenOpp(o.OpportunityId)">
-                    <div class="cpo-bar" style="background:@(o.StageColor??"#94a3b8")"></div>
-                    <div class="cpo-bd">
-                        <div class="cpo-st" style="color:@(o.StageColor??"#94a3b8");border:1px solid @(o.StageColor??"#94a3b8")">@(o.StageNameAr??o.StageName)</div>
-                        @if(!string.IsNullOrWhiteSpace(o.InterestedProduct)){<div class="cpo-pr">🏷️ @o.InterestedProduct</div>}
-                        <div class="cpo-mt"><span>👤 @(o.EmployeeName??"—")</span><span>📡 @(o.SourceName??"—")</span></div>
-                        <div class="cpo-vl"><strong>💰 @((o.ExpectedValue??0).ToString("N0")) ج</strong><span>📅 @(o.NextFollowUpDate?.ToString("yyyy/MM/dd")??"—")</span></div>
-                    </div>
-                </div>
-            }
-            @if (!_opportunities.Any()) { <div class="cp-empty">لا توجد فرص لهذا العميل</div> }
-        </div>
-    }
-
-    @* ═══════════ TAB: INTERACTIONS ═══════════ *@
-    @if (_tab == 1)
-    {
-        <div class="cp-tl">
-            @foreach (var i in _interactions)
-            {
-                <div class="cp-tli">
-                    <div class="cp-tld" style="background:@(i.StageAfterId.HasValue?(i.StageAfterName=="تم البيع"?"#27ae60":i.StageAfterName=="خسارة"?"#e74c3c":"#3b82f6"):"#94a3b8")"></div>
-                    <div class="cp-tlb">
-                        <div class="cp-tlh"><strong>@(i.EmployeeName??i.CreatedBy??"—")</strong><span>@i.InteractionDate.ToString("yyyy/MM/dd HH:mm")</span></div>
-                        @if(!string.IsNullOrWhiteSpace(i.Summary)){<div class="cp-tls">@i.Summary</div>}
-                        @if(i.NextFollowUpDate.HasValue){<div>📅 المتابعة: @i.NextFollowUpDate.Value.ToString("yyyy/MM/dd")</div>}
-                    </div>
-                </div>
-            }
-            @if (!_interactions.Any()) { <div class="cp-empty">لا توجد تواصلات</div> }
-        </div>
-    }
-
-    @* ═══════════ TAB: TASKS ═══════════ *@
-    @if (_tab == 2)
-    {
-        <div class="cp-tasks">
-            @foreach (var t in _tasks)
-            {
-                var isDone = t.Status == "Completed";
-                <div class="cp-tsk @(isDone?"cp-tsk-done":"") @(t.TaskDueStatus=="Overdue"?"cp-tsk-ov":"")">
-                    <div class="cp-tsk-p" style="background:@(t.Priority=="High"?"#ef4444":t.Priority=="Medium"?"#f59e0b":"#3b82f6")"></div>
-                    <div class="cp-tsk-b">
-                        <span class="cp-tsk-d">@t.TaskDescription</span>
-                        <span class="cp-tsk-m">👤 @t.AssignedToName · 📅 @t.DueDate.ToString("yyyy/MM/dd") @(isDone?"· ✅ مكتملة":"")</span>
-                    </div>
-                </div>
-            }
-            @if (!_tasks.Any()) { <div class="cp-empty">لا توجد مهام</div> }
-        </div>
-    }
-
-</div>
 }
 
 <style>
-    .cp{padding:0 1.5rem 3rem;max-width:1000px;margin:0 auto}
-    .load-txt{margin-top:.75rem}
+    :root{--cp-max:1100px;--cp-radius:20px;--cp-radius-sm:12px}
 
-    .cphdr{position:relative;border-radius:20px;overflow:hidden;margin-bottom:1rem;box-shadow:0 12px 35px rgba(124,58,237,.25)}
-    .cphdr-bg{position:absolute;inset:0}
-    .cphdr-grad{position:absolute;inset:0;background:linear-gradient(135deg,#6d28d9 0%,#7c3aed 30%,#8b5cf6 60%,#a78bfa 100%)}
-    .cphdr-orb{position:absolute;width:220px;height:220px;background:rgba(255,255,255,.06);border-radius:50%;filter:blur(80px);top:-60px;right:-60px}
-    .cphdr-grid{position:absolute;inset:0;background:radial-gradient(circle,rgba(255,255,255,.03) 1px,transparent 1px);background-size:24px 24px}
-    .cphdr-inr{position:relative;z-index:1;padding:1.3rem 1.75rem;color:#fff;display:flex;align-items:center;gap:.85rem;flex-wrap:wrap}
-    .cph-back{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.2);color:#fff;border-radius:10px;padding:6px 10px;cursor:pointer}
-    .cph-av{width:56px;height:56px;background:rgba(255,255,255,.2);backdrop-filter:blur(10px);border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.3rem;flex-shrink:0}
-    .cph-info h1{margin:0;font-size:1.3rem;font-weight:800}
-    .cph-meta{display:flex;gap:.6rem;flex-wrap:wrap;font-size:.75rem;margin-top:4px;opacity:.9}
-    .cph-stg{background:rgba(255,255,255,.15);padding:1px 8px;border-radius:8px}
-    .cph-link{color:#fde68a!important;text-decoration:none}
-    .cph-acts{display:flex;gap:.1rem;margin-right:auto}
-    .cph-act{color:rgba(255,255,255,.7)!important}
-    .cph-act:hover{color:#fff!important}
+    /* ═══ LOADING ═══ */
+    .loading-screen{display:flex;align-items:center;justify-content:center;min-height:80vh}
+    .loading-content{display:flex;flex-direction:column;align-items:center;text-align:center}
+    .loading-logo{position:relative;width:70px;height:70px;display:flex;align-items:center;justify-content:center;color:var(--mud-palette-secondary)}
+    .loading-ring{position:absolute;inset:-8px;border:3px solid transparent;border-top-color:var(--mud-palette-secondary);border-radius:50%;animation:spin 1.2s linear infinite}
+    .loading-ring.ring-2{inset:-16px;border-top-color:var(--mud-palette-primary);animation-duration:1.8s;animation-direction:reverse}
+    @@keyframes spin{to{transform:rotate(360deg)}}
 
-    .cph-stats{position:relative;z-index:1;display:flex;gap:0;border-top:1px solid rgba(255,255,255,.1)}
-    .cph-st{flex:1;text-align:center;padding:.65rem .5rem;font-size:.72rem;opacity:.85}
-    .cph-stn{display:block;font-weight:800;font-size:1.05rem;margin-bottom:2px}
-    .cph-st-w{border-left:1px solid rgba(255,255,255,.1);border-right:1px solid rgba(255,255,255,.1)}
+    /* ═══ PROFILE PAGE ═══ */
+    .cp-page{padding:0 1.5rem 3rem;max-width:var(--cp-max);margin:0 auto;font-size:.9rem;line-height:1.6}
 
-    .cptabs{display:flex;gap:.4rem;margin-bottom:.85rem;flex-wrap:wrap}
-    .cp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:.65rem}
-    .cpo-cd{background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:12px;overflow:hidden;cursor:pointer;transition:transform .1s}
-    .cpo-cd:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.08)}
-    .cpo-bar{height:3px}
-    .cpo-bd{padding:.8rem}
-    .cpo-st{display:inline-block;padding:2px 8px;border-radius:8px;font-size:.7rem;font-weight:600;margin-bottom:.3rem}
-    .cpo-pr{font-size:.76rem;color:var(--mud-palette-primary);margin-bottom:.25rem}
-    .cpo-mt{display:flex;gap:.6rem;font-size:.7rem;color:var(--mud-palette-text-secondary);margin-bottom:.3rem}
-    .cpo-vl{display:flex;gap:.7rem;font-size:.78rem;align-items:center}
+    /* Search Overlay */
+    .cp-search-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);backdrop-filter:blur(4px);z-index:9999;display:flex;justify-content:center;padding-top:80px;animation:fadeIn .2s}
+    @@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+    .cp-search-box{width:95%;max-width:600px;background:var(--mud-palette-surface);border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.2);overflow:hidden;max-height:70vh;display:flex;flex-direction:column;animation:slideUp .25s ease-out}
+    @@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+    .cp-search-header{display:flex;align-items:center;gap:.75rem;padding:1rem 1.25rem;border-bottom:1px solid var(--mud-palette-lines-default)}
+    .cp-search-input{flex:1;border:none;outline:none;font-size:1rem;background:transparent;color:var(--mud-palette-text-primary);font-family:inherit}
+    .cp-search-input::placeholder{color:var(--mud-palette-text-disabled)}
+    .cp-search-spinner{width:20px;height:20px;border:2px solid var(--mud-palette-lines-default);border-top-color:var(--mud-palette-primary);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+    .cp-search-close{width:32px;height:32px;border-radius:8px;border:1px solid var(--mud-palette-lines-default);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--mud-palette-text-secondary);transition:all .2s}
+    .cp-search-close:hover{background:var(--mud-palette-action-hover)}
+    .cp-search-results{overflow-y:auto;max-height:55vh}
+    .cp-search-item{display:flex;align-items:center;gap:.75rem;padding:.75rem 1.25rem;cursor:pointer;transition:background .15s;border-bottom:1px solid var(--mud-palette-lines-inputs)}
+    .cp-search-item:hover{background:var(--mud-palette-action-hover)}
+    .cp-search-item.current{background:rgba(124,58,237,.05);border-right:3px solid #7c3aed}
+    .cp-si-avatar{width:38px;height:38px;border-radius:10px;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.8rem;flex-shrink:0}
+    .cp-si-info{flex:1;min-width:0}
+    .cp-si-name{display:block;font-weight:600;font-size:.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .cp-si-meta{display:flex;gap:.5rem;font-size:.72rem;color:var(--mud-palette-text-secondary)}
+    .cp-si-badge{font-size:.65rem;font-weight:700;padding:2px 8px;border-radius:5px;background:rgba(124,58,237,.1);color:#7c3aed}
+    .cp-search-empty{padding:2rem;text-align:center;color:var(--mud-palette-text-disabled);font-size:.86rem}
+    .cp-search-hint{padding:1.5rem;text-align:center;color:var(--mud-palette-text-disabled);font-size:.8rem}
 
-    .cp-tl{display:flex;flex-direction:column;gap:0}
-    .cp-tli{display:flex;gap:.75rem;padding:.75rem 0;border-bottom:1px solid var(--mud-palette-lines-inputs)}
-    .cp-tld{width:10px;height:10px;border-radius:50%;margin-top:5px;flex-shrink:0}
-    .cp-tlb{flex:1}
-    .cp-tlh{display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:.15rem}
-    .cp-tls{font-size:.85rem;margin-bottom:.1rem}
+    /* Hero */
+    .cp-hero{position:relative;border-radius:var(--cp-radius);overflow:hidden;margin-bottom:1rem;box-shadow:0 12px 40px rgba(124,58,237,.22)}
+    .cp-hero-bg{position:absolute;inset:0}
+    .cp-hero-grad{position:absolute;inset:0;background:linear-gradient(135deg,#5b21b6 0%,#6d28d9 25%,#7c3aed 50%,#8b5cf6 75%,#a78bfa 100%)}
+    .cp-hero-pattern{position:absolute;inset:0;opacity:.04;background-image:radial-gradient(circle at 1px 1px,rgba(255,255,255,.5) 1px,transparent 0);background-size:24px 24px}
+    .cp-hero-orb{position:absolute;border-radius:50%;filter:blur(70px);animation:orb-float 10s ease-in-out infinite}
+    .orb-1{width:240px;height:240px;background:rgba(196,181,253,.15);top:-80px;right:-40px}
+    .orb-2{width:160px;height:160px;background:rgba(167,139,250,.12);bottom:-50px;left:10%;animation-delay:-4s}
+    @@keyframes orb-float{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(12px,-8px) scale(1.06)}}
+    .cp-hero-content{position:relative;z-index:2;padding:1.5rem 2rem 0;color:#fff}
+    .cp-hero-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem}
+    .cp-back-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.18);border-radius:8px;color:#fff;font-size:.82rem;font-weight:600;cursor:pointer;transition:all .2s;font-family:inherit}
+    .cp-back-btn:hover{background:rgba(255,255,255,.22)}
+    .cp-hero-actions{display:flex;align-items:center;gap:.35rem}
+    .cp-action-btn{display:inline-flex;align-items:center;gap:5px;padding:7px 12px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:rgba(255,255,255,.8);font-size:.78rem;font-weight:600;cursor:pointer;transition:all .2s;font-family:inherit}
+    .cp-action-btn:hover{background:rgba(255,255,255,.22);color:#fff}
+    .cp-action-btn.edit{background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.25)}
 
-    .cp-tasks{display:flex;flex-direction:column;gap:.35rem}
-    .cp-tsk{display:flex;gap:.5rem;padding:.6rem .75rem;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:10px;align-items:center}
-    .cp-tsk-p{width:4px;height:28px;border-radius:2px;flex-shrink:0}
-    .cp-tsk-b{flex:1}
-    .cp-tsk-d{display:block;font-size:.82rem;font-weight:500}
-    .cp-tsk-m{font-size:.7rem;color:var(--mud-palette-text-secondary)}
-    .cp-tsk-done{opacity:.5}.cp-tsk-done .cp-tsk-d{text-decoration:line-through}
-    .cp-tsk-ov{background:#fef2f2}
+    .cp-hero-profile{display:flex;align-items:center;gap:1.25rem;margin-bottom:1.5rem;flex-wrap:wrap}
+    .cp-avatar{position:relative;width:68px;height:68px;background:rgba(255,255,255,.15);backdrop-filter:blur(12px);border-radius:18px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:1.5rem;flex-shrink:0}
+    .cp-avatar-ring{position:absolute;inset:-4px;border-radius:22px;border:2px solid rgba(255,255,255,.2);animation:pulse-ring 3s ease-out infinite}
+    @@keyframes pulse-ring{0%{transform:scale(1);opacity:.5}100%{transform:scale(1.15);opacity:0}}
+    .cp-hero-info h1{margin:0;font-size:1.5rem;font-weight:900;line-height:1.2}
+    .cp-hero-meta{display:flex;gap:.75rem;flex-wrap:wrap;font-size:.82rem;margin-top:.3rem;opacity:.9}
+    .cp-meta-item{display:inline-flex;align-items:center;gap:3px}
+    .cp-stage-badge{display:inline-flex;align-items:center;gap:6px;margin-top:.4rem;padding:4px 12px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-radius:8px;font-size:.76rem;font-weight:600}
+    .cp-stage-dot{width:8px;height:8px;border-radius:50%;background:#34d399;box-shadow:0 0 8px #34d399;animation:blink 2s infinite}
+    @@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 
-    .cp-empty{text-align:center;padding:3rem;color:var(--mud-palette-text-disabled)}
+    .cp-hero-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:0;border-top:1px solid rgba(255,255,255,.1)}
+    .cp-stat{display:flex;align-items:center;gap:.6rem;padding:.75rem .75rem;cursor:pointer;transition:background .2s}
+    .cp-stat:hover{background:rgba(255,255,255,.08)}
+    .cp-stat-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .cp-stat-data{display:flex;flex-direction:column}
+    .cp-stat-val{font-size:1.05rem;font-weight:900;line-height:1}
+    .cp-stat-lbl{font-size:.65rem;opacity:.7;margin-top:2px}
 
-    @@media(max-width:768px){.cp{padding:0 .3rem 2rem}.cphdr-inr{padding:1rem}.cph-stats{flex-wrap:wrap}.cph-st{flex:1 1 33%}.cp-grid{grid-template-columns:1fr}}
+    /* Insights */
+    .cp-insights{display:flex;align-items:center;gap:.75rem;padding:.75rem 1.25rem;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:var(--cp-radius-sm);margin-bottom:.75rem;flex-wrap:wrap;font-size:.82rem}
+    .cp-insight{display:flex;align-items:center;gap:6px;color:var(--mud-palette-text-secondary)}
+    .cp-insight strong{color:var(--mud-palette-text-primary)}
+    .cp-insight-sep{width:1px;height:18px;background:var(--mud-palette-lines-default)}
+
+    /* Quick Add */
+    .cp-quick-add{display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap}
+    .cp-qa-label{font-size:.82rem;font-weight:700;color:var(--mud-palette-text-secondary)}
+    .cp-qa-btn{display:inline-flex;align-items:center;gap:4px;padding:6px 14px;background:rgba(99,102,241,.08);color:#6366f1;border:1px solid rgba(99,102,241,.15);border-radius:8px;font-size:.8rem;font-weight:600;cursor:pointer;transition:all .2s;font-family:inherit}
+    .cp-qa-btn:hover{background:rgba(99,102,241,.15);transform:translateY(-1px)}
+    .cp-qa-btn.info{background:rgba(59,130,246,.08);color:#3b82f6;border-color:rgba(59,130,246,.15)}
+    .cp-qa-btn.info:hover{background:rgba(59,130,246,.15)}
+    .cp-qa-btn.warn{background:rgba(245,158,11,.08);color:#f59e0b;border-color:rgba(245,158,11,.15)}
+    .cp-qa-btn.warn:hover{background:rgba(245,158,11,.15)}
+
+    /* Tabs */
+    .cp-tabs{display:flex;gap:4px;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:12px;padding:4px;margin-bottom:1rem}
+    .cp-tab{display:flex;align-items:center;gap:6px;padding:8px 16px;border:none;background:transparent;border-radius:8px;font-size:.86rem;font-weight:600;cursor:pointer;color:var(--mud-palette-text-secondary);transition:all .2s;font-family:inherit;flex:1;justify-content:center}
+    .cp-tab:hover{background:var(--mud-palette-action-hover)}
+    .cp-tab.active{background:var(--mud-palette-primary);color:#fff;box-shadow:0 2px 8px rgba(37,99,235,.3)}
+    .cp-tab-count{font-size:.68rem;font-weight:700;padding:1px 7px;border-radius:8px;background:rgba(0,0,0,.08)}
+    .cp-tab.active .cp-tab-count{background:rgba(255,255,255,.2)}
+
+    /* Pipeline Bar */
+    .cp-pipeline-bar{display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:1rem;background:var(--mud-palette-lines-default)}
+    .cp-pipeline-seg{position:relative;transition:flex .5s;min-width:2px}
+    .cp-pipeline-seg:hover{opacity:.8}
+    .cp-pipeline-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.55rem;color:#fff;font-weight:700}
+
+    /* Opp Cards */
+    .cp-opp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:.75rem}
+    .cp-opp-card{background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:var(--cp-radius-sm);overflow:hidden;cursor:pointer;transition:all .2s;display:flex}
+    .cp-opp-card:hover{box-shadow:0 6px 20px rgba(0,0,0,.08);transform:translateY(-2px)}
+    .cp-opp-color{width:5px;flex-shrink:0}
+    .cp-opp-body{flex:1;padding:1rem}
+    .cp-opp-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem}
+    .cp-opp-stage{font-size:.72rem;font-weight:700;padding:3px 10px;border-radius:6px}
+    .cp-opp-value{font-size:.92rem;font-weight:800;color:var(--mud-palette-text-primary)}
+    .cp-opp-product{font-size:.8rem;color:var(--mud-palette-primary);font-weight:600;margin-bottom:.3rem}
+    .cp-opp-meta{display:flex;gap:.6rem;font-size:.72rem;color:var(--mud-palette-text-secondary);margin-bottom:.3rem}
+    .cp-opp-footer{display:flex;justify-content:space-between;font-size:.72rem;color:var(--mud-palette-text-disabled);padding-top:.4rem;border-top:1px dashed var(--mud-palette-lines-default)}
+    .cp-opp-next{color:var(--mud-palette-primary);font-weight:600}
+
+    /* Timeline */
+    .cp-timeline{position:relative;padding-right:24px}
+    .cp-timeline::before{content:'';position:absolute;right:15px;top:0;bottom:0;width:2px;background:var(--mud-palette-lines-default);border-radius:1px}
+    .cp-tl-item{display:flex;gap:1rem;padding:.5rem 0;position:relative}
+    .cp-tl-line{display:flex;flex-direction:column;align-items:center;width:32px;flex-shrink:0}
+    .cp-tl-dot{width:32px;height:32px;border-radius:50%;background:var(--mud-palette-surface);border:2px solid var(--mud-palette-lines-default);display:flex;align-items:center;justify-content:center;font-size:.8rem;z-index:1}
+    .cp-tl-card{flex:1;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:var(--cp-radius-sm);padding:1rem;transition:all .2s}
+    .cp-tl-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.05)}
+    .cp-tl-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem}
+    .cp-tl-user{display:flex;align-items:center;gap:.5rem}
+    .cp-tl-avatar{width:28px;height:28px;border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:700}
+    .cp-tl-date{font-size:.7rem;color:var(--mud-palette-text-disabled)}
+    .cp-tl-text{font-size:.86rem;line-height:1.7;color:var(--mud-palette-text-primary);margin-bottom:.3rem}
+    .cp-tl-foot{display:flex;align-items:center;gap:.5rem}
+    .cp-tl-follow{font-size:.76rem;color:var(--mud-palette-primary);font-weight:600}
+
+    /* Tasks */
+    .cp-tasks-list{display:flex;flex-direction:column;gap:.5rem}
+    .cp-task-card{display:flex;gap:0;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:var(--cp-radius-sm);overflow:hidden;transition:all .2s}
+    .cp-task-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.05)}
+    .cp-task-pri{width:5px;flex-shrink:0}
+    .cp-task-body{flex:1;padding:.85rem 1rem}
+    .cp-task-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem}
+    .cp-task-desc{font-weight:600;font-size:.88rem}
+    .cp-task-meta{display:flex;gap:.6rem;font-size:.72rem;color:var(--mud-palette-text-secondary);flex-wrap:wrap}
+    .cp-task-card.done{opacity:.55}
+    .cp-task-card.done .cp-task-desc{text-decoration:line-through}
+    .cp-task-card.overdue{border-color:rgba(239,68,68,.25);background:rgba(254,242,242,.3)}
+
+    /* Empty */
+    .cp-empty{text-align:center;padding:4rem 2rem;color:var(--mud-palette-text-disabled)}
+    .cp-empty-icon{width:72px;height:72px;border-radius:50%;background:var(--mud-palette-action-hover);display:flex;align-items:center;justify-content:center;margin:0 auto .8rem;color:var(--mud-palette-text-disabled)}
+    .cp-empty h3{margin:.3rem 0 .2rem;color:var(--mud-palette-text-secondary);font-size:1.1rem;font-weight:700}
+    .cp-empty p{font-size:.86rem;margin-bottom:1rem}
+
+    /* ═══ SEARCH PAGE ═══ */
+    .cs-page{max-width:700px;margin:0 auto;padding:0 1.5rem 3rem}
+
+    .cs-header{position:relative;border-radius:var(--cp-radius);overflow:hidden;margin-bottom:1.5rem;box-shadow:0 12px 35px rgba(124,58,237,.2)}
+    .cs-header-bg{position:absolute;inset:0}
+    .cs-grad{position:absolute;inset:0;background:linear-gradient(135deg,#5b21b6,#7c3aed,#8b5cf6)}
+    .cs-orb{position:absolute;width:200px;height:200px;background:rgba(255,255,255,.06);border-radius:50%;filter:blur(60px);top:-60px;left:-40px}
+    .cs-pattern{position:absolute;inset:0;opacity:.04;background-image:radial-gradient(circle at 1px 1px,rgba(255,255,255,.5) 1px,transparent 0);background-size:24px 24px}
+    .cs-header-content{position:relative;z-index:1;padding:2.5rem 2rem;color:#fff;text-align:center}
+    .cs-header-icon{position:relative;width:60px;height:60px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 1rem}
+    .cs-icon-ring{position:absolute;inset:-4px;border-radius:20px;border:2px solid rgba(255,255,255,.2);animation:pulse-ring 3s ease-out infinite}
+    .cs-header-content h1{margin:0;font-size:1.5rem;font-weight:900}
+    .cs-header-content p{margin:.3rem 0 0;opacity:.85;font-size:.9rem}
+
+    .cs-search-wrap{margin-bottom:1rem}
+    .cs-loading{display:flex;align-items:center;gap:.5rem;padding:.5rem 0;font-size:.82rem;color:var(--mud-palette-text-secondary)}
+
+    .cs-count{font-size:.84rem;color:var(--mud-palette-text-secondary);margin-bottom:.75rem;padding:0 .25rem}
+
+    .cs-results{display:flex;flex-direction:column;gap:.5rem}
+    .cs-card{display:flex;align-items:center;gap:1rem;padding:1rem 1.25rem;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:14px;cursor:pointer;transition:all .2s}
+    .cs-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.08);transform:translateY(-2px);border-color:var(--mud-palette-primary)}
+    .cs-card-avatar{width:48px;height:48px;border-radius:14px;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1rem;flex-shrink:0}
+    .cs-card-info{flex:1;min-width:0}
+    .cs-card-name{display:block;font-weight:700;font-size:.95rem;margin-bottom:.2rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .cs-card-meta{display:flex;gap:.6rem;font-size:.76rem;color:var(--mud-palette-text-secondary);flex-wrap:wrap}
+    .cs-stage{background:rgba(124,58,237,.08);color:#7c3aed;padding:1px 6px;border-radius:4px;font-weight:600}
+
+    .cs-empty{text-align:center;padding:4rem 2rem;color:var(--mud-palette-text-disabled)}
+    .cs-empty-icon{width:72px;height:72px;border-radius:50%;background:var(--mud-palette-action-hover);display:flex;align-items:center;justify-content:center;margin:0 auto .8rem;color:var(--mud-palette-text-disabled)}
+    .cs-empty h3{margin:.3rem 0 .2rem;color:var(--mud-palette-text-secondary);font-size:1.1rem;font-weight:700}
+    .cs-empty p{font-size:.86rem}
+
+    /* ═══ RESPONSIVE ═══ */
+    @@media(max-width:900px){
+        .cp-page{padding:0 1rem 2rem}
+        .cp-hero-content{padding:1.25rem 1.25rem 0}
+        .cp-hero-profile{flex-direction:column;text-align:center}
+        .cp-hero-meta{justify-content:center}
+        .cp-hero-actions{justify-content:center}
+        .cp-hero-stats{grid-template-columns:repeat(3,1fr)}
+        .cp-insights{flex-direction:column;align-items:flex-start;gap:.4rem}
+        .cp-insight-sep{display:none}
+        .cp-opp-grid{grid-template-columns:1fr}
+    }
+    @@media(max-width:640px){
+        .cp-page,.cs-page{padding:0 .5rem 1.5rem;font-size:.84rem}
+        .cp-hero-stats{grid-template-columns:repeat(2,1fr)}
+        .cp-tabs{flex-direction:column}
+        .cp-tab{justify-content:flex-start}
+        .cs-header-content{padding:1.5rem 1rem}
+        .cs-card{padding:.75rem 1rem}
+    }
+    @@media print{
+        .cp-hero{box-shadow:none!important;break-inside:avoid}
+        .cp-hero-orb,.cp-hero-pattern{display:none!important}
+        .cp-hero-grad{background:#6d28d9!important}
+        .cp-quick-add,.cp-hero-actions,.cp-search-overlay{display:none!important}
+        body{background:#fff!important}
+    }
 </style>
 
 @code {
-    [Parameter] public int PartyId { get; set; }
+    [Parameter] public int? PartyId { get; set; }
 
-    private bool _loading=true;
+    // Common
+    private bool _loading = true;
+    private string? _currentUser;
+
+    // Profile
     private PartyListDto? _party;
-    private List<OpportunityListDto> _opportunities=new();
-    private List<InteractionListDto> _interactions=new();
-    private List<TaskListDto> _tasks=new();
-    private OpportunityStatsDto? _stats;
+    private List<OpportunityListDto> _opportunities = new();
+    private List<InteractionListDto> _interactions = new();
+    private List<TaskListDto> _tasks = new();
     private int _tab;
+    private int _wonCount;
+    private int _activeTaskCount;
+    private decimal _pipelineValue;
+    private int _winRate;
+    private DateTime? _lastContactDate;
+    private DateTime? _nextFollowUp;
+    private List<StageGroup> _stageGroups = new();
+    private record StageGroup(string Name, string Color, int Count);
 
-    protected override async Task OnInitializedAsync(){
-        try{
+    // Search (shared between both modes)
+    private bool _showSearch;
+    private string _searchQuery = "";
+    private List<PartyListDto> _searchResults = new();
+    private bool _searching;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _currentUser = (await AuthProvider.GetAuthenticationStateAsync()).User.Identity?.Name;
+
+            if (PartyId.HasValue && PartyId.Value > 0)
+            {
+                await LoadProfileData();
+            }
+        }
+        catch (Exception ex) { Snackbar.Add($"خطأ: {ex.Message}", Severity.Error); }
+        finally { _loading = false; }
+    }
+
+    private async Task LoadProfileData()
+{
+    using var db = await DbFactory.CreateDbContextAsync();
+
+    _party = await db.Parties.AsNoTracking()
+        .Where(p => p.PartyId == PartyId.Value)
+        .Select(p => new PartyListDto
+        {
+            PartyId = p.PartyId,
+            PartyName = p.PartyName,
+            Phone = p.Phone,
+            Email = p.Email,
+            City = p.City,
+            CustomerStage = p.CustomerStage
+        })
+        .FirstOrDefaultAsync();
+
+    if (_party == null)
+    {
+        Snackbar.Add("العميل غير موجود", Severity.Error);
+        Nav.NavigateTo("/crm/customers");
+        return;
+    }
+
+    // ★ فرص العميل مباشرة من DB
+    _opportunities = await db.Opportunities.AsNoTracking()
+        .Where(o => o.PartyId == PartyId.Value)
+        .OrderByDescending(o => o.CreatedAt)
+        .Select(o => new OpportunityListDto
+        {
+            OpportunityId = o.OpportunityId,
+            PartyId = o.PartyId,
+            StageName = o.Stage.StageName,
+            StageNameAr = o.Stage.StageNameAr,
+            StageColor = o.Stage.Color,
+            ExpectedValue = o.ExpectedValue,
+            InterestedProduct = o.InterestedProduct,
+            EmployeeName = o.Employee.EmployeeName,
+            SourceName = o.Source.SourceName,
+            CreatedAt = o.CreatedAt,
+            NextFollowUpDate = o.NextFollowUpDate
+        })
+        .ToListAsync();
+
+    // ★ تواصلات العميل مباشرة من DB
+    _interactions = await db.Interactions.AsNoTracking()
+        .Where(i => i.PartyId == PartyId.Value)
+        .OrderByDescending(i => i.InteractionDate)
+        .Select(i => new InteractionListDto
+        {
+            InteractionId = i.InteractionId,
+            PartyId = i.PartyId,
+            EmployeeName = i.Employee.EmployeeName,
+            CreatedBy = i.CreatedBy,
+            Summary = i.Summary,
+            InteractionDate = i.InteractionDate,
+            NextFollowUpDate = i.NextFollowUpDate
+        })
+        .ToListAsync();
+
+    // ★ مهام العميل مباشرة من DB
+    _tasks = await db.CrmTasks.AsNoTracking()
+        .Where(t => t.PartyId == PartyId.Value)
+        .OrderByDescending(t => t.DueDate)
+        .Select(t => new TaskListDto
+        {
+            TaskId = t.TaskId,
+            PartyId = t.PartyId,
+            TaskDescription = t.TaskDescription,
+            Priority = t.Priority,
+            Status = t.Status,
+            DueDate = t.DueDate,
+            DueTime = t.DueTime,
+            AssignedToName = t.Employee.EmployeeName
+        })
+        .ToListAsync();
+
+    CalcStats();
+}
+
+    private void CalcStats()
+    {
+        _wonCount = _opportunities.Count(o => o.StageName == "Won" || o.StageName == "تم البيع");
+        _activeTaskCount = _tasks.Count(t => t.Status != "Completed" && t.Status != "Cancelled");
+        _pipelineValue = _opportunities
+            .Where(o => o.StageName != "Won" && o.StageName != "Lost" && o.StageName != "تم البيع" && o.StageName != "خسارة")
+            .Sum(o => o.ExpectedValue ?? 0);
+        _winRate = _opportunities.Count > 0 ? (int)Math.Round((double)_wonCount / _opportunities.Count * 100) : 0;
+
+        if (_interactions.Any())
+            _lastContactDate = _interactions.Max(i => i.InteractionDate);
+
+        var next = _interactions
+            .Where(i => i.NextFollowUpDate.HasValue && i.NextFollowUpDate.Value.Date >= DateTime.Today)
+            .OrderBy(i => i.NextFollowUpDate)
+            .FirstOrDefault();
+        if (next != null && next.NextFollowUpDate.HasValue)
+            _nextFollowUp = next.NextFollowUpDate.Value;
+
+        _stageGroups = _opportunities
+            .GroupBy(o => new { o.StageName, o.StageColor })
+            .Select(g => new StageGroup(g.Key.StageName ?? "أخرى", g.Key.StageColor ?? "#94a3b8", g.Count()))
+            .OrderByDescending(g => g.Count)
+            .ToList();
+    }
+
+    // ═══ SEARCH ═══
+    private void ToggleSearch()
+    {
+        _showSearch = !_showSearch;
+        if (_showSearch) { _searchQuery = ""; _searchResults = new(); }
+    }
+
+    private async Task OnSearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") { _showSearch = false; return; }
+        if (e.Key == "Enter") { await SearchCustomers(); return; }
+        await SearchCustomers();
+    }
+
+    private async Task SearchCustomers()
+    {
+        if (string.IsNullOrWhiteSpace(_searchQuery) || _searchQuery.Trim().Length < 2)
+        { _searchResults = new(); return; }
+
+        _searching = true; StateHasChanged();
+        try
+        {
+            var q = _searchQuery.Trim().ToLower();
             using var db = await DbFactory.CreateDbContextAsync();
-            _party = await db.Parties.AsNoTracking()
-                .Where(p => p.PartyId == PartyId)
-                .Select(p => new PartyListDto{PartyId=p.PartyId,PartyName=p.PartyName,Phone=p.Phone,Email=p.Email,City=p.City,CustomerStage=p.CustomerStage})
-                .FirstOrDefaultAsync();
-
-            if(_party==null){Snackbar.Add("العميل غير موجود",Severity.Error);Nav.NavigateTo("/crm/opportunities");return;}
-
-            var oppFilter = new OpportunityFilterDto{PageSize=200};
-            var result = await OppService.GetOpportunitiesAsync(oppFilter);
-            _opportunities = result.Items.Where(o=>o.PartyId==PartyId).ToList();
-
-            var intFilter = new InteractionFilterDto{PageSize=200};
-            var intResult = await InteractionService.GetInteractionsAsync(intFilter);
-            _interactions = intResult.Items.Where(i=>i.PartyId==PartyId).ToList();
-
-            var taskFilter = new TaskFilterDto{PageSize=200};
-            var taskResult = await TaskService.GetTasksAsync(taskFilter);
-            _tasks = taskResult.Items.Where(t=>t.PartyId==PartyId).ToList();
-
-            _stats = await OppService.GetStatsAsync(new OpportunityFilterDto());
-        }catch(Exception ex){Snackbar.Add($"خطأ: {ex.Message}",Severity.Error);}
-        finally{_loading=false;}
+            _searchResults = await db.Parties.AsNoTracking()
+                .Where(p => p.PartyName != null &&
+                            (p.PartyName.ToLower().Contains(q) ||
+                             (p.Phone != null && p.Phone.Contains(q))))
+                .OrderBy(p => p.PartyName)
+                .Take(30)
+                .Select(p => new PartyListDto
+                {
+                    PartyId = p.PartyId,
+                    PartyName = p.PartyName,
+                    Phone = p.Phone,
+                    City = p.City,
+                    CustomerStage = p.CustomerStage
+                })
+                .ToListAsync();
+        }
+        catch { _searchResults = new(); }
+        finally { _searching = false; StateHasChanged(); }
     }
 
-    private static string GetInitials(string? n){
-        if(string.IsNullOrWhiteSpace(n))return "?";
-        var w=n.Trim().Split(' ',StringSplitOptions.RemoveEmptyEntries);
-        return w.Length>=2?$"{w[0][0]}{w[1][0]}":n[..1];
+    private void GoToCustomer(int partyId)
+    {
+        _showSearch = false;
+        Nav.NavigateTo($"/crm/customers/{partyId}", forceLoad: true);
     }
 
-    private async Task WA(string? p){
-        if(string.IsNullOrWhiteSpace(p))return;
-        var c=new string(p.Where(char.IsDigit).ToArray());
-        if(c.StartsWith("0"))c="2"+c;if(!c.StartsWith("2"))c="2"+c;
-        await JS.InvokeVoidAsync("open",$"https://wa.me/{c}","_blank");
+    // ═══ HELPERS ═══
+    private static string GetInitials(string? n)
+    {
+        if (string.IsNullOrWhiteSpace(n)) return "?";
+        var w = n.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return w.Length >= 2 ? $"{w[0][0]}{w[1][0]}" : n[..1];
     }
-    private async Task Call(string? p){if(!string.IsNullOrWhiteSpace(p))await JS.InvokeVoidAsync("open",$"tel:{p}","_self");}
+
+    private async Task WA(string? p)
+    {
+        if (string.IsNullOrWhiteSpace(p)) return;
+        var c = new string(p.Where(char.IsDigit).ToArray());
+        if (c.StartsWith("0")) c = "2" + c;
+        if (!c.StartsWith("2")) c = "2" + c;
+        await JS.InvokeVoidAsync("open", $"https://wa.me/{c}", "_blank");
+    }
+
+    private async Task Call(string? p)
+    { if (!string.IsNullOrWhiteSpace(p)) await JS.InvokeVoidAsync("open", $"tel:{p}", "_self"); }
+
+    private async Task Email(string? e)
+    { if (!string.IsNullOrWhiteSpace(e)) await JS.InvokeVoidAsync("open", $"mailto:{e}", "_blank"); }
+
     private void GoBack() => Nav.NavigateTo("/crm/opportunities");
     private void EditCustomer() => Nav.NavigateTo($"/customers/form/{PartyId}");
     private void OpenOpp(int id) => Nav.NavigateTo($"/crm/opportunities/{id}");
+    private void AddOpportunity() => Nav.NavigateTo($"/crm/opportunities/new?partyId={PartyId}");
+    private void AddInteraction() => Nav.NavigateTo($"/crm/interactions/new?partyId={PartyId}");
+    private void AddTask() => Nav.NavigateTo($"/crm/tasks/new?partyId={PartyId}");
+
+    private async Task CompleteTask(int taskId)
+    {
+        var (success, msg) = await TaskService.CompleteAsync(taskId, "تم الإكمال من صفحة العميل", _currentUser ?? "System");
+        if (success)
+        {
+            Snackbar.Add("تم إكمال المهمة ✓", Severity.Success);
+            var taskFilter = new TaskFilterDto { PageSize = 200 };
+            var taskResult = await TaskService.GetTasksAsync(taskFilter);
+            _tasks = taskResult.Items.Where(t => t.PartyId == PartyId).ToList();
+            _activeTaskCount = _tasks.Count(t => t.Status != "Completed" && t.Status != "Cancelled");
+            StateHasChanged();
+        }
+        else Snackbar.Add(msg, Severity.Error);
+    }
 }

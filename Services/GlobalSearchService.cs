@@ -98,7 +98,7 @@ public class GlobalSearchService
                 CategoryAr = "العملاء",
                 Icon       = Icons.Material.Rounded.Groups,
                 Color      = "#10b981",
-                Url        = $"/customers/{c.PartyId}"
+                Url        = $"/customers/form/{c.PartyId}"
             }));
         }
 

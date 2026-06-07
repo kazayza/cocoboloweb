@@ -26,16 +26,30 @@ public class InteractionService : IInteractionService
             query = query.Where(i => i.EmployeeId == filter.EmployeeId.Value);
         if (filter.SourceId.HasValue)
             query = query.Where(i => i.SourceId == filter.SourceId.Value);
+        if (filter.AdTypeId.HasValue)
+            query = query.Where(i => i.AdTypeId == filter.AdTypeId.Value);
+        if (filter.StatusId.HasValue)
+            query = query.Where(i => i.StatusId == filter.StatusId.Value);
+        if (filter.StageBeforeId.HasValue)
+            query = query.Where(i => i.StageBeforeId == filter.StageBeforeId.Value);
+        if (filter.StageAfterId.HasValue)
+            query = query.Where(i => i.StageAfterId == filter.StageAfterId.Value);
+        if (filter.PartyId.HasValue)
+            query = query.Where(i => i.PartyId == filter.PartyId.Value);
         if (filter.DateFrom.HasValue)
             query = query.Where(i => i.InteractionDate >= filter.DateFrom.Value);
         if (filter.DateTo.HasValue)
-            query = query.Where(i => i.InteractionDate <= filter.DateTo.Value);
+            query = query.Where(i => i.InteractionDate <= filter.DateTo.Value.Date.AddDays(1).AddTicks(-1));
         if (!string.IsNullOrWhiteSpace(filter.SearchText))
         {
             var s = filter.SearchText.Trim();
+            // بحث عربي ذكي سيتم في الذاكرة بعد الجلب الأولي لتجنب مشاكل SQL Collation
             query = query.Where(i =>
                 (i.ClientName != null && i.ClientName.Contains(s)) ||
-                (i.Summary != null && i.Summary.Contains(s)));
+                (i.Phone != null && i.Phone.Contains(s)) ||
+                (i.AllPhones != null && i.AllPhones.Contains(s)) ||
+                (i.Summary != null && i.Summary.Contains(s)) ||
+                (i.Notes != null && i.Notes.Contains(s)));
         }
 
         var total = await query.CountAsync();
@@ -48,13 +62,17 @@ public class InteractionService : IInteractionService
             .Select(i => new InteractionListDto
             {
                 InteractionId = i.InteractionId, OpportunityId = i.OpportunityId, PartyId = i.PartyId,
-                ClientName = i.ClientName ?? "", Phone = i.Phone,
+                ClientName = i.ClientName ?? "", Phone = i.Phone, AllPhones = i.AllPhones,
                 EmployeeId = i.EmployeeId, EmployeeName = i.EmployeeName,
                 SourceId = i.SourceId, SourceName = i.SourceName, SourceIcon = i.SourceIcon,
-                StatusId = i.StatusId, StatusName = i.StatusName,
+                StatusId = i.StatusId, StatusName = i.StatusName, StatusNameAr = i.StatusNameAr,
                 InteractionDate = i.InteractionDate, InteractionTime = i.InteractionTime,
-                Summary = i.Summary, StageBeforeId = i.StageBeforeId, StageBeforeName = i.StageBeforeName,
+                Summary = i.Summary, 
+                StageBeforeId = i.StageBeforeId, StageBeforeName = i.StageBeforeName, 
+                StageBeforeNameAr = i.StageBeforeNameAr, StageBeforeColor = i.StageBeforeColor,
                 StageAfterId = i.StageAfterId, StageAfterName = i.StageAfterName,
+                StageAfterNameAr = i.StageAfterNameAr, StageAfterColor = i.StageAfterColor,
+                AdTypeId = i.AdTypeId, AdTypeName = i.AdTypeName, AdTypeNameAr = i.AdTypeNameAr,
                 NextFollowUpDate = i.NextFollowUpDate, Notes = i.Notes,
                 CreatedBy = i.CreatedBy, CreatedAt = i.CreatedAt
             }).ToListAsync();

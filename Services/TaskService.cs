@@ -18,6 +18,9 @@ public class TaskService : ITaskService
         var crmAccess = _http.GetCrmAccessFrom();
         var query = _db.VwCrmTasks.AsNoTracking().AsQueryable();
 
+        // ★ أضف السطر ده هنا - استبعد Completed و Cancelled
+    query = query.Where(t => t.Status != "Completed" && t.Status != "Cancelled");
+
         if (crmAccess.HasValue)
             query = query.Where(t => t.CreatedAt >= crmAccess.Value);
         if (filter.OpportunityId.HasValue)
@@ -55,7 +58,7 @@ public class TaskService : ITaskService
                 TaskId = t.TaskId, OpportunityId = t.OpportunityId, PartyId = t.PartyId,
                 ClientName = t.ClientName, Phone = t.Phone,
                 AssignedTo = t.AssignedTo, AssignedToName = t.AssignedToName,
-                TaskTypeId = t.TaskTypeId, TaskTypeName = t.TaskTypeName,
+                TaskTypeId = t.TaskTypeId, TaskTypeName = t.TaskTypeName,TaskTypeNameAr = t.TaskTypeNameAr,
                 TaskDescription = t.TaskDescription, DueDate = t.DueDate, DueTime = t.DueTime,
                 Priority = t.Priority, Status = t.Status,
                 CompletedDate = t.CompletedDate, CompletedBy = t.CompletedBy,

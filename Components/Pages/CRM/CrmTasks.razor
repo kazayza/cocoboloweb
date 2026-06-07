@@ -1,166 +1,1279 @@
 @page "/crm/tasks"
 
 @using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
 @using COCOBOLOERPNEW.Services
-@using MudColor = MudBlazor.Color
-@using MudSize = MudBlazor.Size
-@using MudVariant = MudBlazor.Variant
-
-@inject ITaskService TaskService
-@inject NavigationManager Navigation
-@inject ISnackbar Snackbar
-@inject AuthenticationStateProvider AuthProvider
 @using System.Security.Claims
 @using Microsoft.AspNetCore.Components.Authorization
+@using ClosedXML.Excel
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
 
-<PageTitle>المهام — CRM</PageTitle>
+@inject ITaskService TaskService
+@inject IOpportunityService OppService
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
 
-@if (_isLoading)
-{ <div class="loading-screen"><div class="loading-content"><MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" /><MudText Class="loading-text">جاري تحميل المهام...</MudText></div></div> }
+@implements IAsyncDisposable
+
+<PageTitle>إدارة المهام — CRM</PageTitle>
+
+<script suppress-error="BL9992">
+(function () {
+    if (window.__crmTasksReady) return;
+    window.__crmTasksReady = true;
+
+    var _ref = null, _fn = null, _tm = null;
+    window.setupTasksScrollWatcher = function (dotNetRef) {
+        _ref = dotNetRef;
+        if (_fn) window.removeEventListener('scroll', _fn);
+        _fn = function () {
+            clearTimeout(_tm);
+            _tm = setTimeout(function () {
+                if (_ref) { try { _ref.invokeMethodAsync('OnScrollChanged', window.pageYOffset || document.documentElement.scrollTop || 0); } catch (e) { } }
+            }, 80);
+        };
+        window.addEventListener('scroll', _fn, { passive: true });
+        setTimeout(_fn, 200);
+    };
+    window.removeTasksScrollWatcher = function () { if (_fn) window.removeEventListener('scroll', _fn); _ref = null; _fn = null; };
+
+    window.setupTasksKeyboard = function (dotNetRef) {
+        var handler = function (e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable) return;
+            var map = { '1': 'all', '2': 'overdue', '3': 'today', '4': 'tomorrow', '5': 'upcoming' };
+            if (map[e.key]) { e.preventDefault(); dotNetRef.invokeMethodAsync('OnKeyboardShortcut', map[e.key]); }
+            else if (e.key.toLowerCase() === 'b') { e.preventDefault(); dotNetRef.invokeMethodAsync('OnKeyboardShortcut', 'board'); }
+            else if (e.key.toLowerCase() === 'l') { e.preventDefault(); dotNetRef.invokeMethodAsync('OnKeyboardShortcut', 'list'); }
+            else if (e.key.toLowerCase() === 't') { e.preventDefault(); dotNetRef.invokeMethodAsync('OnKeyboardShortcut', 'table'); }
+            else if (e.key.toLowerCase() === 'e' && e.ctrlKey) { e.preventDefault(); dotNetRef.invokeMethodAsync('OnKeyboardShortcut', 'export'); }
+        };
+        window.addEventListener('keydown', handler);
+        window.__tasksKeyHandler = handler;
+    };
+    window.removeTasksKeyboard = function () { if (window.__tasksKeyHandler) { window.removeEventListener('keydown', window.__tasksKeyHandler); window.__tasksKeyHandler = null; } };
+
+    window.saveTasksPrefs = function (k, v) { try { localStorage.setItem('crm_tasks_' + k, JSON.stringify(v)); } catch (e) { } };
+    window.loadTasksPrefs = function (k) { try { var v = localStorage.getItem('crm_tasks_' + k); return v ? JSON.parse(v) : null; } catch (e) { return null; } };
+
+    window.updateTasksTabBadge = function (count) {
+        document.title = count > 0 ? '(' + count + ') \u26A0\uFE0F \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0645\u0647\u0627\u0645 \u2014 CRM' : '\u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0645\u0647\u0627\u0645 \u2014 CRM';
+    };
+
+    window.scrollTasksToTop = function () { window.scrollTo({ top: 0, behavior: 'smooth' }); };
+    window.printTasks = function () { window.print(); };
+
+    window.downloadTasksFile = function (fileName, base64, contentType) {
+        try {
+            var raw = atob(base64), len = raw.length, u8 = new Uint8Array(len);
+            for (var i = 0; i < len; i++) u8[i] = raw.charCodeAt(i);
+            var blob = new Blob([u8], { type: contentType || 'application/octet-stream' });
+            var url = URL.createObjectURL(blob), a = document.createElement('a');
+            a.href = url; a.download = fileName; document.body.appendChild(a); a.click();
+            setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 300);
+            return true;
+        } catch (e) { console.error(e); return false; }
+    };
+})();
+</script>
+
+@if (_loading)
+{
+    <div class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-logo">
+                <MudIcon Icon="@Icons.Material.Rounded.TaskAlt" Size="MudSize.Large" />
+                <div class="loading-ring"></div>
+                <div class="loading-ring ring-2"></div>
+            </div>
+            <MudText Typo="Typo.h5" Class="mt-4" Style="font-weight:800">جاري تحميل المهام</MudText>
+            <MudProgressLinear Color="MudColor.Primary" Indeterminate="true" Class="mt-4" Style="max-width:300px;border-radius:8px" />
+        </div>
+    </div>
+}
 else
 {
-<div dir="rtl" class="list-page">
-    <div class="page-bg-decorations"><div class="bg-orb bg-orb-1"></div><div class="bg-orb bg-orb-2"></div></div>
-    <div class="top-accent-bar"><div class="accent-shimmer"></div></div>
-
-    <div class="list-header">
-        <div class="header-bg"><div class="header-gradient"></div><div class="header-orbs"><div class="header-orb orb-1"></div><div class="header-orb orb-2"></div></div><div class="header-grid"></div></div>
-        <div class="header-content">
-            <div class="header-info">
-                <div class="header-icon-wrapper"><div class="header-icon-glow"></div><div class="header-icon"><MudIcon Icon="@Icons.Material.Rounded.Assignment" Size="MudSize.Large" /></div></div>
-                <div class="header-text"><h1>المهام</h1><p>إدارة ومتابعة مهام CRM</p></div>
-            </div>
-        </div>
-    </div>
-
-    @* Filters *@
-    <div class="filter-bar">
-        <div class="search-box"><MudIcon Icon="@Icons.Material.Rounded.Search" Class="search-icon" /><input type="text" @bind="_searchText" @bind:event="oninput" placeholder="بحث..." class="search-input" /></div>
-        <MudSelect T="string" Label="الحالة" Variant="MudVariant.Outlined" @bind-Value="_filter.Status" Dense="true" Class="filter-pick" Clearable="true">
-            <MudSelectItem Value="@("Pending")">⏳ قيد الانتظار</MudSelectItem>
-            <MudSelectItem Value="@("InProgress")">🔄 جاري</MudSelectItem>
-            <MudSelectItem Value="@("Completed")">✅ مكتملة</MudSelectItem>
-        </MudSelect>
-        <MudSelect T="string" Label="الأولوية" Variant="MudVariant.Outlined" @bind-Value="_filter.Priority" Dense="true" Class="filter-pick" Clearable="true">
-            <MudSelectItem Value="@("High")">🔴 عالية</MudSelectItem>
-            <MudSelectItem Value="@("Medium")">🟡 متوسطة</MudSelectItem>
-            <MudSelectItem Value="@("Low")">🔵 منخفضة</MudSelectItem>
-        </MudSelect>
-        <MudChip T="string" Variant="@(_filter.IsOverdue == true ? MudVariant.Filled : MudVariant.Outlined)"
-                 Color="@(_filter.IsOverdue == true ? MudColor.Error : MudColor.Default)" Size="MudSize.Small"
-                 OnClick="() => { _filter.IsOverdue = _filter.IsOverdue == true ? null : true; _ = ApplyFilter(); }">متأخرة فقط</MudChip>
-        <MudButton Variant="MudVariant.Outlined" OnClick="ApplyFilter" StartIcon="@Icons.Material.Rounded.FilterList">تصفية</MudButton>
-    </div>
-
-    @if (_isTableLoading) { <MudLinearProgress Color="MudColor.Primary" Indeterminate="true" Class="load-bar" /> }
-
-    <div class="table-wrap">
-        <table class="data-table">
-            <thead><tr><th>المهمة</th><th>العميل</th><th>المسؤول</th><th>الأولوية</th><th>الاستحقاق</th><th>الحالة</th><th></th></tr></thead>
-            <tbody>
-                @foreach (var t in _pagedResult.Items)
-                {
-                    var isDone = t.Status == "Completed";
-                    var priColor = t.Priority switch { "High" => "#ef4444", "Medium" => "#f59e0b", _ => "#3b82f6" };
-                    <tr class="@(isDone ? "row-done" : t.TaskDueStatus == "Overdue" ? "row-overdue" : "clickable")"
-                        @onclick="() => { if (t.OpportunityId.HasValue) GoToOpportunity(t.OpportunityId.Value); }">
-                        <td><strong>@(t.TaskDescription ?? "—").Truncate(40)</strong></td>
-                        <td>@(t.ClientName ?? "—")</td>
-                        <td>@(t.AssignedToName ?? "—")</td>
-                        <td><span class="pri-badge" style="background:@(priColor + "20");color:@priColor">@(t.Priority == "High" ? "عالية" : t.Priority == "Medium" ? "متوسطة" : "منخفضة")</span></td>
-                        <td><span class="@(t.TaskDueStatus == "Overdue" ? "text-danger" : "")">@t.DueDate.ToString("yyyy/MM/dd")</span></td>
-                        <td>@(t.Status == "Completed" ? "✅ مكتملة" : t.Status == "InProgress" ? "🔄 جاري" : "⏳ قيد الانتظار")</td>
-                        <td @onclick:stopPropagation="true">
-                            @if (!isDone)
-                            {
-                                <MudIconButton Icon="@Icons.Material.Rounded.CheckCircle" Size="MudSize.Small" OnClick="() => Complete(t.TaskId)" Class="action-green" />
-                            }
-                        </td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-    </div>
-
-    @if (!_pagedResult.Items.Any()) { <div class="empty-state"><MudIcon Icon="@Icons.Material.Rounded.CheckCircle" Size="MudSize.Large" /><span>لا توجد مهام</span></div> }
-
-    @if (_pagedResult.TotalPages > 1)
+<div dir="rtl" class="tasks-page">
+   
+    @* ═══ 1. ALERT BAR ═══ *@
+    @if (_stats.Overdue > 0)
     {
-        <div class="pagination-bar">
-            <MudIconButton Icon="@Icons.Material.Rounded.ChevronRight" OnClick="() => GoToPage(_filter.PageNumber - 1)" Disabled="@(!_pagedResult.HasPrevious)" />
-            <span>صفحة @_pagedResult.PageNumber من @_pagedResult.TotalPages — @_pagedResult.TotalCount مهمة</span>
-            <MudIconButton Icon="@Icons.Material.Rounded.ChevronLeft" OnClick="() => GoToPage(_filter.PageNumber + 1)" Disabled="@(!_pagedResult.HasNext)" />
+        <div class="alert-bar" @onclick="@(() => SetQuickFilter("overdue"))">
+            <div class="alert-content">
+                <div class="alert-pulse"></div>
+                <span class="alert-icon">⚠️</span>
+                <span class="alert-text">تنبيه: لديك <strong>@_stats.Overdue</strong> مهام متأخرة!</span>
+            </div>
+            <span class="alert-action">عرض المتأخرات ←</span>
         </div>
     }
+    
+
+    @* ═══ HEADER ═══ *@
+    <div class="premium-header">
+        <div class="header-bg">
+            <div class="header-gradient"></div>
+            <div class="header-pattern"></div>
+            <div class="header-orb orb-1"></div>
+            <div class="header-orb orb-2"></div>
+            <div class="header-orb orb-3"></div>
+        </div>
+        <div class="header-content">
+            <div class="header-top">
+                <div class="header-title">
+                    <div class="title-icon-box">
+                        <MudIcon Icon="@Icons.Material.Rounded.TaskAlt" Size="MudSize.Large" />
+                        <div class="icon-pulse-ring"></div>
+                    </div>
+                    <div class="title-text">
+                        <div class="title-badge-row">
+                            <span class="live-dot"></span>
+                            <span class="badge-text">CRM</span>
+                        </div>
+                        <h1>إدارة المهام</h1>
+                        <p>متابعة وعرض جميع المهام • @_displayItems.Count مهمة نشطة</p>
+                    </div>
+                </div>
+                <div class="header-btns">
+                    @if (_canExport)
+                    {
+                        <button class="export-btn" @onclick="ExportExcel" disabled="@_isExporting">
+                            @if (_isExporting)
+                            { <div class="btn-spinner"></div> <span>جاري التصدير...</span> }
+                            else
+                            { <MudIcon Icon="@Icons.Material.Rounded.FileDownload" Size="MudSize.Small" /> <span>تصدير Excel</span> }
+                        </button>
+                    }
+                    <button class="print-btn-header" @onclick="PrintPage">
+                        <MudIcon Icon="@Icons.Material.Rounded.Print" Size="MudSize.Small" /> <span>طباعة</span>
+                    </button>
+                    @if (_crmAccessFrom.HasValue)
+                    {
+                        <div class="access-badge">
+                            <MudIcon Icon="@Icons.Material.Rounded.Lock" Size="MudSize.Small" />
+                            <span>من @_crmAccessFrom.Value.ToString("yyyy/MM/dd")</span>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @* KPI *@
+            <div class="kpi-grid">
+                <div class="kpi-card @(_stats.Overdue > 0 ? "kpi-alert" : "")">
+                    <div class="kpi-icon" style="background:rgba(248,113,113,.15);color:#f87171">
+                        <MudIcon Icon="@Icons.Material.Rounded.Warning" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.Overdue</span>
+                        <span class="kpi-label">⚠️ متأخرة</span>
+                    </div>
+                    @if (_stats.Overdue > 0) { <span class="kpi-live-dot" style="background:#f87171;box-shadow:0 0 8px #f87171"></span> }
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon" style="background:rgba(251,191,36,.15);color:#fbbf24">
+                        <MudIcon Icon="@Icons.Material.Rounded.Today" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.DueToday</span>
+                        <span class="kpi-label">🕐 اليوم</span>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon" style="background:rgba(96,165,250,.15);color:#60a5fa">
+                        <MudIcon Icon="@Icons.Material.Rounded.Event" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.DueTomorrow</span>
+                        <span class="kpi-label">📅 غداً</span>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon" style="background:rgba(52,211,153,.15);color:#34d399">
+                        <MudIcon Icon="@Icons.Material.Rounded.Upcoming" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.Upcoming</span>
+                        <span class="kpi-label">🟢 قادمة</span>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon" style="background:rgba(99,102,241,.15);color:#818cf8">
+                        <MudIcon Icon="@Icons.Material.Rounded.Inventory2" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-data">
+                        <span class="kpi-value">@_stats.TotalActive</span>
+                        <span class="kpi-label">إجمالي النشطة</span>
+                    </div>
+                </div>
+            </div>
+
+            @* ═══ 5. MINI PROGRESS ═══ *@
+            @if (_stats.TotalToday > 0)
+            {
+                <div class="progress-section">
+                    <span class="progress-label">إنجاز اليوم</span>
+                    <div class="progress-track">
+                        <div class="progress-fill @(_todayProgressPercent >= 100 ? "progress-done" : "")" style="width:@Math.Min(_todayProgressPercent, 100)%"></div>
+                    </div>
+                    <span class="progress-text">@_stats.CompletedToday/@_stats.TotalToday (@_todayProgressPercent%)</span>
+                </div>
+            }
+        </div>
+    </div>
+
+    @* ═══ FILTERS ═══ *@
+    <MudPaper Class="filter-paper" Elevation="0">
+        <div class="filter-header" @onclick="ToggleFilters">
+            <div class="filter-title">
+                <div class="filter-icon-box"><MudIcon Icon="@Icons.Material.Rounded.FilterAlt" Size="MudSize.Small" /></div>
+                <span>فلاتر متقدمة</span>
+                @if (_hasActiveFilters)
+                { <MudChip T="string" Size="MudSize.Small" Color="MudColor.Primary" Variant="Variant.Filled" Class="active-chip">@_activeFilterCount نشط</MudChip> }
+            </div>
+            <div class="@GetFilterToggleClass()">
+                <MudIcon Icon="@Icons.Material.Rounded.KeyboardArrowDown" Size="MudSize.Small" />
+            </div>
+        </div>
+
+        @if (_filtersExpanded)
+        {
+            <div class="filter-body animate-in">
+                <div class="filter-section">
+                    <div class="section-label"><MudIcon Icon="@Icons.Material.Rounded.Search" Size="MudSize.Small" /> البحث</div>
+                    <div class="filter-grid cols-1">
+                        <MudTextField T="string" Label="🔍 بحث في الوصف أو اسم العميل" Variant="Variant.Outlined"
+                                      @bind-Value="_filter.SearchText" Dense="true"
+                                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Rounded.Search"
+                                      Immediate="true" DebounceInterval="400" OnDebounceIntervalElapsed="ApplyFilters" />
+                    </div>
+                </div>
+                <div class="filter-section">
+                    <div class="section-label"><MudIcon Icon="@Icons.Material.Rounded.Tune" Size="MudSize.Small" /> التصنيف</div>
+                    <div class="filter-grid cols-3">
+                        <MudSelect T="string" Label="الأولوية" Variant="Variant.Outlined" @bind-Value="_filter.Priority" Dense="true" Clearable="true">
+                            <MudSelectItem Value="@("High")"><div style="display:flex;align-items:center;gap:6px"><span class="priority-dot high"></span> عالية</div></MudSelectItem>
+                            <MudSelectItem Value="@("Medium")"><div style="display:flex;align-items:center;gap:6px"><span class="priority-dot medium"></span> متوسطة</div></MudSelectItem>
+                            <MudSelectItem Value="@("Low")"><div style="display:flex;align-items:center;gap:6px"><span class="priority-dot low"></span> منخفضة</div></MudSelectItem>
+                        </MudSelect>
+                        <MudSelect T="int?" Label="الموظف المسؤول" Variant="Variant.Outlined" @bind-Value="_filter.AssignedTo" Dense="true" Clearable="true">
+                            @foreach (var e in _employees) { <MudSelectItem Value="@((int?)e.EmployeeId)">@e.FullName</MudSelectItem> }
+                        </MudSelect>
+                        <MudSelect T="int?" Label="نوع المهمة" Variant="Variant.Outlined" @bind-Value="_filter.TaskTypeId" Dense="true" Clearable="true">
+                            @foreach (var t in _taskTypes) { <MudSelectItem Value="@((int?)t.TaskTypeId)">@(t.TaskTypeNameAr ?? t.TaskTypeName)</MudSelectItem> }
+                        </MudSelect>
+                    </div>
+                </div>
+                <div class="filter-actions">
+                    <div class="quick-filters">
+                        <span class="quick-label">اختصارات:</span>
+                        <MudChip T="string" OnClick="@(() => SetQuickFilter("all"))" Variant="@(_quickFilter=="all"?Variant.Filled:Variant.Outlined)" Color="MudColor.Default" Size="MudSize.Small">الكل [1]</MudChip>
+                        <MudChip T="string" OnClick="@(() => SetQuickFilter("overdue"))" Variant="@(_quickFilter=="overdue"?Variant.Filled:Variant.Outlined)" Color="MudColor.Error" Size="MudSize.Small">🔴 متأخر [2]</MudChip>
+                        <MudChip T="string" OnClick="@(() => SetQuickFilter("today"))" Variant="@(_quickFilter=="today"?Variant.Filled:Variant.Outlined)" Color="MudColor.Warning" Size="MudSize.Small">🟡 اليوم [3]</MudChip>
+                        <MudChip T="string" OnClick="@(() => SetQuickFilter("tomorrow"))" Variant="@(_quickFilter=="tomorrow"?Variant.Filled:Variant.Outlined)" Color="MudColor.Info" Size="MudSize.Small">🔵 غداً [4]</MudChip>
+                        <MudChip T="string" OnClick="@(() => SetQuickFilter("upcoming"))" Variant="@(_quickFilter=="upcoming"?Variant.Filled:Variant.Outlined)" Color="MudColor.Success" Size="MudSize.Small">🟢 قادم [5]</MudChip>
+                    </div>
+                    <div class="filter-btns">
+                        <MudButton Variant="Variant.Filled" Color="MudColor.Primary" OnClick="ApplyFilters" StartIcon="@Icons.Material.Rounded.Search" Class="btn-action">بحث</MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="MudColor.Default" OnClick="ResetFilters" StartIcon="@Icons.Material.Rounded.RestartAlt">إعادة تعيين</MudButton>
+                    </div>
+                </div>
+            </div>
+        }
+    </MudPaper>
+
+    @* ═══ VIEW TOOLBAR ═══ *@
+    <div class="view-toolbar">
+        <div class="toolbar-left">
+            <div class="view-tabs">
+                <button class="@GetViewTabClass(ViewMode.Board)" @onclick="@(() => SetView(ViewMode.Board))">
+                    <MudIcon Icon="@Icons.Material.Rounded.ViewKanban" Size="MudSize.Small" /> كانبان <span class="shortcut-hint">B</span>
+                </button>
+                <button class="@GetViewTabClass(ViewMode.List)" @onclick="@(() => SetView(ViewMode.List))">
+                    <MudIcon Icon="@Icons.Material.Rounded.ViewList" Size="MudSize.Small" /> قائمة <span class="shortcut-hint">L</span>
+                </button>
+                <button class="@GetViewTabClass(ViewMode.Table)" @onclick="@(() => SetView(ViewMode.Table))">
+                    <MudIcon Icon="@Icons.Material.Rounded.TableRows" Size="MudSize.Small" /> جدول <span class="shortcut-hint">T</span>
+                </button>
+            </div>
+            @if (_viewMode == ViewMode.List)
+            {
+                <div class="group-toggle-wrap">
+                    <button class="@(_groupMode == GroupMode.ByTime ? "grp-btn active" : "grp-btn")" @onclick="@(() => SetGroupMode(GroupMode.ByTime))">
+                        <MudIcon Icon="@Icons.Material.Rounded.Schedule" Size="MudSize.Small" /> حسب الوقت
+                    </button>
+                    <button class="@(_groupMode == GroupMode.ByEmployee ? "grp-btn active" : "grp-btn")" @onclick="@(() => SetGroupMode(GroupMode.ByEmployee))">
+                        <MudIcon Icon="@Icons.Material.Rounded.People" Size="MudSize.Small" /> حسب الموظف
+                    </button>
+                </div>
+            }
+        </div>
+        <div class="toolbar-right">
+            <div class="refresh-wrap">
+                <span class="refresh-label">🔄 @_refreshLabel</span>
+                <button class="refresh-btn" @onclick="ManualRefresh">
+                    <MudIcon Icon="@Icons.Material.Rounded.Refresh" Size="MudSize.Small" />
+                </button>
+            </div>
+            <span class="total-label"><strong>@_displayItems.Count</strong> مهمة</span>
+            <MudSelect T="int" Value="_filter.PageSize" ValueChanged="ChangePageSize" Dense="true" Variant="Variant.Outlined" Class="page-size-sel" Label="صفوف">
+                <MudSelectItem Value="25">25</MudSelectItem>
+                <MudSelectItem Value="50">50</MudSelectItem>
+                <MudSelectItem Value="100">100</MudSelectItem>
+            </MudSelect>
+            <MudTooltip Text="اختصارات: 1-5 شيبس | B كانبان | L قائمة | T جدول | Ctrl+E تصدير" Arrow="true" Placement="Placement.Top">
+                <div class="shortcuts-icon"><MudIcon Icon="@Icons.Material.Rounded.Keyboard" Size="MudSize.Small" /></div>
+            </MudTooltip>
+        </div>
+    </div>
+
+    @if (_isLoadingData) { <MudProgressLinear Color="MudColor.Primary" Indeterminate="true" Class="mb-3" Style="border-radius:4px" /> }
+
+        @* ═══ KANBAN ═══ *@
+    @if (_viewMode == ViewMode.Board)
+    {
+        <div class="kanban-board">
+            @foreach (var col in _kanbanColumns)
+            {
+                var colTasks = GetColumnTasks(col.Key);
+                <div class="kanban-col">
+                    <div class="kanban-col-header" style="@($"border-top:3px solid {col.Color}")">
+                        <div class="col-title">
+                            <span class="col-icon">@col.Emoji</span>
+                            <span>@col.Title</span>
+                        </div>
+                        <span class="col-count" style="@($"background:{col.Color}18;color:{col.Color}")">@colTasks.Count</span>
+                    </div>
+                    <div class="kanban-col-body">
+                        @foreach (var task in colTasks)
+                        {
+                            var cat = GetSmartCategory(task);
+                            <div class="kanban-card @GetOverdueSeverityClass(task)"
+                                 @onclick="@(() => OpenOpportunity(task.OpportunityId))">
+
+                                @* ROW 1: Priority + Assigned To *@
+                                <div class="kc-top">
+                                    <span class="kc-priority @GetPriorityClass(task.Priority)">@GetPriorityIcon(task.Priority) @GetPriorityLabel(task.Priority)</span>
+                                    @if (!string.IsNullOrWhiteSpace(task.AssignedToName))
+                                    { <span class="kc-user-small">👤 @task.AssignedToName</span> }
+                                </div>
+
+                                @* ROW 2: Description *@
+                                <div class="kc-desc">@Truncate(task.TaskDescription ?? "بدون وصف", 100)</div>
+
+                                @* ROW 3: Client Name - دايماً ظاهر *@
+                                <div class="kc-client">
+                                    <div class="avatar xs" style="@GetTaskAvatarStyle()">@GetInitials(task.ClientName)</div>
+                                    <span>@(task.ClientName ?? "—")</span>
+                                </div>
+
+                                @* ROW 4: Due Date + Status *@
+                                <div class="kc-footer">
+                                    <span class="kc-due">
+                                        <MudIcon Icon="@Icons.Material.Rounded.Schedule" Size="MudSize.Small" />
+                                        @task.DueDate.ToString("dd/MM/yyyy")
+                                        @if (task.DueTime.HasValue) { <span>@task.DueTime.Value.ToString(@"HH\:mm")</span> }
+                                    </span>
+                                    <span class="kc-status @GetStatusClass(task.Status)">@GetStatusLabel(task.Status)</span>
+                                </div>
+
+                                @* ROW 5: Badge *@
+                                @if (cat == "overdue")
+                                {
+                                    <div class="kc-badge @GetOverdueBadgeClass(task)">@GetOverdueBadgeText(task)</div>
+                                }
+                                else if (cat == "today" && task.DueTime.HasValue)
+                                {
+                                    <div class="kc-badge today">🕐 @task.DueTime.Value.ToString(@"HH\:mm")</div>
+                                }
+                                else if (cat == "tomorrow")
+                                {
+                                    <div class="kc-badge tomorrow">📅 @task.DueDate.ToString("dddd")</div>
+                                }
+                                else if (cat == "upcoming")
+                                {
+                                    <div class="kc-badge upcoming">بعد @GetDaysUntilDue(task) يوم</div>
+                                }
+                            </div>
+                        }
+                        @if (!colTasks.Any())
+                        {
+                            <div class="kanban-empty">
+                                <span>@col.Emoji</span>
+                                <span>@GetEmptySubtitle()</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    @* ═══ SMART LIST ═══ *@
+    @if (_viewMode == ViewMode.List)
+    {
+        <div class="smart-list">
+            @if (_groupMode == GroupMode.ByTime)
+            {
+                @foreach (var group in _smartGroups)
+                {
+                    <div class="group-header">
+                        <span class="gh-dot" style="@($"background:{GetGroupColor(group.Key)}")"></span>
+                        <span class="gh-label" style="@($"color:{GetGroupColor(group.Key)}")">@GetGroupTitle(group.Key)</span>
+                        <span class="gh-count" style="@($"background:{GetGroupColor(group.Key)}18;color:{GetGroupColor(group.Key)}")">@group.Count()</span>
+                        <span class="gh-line"></span>
+                    </div>
+                    @foreach (var task in group)
+                    {
+                        var cat = GetSmartCategory(task);
+                        <div class="task-item @GetOverdueSeverityClass(task) @(cat == "today" ? "item-today" : "") @(cat == "tomorrow" ? "item-tomorrow" : "")"
+                             @onclick="@(() => OpenOpportunity(task.OpportunityId))">
+                            <div class="ti-border" style="@($"background:{GetGroupColor(cat)}")"></div>
+                            <div class="ti-right">
+                                <span class="ti-priority @GetPriorityClass(task.Priority)">@GetPriorityIcon(task.Priority)</span>
+                                <div class="ti-content">
+                                    <div class="ti-desc">@(task.TaskDescription ?? "بدون وصف")</div>
+                                    <div class="ti-meta">
+                                        @if (!string.IsNullOrWhiteSpace(task.ClientName))
+                                        { <span class="ti-tag client">👤 @task.ClientName</span> }
+                                        @if (!string.IsNullOrWhiteSpace(task.TaskTypeName))
+                                        { <span class="ti-tag type">📋 @(task.TaskTypeNameAr ?? task.TaskTypeName)</span> }
+                                        <span class="ti-tag due">📅 @task.DueDate.ToString("dd/MM/yyyy")@if (task.DueTime.HasValue) { @task.DueTime.Value.ToString(@" HH\:mm") }</span>
+                                        @if (cat == "overdue")
+                                        { <span class="ti-tag @GetOverdueTagClass(task)">@GetOverdueBadgeText(task)</span> }
+                                        else if (cat == "today")
+                                        { <span class="ti-tag today-tag">🕐 اليوم</span> }
+                                        else if (cat == "tomorrow")
+                                        { <span class="ti-tag tomorrow-tag">📅 غداً</span> }
+                                        else
+                                        { <span class="ti-tag upcoming-tag">بعد @GetDaysUntilDue(task) يوم</span> }
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="ti-left">
+                                <span class="ti-status @GetStatusClass(task.Status)">@GetStatusLabel(task.Status)</span>
+                                @if (!string.IsNullOrWhiteSpace(task.AssignedToName))
+                                { <span class="ti-assignee">@task.AssignedToName</span> }
+                                <MudIcon Icon="@Icons.Material.Rounded.OpenInNew" Size="MudSize.Small" Style="color:var(--mud-palette-text-disabled)" />
+                            </div>
+                        </div>
+                    }
+                }
+            }
+            else @* GROUP BY EMPLOYEE *@
+            {
+                @foreach (var empGroup in _employeeGroups)
+                {
+                    <div class="group-header emp-header">
+                        <div class="avatar sm" style="@GetTaskAvatarStyle()">@GetInitials(empGroup.Key)</div>
+                        <span class="gh-label emp-name">@(empGroup.Key ?? "غير معين")</span>
+                        <span class="gh-count emp-count">@empGroup.Count()</span>
+                        <span class="gh-line"></span>
+                    </div>
+                    @foreach (var task in empGroup.OrderBy(t => GetSmartSortKey(t).Group).ThenBy(t => GetSmartSortKey(t).PriorityVal).ThenBy(t => GetSmartSortKey(t).DaysVal))
+                    {
+                        var cat = GetSmartCategory(task);
+                        <div class="task-item @GetOverdueSeverityClass(task) @(cat == "today" ? "item-today" : "") @(cat == "tomorrow" ? "item-tomorrow" : "")"
+                             @onclick="@(() => OpenOpportunity(task.OpportunityId))">
+                            <div class="ti-border" style="@($"background:{GetGroupColor(cat)}")"></div>
+                            <div class="ti-right">
+                                <span class="ti-priority @GetPriorityClass(task.Priority)">@GetPriorityIcon(task.Priority)</span>
+                                <div class="ti-content">
+                                    <div class="ti-desc">@(task.TaskDescription ?? "بدون وصف")</div>
+                                    <div class="ti-meta">
+                                        @if (!string.IsNullOrWhiteSpace(task.ClientName))
+                                        { <span class="ti-tag client">👤 @task.ClientName</span> }
+                                        <span class="ti-tag due">📅 @task.DueDate.ToString("dd/MM/yyyy")</span>
+                                        @if (cat == "overdue")
+                                        { <span class="ti-tag @GetOverdueTagClass(task)">@GetOverdueBadgeText(task)</span> }
+                                        else if (cat == "today")
+                                        { <span class="ti-tag today-tag">🕐 اليوم</span> }
+                                        else if (cat == "tomorrow")
+                                        { <span class="ti-tag tomorrow-tag">📅 غداً</span> }
+                                        else
+                                        { <span class="ti-tag upcoming-tag">بعد @GetDaysUntilDue(task) يوم</span> }
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="ti-left">
+                                <span class="ti-status @GetStatusClass(task.Status)">@GetStatusLabel(task.Status)</span>
+                                <MudIcon Icon="@Icons.Material.Rounded.OpenInNew" Size="MudSize.Small" Style="color:var(--mud-palette-text-disabled)" />
+                            </div>
+                        </div>
+                    }
+                }
+            }
+
+            @if (!_displayItems.Any())
+            {
+                <div class="empty-box">
+                    <div class="empty-circle"><MudIcon Icon="@GetEmptyIcon()" Size="MudSize.Large" /></div>
+                    <h3>@GetEmptyTitle()</h3>
+                    <p>@GetEmptySubtitle()</p>
+                </div>
+            }
+        </div>
+    }
+
+    @* ═══ TABLE ═══ *@
+    @if (_viewMode == ViewMode.Table)
+    {
+        <MudPaper Class="tbl-paper" Elevation="0">
+            <div class="tbl-scroll">
+                <table class="tbl">
+                    <thead>
+                        <tr>
+                            <th>الحالة</th><th>الأولوية</th><th>الوصف</th><th>العميل</th><th>النوع</th>
+                            <th>الاستحقاق</th><th>الموعد</th><th>المسؤول</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var task in _smartSortedItems)
+                        {
+                            var cat = GetSmartCategory(task);
+                            <tr class="@GetOverdueSeverityClass(task) @(cat == "today" ? "row-today" : "")"
+                                @onclick="@(() => OpenOpportunity(task.OpportunityId))">
+                                <td>
+                                    <div class="td-status-cell">
+                                        <span class="status-dot" style="@($"background:{GetSmartStatusColor(task)}")"></span>
+                                        <span class="td-status-text" style="@($"color:{GetSmartStatusColor(task)}")">@GetGroupTitle(cat)</span>
+                                    </div>
+                                </td>
+                                <td><span class="priority-badge @GetPriorityClass(task.Priority)">@GetPriorityIcon(task.Priority) @GetPriorityLabel(task.Priority)</span></td>
+                                <td><div class="td-desc">@Truncate(task.TaskDescription, 50)</div></td>
+                                <td><strong>@(task.ClientName ?? "—")</strong></td>
+                                <td>@(task.TaskTypeNameAr ?? task.TaskTypeName ?? "—")</td>
+                                <td><div class="@("due-text " + (cat == "overdue" ? "due-overdue" : cat == "today" ? "due-today" : ""))">@task.DueDate.ToString("dd/MM/yyyy")</div></td>
+                                <td>@(task.DueTime?.ToString(@"HH\:mm") ?? "—")</td>
+                                <td>@(task.AssignedToName ?? "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (!_displayItems.Any())
+            { <div class="empty-box sm"><MudIcon Icon="@GetEmptyIcon()" Size="MudSize.Large" /><h3>@GetEmptyTitle()</h3></div> }
+        </MudPaper>
+    }
+
+    @* PAGINATION *@
+    @if (_paged.TotalPages > 1)
+    {
+        <div class="paging">
+            <MudPagination Count="_paged.TotalPages" Selected="_filter.PageNumber" SelectedChanged="GoToPage"
+                           Color="MudColor.Primary" Size="MudSize.Medium" ShowFirstButton="true" ShowLastButton="true" />
+        </div>
+    }
+
+    @* SCROLL TOP *@
+    <div class="@GetScrollTopClass()" @onclick="ScrollToTop">
+        <div class="scroll-btn"><MudIcon Icon="@Icons.Material.Rounded.KeyboardArrowUp" /></div>
+    </div>
 </div>
 }
 
 <style>
-    .list-page { padding: 0 1.5rem 3rem; }
-    .filter-bar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.6rem 1rem; background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 12px; }
-    .search-box { position: relative; flex: 1; min-width: 140px; }
-    .search-icon { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); }
-    .search-input { width: 100%; padding: 7px 30px 7px 10px; border: 1px solid var(--mud-palette-lines-inputs); border-radius: 8px; background: var(--mud-palette-background); }
-    .filter-pick { min-width: 120px; }
-    .load-bar { margin-bottom: 0.5rem; border-radius: 4px; }
-    .table-wrap { overflow-x: auto; border: 1px solid var(--mud-palette-lines-default); border-radius: 12px; background: var(--mud-palette-surface); }
-    .data-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-    .data-table th { padding: 0.6rem 0.8rem; text-align: right; font-weight: 700; border-bottom: 2px solid var(--mud-palette-lines-inputs); }
-    .data-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--mud-palette-lines-inputs); }
-    .data-table tr:last-child td { border-bottom: none; }
-    .clickable { cursor: pointer; }
-    .clickable:hover { background: var(--mud-palette-action-hover); }
-    .row-done { opacity: 0.5; }
-    .row-done td:first-child { text-decoration: line-through; }
-    .row-overdue { background: #ef444403; }
-    .pri-badge { padding: 1px 6px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; }
-    .text-danger { color: #ef4444; font-weight: 600; }
-    .action-green { color: #10b981 !important; }
-    .empty-state { display: flex; flex-direction: column; align-items: center; padding: 3rem; color: var(--mud-palette-text-disabled); gap: 0.5rem; }
-    .pagination-bar { display: flex; align-items: center; justify-content: center; gap: 0.75rem; margin-top: 1.5rem; font-size: 0.85rem; color: var(--mud-palette-text-secondary); }
+    :root{--page-max:1440px;--radius-lg:22px;--radius-md:14px;--radius-sm:8px}
+    .tasks-page{padding:0 1.5rem 3rem;max-width:var(--page-max);margin:0 auto;font-size:.9rem;line-height:1.6}
 
-    .list-header { position: relative; border-radius: 20px; overflow: hidden; margin-bottom: 0.75rem; }
-    .header-bg { position: absolute; inset: 0; }
-    .header-gradient { position: absolute; inset: 0; background: linear-gradient(135deg, #d97706 0%, #f59e0b 40%, #fbbf24 100%); }
-    .header-orbs { position: absolute; inset: 0; overflow: hidden; }
-    .header-orb { position: absolute; border-radius: 50%; filter: blur(60px); }
-    .orb-1 { width: 140px; height: 140px; background: rgba(255,255,255,.1); top: -20px; right: -20px; }
-    .orb-2 { width: 100px; height: 100px; background: rgba(255,255,255,.05); bottom: -20px; left: 10%; }
-    .header-grid { position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 1px, rgba(255,255,255,.02) 1px, rgba(255,255,255,.02) 2px), repeating-linear-gradient(90deg, transparent, transparent 1px, rgba(255,255,255,.02) 1px, rgba(255,255,255,.02) 2px); background-size: 40px 40px; }
-    .header-content { position: relative; z-index: 1; padding: 1.25rem 1.5rem; color: #fff; }
-    .header-info { display: flex; align-items: center; gap: 0.75rem; }
-    .header-icon-wrapper { position: relative; }
-    .header-icon-glow { position: absolute; inset: -6px; background: rgba(255,255,255,.12); border-radius: 50%; filter: blur(10px); }
-    .header-icon { width: 44px; height: 44px; background: rgba(255,255,255,.12); border-radius: 12px; display: flex; align-items: center; justify-content: center; }
-    .header-text h1 { margin: 0; font-size: 1.15rem; }
-    .header-text p { margin: 2px 0 0; font-size: 0.75rem; opacity: 0.75; }
+    .loading-screen{display:flex;align-items:center;justify-content:center;min-height:80vh}
+    .loading-content{display:flex;flex-direction:column;align-items:center;text-align:center}
+    .loading-logo{position:relative;width:80px;height:80px;display:flex;align-items:center;justify-content:center;color:var(--mud-palette-primary)}
+    .loading-ring{position:absolute;inset:-8px;border:3px solid transparent;border-top-color:var(--mud-palette-primary);border-radius:50%;animation:spin 1.2s linear infinite}
+    .loading-ring.ring-2{inset:-16px;border-top-color:var(--mud-palette-secondary);animation-duration:1.8s;animation-direction:reverse}
+    @@keyframes spin{to{transform:rotate(360deg)}}
 
-    @@media (max-width: 900px) { .filter-bar { flex-direction: column; } .filter-pick { width: 100%; } }
+    .alert-bar{background:linear-gradient(90deg,#fef2f2,#fff1f2);border:1px solid rgba(239,68,68,.25);border-radius:var(--radius-md);padding:.7rem 1.25rem;margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;cursor:pointer;transition:all .25s;animation:alertSlide .4s ease-out}
+    .alert-bar:hover{background:linear-gradient(90deg,#fee2e2,#ffe4e6);box-shadow:0 2px 12px rgba(239,68,68,.15)}
+    .alert-content{display:flex;align-items:center;gap:.6rem}
+    .alert-pulse{width:10px;height:10px;border-radius:50%;background:#ef4444;animation:alertPulse 1.5s ease-in-out infinite}
+    .alert-icon{font-size:1.2rem}
+    .alert-text{font-weight:600;font-size:.9rem;color:#991b1b}
+    .alert-action{font-size:.82rem;font-weight:700;color:#ef4444;white-space:nowrap}
+    @@keyframes alertSlide{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+    @@keyframes alertPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.3)}}
+
+    .premium-header{position:relative;border-radius:var(--radius-lg);overflow:hidden;margin-bottom:1.5rem;box-shadow:0 12px 40px rgba(37,99,235,.22)}
+    .header-bg{position:absolute;inset:0}
+    .header-gradient{position:absolute;inset:0;background:linear-gradient(135deg,#1e3a5f 0%,#1e40af 30%,#2563eb 60%,#3b82f6 85%,#60a5fa 100%)}
+    .header-pattern{position:absolute;inset:0;opacity:.06;background-image:radial-gradient(circle at 1px 1px,rgba(255,255,255,.5) 1px,transparent 0);background-size:28px 28px}
+    .header-orb{position:absolute;border-radius:50%;filter:blur(70px);animation:orb-float 10s ease-in-out infinite}
+    .orb-1{width:260px;height:260px;background:rgba(147,197,253,.2);top:-80px;right:-40px}
+    .orb-2{width:180px;height:180px;background:rgba(99,102,241,.18);bottom:-50px;left:8%;animation-delay:-4s}
+    .orb-3{width:120px;height:120px;background:rgba(52,211,153,.12);top:40%;left:55%;animation-delay:-7s}
+    @@keyframes orb-float{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(15px,-10px) scale(1.08)}}
+    .header-content{position:relative;z-index:2;padding:1.75rem 2rem;color:#fff}
+    .header-top{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap}
+    .header-title{display:flex;gap:1rem;align-items:center}
+    .title-icon-box{position:relative;width:52px;height:52px;background:rgba(255,255,255,.13);backdrop-filter:blur(12px);border-radius:16px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.18);flex-shrink:0}
+    .icon-pulse-ring{position:absolute;inset:-5px;border-radius:19px;border:2px solid rgba(255,255,255,.25);animation:pulse-ring 2.5s ease-out infinite}
+    @@keyframes pulse-ring{0%{transform:scale(1);opacity:.6}100%{transform:scale(1.25);opacity:0}}
+    .title-text h1{margin:0;font-size:1.65rem;font-weight:900;line-height:1.2}
+    .title-text p{margin:.2rem 0 0;opacity:.85;font-size:.88rem}
+    .title-badge-row{display:flex;align-items:center;gap:6px;margin-bottom:.25rem}
+    .live-dot{width:7px;height:7px;border-radius:50%;background:#34d399;box-shadow:0 0 8px #34d399;animation:blink 2s infinite}
+    .badge-text{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;opacity:.8}
+    @@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+    .header-btns{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+    .export-btn,.print-btn-header{display:inline-flex;align-items:center;gap:6px;padding:8px 18px;background:rgba(255,255,255,.13);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.22);border-radius:10px;color:#fff;font-weight:700;font-size:.84rem;cursor:pointer;transition:all .25s;font-family:inherit}
+    .export-btn:hover:not(:disabled),.print-btn-header:hover{background:rgba(255,255,255,.22);transform:translateY(-1px)}
+    .export-btn:disabled{opacity:.5;cursor:not-allowed}
+    .btn-spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite}
+    .access-badge{display:flex;align-items:center;gap:4px;font-size:.7rem;opacity:.7;padding:3px 10px;background:rgba(255,255,255,.08);border-radius:6px}
+
+    .progress-section{display:flex;align-items:center;gap:.75rem;margin-top:1.25rem;padding:.6rem 1rem;background:rgba(255,255,255,.08);border-radius:10px;border:1px solid rgba(255,255,255,.1)}
+    .progress-label{font-size:.78rem;font-weight:600;white-space:nowrap;opacity:.9}
+    .progress-track{flex:1;height:8px;background:rgba(255,255,255,.15);border-radius:4px;overflow:hidden}
+    .progress-fill{height:100%;background:linear-gradient(90deg,#34d399,#22c55e);border-radius:4px;transition:width .8s ease}
+    .progress-fill.progress-done{background:linear-gradient(90deg,#34d399,#10b981);box-shadow:0 0 10px rgba(34,197,94,.5)}
+    .progress-text{font-size:.78rem;font-weight:700;white-space:nowrap;opacity:.9}
+
+    .kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:.65rem}
+    .kpi-card{position:relative;background:rgba(255,255,255,.09);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.1);border-radius:var(--radius-md);padding:.85rem;display:flex;align-items:center;gap:.65rem;transition:all .25s;overflow:hidden}
+    .kpi-card:hover{background:rgba(255,255,255,.15);transform:translateY(-2px)}
+    .kpi-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .kpi-data{display:flex;flex-direction:column;min-width:0}
+    .kpi-value{font-size:1.35rem;font-weight:900;line-height:1}
+    .kpi-label{font-size:.7rem;opacity:.75;margin-top:.15rem;white-space:nowrap}
+    .kpi-live-dot{position:absolute;top:6px;left:6px;width:7px;height:7px;border-radius:50%;animation:blink 1.5s infinite}
+    .kpi-alert{border-color:rgba(248,113,113,.3)!important}
+
+    .filter-paper{border-radius:var(--radius-md);border:1px solid var(--mud-palette-lines-default);margin-bottom:1rem;overflow:hidden;background:var(--mud-palette-surface)}
+    .filter-header{padding:.85rem 1.25rem;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;transition:background .2s}
+    .filter-header:hover{background:var(--mud-palette-action-hover)}
+    .filter-title{display:flex;align-items:center;gap:.5rem;font-weight:700;font-size:.92rem}
+    .filter-icon-box{width:28px;height:28px;border-radius:7px;background:var(--mud-palette-primary);color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .active-chip{font-size:.65rem!important;height:20px!important}
+    .filter-toggle-btn{width:26px;height:26px;border-radius:50%;background:var(--mud-palette-action-hover);display:flex;align-items:center;justify-content:center;transition:transform .3s}
+    .filter-toggle-btn.expanded{transform:rotate(180deg)}
+    .filter-body{padding:0 1.25rem 1.25rem}
+    .animate-in{animation:fadeSlide .25s ease-out}
+    @@keyframes fadeSlide{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+    .filter-section{margin-bottom:.85rem}
+    .section-label{display:flex;align-items:center;gap:.35rem;font-size:.76rem;font-weight:700;color:var(--mud-palette-text-secondary);margin-bottom:.45rem;text-transform:uppercase;letter-spacing:.5px}
+    .filter-grid{display:grid;gap:.75rem}
+    .cols-1{grid-template-columns:1fr}
+    .cols-3{grid-template-columns:repeat(3,1fr)}
+    .filter-actions{display:flex;justify-content:space-between;align-items:center;margin-top:1rem;padding-top:1rem;border-top:1px solid var(--mud-palette-lines-default);flex-wrap:wrap;gap:.75rem}
+    .quick-filters{display:flex;gap:.3rem;align-items:center;flex-wrap:wrap}
+    .quick-label{font-size:.72rem;font-weight:600;color:var(--mud-palette-text-secondary)}
+    .filter-btns{display:flex;gap:.4rem}
+    .btn-action{font-weight:700!important}
+    .priority-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+    .priority-dot.high{background:#ef4444}.priority-dot.medium{background:#f59e0b}.priority-dot.low{background:#22c55e}
+
+    .view-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:.85rem;flex-wrap:wrap;gap:.5rem}
+    .toolbar-left{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+    .toolbar-right{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+    .view-tabs{display:flex;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:10px;padding:3px;gap:3px}
+    .view-tab{display:flex;align-items:center;gap:5px;padding:7px 15px;border:none;background:transparent;border-radius:7px;font-size:.84rem;font-weight:600;cursor:pointer;color:var(--mud-palette-text-secondary);transition:all .2s;font-family:inherit}
+    .view-tab:hover{background:var(--mud-palette-action-hover)}
+    .view-tab.active{background:var(--mud-palette-primary);color:#fff;box-shadow:0 2px 8px rgba(37,99,235,.3)}
+    .shortcut-hint{font-size:.6rem;opacity:.5;font-weight:400;margin-right:2px}
+    .view-tab.active .shortcut-hint{opacity:.7}
+    .group-toggle-wrap{display:flex;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:10px;padding:3px;gap:3px}
+    .grp-btn{display:flex;align-items:center;gap:4px;padding:6px 12px;border:none;background:transparent;border-radius:7px;font-size:.78rem;font-weight:600;cursor:pointer;color:var(--mud-palette-text-secondary);transition:all .2s;font-family:inherit}
+    .grp-btn:hover{background:var(--mud-palette-action-hover)}
+    .grp-btn.active{background:var(--mud-palette-secondary);color:#fff}
+    .refresh-wrap{display:flex;align-items:center;gap:.3rem}
+    .refresh-label{font-size:.72rem;color:var(--mud-palette-text-disabled);white-space:nowrap}
+    .refresh-btn{width:28px;height:28px;border:1px solid var(--mud-palette-lines-default);border-radius:7px;background:var(--mud-palette-surface);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--mud-palette-text-secondary);transition:all .2s}
+    .refresh-btn:hover{background:var(--mud-palette-primary);color:#fff;border-color:var(--mud-palette-primary)}
+    .total-label{font-size:.84rem;color:var(--mud-palette-text-secondary)}
+    .page-size-sel{width:82px}
+    .shortcuts-icon{width:28px;height:28px;border-radius:7px;background:var(--mud-palette-action-hover);display:flex;align-items:center;justify-content:center;color:var(--mud-palette-text-disabled);cursor:help}
+
+        /* ★ احذف القديم وحط ده بداله */
+    .kanban-card.sev-low{border-right:3px solid #fb923c;background:linear-gradient(to left,#fff7ed,var(--mud-palette-surface))}
+    .kanban-card.sev-med{border-right:3px solid #ef4444;background:linear-gradient(to left,#fef2f2,var(--mud-palette-surface))}
+    .kanban-card.sev-high{border-right:3px solid #a855f7;background:linear-gradient(to left:#faf5ff,var(--mud-palette-surface))}
+    .row-sev-low{background:rgba(251,146,60,.02)!important}
+    .row-sev-med{background:rgba(239,68,68,.02)!important}
+    .row-sev-high{background:rgba(168,85,247,.02)!important}
+
+        .kanban-board{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;align-items:flex-start}
+    .kanban-col{background:var(--mud-palette-background);border-radius:var(--radius-md);overflow:hidden;border:1px solid var(--mud-palette-lines-default)}
+    .kanban-col-header{padding:.75rem 1rem;display:flex;justify-content:space-between;align-items:center;background:var(--mud-palette-surface)}
+    .col-title{display:flex;align-items:center;gap:.4rem;font-weight:700;font-size:.88rem}
+    .col-icon{font-size:1rem}
+    .col-count{font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:8px}
+    .kanban-col-body{padding:.5rem;display:flex;flex-direction:column;gap:.6rem;min-height:120px;max-height:70vh;overflow-y:auto}
+    .kanban-card{background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:10px;padding:1rem;cursor:pointer;transition:all .2s;position:relative;min-height:100px}
+    .kanban-card:hover{box-shadow:0 6px 20px rgba(0,0,0,.08);transform:translateY(-2px)}
+    .kc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem}
+    .kc-priority{font-size:1rem}
+    .kc-user-small{font-size:.72rem;color:var(--mud-palette-text-secondary);font-weight:600;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .kc-desc{font-size:.88rem;line-height:1.6;color:var(--mud-palette-text-primary);margin-bottom:.5rem;font-weight:600;word-wrap:break-word}
+    .kc-client{display:flex;align-items:center;gap:.5rem;font-size:.82rem;color:var(--mud-palette-text-primary);margin-bottom:.5rem;font-weight:600;background:rgba(99,102,241,.06);padding:4px 8px;border-radius:6px}
+    .avatar{border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0}
+    .avatar.xs{width:26px;height:26px;font-size:.65rem}
+    .avatar.sm{width:30px;height:30px;font-size:.7rem}
+    .kc-footer{display:flex;justify-content:space-between;align-items:center;font-size:.72rem;color:var(--mud-palette-text-disabled);padding-top:.4rem;border-top:1px solid var(--mud-palette-lines-default)}
+    .kc-due{display:flex;align-items:center;gap:3px}
+    .kc-status{font-size:.68rem;padding:2px 8px;border-radius:5px;font-weight:600}
+    .kc-badge{margin-top:.5rem;font-size:.72rem;padding:4px 10px;border-radius:6px;font-weight:700;text-align:center}
+    .kc-badge.badge-low{background:rgba(251,146,60,.1);color:#fb923c}
+    .kc-badge.badge-med{background:rgba(239,68,68,.1);color:#ef4444}
+    .kc-badge.badge-high{background:rgba(168,85,247,.1);color:#a855f7}
+    .kc-badge.today{background:rgba(245,158,11,.1);color:#f59e0b}
+    .kc-badge.tomorrow{background:rgba(59,130,246,.1);color:#3b82f6}
+    .kc-badge.upcoming{background:rgba(34,197,94,.1);color:#22c55e}
+    .kanban-empty{text-align:center;padding:2rem 1rem;color:var(--mud-palette-text-disabled);font-size:.78rem;display:flex;flex-direction:column;align-items:center;gap:.3rem}
+
+    .smart-list{display:flex;flex-direction:column;gap:.4rem}
+    .group-header{display:flex;align-items:center;gap:.5rem;padding:.6rem 0 .3rem;margin-top:.5rem;position:sticky;top:0;background:var(--mud-palette-background);z-index:2}
+    .group-header:first-child{margin-top:0}
+    .gh-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+    .gh-label{font-weight:800;font-size:.85rem}
+    .gh-count{font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:8px}
+    .gh-line{flex:1;height:1px;background:var(--mud-palette-lines-default)}
+    .emp-header{gap:.6rem}
+    .emp-name{color:var(--mud-palette-text-primary)!important}
+    .emp-count{background:rgba(99,102,241,.1)!important;color:#6366f1!important}
+    .task-item{display:flex;justify-content:space-between;align-items:center;padding:.8rem 1rem .8rem .5rem;background:var(--mud-palette-surface);border:1px solid var(--mud-palette-lines-default);border-radius:var(--radius-md);cursor:pointer;transition:all .2s;gap:1rem;position:relative;overflow:hidden}
+    .task-item:hover{box-shadow:0 4px 16px rgba(0,0,0,.06);border-color:var(--mud-palette-primary-lighten);transform:translateX(-2px)}
+    .ti-border{position:absolute;right:0;top:0;bottom:0;width:3px;border-radius:0 3px 3px 0}
+    .item-today{border-color:rgba(245,158,11,.2)}.item-today:hover{border-color:rgba(245,158,11,.4)}
+    .item-tomorrow{border-color:rgba(59,130,246,.15)}.item-tomorrow:hover{border-color:rgba(59,130,246,.3)}
+    .ti-right{display:flex;align-items:center;gap:.75rem;flex:1;min-width:0;padding-right:.5rem}
+    .ti-priority{font-size:1.1rem;flex-shrink:0}
+    .ti-content{flex:1;min-width:0}
+    .ti-desc{font-weight:600;font-size:.9rem;margin-bottom:.3rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .ti-meta{display:flex;gap:.3rem;flex-wrap:wrap}
+    .ti-tag{font-size:.68rem;padding:2px 7px;border-radius:5px;font-weight:600}
+    .ti-tag.client{background:rgba(99,102,241,.07);color:#6366f1}
+    .ti-tag.type{background:rgba(139,92,246,.07);color:#8b5cf6}
+    .ti-tag.due{background:rgba(96,165,250,.07);color:#60a5fa}
+    .ti-tag.overdue-low{background:rgba(251,146,60,.08);color:#fb923c;font-weight:700}
+    .ti-tag.overdue-med{background:rgba(239,68,68,.08);color:#ef4444;font-weight:700}
+    .ti-tag.overdue-high{background:rgba(168,85,247,.08);color:#a855f7;font-weight:700}
+    .ti-tag.today-tag{background:rgba(245,158,11,.08);color:#f59e0b;font-weight:600}
+    .ti-tag.tomorrow-tag{background:rgba(59,130,246,.08);color:#3b82f6;font-weight:600}
+    .ti-tag.upcoming-tag{background:rgba(34,197,94,.06);color:#22c55e}
+    .ti-left{display:flex;align-items:center;gap:.5rem;flex-shrink:0}
+    .ti-status{font-size:.72rem;padding:3px 10px;border-radius:6px;font-weight:600}
+    .ti-assignee{font-size:.72rem;color:var(--mud-palette-text-secondary)}
+    .status-pending{background:rgba(251,191,36,.1);color:#f59e0b}
+    .status-inprogress{background:rgba(59,130,246,.1);color:#3b82f6}
+    .p-high{color:#ef4444}.p-medium{color:#f59e0b}.p-low{color:#22c55e}
+    .priority-badge{display:flex;align-items:center;gap:4px;font-size:.76rem;font-weight:600;padding:3px 8px;border-radius:6px}
+    .priority-badge.p-high{background:rgba(239,68,68,.08)}
+    .priority-badge.p-medium{background:rgba(245,158,11,.08)}
+    .priority-badge.p-low{background:rgba(34,197,94,.08)}
+    .due-overdue{color:#ef4444!important;font-weight:700}
+    .due-today{color:#f59e0b!important;font-weight:600}
+    .due-text{line-height:1.3}
+
+    .tbl-paper{border-radius:var(--radius-md);overflow:hidden;border:1px solid var(--mud-palette-lines-default)}
+    .tbl-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .tbl{width:100%;border-collapse:collapse;font-size:.86rem;min-width:860px}
+    .tbl thead{background:var(--mud-palette-background)}
+    .tbl th{padding:.75rem .9rem;text-align:right;font-weight:700;color:var(--mud-palette-text-secondary);border-bottom:2px solid var(--mud-palette-lines-default);white-space:nowrap;font-size:.76rem;text-transform:uppercase}
+    .tbl td{padding:.65rem .9rem;border-bottom:1px solid var(--mud-palette-lines-inputs);vertical-align:middle}
+    .tbl tbody tr{cursor:pointer;transition:background .15s}
+    .tbl tbody tr:hover{background:var(--mud-palette-action-hover)}
+    .row-today{background:rgba(245,158,11,.02)!important}.row-today:hover{background:rgba(245,158,11,.05)!important}
+    .td-status-cell{display:flex;align-items:center;gap:6px}
+    .status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+    .td-status-text{font-size:.76rem;font-weight:600;white-space:nowrap}
+    .td-desc{max-width:250px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
+
+    .empty-box{text-align:center;padding:4.5rem 2rem;color:var(--mud-palette-text-disabled)}
+    .empty-box.sm{padding:2.5rem}
+    .empty-circle{width:72px;height:72px;border-radius:50%;background:var(--mud-palette-action-hover);display:flex;align-items:center;justify-content:center;margin:0 auto .8rem}
+    .empty-box h3{margin:.4rem 0 .2rem;color:var(--mud-palette-text-secondary);font-size:1.1rem;font-weight:700}
+    .empty-box p{font-size:.88rem}
+    .paging{display:flex;justify-content:center;margin-top:1.75rem}
+    .scroll-top-fab{position:fixed;bottom:24px;left:24px;z-index:9999;opacity:0;transform:translateY(20px) scale(.8);transition:all .35s;pointer-events:none}
+    .scroll-top-fab.visible{opacity:1;transform:translateY(0) scale(1);pointer-events:all}
+    .scroll-btn{width:48px;height:48px;border-radius:50%;background:var(--mud-palette-primary);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 18px rgba(37,99,235,.35);transition:all .2s}
+    .scroll-btn:hover{transform:scale(1.12)}
+
+    @@media print{
+        .alert-bar,.filter-paper,.view-toolbar,.paging,.scroll-top-fab,.export-btn,.print-btn-header,.refresh-wrap,.shortcuts-icon,.group-toggle-wrap{display:none!important}
+        .premium-header{box-shadow:none!important;break-inside:avoid}
+        .header-orb,.header-pattern{display:none!important}
+        .header-gradient{background:#1e40af!important}
+        .tasks-page{padding:0!important;font-size:11pt!important}
+        .kanban-board{grid-template-columns:repeat(4,1fr)!important;gap:8px!important}
+        .kanban-card,.task-item{break-inside:avoid;box-shadow:none!important;transform:none!important;border:1px solid #ccc!important}
+        .kanban-card::before,.task-item .ti-border{display:none!important}
+        .kanban-col{break-inside:avoid}
+        .tbl{font-size:9pt!important}
+        .tbl th{background:#f0f0f0!important;color:#000!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .progress-section{border:1px solid #ccc!important}
+        body{background:#fff!important}
+    }
+
+    @@media(max-width:1400px){.kanban-board{grid-template-columns:repeat(2,1fr)}}
+    @@media(max-width:1100px){.cols-3{grid-template-columns:1fr 1fr}.kpi-grid{grid-template-columns:repeat(3,1fr)}}
+    @@media(max-width:900px){
+        .tasks-page{padding:0 1rem 2rem}.header-content{padding:1.25rem 1.5rem}
+        .header-top{flex-direction:column;gap:.75rem}
+        .header-btns{flex-direction:row;flex-wrap:wrap}
+        .title-text h1{font-size:1.35rem}
+        .kpi-grid{grid-template-columns:repeat(3,1fr);gap:.5rem}
+        .cols-3{grid-template-columns:1fr}
+        .kanban-board{grid-template-columns:1fr 1fr}
+        .view-toolbar{flex-direction:column;align-items:stretch}
+        .toolbar-left,.toolbar-right{justify-content:center;flex-wrap:wrap}
+        .task-item{flex-direction:column;align-items:stretch;gap:.5rem}
+        .ti-left{justify-content:flex-end}
+        .progress-section{flex-wrap:wrap}
+    }
+    @@media(max-width:640px){
+        .tasks-page{padding:0 .65rem 1.5rem;font-size:.84rem}
+        .kpi-grid{grid-template-columns:repeat(2,1fr);gap:.4rem}
+        .kpi-card{padding:.6rem;gap:.4rem}.kpi-icon{width:32px;height:32px}.kpi-value{font-size:1.05rem}
+        .kanban-board{grid-template-columns:1fr}
+        .filter-actions{flex-direction:column;align-items:stretch}
+        .quick-filters{justify-content:center}.filter-btns{justify-content:center}
+        .shortcut-hint{display:none}
+    }
 </style>
 
 @code {
-    private bool _isLoading = true, _isTableLoading, _canView;
-    private string _searchText = "";
-    private TaskFilterDto _filter = new();
-    private PagedResult<TaskListDto> _pagedResult = new();
+    // ═══ STATE ═══
+    private bool _loading = true;
+    private bool _isLoadingData;
+    private bool _isExporting;
+    private bool _filtersExpanded = true;
+    private bool _canExport;
+    private bool _showScrollTop;
+    private string? _currentUser;
+    private DateTime? _crmAccessFrom;
+    private DotNetObjectReference<CrmTasks>? _dotNetRef;
+    private System.Timers.Timer? _autoRefreshTimer;
+    private DateTime _lastRefreshTime;
+    private string _refreshLabel = "الآن";
 
-    protected override async Task OnInitializedAsync()
+    private TaskFilterDto _filter = new() { PageSize = 50, SortBy = "DueDate" };
+    private PagedResult<TaskListDto> _paged = new();
+    private TaskStats _stats = new();
+
+    private List<Employee> _employees = new();
+    private List<TaskTypeItem> _taskTypes = new();
+
+    private string _quickFilter = "all";
+
+    private enum ViewMode { Board, List, Table }
+    private ViewMode _viewMode = ViewMode.List;
+
+    private enum GroupMode { ByTime, ByEmployee }
+    private GroupMode _groupMode = GroupMode.ByTime;
+
+    private readonly KanbanCol[] _kanbanColumns = new[]
     {
-        var auth = await AuthProvider.GetAuthenticationStateAsync();
-        var user = auth.User;
-        _canView = user.HasClaim("Permission", "frmTasks:View") || user.IsInRole("Admin");
-        if (!_canView) { Navigation.NavigateTo("/"); return; }
+        new KanbanCol("overdue", "⚠️ متأخرة", "#ef4444", "⚠️"),
+        new KanbanCol("today", "🕐 اليوم", "#f59e0b", "🕐"),
+        new KanbanCol("tomorrow", "📅 غداً", "#3b82f6", "📅"),
+        new KanbanCol("upcoming", "🟢 قادمة", "#22c55e", "🟢")
+    };
 
-        _isTableLoading = true; _pagedResult = await TaskService.GetTasksAsync(_filter); _isTableLoading = _isLoading = false; 
+    private record KanbanCol(string Key, string Title, string Color, string Emoji);
+    private record TaskTypeItem(int TaskTypeId, string TaskTypeName, string? TaskTypeNameAr);
+
+    // ═══════════════════════════════════════════════════════
+    // ★ الحساب من DueDate مباشرة (مش من TaskDueStatus)
+    // ═══════════════════════════════════════════════════════
+
+    private static string GetSmartCategory(TaskListDto t)
+    {
+        var today = DateTime.Today;
+        if (t.DueDate.Date < today) return "overdue";
+        if (t.DueDate.Date == today) return "today";
+        if (t.DueDate.Date == today.AddDays(1)) return "tomorrow";
+        return "upcoming";
     }
 
-    private async Task ApplyFilter()
-    { _filter.SearchText = _searchText; _filter.PageNumber = 1; _isTableLoading = true; StateHasChanged(); _pagedResult = await TaskService.GetTasksAsync(_filter); _isTableLoading = false; }
+    private static int GetDaysUntilDue(TaskListDto t)
+    {
+        var diff = (t.DueDate.Date - DateTime.Today).Days;
+        return diff < 0 ? Math.Abs(diff) : diff;
+    }
 
-    private async Task GoToPage(int page) { _filter.PageNumber = page; _isTableLoading = true; StateHasChanged(); _pagedResult = await TaskService.GetTasksAsync(_filter); _isTableLoading = false; }
+    // ═══ FILTERING ═══
+    private List<TaskListDto> _activeItems =>
+        _paged.Items.Where(t => t.Status != "Completed" && t.Status != "Cancelled").ToList();
 
-    private async Task Complete(int taskId)
-    { var (ok, msg) = await TaskService.CompleteAsync(taskId, "", "System"); Snackbar.Add(msg, ok ? Severity.Success : Severity.Error); if (ok) { _pagedResult = await TaskService.GetTasksAsync(_filter); } }
+    private List<TaskListDto> _displayItems => _quickFilter switch
+    {
+        "overdue"   => _activeItems.Where(t => GetSmartCategory(t) == "overdue").ToList(),
+        "today"     => _activeItems.Where(t => GetSmartCategory(t) == "today").ToList(),
+        "tomorrow"  => _activeItems.Where(t => GetSmartCategory(t) == "tomorrow").ToList(),
+        "upcoming"  => _activeItems.Where(t => GetSmartCategory(t) == "upcoming").ToList(),
+        _           => _activeItems
+    };
 
-    private void GoToOpportunity(int id) => Navigation.NavigateTo($"/crm/opportunities/{id}");
+    // ═══ SMART SORT ═══
+    private static (int Group, int PriorityVal, int DaysVal) GetSmartSortKey(TaskListDto t)
+    {
+        int group = GetSmartCategory(t) switch { "overdue" => 1, "today" => 2, "tomorrow" => 3, _ => 4 };
+        int pri = NormalizePriority(t.Priority) switch { "High" => 1, "Medium" => 2, "Low" => 3, _ => 4 };
+        int days = GetDaysUntilDue(t);
+        return (group, pri, days);
+    }
+
+    private List<TaskListDto> _smartSortedItems =>
+        _displayItems.Select(t => new { Task = t, Key = GetSmartSortKey(t) })
+            .OrderBy(x => x.Key.Group).ThenBy(x => x.Key.PriorityVal).ThenBy(x => x.Key.DaysVal)
+            .Select(x => x.Task).ToList();
+
+    private List<IGrouping<string, TaskListDto>> _smartGroups =>
+        _smartSortedItems.GroupBy(t => GetSmartCategory(t))
+            .OrderBy(g => g.Key switch { "overdue" => 1, "today" => 2, "tomorrow" => 3, "upcoming" => 4, _ => 5 }).ToList();
+
+    private IEnumerable<IGrouping<string?, TaskListDto>> _employeeGroups =>
+        _displayItems.GroupBy(t => t.AssignedToName).OrderByDescending(g => g.Count());
+
+    private List<TaskListDto> GetColumnTasks(string key) =>
+        _displayItems.Where(t => GetSmartCategory(t) == key).ToList();
+
+    // ═══ PRIORITY ═══
+    private static string NormalizePriority(string? p) => p switch
+    { "High" => "High", "Medium" => "Medium", "Normal" => "Medium", "Low" => "Low", _ => "Medium" };
+
+    private static string GetPriorityClass(string? p) => NormalizePriority(p) switch
+    { "High" => "p-high", "Medium" => "p-medium", "Low" => "p-low", _ => "" };
+
+    private static string GetPriorityIcon(string? p) => NormalizePriority(p) switch
+    { "High" => "🔴", "Medium" => "🟡", "Low" => "🟢", _ => "⚪" };
+
+    private static string GetPriorityLabel(string? p) => NormalizePriority(p) switch
+    { "High" => "عالية", "Medium" => "متوسطة", "Low" => "منخفضة", _ => "—" };
+
+    // ═══ GRADUATED OVERDUE ═══
+    private static string GetOverdueSeverity(TaskListDto t)
+    {
+        if (GetSmartCategory(t) != "overdue") return "";
+        var d = GetDaysUntilDue(t);
+        if (d <= 1) return "low";
+        if (d <= 6) return "med";
+        return "high";
+    }
+
+    private static string GetOverdueSeverityClass(TaskListDto t) => GetOverdueSeverity(t) switch
+    { "low" => "sev-low", "med" => "sev-med", "high" => "sev-high", _ => "" };
+
+    private static string GetOverdueBadgeClass(TaskListDto t) => GetOverdueSeverity(t) switch
+    { "low" => "badge-low", "med" => "badge-med", "high" => "badge-high", _ => "" };
+
+    private static string GetOverdueTagClass(TaskListDto t) => GetOverdueSeverity(t) switch
+    { "low" => "overdue-low", "med" => "overdue-med", "high" => "overdue-high", _ => "" };
+
+    private static string GetOverdueBadgeText(TaskListDto t)
+    {
+        if (GetSmartCategory(t) != "overdue") return "";
+        var d = GetDaysUntilDue(t);
+        if (d == 1) return "⚠️ متأخرة يوم";
+        if (d == 2) return "⚠️ متأخرة يومين";
+        if (d <= 6) return $"⚠️ متأخرة {d} أيام";
+        return $"🟣 متأخرة {d} يوم – حرج!";
+    }
+
+    // ═══ HELPERS ═══
+    private bool _hasActiveFilters =>
+        !string.IsNullOrWhiteSpace(_filter.Priority) || _filter.AssignedTo.HasValue ||
+        _filter.TaskTypeId.HasValue || !string.IsNullOrWhiteSpace(_filter.SearchText);
+
+    private int _activeFilterCount
+    {
+        get { int c = 0; if (!string.IsNullOrWhiteSpace(_filter.Priority)) c++; if (_filter.AssignedTo.HasValue) c++; if (_filter.TaskTypeId.HasValue) c++; if (!string.IsNullOrWhiteSpace(_filter.SearchText)) c++; return c; }
+    }
+
+    private string GetFilterToggleClass() => _filtersExpanded ? "filter-toggle-btn expanded" : "filter-toggle-btn";
+    private string GetViewTabClass(ViewMode m) => _viewMode == m ? "view-tab active" : "view-tab";
+    private string GetScrollTopClass() => _showScrollTop ? "scroll-top-fab visible" : "scroll-top-fab";
+
+    private static string GetStatusClass(string? s) => s switch { "Pending" => "status-pending", "In Progress" => "status-inprogress", _ => "" };
+    private static string GetStatusLabel(string? s) => s switch { "Pending" => "قيد الانتظار", "In Progress" => "جاري التنفيذ", _ => s ?? "—" };
+
+    private static string GetSmartStatusColor(TaskListDto t) => GetSmartCategory(t) switch
+    { "overdue" => "#ef4444", "today" => "#f59e0b", "tomorrow" => "#3b82f6", "upcoming" => "#22c55e", _ => "#94a3b8" };
+
+    private static string GetGroupColor(string key) => key switch
+    { "overdue" => "#ef4444", "today" => "#f59e0b", "tomorrow" => "#3b82f6", "upcoming" => "#22c55e", _ => "#94a3b8" };
+
+    private static string GetGroupTitle(string key) => key switch
+    { "overdue" => "⚠️ متأخرة", "today" => "🕐 اليوم", "tomorrow" => "📅 غداً", "upcoming" => "🟢 قادمة", _ => "أخرى" };
+
+    private static string GetTaskAvatarStyle() => "background:linear-gradient(135deg,#2563eb,#7c3aed)";
+    private static string GetInitials(string? n) => string.IsNullOrWhiteSpace(n) ? "?" : string.Join("", n.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(w => w[0])).ToUpper();
+    private static string Truncate(string? s, int m) => string.IsNullOrEmpty(s) ? "" : s.Length <= m ? s : s[..m] + "...";
+
+    // ═══ PROGRESS ═══
+    private int _todayProgressPercent => _stats.TotalToday > 0 ? (int)Math.Round((double)_stats.CompletedToday / _stats.TotalToday * 100) : 0;
+
+    // ═══ SMART EMPTY ═══
+    private string GetEmptyTitle() => _quickFilter switch
+    { "overdue" => "✅ لا توجد مهام متأخرة – أحسنت!", "today" => "😊 لا توجد مهام مستحقة اليوم", "tomorrow" => "📅 لا توجد مهام غداً", "upcoming" => "🎯 لا توجد مهام قادمة", _ => "🎉 ممتاز! لا توجد مهام معلقة" };
+    private string GetEmptySubtitle() => _quickFilter switch
+    { "overdue" => "جميع المهام في موعدها", "today" => "استمتع ببقية اليوم!", "tomorrow" => "يمكنك التخطيط لغداً", "upcoming" => "أضف مهام جديدة للتخطيط", _ => "أضف مهام جديدة للبدء" };
+    private string GetEmptyIcon() => _quickFilter switch
+    { "overdue" => Icons.Material.Rounded.CheckCircle, "today" => Icons.Material.Rounded.EmojiEmotions, _ => Icons.Material.Rounded.Celebration };
+
+    // ═══ LIFECYCLE ═══
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            _currentUser = user.Identity?.Name;
+            _canExport = user.HasClaim("Permission", "frmTasks:Export") || user.IsInRole("Admin");
+            _crmAccessFrom = user.GetAccessFromDate();
+            _employees = await OppService.GetActiveEmployeesAsync();
+            // _taskTypes = await TaskService.GetTaskTypesAsync();
+            await LoadPrefs();
+            await LoadData();
+            StartAutoRefresh();
+        }
+        catch (Exception ex) { Snackbar.Add($"خطأ: {ex.Message}", Severity.Error); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _dotNetRef = DotNetObjectReference.Create(this);
+                await JS.InvokeVoidAsync("setupTasksScrollWatcher", _dotNetRef);
+                await JS.InvokeVoidAsync("setupTasksKeyboard", _dotNetRef);
+            }
+            catch { }
+        }
+    }
+
+    [JSInvokable]
+    public void OnScrollChanged(double scrollY)
+    {
+        var show = scrollY > 200;
+        if (show != _showScrollTop) { _showScrollTop = show; InvokeAsync(StateHasChanged); }
+    }
+
+    [JSInvokable]
+    public async Task OnKeyboardShortcut(string action)
+    {
+        switch (action)
+        {
+            case "all": await SetQuickFilter("all"); break;
+            case "overdue": await SetQuickFilter("overdue"); break;
+            case "today": await SetQuickFilter("today"); break;
+            case "tomorrow": await SetQuickFilter("tomorrow"); break;
+            case "upcoming": await SetQuickFilter("upcoming"); break;
+            case "board": SetView(ViewMode.Board); StateHasChanged(); break;
+            case "list": SetView(ViewMode.List); StateHasChanged(); break;
+            case "table": SetView(ViewMode.Table); StateHasChanged(); break;
+            case "export": await ExportExcel(); break;
+        }
+    }
+
+    private async Task ScrollToTop() { try { await JS.InvokeVoidAsync("scrollTasksToTop"); } catch { } }
+    private void ToggleFilters() => _filtersExpanded = !_filtersExpanded;
+
+    // ═══ DATA ═══
+    private async Task LoadData()
+    {
+        _isLoadingData = true; StateHasChanged();
+        try
+        {
+            _paged = await TaskService.GetTasksAsync(_filter);
+            CalcStats();
+            await UpdateTabBadge();
+        }
+        catch (Exception ex) { Snackbar.Add($"خطأ: {ex.Message}", Severity.Error); }
+        finally { _isLoadingData = false; StateHasChanged(); }
+    }
+
+    private void CalcStats()
+    {
+        var active = _activeItems;
+        var today = DateTime.Today;
+        var completedToday = _paged.Items.Count(t => t.Status == "Completed" && t.DueDate.Date == today);
+
+        _stats = new TaskStats
+        {
+            TotalActive = active.Count,
+            Overdue = active.Count(t => GetSmartCategory(t) == "overdue"),
+            DueToday = active.Count(t => GetSmartCategory(t) == "today"),
+            DueTomorrow = active.Count(t => GetSmartCategory(t) == "tomorrow"),
+            Upcoming = active.Count(t => GetSmartCategory(t) == "upcoming"),
+            CompletedToday = completedToday,
+            TotalToday = active.Count(t => GetSmartCategory(t) == "today") + completedToday
+        };
+    }
+
+    private async Task UpdateTabBadge()
+    {
+        try { await JS.InvokeVoidAsync("updateTasksTabBadge", _stats.Overdue); } catch { }
+    }
+
+    // ═══ AUTO REFRESH ═══
+    private void StartAutoRefresh()
+    {
+        _lastRefreshTime = DateTime.Now;
+        _autoRefreshTimer = new System.Timers.Timer(60000);
+        _autoRefreshTimer.Elapsed += async (_, _) =>
+        {
+            var diff = DateTime.Now - _lastRefreshTime;
+            await InvokeAsync(async () =>
+            {
+                _refreshLabel = diff.TotalMinutes < 1 ? "الآن" : $"منذ {(int)diff.TotalMinutes} دقيقة";
+                if (diff.TotalMinutes >= 5)
+                {
+                    await LoadData();
+                    _lastRefreshTime = DateTime.Now;
+                    _refreshLabel = "الآن";
+                }
+                StateHasChanged();
+            });
+        };
+        _autoRefreshTimer.Start();
+    }
+
+    private async Task ManualRefresh()
+    {
+        _lastRefreshTime = DateTime.Now;
+        _refreshLabel = "الآن";
+        await LoadData();
+    }
+
+    // ═══ PREFS ═══
+    private async Task LoadPrefs()
+    {
+        try
+        {
+            var view = await JS.InvokeAsync<string?>("loadTasksPrefs", "viewMode");
+            if (view != null && Enum.TryParse<ViewMode>(view, out var vm)) _viewMode = vm;
+            var chip = await JS.InvokeAsync<string?>("loadTasksPrefs", "quickFilter");
+            if (chip != null) _quickFilter = chip;
+            var ps = await JS.InvokeAsync<int?>("loadTasksPrefs", "pageSize");
+            if (ps.HasValue) _filter.PageSize = ps.Value;
+            var gm = await JS.InvokeAsync<string?>("loadTasksPrefs", "groupMode");
+            if (gm != null && Enum.TryParse<GroupMode>(gm, out var g)) _groupMode = g;
+        }
+        catch { }
+    }
+
+    private async Task SavePrefs()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("saveTasksPrefs", "viewMode", _viewMode.ToString());
+            await JS.InvokeVoidAsync("saveTasksPrefs", "quickFilter", _quickFilter);
+            await JS.InvokeVoidAsync("saveTasksPrefs", "pageSize", _filter.PageSize);
+            await JS.InvokeVoidAsync("saveTasksPrefs", "groupMode", _groupMode.ToString());
+        }
+        catch { }
+    }
+
+    private async Task PrintPage() { try { await JS.InvokeVoidAsync("printTasks"); } catch { } }
+
+    // ═══ FILTERS ═══
+    private async Task ApplyFilters() { _filter.PageNumber = 1; await LoadData(); await SavePrefs(); }
+
+    private async Task ResetFilters()
+    {
+        var ps = _filter.PageSize;
+        _filter = new TaskFilterDto { PageSize = ps, SortBy = "DueDate" };
+        _quickFilter = "all";
+        await LoadData();
+        await SavePrefs();
+    }
+
+    private async Task SetQuickFilter(string f)
+    {
+        _quickFilter = f;
+        await SavePrefs();
+        StateHasChanged();
+    }
+
+    private async Task ChangePageSize(int s) { _filter.PageSize = s; await ApplyFilters(); }
+    private async Task GoToPage(int p) { _filter.PageNumber = p; await LoadData(); await ScrollToTop(); }
+    private void SetView(ViewMode m) { _viewMode = m; _ = SavePrefs(); StateHasChanged(); }
+    private void SetGroupMode(GroupMode m) { _groupMode = m; _ = SavePrefs(); StateHasChanged(); }
+
+    private void OpenOpportunity(int? id)
+    {
+        if (id.HasValue) Nav.NavigateTo($"/crm/opportunities/{id.Value}");
+    }
+
+    // ═══ EXPORT ═══
+    private async Task ExportExcel()
+    {
+        if (_isExporting || !_canExport) return;
+        _isExporting = true; StateHasChanged();
+        try
+        {
+            var ef = new TaskFilterDto
+            {
+                PageSize = 50000, SearchText = _filter.SearchText,
+                Priority = _filter.Priority, AssignedTo = _filter.AssignedTo,
+                TaskTypeId = _filter.TaskTypeId
+            };
+            var data = await TaskService.GetTasksAsync(ef);
+            var active = data.Items.Where(t => t.Status != "Completed" && t.Status != "Cancelled").ToList();
+            if (!active.Any()) { Snackbar.Add("لا توجد بيانات", Severity.Warning); return; }
+
+            using var wb = new XLWorkbook();
+            var ws = wb.Worksheets.Add("المهام");
+            var hdrs = new[] { "الحالة الزمنية", "الوصف", "العميل", "النوع", "الأولوية", "الحالة", "تاريخ الاستحقاق", "الوقت", "المسؤول" };
+            for (int i = 0; i < hdrs.Length; i++)
+            {
+                var c = ws.Cell(1, i + 1); c.Value = hdrs[i]; c.Style.Font.Bold = true;
+                c.Style.Fill.BackgroundColor = XLColor.FromHtml("#1e40af"); c.Style.Font.FontColor = XLColor.White;
+            }
+            int row = 2;
+            foreach (var t in _smartSortedItems)
+            {
+                ws.Cell(row, 1).Value = GetGroupTitle(GetSmartCategory(t));
+                ws.Cell(row, 2).Value = t.TaskDescription ?? "";
+                ws.Cell(row, 3).Value = t.ClientName ?? "";
+                ws.Cell(row, 4).Value = t.TaskTypeNameAr ?? t.TaskTypeName ?? "";
+                ws.Cell(row, 5).Value = GetPriorityLabel(t.Priority);
+                ws.Cell(row, 6).Value = GetStatusLabel(t.Status);
+                ws.Cell(row, 7).Value = t.DueDate.ToString("yyyy/MM/dd");
+                ws.Cell(row, 8).Value = t.DueTime?.ToString(@"HH\:mm") ?? "";
+                ws.Cell(row, 9).Value = t.AssignedToName ?? "";
+                var cat = GetSmartCategory(t);
+                if (cat == "overdue") ws.Range(row, 1, row, hdrs.Length).Style.Fill.BackgroundColor = XLColor.FromHtml("#fef2f2");
+                else if (cat == "today") ws.Range(row, 1, row, hdrs.Length).Style.Fill.BackgroundColor = XLColor.FromHtml("#fffbeb");
+                else if (row % 2 == 0) ws.Range(row, 1, row, hdrs.Length).Style.Fill.BackgroundColor = XLColor.FromHtml("#eff6ff");
+                row++;
+            }
+            ws.Columns().AdjustToContents(); ws.RightToLeft = true; ws.SheetView.FreezeRows(1);
+
+            using var ms = new MemoryStream(); wb.SaveAs(ms);
+            var b64 = Convert.ToBase64String(ms.ToArray());
+            var ok = await JS.InvokeAsync<bool>("downloadTasksFile",
+                $"Tasks_{DateTime.Now:yyyyMMdd_HHmm}.xlsx", b64,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            if (ok) Snackbar.Add($"تم تصدير {active.Count} مهمة ✓", Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add($"فشل: {ex.Message}", Severity.Error); }
+        finally { _isExporting = false; StateHasChanged(); }
+    }
+
+    // ═══ CLEANUP ═══
+    public async ValueTask DisposeAsync()
+    {
+        if (_autoRefreshTimer != null) { _autoRefreshTimer.Stop(); _autoRefreshTimer.Dispose(); }
+        try { await JS.InvokeVoidAsync("removeTasksScrollWatcher"); } catch { }
+        try { await JS.InvokeVoidAsync("removeTasksKeyboard"); } catch { }
+        _dotNetRef?.Dispose();
+    }
+
+    private class TaskStats
+    {
+        public int TotalActive;
+        public int Overdue;
+        public int DueToday;
+        public int DueTomorrow;
+        public int Upcoming;
+        public int CompletedToday;
+        public int TotalToday;
+    }
 }

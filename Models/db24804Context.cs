@@ -1999,17 +1999,25 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.OpportunityId).HasColumnName("OpportunityID");
             entity.Property(e => e.PartyId).HasColumnName("PartyID");
             entity.Property(e => e.Phone).HasMaxLength(50);
+            entity.Property(e => e.AllPhones).HasMaxLength(500);
             entity.Property(e => e.SourceIcon).HasMaxLength(10);
             entity.Property(e => e.SourceId).HasColumnName("SourceID");
             entity.Property(e => e.SourceName).HasMaxLength(50);
             entity.Property(e => e.StageAfterId).HasColumnName("StageAfterID");
             entity.Property(e => e.StageAfterName).HasMaxLength(50);
+            entity.Property(e => e.StageAfterNameAr).HasMaxLength(50);
+            entity.Property(e => e.StageAfterColor).HasMaxLength(20);
             entity.Property(e => e.StageBeforeId).HasColumnName("StageBeforeID");
             entity.Property(e => e.StageBeforeName).HasMaxLength(50);
+            entity.Property(e => e.StageBeforeNameAr).HasMaxLength(50);
+            entity.Property(e => e.StageBeforeColor).HasMaxLength(20);
             entity.Property(e => e.StatusId).HasColumnName("StatusID");
             entity.Property(e => e.StatusName).HasMaxLength(50);
             entity.Property(e => e.StatusNameAr).HasMaxLength(50);
             entity.Property(e => e.Summary).HasMaxLength(1000);
+            entity.Property(e => e.AdTypeId).HasColumnName("AdTypeID");
+            entity.Property(e => e.AdTypeName).HasMaxLength(100);
+            entity.Property(e => e.AdTypeNameAr).HasMaxLength(100);
         });
 
         modelBuilder.Entity<VwPriceChangeRequest>(entity =>

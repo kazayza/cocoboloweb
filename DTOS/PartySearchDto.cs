@@ -8,4 +8,5 @@ public class PartySearchDto
     public string? Phone2 { get; set; }
     public string? LastStageName { get; set; }
     public DateTime? LastContactDate { get; set; }
+    public string? FullName { get; set; }
 }
