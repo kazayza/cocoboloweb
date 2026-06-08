@@ -26,6 +26,8 @@ public partial class ShiftsList : ComponentBase
     private bool _hasAddPermission;
     private bool _hasEditPermission;
     private bool _hasDeletePermission;
+    private bool _canSeeAllShifts;
+    private string _userName = "";
     
     #endregion
 
@@ -82,7 +84,6 @@ public partial class ShiftsList : ComponentBase
         
         if (_hasViewPermission)
         {
-            // ✅ تحميل بالتتابع - مش في نفس الوقت
             await LoadData();
             await LoadStatistics();
         }
@@ -95,11 +96,23 @@ public partial class ShiftsList : ComponentBase
     {
         var authState = await AuthState.GetAuthenticationStateAsync();
         var user = authState.User;
+        _userName = user.Identity?.Name ?? "System";
 
-        _hasViewPermission = user.IsInRole("Admin") || user.HasClaim("Permission", "frm_AllShifts:View");
-        _hasAddPermission = user.IsInRole("Admin") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Add");
-        _hasEditPermission = user.IsInRole("Admin") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Edit");
-        _hasDeletePermission = user.IsInRole("Admin") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Delete");
+        // الأدوار المسموح لها برؤية جميع شيفتات الموظفين
+        _canSeeAllShifts = user.IsInRole("Admin") || 
+                           user.IsInRole("Hr") || 
+                           user.IsInRole("HR") || 
+                           user.IsInRole("Accountant") || 
+                           user.IsInRole("Account") || 
+                           user.IsInRole("SalesManager") || 
+                           user.IsInRole("AccountManager") ||
+                           user.HasClaim("Permission", "frm_AllShifts:View");
+
+        _hasViewPermission = user.Identity?.IsAuthenticated == true;
+        
+        _hasAddPermission = _canSeeAllShifts && (user.IsInRole("Admin") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Add"));
+        _hasEditPermission = _canSeeAllShifts && (user.IsInRole("Admin") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Edit"));
+        _hasDeletePermission = _canSeeAllShifts && (user.IsInRole("Admin") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Delete"));
     }
 
     #endregion
@@ -108,18 +121,32 @@ public partial class ShiftsList : ComponentBase
 
     private async Task LoadData()
     {
-        _filter.PageNumber = _currentPage;
-        var result = await ShiftService.GetShiftsAsync(_filter);
-        
-        _shifts = result.Items;
-        _totalCount = result.TotalCount;
-        _totalPages = result.TotalPages;
-        _hasPrevious = result.HasPrevious;
-        _hasNext = result.HasNext;
+        if (_canSeeAllShifts)
+        {
+            _filter.PageNumber = _currentPage;
+            var result = await ShiftService.GetShiftsAsync(_filter);
+            
+            _shifts = result.Items;
+            _totalCount = result.TotalCount;
+            _totalPages = result.TotalPages;
+            _hasPrevious = result.HasPrevious;
+            _hasNext = result.HasNext;
+        }
+        else
+        {
+            // الموظف العادي يرى شيفتاته الشخصية فقط
+            _shifts = await ShiftService.GetMyShiftsAsync(_userName);
+            _totalCount = _shifts.Count;
+            _totalPages = 1;
+            _hasPrevious = false;
+            _hasNext = false;
+        }
     }
 
     private async Task LoadStatistics()
     {
+        if (!_canSeeAllShifts) return;
+
         try
         {
             var stats = await ShiftService.GetStatisticsAsync();
@@ -130,7 +157,7 @@ public partial class ShiftsList : ComponentBase
         }
         catch
         {
-            // Fallback - حساب من البيانات المحملة
+            // Fallback
             _activeCount = _shifts.Count(s => s.IsActive);
             _morningCount = _shifts.Count(s => s.ShiftType == ShiftTypes.Morning);
             _eveningCount = _shifts.Count(s => s.ShiftType == ShiftTypes.Evening);
@@ -166,8 +193,6 @@ public partial class ShiftsList : ComponentBase
         _isLoadingData = false;
         StateHasChanged();
     }
-
-    
 
     #endregion
 
@@ -241,7 +266,6 @@ public partial class ShiftsList : ComponentBase
             Snackbar.Add(result.Message, Severity.Success);
             _showDeleteDialog = false;
             
-            // ✅ تحميل بالتتابع
             await LoadData();
             await LoadStatistics();
         }
@@ -299,7 +323,6 @@ public partial class ShiftsList : ComponentBase
     {
         if (success)
         {
-            // ✅ تحميل بالتتابع
             await LoadData();
             await LoadStatistics();
         }

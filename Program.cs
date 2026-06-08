@@ -760,6 +760,7 @@ app.MapGet("/api/public/quotations/{id:int}/excel-view", async (
 
 
 app.MapQuotationExports();
+app.MapLeadImportEndpoints();
 app.Run();
 
 // ============================================================

@@ -571,16 +571,16 @@ public async Task<byte[]> GetImportTemplateAsync()
     // Row 2
     ws.Cell(2, 1).Value = 101;  // كود البصمة
     ws.Cell(2, 2).Value = ShiftTypes.Morning;
-    ws.Cell(2, 3).Value = "08:00";
-    ws.Cell(2, 4).Value = "16:00";
+    ws.Cell(2, 3).Value = "10:00";
+    ws.Cell(2, 4).Value = "18:00";
     ws.Cell(2, 5).Value = DateTime.Today.ToString("yyyy/MM/dd");
     ws.Cell(2, 6).Value = ""; // مستمر
 
     // Row 3
     ws.Cell(3, 1).Value = 102;
     ws.Cell(3, 2).Value = ShiftTypes.Evening;
-    ws.Cell(3, 3).Value = "16:00";
-    ws.Cell(3, 4).Value = "00:00";
+    ws.Cell(3, 3).Value = "14:00";
+    ws.Cell(3, 4).Value = "22:00";
     ws.Cell(3, 5).Value = DateTime.Today.ToString("yyyy/MM/dd");
     ws.Cell(3, 6).Value = DateTime.Today.AddMonths(3).ToString("yyyy/MM/dd");
 
@@ -592,16 +592,16 @@ public async Task<byte[]> GetImportTemplateAsync()
 
     wsInstructions.Cell(3, 1).Value = "1. كود البصمة: مطلوب - رقم كود البصمة الخاص بالموظف";
     wsInstructions.Cell(4, 1).Value = "2. نوع الشيفت: مطلوب - (صباحي أو مسائي)";
-    wsInstructions.Cell(5, 1).Value = "3. وقت البدء: اختياري - الصيغة: HH:mm (مثال: 08:00)";
-    wsInstructions.Cell(6, 1).Value = "4. وقت الانتهاء: اختياري - الصيغة: HH:mm (مثال: 16:00)";
+    wsInstructions.Cell(5, 1).Value = "3. وقت البدء: اختياري - الصيغة: HH:mm (مثال: 10:00)";
+    wsInstructions.Cell(6, 1).Value = "4. وقت الانتهاء: اختياري - الصيغة: HH:mm (مثال: 18:00)";
     wsInstructions.Cell(7, 1).Value = "5. تاريخ البدء: مطلوب - الصيغة: yyyy/MM/dd";
     wsInstructions.Cell(8, 1).Value = "6. تاريخ الانتهاء: اختياري - اتركه فارغاً للشيفت المستمر";
 
     wsInstructions.Cell(10, 1).Value = "ملاحظات:";
     wsInstructions.Cell(10, 1).Style.Font.Bold = true;
     wsInstructions.Cell(11, 1).Value = "• إذا لم تحدد وقت البدء والانتهاء سيتم استخدام الأوقات الافتراضية حسب نوع الشيفت";
-    wsInstructions.Cell(12, 1).Value = "• صباحى: 08:00 - 16:00";
-    wsInstructions.Cell(13, 1).Value = "• مسائى: 16:00 - 00:00";
+    wsInstructions.Cell(12, 1).Value = "• صباحى: 10:00 - 18:00";
+    wsInstructions.Cell(13, 1).Value = "• مسائى: 14:00 - 22:00";
 
     wsInstructions.Columns().AdjustToContents();
 

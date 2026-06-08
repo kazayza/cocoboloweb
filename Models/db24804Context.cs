@@ -148,6 +148,7 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
     public virtual DbSet<Warehouse> Warehouses { get; set; }
     public virtual DbSet<EmployeeLoan>     EmployeeLoans     { get; set; }
     public virtual DbSet<LoanInstallment>  LoanInstallments  { get; set; }
+    public virtual DbSet<LeadsCrm> LeadsCRMs { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -2159,6 +2160,59 @@ modelBuilder.Entity<PartyContact>(entity =>
     entity.HasOne(d => d.UploadedBy).WithMany()
         .HasForeignKey(d => d.UploadedByUserId)
         .HasConstraintName("FK_Attachments_User");
+});
+modelBuilder.Entity<LeadsCrm>(entity =>
+{
+    entity.ToTable("LeadsCRM");
+
+    entity.Property(e => e.LeadId).HasColumnName("LeadId");
+    entity.Property(e => e.FullName).HasMaxLength(200).IsRequired();
+    entity.Property(e => e.Phone).HasMaxLength(50).IsRequired();
+    entity.Property(e => e.Phone2).HasMaxLength(50);
+    entity.Property(e => e.Email).HasMaxLength(200);
+    entity.Property(e => e.City).HasMaxLength(100);
+    entity.Property(e => e.Area).HasMaxLength(100);
+    entity.Property(e => e.Address).HasMaxLength(500);
+
+    entity.Property(e => e.MetaLeadId).HasMaxLength(100);
+    entity.Property(e => e.CampaignId).HasMaxLength(100);
+    entity.Property(e => e.CampaignName).HasMaxLength(300);
+    entity.Property(e => e.AdId).HasMaxLength(100);
+    entity.Property(e => e.AdName).HasMaxLength(300);
+    entity.Property(e => e.AdsetId).HasMaxLength(100);
+    entity.Property(e => e.AdSetName).HasMaxLength(300);
+    entity.Property(e => e.FormId).HasMaxLength(100);
+    entity.Property(e => e.FormName).HasMaxLength(300);
+    entity.Property(e => e.Platform).HasMaxLength(50);
+    entity.Property(e => e.IsOrganic).HasDefaultValue(false);
+    entity.Property(e => e.InboxUrl).HasMaxLength(500);
+    entity.Property(e => e.FormLanguage).HasMaxLength(10);
+
+    entity.Property(e => e.ProjectType).HasMaxLength(200);
+    entity.Property(e => e.ProjectStage).HasMaxLength(200);
+    entity.Property(e => e.Budget).HasMaxLength(200);
+    entity.Property(e => e.DecisionMaker).HasMaxLength(200);
+    entity.Property(e => e.NextAction).HasMaxLength(200);
+    entity.Property(e => e.BestTimeToReach).HasMaxLength(200);
+    entity.Property(e => e.ProjectStageAlt).HasMaxLength(200);
+    entity.Property(e => e.BudgetAlt).HasMaxLength(200);
+
+    entity.Property(e => e.LeadStatus).HasMaxLength(50).HasDefaultValue("New");
+
+    entity.Property(e => e.IsConverted).HasDefaultValue(false);
+    entity.Property(e => e.ConvertedBy).HasMaxLength(100);
+    entity.Property(e => e.IsDuplicate).HasDefaultValue(false);
+    entity.Property(e => e.DuplicateOfPhone).HasMaxLength(50);
+
+    entity.Property(e => e.SheetTabName).HasMaxLength(200);
+    entity.Property(e => e.Feedback);
+    entity.Property(e => e.LastContactDate).HasColumnType("datetime");
+    entity.Property(e => e.QualifiedDate).HasColumnType("datetime");
+    entity.Property(e => e.RejectedReason).HasMaxLength(500);
+    entity.Property(e => e.ExtraData);
+
+    entity.Property(e => e.CreatedBy).HasMaxLength(100).HasDefaultValue("MetaIntegration");
+    entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETDATE()");
 });
 
         OnModelCreatingPartial(modelBuilder);
