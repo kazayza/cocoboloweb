@@ -57,7 +57,7 @@ public class QuotationService : IQuotationService
         var user = CurrentUser;
         if (user?.Identity?.IsAuthenticated != true) return false;
         if (user.IsInRole("Admin")) return true;
-        return user.HasClaim("Permission", $"frmQuotations:{permission}");
+        return user.HasClaim("Permission", $"frmQuotationsList:{permission}");
     }
 
     // ============================================================
