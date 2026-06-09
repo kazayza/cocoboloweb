@@ -1,13 +1,16 @@
-using System;
-using System.Collections.Generic;
-
 namespace COCOBOLOERPNEW.DTOs;
 
-// ═══ فلتر البحث ═══
+// ═══════════════════════════════════════════════════════════════
+// DTOs لإدارة Leads CRM
+// ═══════════════════════════════════════════════════════════════
+
+/// <summary>
+/// فلتر البحث في Leads
+/// </summary>
 public class LeadsCrmFilterDto
 {
-    public string? SearchTerm { get; set; }
     public string? SearchText { get; set; }
+    public string? SearchTerm { get; set; }
     public string? LeadStatus { get; set; }
     public string? CampaignName { get; set; }
     public string? Platform { get; set; }
@@ -16,52 +19,67 @@ public class LeadsCrmFilterDto
     public bool? IsConverted { get; set; }
     public DateTime? DateFrom { get; set; }
     public DateTime? DateTo { get; set; }
-    public int PageNumber { get; set; } = 1;       // ← اتغير من Page لـ PageNumber
+    public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 25;
 }
 
-// ═══ عرض Lead في الجدول ═══
+/// <summary>
+/// بيانات Lead في القائمة
+/// </summary>
 public class LeadsCrmListDto
 {
     public int LeadId { get; set; }
-    public string FullName { get; set; } = string.Empty;
-    public string Phone { get; set; } = string.Empty;
+    public string FullName { get; set; } = "";
+    public string Phone { get; set; } = "";
     public string? Phone2 { get; set; }
-    public string? Email { get; set; }              // ← أضف
+    public string? Email { get; set; }
     public string? City { get; set; }
-    public string? Address { get; set; }            // ← أضف
+    public string? Address { get; set; }
+
+    // بيانات الإعلان
     public string? CampaignName { get; set; }
     public string? AdName { get; set; }
     public string? Platform { get; set; }
+
+    // أسئلة الفورم
     public string? ProjectType { get; set; }
-    public string? ProjectStage { get; set; }       // ← أضف
+    public string? ProjectStage { get; set; }
     public string? Budget { get; set; }
-    public string? DecisionMaker { get; set; }      // ← أضف
-    public string? NextAction { get; set; }         // ← أضف
-    public string? BestTimeToReach { get; set; }    // ← أضف
-    public string LeadStatus { get; set; } = "جديد";  // ← اتغير من New
+    public string? DecisionMaker { get; set; }
+    public string? NextAction { get; set; }
+    public string? BestTimeToReach { get; set; }
+
+    // الحالة
+    public string? LeadStatus { get; set; }
     public string? FormLanguage { get; set; }
-    public bool IsConverted { get; set; }
-    public bool IsDuplicate { get; set; }
     public int? AssignedEmployeeId { get; set; }
     public string? AssignedEmployeeName { get; set; }
     public string? Feedback { get; set; }
+    public bool IsConverted { get; set; }
+    public bool IsDuplicate { get; set; }
     public string? SheetTabName { get; set; }
+
+    // التواريخ
     public DateTime? LeadDate { get; set; }
     public DateTime CreatedAt { get; set; }
+    public DateTime? LastContactDate { get; set; }
 }
 
-// ═══ تفاصيل Lead كاملة ═══
+/// <summary>
+/// تفاصيل Lead كاملة
+/// </summary>
 public class LeadsCrmDetailDto
 {
     public int LeadId { get; set; }
-    public string FullName { get; set; } = string.Empty;
-    public string Phone { get; set; } = string.Empty;
+    public string FullName { get; set; } = "";
+    public string Phone { get; set; } = "";
     public string? Phone2 { get; set; }
     public string? Email { get; set; }
     public string? City { get; set; }
     public string? Area { get; set; }
     public string? Address { get; set; }
+
+    // بيانات الإعلان
     public string? MetaLeadId { get; set; }
     public string? CampaignId { get; set; }
     public string? CampaignName { get; set; }
@@ -75,6 +93,8 @@ public class LeadsCrmDetailDto
     public bool? IsOrganic { get; set; }
     public string? InboxUrl { get; set; }
     public string? FormLanguage { get; set; }
+
+    // أسئلة الفورم
     public string? ProjectType { get; set; }
     public string? ProjectStage { get; set; }
     public string? Budget { get; set; }
@@ -83,8 +103,10 @@ public class LeadsCrmDetailDto
     public string? BestTimeToReach { get; set; }
     public string? ProjectStageAlt { get; set; }
     public string? BudgetAlt { get; set; }
+
+    // الحالة والتتبع
     public DateTime? LeadDate { get; set; }
-    public string LeadStatus { get; set; } = "جديد";  // ← اتغير من New
+    public string? LeadStatus { get; set; }
     public bool IsConverted { get; set; }
     public int? ConvertedPartyId { get; set; }
     public int? ConvertedOpportunityId { get; set; }
@@ -95,41 +117,59 @@ public class LeadsCrmDetailDto
     public string? SheetTabName { get; set; }
     public int? SheetRowNumber { get; set; }
     public string? Notes { get; set; }
-    public string? Feedback { get; set; }
     public int? AssignedEmployeeId { get; set; }
     public string? AssignedEmployeeName { get; set; }
+    public string? Feedback { get; set; }
+    public string? RejectedReason { get; set; }
     public DateTime? LastContactDate { get; set; }
     public DateTime? QualifiedDate { get; set; }
-    public string? RejectedReason { get; set; }
     public string? ExtraData { get; set; }
     public DateTime CreatedAt { get; set; }
-    public string CreatedBy { get; set; } = "MetaIntegration";
+    public string? CreatedBy { get; set; }
 }
 
-// ═══ تحديث Lead ═══
+/// <summary>
+/// تحديث Lead
+/// </summary>
 public class LeadsCrmUpdateDto
 {
     public int LeadId { get; set; }
     public string? LeadStatus { get; set; }
-    public string? Feedback { get; set; }
     public int? AssignedEmployeeId { get; set; }
+    public string? Feedback { get; set; }
     public string? RejectedReason { get; set; }
 }
 
-// ═══ تحويل Lead لعميل ═══
+/// <summary>
+/// تحويل Lead لعميل
+/// </summary>
 public class LeadConvertDto
 {
-    public int LeadId { get; set; }               // ← الرازور هيحط الـ ID هنا
+    public int LeadId { get; set; }
     public int? EmployeeId { get; set; }
     public int? SourceId { get; set; }
     public int? AdTypeId { get; set; }
     public int? CategoryId { get; set; }
     public int? TaskTypeId { get; set; }
-    public decimal ExpectedValue { get; set; }    // ← أضف
-    public string? Notes { get; set; }            // ← أضف
+    public decimal ExpectedValue { get; set; }
+    public string? Notes { get; set; }
 }
 
-// ═══ إحصائيات Leads ═══
+/// <summary>
+/// نتيجة تحويل Lead
+/// </summary>
+public class LeadConvertResult
+{
+    public bool Success { get; set; }
+    public string? Message { get; set; }
+    public int? PartyId { get; set; }
+    public int? OpportunityId { get; set; }
+    public int? TaskId { get; set; }
+}
+
+/// <summary>
+/// إحصائيات Leads — محسّن (استعلام واحد بس)
+/// </summary>
 public class LeadsCrmStatsDto
 {
     public int TotalLeads { get; set; }
@@ -146,14 +186,20 @@ public class LeadsCrmStatsDto
     public List<LeadsByPlatformDto> ByPlatform { get; set; } = new();
 }
 
+/// <summary>
+/// Leads حسب الحملة
+/// </summary>
 public class LeadsByCampaignDto
 {
-    public string CampaignName { get; set; } = string.Empty;
+    public string CampaignName { get; set; } = "";
     public int Count { get; set; }
 }
 
+/// <summary>
+/// Leads حسب المنصة
+/// </summary>
 public class LeadsByPlatformDto
 {
-    public string Platform { get; set; } = string.Empty;
+    public string Platform { get; set; } = "";
     public int Count { get; set; }
 }

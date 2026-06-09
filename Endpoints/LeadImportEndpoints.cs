@@ -3,6 +3,7 @@ using COCOBOLOERPNEW.Models;
 using COCOBOLOERPNEW.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
 
 namespace COCOBOLOERPNEW.Endpoints;
 
@@ -95,10 +96,10 @@ public static class LeadImportEndpoints
                 City = request.City?.Trim(),
                 Area = request.Area?.Trim(),
                 Address = BuildAddress(request),
-                MetaLeadId = request.LeadId?.ToString(),
+                //MetaLeadId = request.LeadId?.ToString(),
                 CampaignName = request.CampaignName?.Trim(),
                 AdName = request.AdName?.Trim(),
-                AdSetName = request.AdSet?.Trim(),
+                //AdSetName = request.AdSet?.Trim(),
                 FormName = request.FormName?.Trim(),
                 FormId = request.FormId?.Trim(),
                 Platform = request.Platform?.Trim(),
@@ -108,7 +109,7 @@ public static class LeadImportEndpoints
                 DecisionMaker = decisionMaker,
                 NextAction = nextAction,
                 BestTimeToReach = bestTime,
-                LeadDate = request.LeadDate ?? DateTime.Now,
+                LeadDate = ParseLeadDate(request.LeadDate) ?? DateTime.Now,
                 //LeadStatus = "New",
                 LeadStatus = "جديد",  // ✅ عربي زي باقي السيستم
                 SheetTabName = request.SheetTabName,
@@ -230,8 +231,8 @@ public static class LeadImportEndpoints
                         DecisionMaker = decisionMaker,
                         NextAction = nextAction,
                         BestTimeToReach = bestTime,
-                        LeadDate = req.LeadDate ?? DateTime.Now,
-                        LeadStatus = "New",
+                        LeadDate = ParseLeadDate(req.LeadDate) ?? DateTime.Now,
+                        LeadStatus = "جديد",
                         SheetTabName = req.SheetTabName,
                         SheetRowNumber = req.SheetRowNumber,
                         Notes = BuildSummary(req, projectType, projectStage,
@@ -299,6 +300,40 @@ public static class LeadImportEndpoints
             cleaned = "+2" + cleaned;
         return cleaned;
     }
+    private static DateTime? ParseLeadDate(string? dateStr)
+{
+    if (string.IsNullOrWhiteSpace(dateStr)) return null;
+
+    // لو ISO format: 2026-06-09 أو 2026-06-09T14:30:00
+    if (DateTime.TryParseExact(dateStr, "yyyy-MM-dd",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var iso))
+        return DateTime.SpecifyKind(iso, DateTimeKind.Local);
+
+    if (DateTime.TryParseExact(dateStr, "yyyy-MM-ddTHH:mm:ss",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var isoFull))
+        return DateTime.SpecifyKind(isoFull, DateTimeKind.Local);
+
+    // لو MM/dd/yyyy (أمريكي - الشهر الأول)
+    if (DateTime.TryParseExact(dateStr, "MM/dd/yyyy",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var usDate))
+        return DateTime.SpecifyKind(usDate, DateTimeKind.Local);
+
+    // لو dd/MM/yyyy (مصري/أوروبي - اليوم الأول)
+    if (DateTime.TryParseExact(dateStr, "dd/MM/yyyy",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var euDate))
+        return DateTime.SpecifyKind(euDate, DateTimeKind.Local);
+
+    // لو dd-MM-yyyy
+    if (DateTime.TryParseExact(dateStr, "dd-MM-yyyy",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var dashDate))
+        return DateTime.SpecifyKind(dashDate, DateTimeKind.Local);
+
+    // Fallback: جرّب بأي طريقة
+    if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out var fallback))
+        return DateTime.SpecifyKind(fallback, DateTimeKind.Local);
+
+    return null;
+}
 
     private static string? BuildAddress(LeadImportRequest request)
     {

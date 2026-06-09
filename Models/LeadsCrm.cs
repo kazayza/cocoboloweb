@@ -50,7 +50,7 @@ public class LeadsCrm
     public DateTime? LeadDate { get; set; }
 
     // ═══ حالة الـ Lead ═══
-    public string LeadStatus { get; set; } = "New";
+    public string LeadStatus { get; set; } = "جديد";
 
     // ═══ تتبع التحويل للـ CRM ═══
     public bool IsConverted { get; set; } = false;

@@ -35,7 +35,7 @@ public class LeadImportRequest
     public string? NextAction { get; set; }
     public string? BestTimeToReach { get; set; }
 
-    public DateTime? LeadDate { get; set; }
+    public string? LeadDate { get; set; }
     public string? LeadStatus { get; set; }
 
     // ربط بالـ CRM Lookup IDs

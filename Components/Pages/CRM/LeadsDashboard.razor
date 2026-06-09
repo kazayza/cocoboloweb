@@ -1,0 +1,954 @@
+@page "/crm/leads/dashboard"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using ApexCharts
+@using Microsoft.AspNetCore.Authorization
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@using MudVariant = MudBlazor.Variant
+
+@attribute [Authorize]
+
+@inject ILeadsCrmService LeadsService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<PageTitle>لوحة تحليلات Leads</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="dash-loading">
+        <MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Style="color:var(--mud-palette-text-secondary);margin-top:1rem">جاري تحميل لوحة التحليلات...</MudText>
+    </div>
+}
+else
+{
+<div dir="rtl" class="dash-page">
+
+    @* ═══════════════════════════════════════════════════════ *@
+    @* ═══ HEADER ═══ *@
+    @* ═══════════════════════════════════════════════════════ *@
+    <div class="dash-header">
+        <div class="dash-hdr-bg">
+            <div class="dash-hdr-gradient"></div>
+            <div class="dash-hdr-dots"></div>
+            <div class="dash-hdr-glow dash-hdr-glow1"></div>
+            <div class="dash-hdr-glow dash-hdr-glow2"></div>
+        </div>
+        <div class="dash-hdr-body">
+            <div class="dash-hdr-top">
+                <div class="dash-hdr-title-area">
+                    <div class="dash-hdr-icon">
+                        <MudIcon Icon="@Icons.Material.Rounded.Analytics" Style="font-size:1.6rem" />
+                    </div>
+                    <div>
+                        <h1 class="dash-hdr-h1">لوحة تحليلات Leads</h1>
+                        <p class="dash-hdr-sub">رؤية شاملة لأداء الـ Leads والحملات الإعلانية</p>
+                    </div>
+                </div>
+                <div class="dash-hdr-actions">
+                    <button class="hdr-btn" @onclick="ExportExcel">
+                        <MudIcon Icon="@Icons.Material.Rounded.FileDownload" Size="MudSize.Small" />
+                        تصدير Excel
+                    </button>
+                    <button class="hdr-btn hdr-btn-back" @onclick="GoBack">
+                        <MudIcon Icon="@Icons.Material.Rounded.ArrowBack" Size="MudSize.Small" />
+                        العودة للقائمة
+                    </button>
+                </div>
+            </div>
+
+            @* ─── Period Selector ─── *@
+            <div class="period-row">
+                @foreach (var p in _periods)
+                {
+                    <button class="period-btn @(_selectedPeriod == p.Key ? "period-on" : "")"
+                            @onclick="@(() => SelectPeriod(p.Key))">
+                        @p.Value
+                    </button>
+                }
+                @if (_selectedPeriod == "custom")
+                {
+                    <MudDatePicker Label="من" Variant="MudVariant.Outlined"
+                                   @bind-Date="_filter.DateFrom" Dense="true" Class="period-date" />
+                    <MudDatePicker Label="إلى" Variant="MudVariant.Outlined"
+                                   @bind-Date="_filter.DateTo" Dense="true" Class="period-date" />
+                    <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary"
+                               OnClick="ApplyCustomPeriod" Size="MudSize.Small">تطبيق</MudButton>
+                }
+            </div>
+
+            @* ─── Quick Filters ─── *@
+            <div class="quick-filters">
+                <div class="qf-group">
+                    <span class="qf-label">المنصة:</span>
+                    <button class="qf-btn @(_filter.Platform == null ? "qf-on" : "")" @onclick="@(() => SetPlatform(null))">الكل</button>
+                    <button class="qf-btn @(_filter.Platform == "fb" ? "qf-on" : "")" @onclick="@(() => SetPlatform("fb"))">Facebook</button>
+                    <button class="qf-btn @(_filter.Platform == "ig" ? "qf-on" : "")" @onclick="@(() => SetPlatform("ig"))">Instagram</button>
+                </div>
+                <div class="qf-group">
+                    <span class="qf-label">الموظف:</span>
+                    <MudSelect T="int?" Variant="MudVariant.Outlined"
+                               @bind-Value="_filter.EmployeeId" Dense="true" Class="qf-select"
+                               Clearable="true" Placeholder="الكل">
+                        @foreach (var emp in _employees)
+                        {
+                            <MudSelectItem Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </div>
+                <button class="qf-adv-toggle" @onclick="@(() => _showAdvanced = !_showAdvanced)">
+                    <MudIcon Icon="@(_showAdvanced ? Icons.Material.Rounded.ExpandLess : Icons.Material.Rounded.ExpandMore)" Size="MudSize.Small" />
+                    فلاتر متقدمة
+                </button>
+            </div>
+
+            @* ─── Advanced Filters (Collapsible) ─── *@
+            @if (_showAdvanced)
+            {
+                <div class="adv-filters">
+                    <MudSelect T="string" Label="المدينة" Variant="MudVariant.Outlined"
+                               @bind-Value="_filter.City" Dense="true" Class="adv-item"
+                               Clearable="true" Placeholder="الكل">
+                        @foreach (var c in _data?.AvailableCities ?? new List<string>())
+                        {
+                            <MudSelectItem Value="@c">@c</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="string" Label="نوع المشروع" Variant="MudVariant.Outlined"
+                               @bind-Value="_filter.ProjectType" Dense="true" Class="adv-item"
+                               Clearable="true" Placeholder="الكل">
+                        @foreach (var pt in _data?.AvailableProjectTypes ?? new List<string>())
+                        {
+                            <MudSelectItem Value="@pt">@pt</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="string" Label="مرحلة المشروع" Variant="MudVariant.Outlined"
+                               @bind-Value="_filter.ProjectStage" Dense="true" Class="adv-item"
+                               Clearable="true" Placeholder="الكل">
+                        @foreach (var ps in _data?.AvailableProjectStages ?? new List<string>())
+                        {
+                            <MudSelectItem Value="@ps">@ps</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="string" Label="الحملة" Variant="MudVariant.Outlined"
+                               @bind-Value="_filter.CampaignName" Dense="true" Class="adv-item"
+                               Clearable="true" Placeholder="الكل">
+                        @foreach (var cam in _data?.AvailableCampaigns ?? new List<string>())
+                        {
+                            <MudSelectItem Value="@cam">@cam</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudButton Variant="MudVariant.Outlined" Color="MudColor.Error"
+                               OnClick="ResetAllFilters" Size="MudSize.Small"
+                               StartIcon="@Icons.Material.Rounded.FilterAltOff">مسح الكل</MudButton>
+                </div>
+            }
+        </div>
+    </div>
+
+    @* ═══════════════════════════════════════════════════════ *@
+    @* ═══ KPIs ═══ *@
+    @* ═══════════════════════════════════════════════════════ *@
+    <div class="kpi-row">
+        <div class="kpi-card">
+            <div class="kpi-card-ico" style="background:rgba(99,102,241,0.15)">
+                <MudIcon Icon="@Icons.Material.Rounded.Layers" Style="color:#6366f1" />
+            </div>
+            <div class="kpi-card-body">
+                <span class="kpi-card-val">@_data.Kpis.TotalLeads</span>
+                <span class="kpi-card-lbl">إجمالي Leads</span>
+            </div>
+            @if (_data.Kpis.TotalLeadsChange.HasValue)
+            {
+                <span class="kpi-card-delta @(_data.Kpis.TotalLeadsChange >= 0 ? "delta-up" : "delta-down")">
+                    @(_data.Kpis.TotalLeadsChange >= 0 ? "↑" : "↓") @Math.Abs(_data.Kpis.TotalLeadsChange.Value).ToString("F1")%
+                </span>
+            }
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-card-ico" style="background:rgba(16,185,129,0.15)">
+                <MudIcon Icon="@Icons.Material.Rounded.TrendingUp" Style="color:#10b981" />
+            </div>
+            <div class="kpi-card-body">
+                <span class="kpi-card-val">@_data.Kpis.ConversionRate.ToString("F1")%</span>
+                <span class="kpi-card-lbl">معدل التحويل</span>
+            </div>
+            @if (_data.Kpis.ConversionRateChange.HasValue)
+            {
+                <span class="kpi-card-delta @(_data.Kpis.ConversionRateChange >= 0 ? "delta-up" : "delta-down")">
+                    @(_data.Kpis.ConversionRateChange >= 0 ? "↑" : "↓") @Math.Abs(_data.Kpis.ConversionRateChange.Value).ToString("F1")%
+                </span>
+            }
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-card-ico" style="background:rgba(59,130,246,0.15)">
+                <MudIcon Icon="@Icons.Material.Rounded.Schedule" Style="color:#3b82f6" />
+            </div>
+            <div class="kpi-card-body">
+                <span class="kpi-card-val">@_data.Kpis.AvgConversionDays.ToString("F1")</span>
+                <span class="kpi-card-lbl">متوسط أيام التحويل</span>
+            </div>
+            @if (_data.Kpis.AvgConversionDaysChange.HasValue)
+            {
+                <span class="kpi-card-delta @(_data.Kpis.AvgConversionDaysChange <= 0 ? "delta-up" : "delta-down")">
+                    @(_data.Kpis.AvgConversionDaysChange <= 0 ? "↓" : "↑") @Math.Abs(_data.Kpis.AvgConversionDaysChange.Value).ToString("F1")
+                </span>
+            }
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-card-ico" style="background:rgba(139,92,246,0.15)">
+                <MudIcon Icon="@Icons.Material.Rounded.CheckCircle" Style="color:#8b5cf6" />
+            </div>
+            <div class="kpi-card-body">
+                <span class="kpi-card-val">@_data.Kpis.ConvertedCount</span>
+                <span class="kpi-card-lbl">تم التحويل</span>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-card-ico" style="background:rgba(245,158,11,0.15)">
+                <MudIcon Icon="@Icons.Material.Rounded.ContentCopy" Style="color:#f59e0b" />
+            </div>
+            <div class="kpi-card-body">
+                <span class="kpi-card-val">@_data.Kpis.DuplicateRate.ToString("F1")%</span>
+                <span class="kpi-card-lbl">نسبة المكرر</span>
+            </div>
+            @if (_data.Kpis.DuplicateRateChange.HasValue)
+            {
+                <span class="kpi-card-delta @(_data.Kpis.DuplicateRateChange <= 0 ? "delta-up" : "delta-down")">
+                    @(_data.Kpis.DuplicateRateChange <= 0 ? "↓" : "↑") @Math.Abs(_data.Kpis.DuplicateRateChange.Value).ToString("F1")%
+                </span>
+            }
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-card-ico" style="background:rgba(239,68,68,0.15)">
+                <MudIcon Icon="@Icons.Material.Rounded.Cancel" Style="color:#ef4444" />
+            </div>
+            <div class="kpi-card-body">
+                <span class="kpi-card-val">@_data.Kpis.RejectionRate.ToString("F1")%</span>
+                <span class="kpi-card-lbl">نسبة الرفض</span>
+            </div>
+            @if (_data.Kpis.RejectionRateChange.HasValue)
+            {
+                <span class="kpi-card-delta @(_data.Kpis.RejectionRateChange <= 0 ? "delta-up" : "delta-down")">
+                    @(_data.Kpis.RejectionRateChange <= 0 ? "↓" : "↑") @Math.Abs(_data.Kpis.RejectionRateChange.Value).ToString("F1")%
+                </span>
+            }
+        </div>
+    </div>
+
+    @* ═══════════════════════════════════════════════════════ *@
+    @* ═══ CHARTS ROW 1 ═══ *@
+    @* ═══════════════════════════════════════════════════════ *@
+    <div class="charts-row">
+        @* ─── Status Distribution (Donut) ─── *@
+        <div class="chart-card">
+            <div class="chart-title">
+                <MudIcon Icon="@Icons.Material.Rounded.DonutLarge" Size="MudSize.Small" Style="color:#6366f1" />
+                <span>توزيع الحالات</span>
+            </div>
+            <ApexChart TData="ChartItemDto" Options="_statusDonutOptions">
+                <ApexPointSeries TData="ChartItemDto"
+                                 Items="_data.StatusDistribution"
+                                 Name="الحالات"
+                                 Series="x => x.Label"
+                                 Value="x => x.Value"
+                                 ChartType="ChartType.Donut" />
+            </ApexChart>
+        </div>
+
+        @* ─── Platform Comparison (Bar) ─── *@
+        <div class="chart-card">
+            <div class="chart-title">
+                <MudIcon Icon="@Icons.Material.Rounded.CompareArrows" Size="MudSize.Small" Style="color:#3b82f6" />
+                <span>Leads حسب المنصة</span>
+            </div>
+            <ApexChart TData="ChartItemDto" Options="_platformBarOptions">
+                <ApexPointSeries TData="ChartItemDto"
+                                 Items="_data.PlatformData"
+                                 Name="Leads"
+                                 Series="x => x.Label"
+                                 Value="x => x.Value"
+                                 ChartType="ChartType.Bar" />
+            </ApexChart>
+        </div>
+
+        @* ─── Daily Trend (Area) ─── *@
+        <div class="chart-card">
+            <div class="chart-title">
+                <MudIcon Icon="@Icons.Material.Rounded.ShowChart" Size="MudSize.Small" Style="color:#10b981" />
+                <span>تطور Leads يومياً</span>
+            </div>
+            <ApexChart TData="DailyTrendItemDto" Options="_areaOptions">
+                <ApexPointSeries TData="DailyTrendItemDto"
+                                 Items="_data.DailyTrend"
+                                 Name="Leads"
+                                 Series="x => x.Date"
+                                 Value="x => x.Leads"
+                                 ChartType="ChartType.Area" />
+                <ApexPointSeries TData="DailyTrendItemDto"
+                                 Items="_data.DailyTrend"
+                                 Name="محوّل"
+                                 Series="x => x.Date"
+                                 Value="x => x.Converted"
+                                 ChartType="ChartType.Area" />
+            </ApexChart>
+        </div>
+    </div>
+
+    @* ═══════════════════════════════════════════════════════ *@
+    @* ═══ CHARTS ROW 2 ═══ *@
+    @* ═══════════════════════════════════════════════════════ *@
+    <div class="charts-row">
+        @* ─── Budget Distribution (Bar) ─── *@
+        <div class="chart-card">
+            <div class="chart-title">
+                <MudIcon Icon="@Icons.Material.Rounded.AttachMoney" Size="MudSize.Small" Style="color:#f59e0b" />
+                <span>توزيع الميزانيات</span>
+            </div>
+            <ApexChart TData="ChartItemDto" Options="_budgetBarOptions">
+                <ApexPointSeries TData="ChartItemDto"
+                                 Items="_data.BudgetDistribution"
+                                 Name="Leads"
+                                 Series="x => x.Label"
+                                 Value="x => x.Value"
+                                 ChartType="ChartType.Bar" />
+            </ApexChart>
+        </div>
+
+        @* ─── Top Cities (Horizontal Bar) ─── *@
+        <div class="chart-card">
+            <div class="chart-title">
+                <MudIcon Icon="@Icons.Material.Rounded.LocationCity" Size="MudSize.Small" Style="color:#8b5cf6" />
+                <span>أعلى المدن</span>
+            </div>
+            <ApexChart TData="ChartItemDto" Options="_citiesBarOptions">
+                <ApexPointSeries TData="ChartItemDto"
+                                 Items="_data.TopCities"
+                                 Name="Leads"
+                                 Series="x => x.Label"
+                                 Value="x => x.Value"
+                                 ChartType="ChartType.Bar" />
+            </ApexChart>
+        </div>
+
+        @* ─── Employee Performance (Stacked Bar) ─── *@
+        <div class="chart-card">
+            <div class="chart-title">
+                <MudIcon Icon="@Icons.Material.Rounded.People" Size="MudSize.Small" Style="color:#ec4899" />
+                <span>أداء الموظفين</span>
+            </div>
+            <ApexChart TData="DashboardEmployeeDto" Options="_employeeStackedOptions">
+                <ApexPointSeries TData="DashboardEmployeeDto"
+                                 Items="_data.EmployeePerformance"
+                                 Name="جديد"
+                                 Series="x => x.Name"
+                                 Value="x => x.NewCount"
+                                 ChartType="ChartType.Bar" />
+                <ApexPointSeries TData="DashboardEmployeeDto"
+                                 Items="_data.EmployeePerformance"
+                                 Name="تم التواصل"
+                                 Series="x => x.Name"
+                                 Value="x => x.ContactedCount"
+                                 ChartType="ChartType.Bar" />
+                <ApexPointSeries TData="DashboardEmployeeDto"
+                                 Items="_data.EmployeePerformance"
+                                 Name="مؤهل"
+                                 Series="x => x.Name"
+                                 Value="x => x.QualifiedCount"
+                                 ChartType="ChartType.Bar" />
+                <ApexPointSeries TData="DashboardEmployeeDto"
+                                 Items="_data.EmployeePerformance"
+                                 Name="محوّل"
+                                 Series="x => x.Name"
+                                 Value="x => x.ConvertedCount"
+                                 ChartType="ChartType.Bar" />
+                <ApexPointSeries TData="DashboardEmployeeDto"
+                                 Items="_data.EmployeePerformance"
+                                 Name="مرفوض"
+                                 Series="x => x.Name"
+                                 Value="x => x.RejectedCount"
+                                 ChartType="ChartType.Bar" />
+            </ApexChart>
+        </div>
+    </div>
+
+    @* ═══════════════════════════════════════════════════════ *@
+    @* ═══ FUNNEL ═══ *@
+    @* ═══════════════════════════════════════════════════════ *@
+    <div class="funnel-section">
+        <div class="chart-title" style="margin-bottom:1rem">
+            <MudIcon Icon="@Icons.Material.Rounded.FilterAlt" Size="MudSize.Small" Style="color:#6366f1" />
+            <span>قمع التحويل (Pipeline Funnel)</span>
+        </div>
+        <div class="funnel-container">
+            @foreach (var item in _data.FunnelData)
+            {
+                <div class="funnel-step">
+                    <div class="funnel-bar" style="width:@GetFunnelWidth(item.Percentage)%;background:@item.Color">
+                        <span class="funnel-count">@item.Count</span>
+                    </div>
+                    <div class="funnel-info">
+                        <span class="funnel-stage">@item.Stage</span>
+                        <span class="funnel-pct">@item.Percentage.ToString("F1")%</span>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    @* ═══════════════════════════════════════════════════════ *@
+    @* ═══ TABLES ═══ *@
+    @* ═══════════════════════════════════════════════════════ *@
+    <div class="tables-row">
+        @* ─── Top Campaigns ─── *@
+        <div class="table-card">
+            <div class="chart-title" style="margin-bottom:0.75rem">
+                <MudIcon Icon="@Icons.Material.Rounded.Campaign" Size="MudSize.Small" Style="color:#10b981" />
+                <span>أفضل الحملات</span>
+            </div>
+            <MudTable Items="_data.TopCampaigns" T="CampaignPerformanceDto"
+                      Hover="true" Dense="true" Elevation="0" Class="dash-table">
+                <HeaderContent>
+                    <MudTh>الحملة</MudTh>
+                    <MudTh>المنصة</MudTh>
+                    <MudTh>Leads</MudTh>
+                    <MudTh>محوّل</MudTh>
+                    <MudTh>معدل التحويل</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.CampaignName</MudTd>
+                    <MudTd>
+                        <span class="@GetPlatformClass(context.Platform)">
+                            @(context.Platform == "fb" ? "FB" : context.Platform == "ig" ? "IG" : "—")
+                        </span>
+                    </MudTd>
+                    <MudTd><strong>@context.TotalLeads</strong></MudTd>
+                    <MudTd>@context.ConvertedLeads</MudTd>
+                    <MudTd>
+                        <span class="conv-rate @GetConvRateClass(context.ConversionRate)">
+                            @context.ConversionRate.ToString("F1")%
+                        </span>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="empty-sm">لا توجد بيانات حملات</div>
+                </NoRecordsContent>
+            </MudTable>
+        </div>
+
+        @* ─── Project Summary ─── *@
+        <div class="table-card">
+            <div class="chart-title" style="margin-bottom:0.75rem">
+                <MudIcon Icon="@Icons.Material.Rounded.HomeWork" Size="MudSize.Small" Style="color:#f59e0b" />
+                <span>ملخص المشاريع</span>
+            </div>
+            <MudTable Items="_data.ProjectSummary" T="ProjectTypeSummaryDto"
+                      Hover="true" Dense="true" Elevation="0" Class="dash-table">
+                <HeaderContent>
+                    <MudTh>نوع المشروع</MudTh>
+                    <MudTh>Leads</MudTh>
+                    <MudTh>محوّل</MudTh>
+                    <MudTh>معدل التحويل</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd><strong>@context.ProjectType</strong></MudTd>
+                    <MudTd>@context.TotalLeads</MudTd>
+                    <MudTd>@context.ConvertedLeads</MudTd>
+                    <MudTd>
+                        <span class="conv-rate @GetConvRateClass(context.ConversionRate)">
+                            @context.ConversionRate.ToString("F1")%
+                        </span>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="empty-sm">لا توجد بيانات مشاريع</div>
+                </NoRecordsContent>
+            </MudTable>
+        </div>
+
+        @* ─── Recent Converted ─── *@
+        <div class="table-card">
+            <div class="chart-title" style="margin-bottom:0.75rem">
+                <MudIcon Icon="@Icons.Material.Rounded.PersonAdd" Size="MudSize.Small" Style="color:#8b5cf6" />
+                <span>آخر Leads محوّلة</span>
+            </div>
+            <MudTable Items="_data.RecentConverted" T="RecentConvertedDto"
+                      Hover="true" Dense="true" Elevation="0" Class="dash-table">
+                <HeaderContent>
+                    <MudTh>الاسم</MudTh>
+                    <MudTh>الحملة</MudTh>
+                    <MudTh>الموظف</MudTh>
+                    <MudTh>التاريخ</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd><strong>@context.FullName</strong></MudTd>
+                    <MudTd>@(context.CampaignName ?? "—")</MudTd>
+                    <MudTd>@(context.EmployeeName ?? "—")</MudTd>
+                    <MudTd>@context.ConvertedDate.ToString("yyyy/MM/dd")</MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="empty-sm">لا توجد تحويلات حديثة</div>
+                </NoRecordsContent>
+            </MudTable>
+        </div>
+    </div>
+
+</div>
+}
+
+<style>
+    /* ═══ PAGE ═══ */
+    .dash-page { padding: 0 1.5rem 3rem; overflow-x: hidden; }
+    .dash-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; gap: 1rem; }
+
+    /* ═══ HEADER ═══ */
+    .dash-header { position: relative; border-radius: 20px; overflow: hidden; margin-bottom: 1rem; box-shadow: 0 4px 24px rgba(99,102,241,0.15), 0 1px 3px rgba(0,0,0,0.08); }
+    .dash-hdr-bg { position: absolute; inset: 0; }
+    .dash-hdr-gradient { position: absolute; inset: 0; background: linear-gradient(135deg, #1e1b4b 0%, #312e81 30%, #4338ca 60%, #6366f1 100%); }
+    .dash-hdr-dots { position: absolute; inset: 0; background-image: radial-gradient(rgba(255,255,255,0.06) 1px, transparent 1px); background-size: 20px 20px; }
+    .dash-hdr-glow { position: absolute; border-radius: 50%; filter: blur(60px); }
+    .dash-hdr-glow1 { width: 200px; height: 200px; background: rgba(129,140,248,0.25); top: -50px; right: 15%; }
+    .dash-hdr-glow2 { width: 150px; height: 150px; background: rgba(167,139,250,0.2); bottom: -40px; left: 25%; }
+    .dash-hdr-body { position: relative; z-index: 1; padding: 1.5rem 1.75rem 1.25rem; color: #fff; }
+    .dash-hdr-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
+    .dash-hdr-title-area { display: flex; align-items: center; gap: 0.85rem; }
+    .dash-hdr-icon { width: 50px; height: 50px; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); border-radius: 16px; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px); }
+    .dash-hdr-h1 { margin: 0; font-size: 1.5rem; font-weight: 800; letter-spacing: -0.3px; }
+    .dash-hdr-sub { margin: 3px 0 0; font-size: 0.88rem; opacity: 0.8; }
+    .dash-hdr-actions { display: flex; gap: 0.5rem; }
+    .hdr-btn { display: flex; align-items: center; gap: 6px; padding: 8px 18px; border: 1px solid rgba(255,255,255,0.25); border-radius: 12px; background: rgba(255,255,255,0.1); color: #fff; font-size: 0.85rem; font-weight: 700; cursor: pointer; transition: all 0.2s; backdrop-filter: blur(8px); }
+    .hdr-btn:hover { background: rgba(255,255,255,0.2); transform: translateY(-1px); }
+    .hdr-btn-back { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.15); }
+
+    /* ═══ PERIOD SELECTOR ═══ */
+    .period-row { display: flex; align-items: center; gap: 0.4rem; margin-top: 1rem; flex-wrap: wrap; }
+    .period-btn { padding: 6px 16px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.75); font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .period-btn:hover { background: rgba(255,255,255,0.12); }
+    .period-on { background: rgba(255,255,255,0.22) !important; color: #fff !important; border-color: rgba(255,255,255,0.4) !important; }
+    .period-date { width: 145px; }
+
+    /* ═══ QUICK FILTERS ═══ */
+    .quick-filters { display: flex; align-items: center; gap: 1.5rem; margin-top: 0.75rem; flex-wrap: wrap; }
+    .qf-group { display: flex; align-items: center; gap: 0.3rem; }
+    .qf-label { font-size: 0.82rem; font-weight: 600; opacity: 0.75; margin-left: 4px; }
+    .qf-btn { padding: 4px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.7); font-size: 0.78rem; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .qf-btn:hover { background: rgba(255,255,255,0.12); }
+    .qf-on { background: rgba(255,255,255,0.22) !important; color: #fff !important; border-color: rgba(255,255,255,0.4) !important; }
+    .qf-select { width: 160px; }
+    .qf-adv-toggle { display: flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); background: transparent; color: rgba(255,255,255,0.6); font-size: 0.78rem; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .qf-adv-toggle:hover { background: rgba(255,255,255,0.08); }
+
+    /* ═══ ADVANCED FILTERS ═══ */
+    .adv-filters { display: flex; gap: 0.5rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.1); flex-wrap: wrap; align-items: center; }
+    .adv-item { min-width: 140px; flex: 1; }
+
+    /* ═══ KPI CARDS ═══ */
+    .kpi-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.75rem; margin-bottom: 1rem; }
+    .kpi-card { position: relative; background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 16px; padding: 1.1rem 1.25rem; display: flex; align-items: center; gap: 0.85rem; box-shadow: 0 1px 4px rgba(0,0,0,0.04); transition: all 0.2s; overflow: hidden; }
+    .kpi-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+    .kpi-card-ico { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .kpi-card-body { display: flex; flex-direction: column; }
+    .kpi-card-val { font-size: 1.35rem; font-weight: 800; color: var(--mud-palette-text-primary); line-height: 1.2; }
+    .kpi-card-lbl { font-size: 0.75rem; color: var(--mud-palette-text-secondary); font-weight: 600; margin-top: 2px; }
+    .kpi-card-delta { position: absolute; top: 10px; left: 12px; font-size: 0.72rem; font-weight: 700; padding: 2px 8px; border-radius: 6px; }
+    .delta-up { background: #d1fae5; color: #047857; }
+    .delta-down { background: #fee2e2; color: #991b1b; }
+
+    /* ═══ CHARTS ═══ */
+    .charts-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 0.75rem; }
+    .chart-card { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 16px; padding: 1.25rem; box-shadow: 0 1px 4px rgba(0,0,0,0.04); min-height: 320px; }
+    .chart-title { display: flex; align-items: center; gap: 8px; font-size: 0.92rem; font-weight: 700; color: var(--mud-palette-text-primary); margin-bottom: 0.5rem; }
+
+    /* ═══ FUNNEL ═══ */
+    .funnel-section { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 16px; padding: 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,0.04); margin-bottom: 0.75rem; }
+    .funnel-container { display: flex; flex-direction: column; gap: 0.5rem; align-items: center; max-width: 700px; margin: 0 auto; }
+    .funnel-step { display: flex; align-items: center; gap: 1rem; width: 100%; }
+    .funnel-bar { height: 42px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 0.9rem; transition: width 0.6s ease; min-width: 60px; }
+    .funnel-count { font-size: 1rem; font-weight: 800; }
+    .funnel-info { display: flex; flex-direction: column; min-width: 100px; }
+    .funnel-stage { font-weight: 700; font-size: 0.88rem; color: var(--mud-palette-text-primary); }
+    .funnel-pct { font-size: 0.78rem; color: var(--mud-palette-text-secondary); font-weight: 600; }
+
+    /* ═══ TABLES ═══ */
+    .tables-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; }
+    .table-card { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 16px; padding: 1.25rem; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
+    .dash-table { border-radius: 8px; }
+    .dash-table .mud-table-head .mud-table-cell { font-size: 12px; font-weight: 700; color: var(--mud-palette-text-secondary); }
+    .empty-sm { text-align: center; padding: 20px; color: var(--mud-palette-text-secondary); font-size: 0.88rem; }
+
+    /* ═══ CONVERSION RATE BADGE ═══ */
+    .conv-rate { padding: 2px 8px; border-radius: 8px; font-size: 12px; font-weight: 700; }
+    .conv-high { background: #d1fae5; color: #047857; }
+    .conv-mid { background: #fef3c7; color: #92400e; }
+    .conv-low { background: #fee2e2; color: #991b1b; }
+
+    /* ═══ PLATFORM BADGES ═══ */
+    .platform-fb { background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 8px; font-size: 11px; font-weight: 700; }
+    .platform-ig { background: #fce7f3; color: #9d174d; padding: 2px 8px; border-radius: 8px; font-size: 11px; font-weight: 700; }
+    .platform-default { background: #f3f4f6; color: #4b5563; padding: 2px 8px; border-radius: 8px; font-size: 11px; font-weight: 700; }
+
+    /* ═══ RESPONSIVE ═══ */
+    @@media (max-width: 1200px) {
+        .kpi-row { grid-template-columns: repeat(3, 1fr); }
+        .charts-row { grid-template-columns: repeat(2, 1fr); }
+        .tables-row { grid-template-columns: 1fr; }
+    }
+    @@media (max-width: 768px) {
+        .kpi-row { grid-template-columns: repeat(2, 1fr); }
+        .charts-row { grid-template-columns: 1fr; }
+    }
+</style>
+
+@code {
+    // ───── State ─────
+    private bool _isLoading = true;
+    private bool _showAdvanced = false;
+    private string _selectedPeriod = "month";
+    private LeadsDashboardDataDto _data = new();
+    private LeadsDashboardFilterDto _filter = new();
+    private List<Employee> _employees = new();
+
+    private readonly Dictionary<string, string> _periods = new()
+    {
+        { "today", "اليوم" },
+        { "week", "هذا الأسبوع" },
+        { "month", "هذا الشهر" },
+        { "quarter", "ربع سنوي" },
+        { "year", "هذه السنة" },
+        { "all", "الكل" },
+        { "custom", "مخصص" }
+    };
+
+    // ───── ApexChart Options ─────
+    private ApexChartOptions<ChartItemDto> _statusDonutOptions = new();
+    private ApexChartOptions<ChartItemDto> _platformBarOptions = new();
+    private ApexChartOptions<DailyTrendItemDto> _areaOptions = new();
+    private ApexChartOptions<ChartItemDto> _budgetBarOptions = new();
+    private ApexChartOptions<ChartItemDto> _citiesBarOptions = new();
+    private ApexChartOptions<DashboardEmployeeDto> _employeeStackedOptions = new();
+
+    // ═══════════════════════════════════════
+    //            LIFECYCLE
+    // ═══════════════════════════════════════
+
+    protected override async Task OnInitializedAsync()
+    {
+        InitChartOptions();
+        await LoadEmployeesAsync();
+        SelectPeriod("month");
+    }
+
+    // ═══════════════════════════════════════
+    //          CHART OPTIONS INIT
+    // ═══════════════════════════════════════
+
+    private void InitChartOptions()
+    {
+        var font = "Segoe UI, Tahoma, sans-serif";
+
+        // ─── Status Donut ───
+        _statusDonutOptions = new ApexChartOptions<ChartItemDto>
+        {
+            Chart = new Chart
+            {
+                FontFamily = font,
+                Background = "transparent",
+                Toolbar = new Toolbar { Show = false }
+            },
+            Colors = new List<string> { "#3b82f6", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444" },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Bottom,
+                FontSize = "13px",
+                FontWeight = "600"
+            },
+            PlotOptions = new PlotOptions
+            {
+                Pie = new PlotOptionsPie
+                {
+                    Donut = new PlotOptionsDonut
+                    {
+                        Size = "65%",
+                        Labels = new DonutLabels
+                        {
+                            Show = true,
+                            Total = new DonutLabelTotal
+                            {
+                                Show = true,
+                                Label = "الإجمالي",
+                                FontSize = "16px",
+                                FontWeight = "800"
+                            }
+                        }
+                    }
+                }
+            },
+            DataLabels = new DataLabels { Enabled = true },
+            Stroke = new Stroke { Show = false }
+        };
+
+        // ─── Platform Bar ───
+        _platformBarOptions = new ApexChartOptions<ChartItemDto>
+        {
+            Chart = new Chart
+            {
+                FontFamily = font,
+                Background = "transparent",
+                Toolbar = new Toolbar { Show = false }
+            },
+            Colors = new List<string> { "#6366f1" },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "55%"
+                }
+            },
+            DataLabels = new DataLabels { Enabled = false },
+            Tooltip = new Tooltip { Theme = Mode.Dark }
+        };
+
+        // ─── Area (Daily Trend) ───
+        _areaOptions = new ApexChartOptions<DailyTrendItemDto>
+        {
+            Chart = new Chart
+            {
+                FontFamily = font,
+                Background = "transparent",
+                Toolbar = new Toolbar { Show = false }
+            },
+            Colors = new List<string> { "#6366f1", "#10b981" },
+            Stroke = new Stroke { Curve = Curve.Smooth, Width = 2 },
+            Fill = new Fill
+            {
+                Type = new List<FillType> { FillType.Gradient, FillType.Gradient },
+                Gradient = new FillGradient
+                {
+                    Shade = GradientShade.Dark,
+                    Type = GradientType.Vertical,
+                    OpacityFrom = new Opacity(0.35),
+                    OpacityTo = new Opacity(0.05)
+                }
+            },
+            DataLabels = new DataLabels { Enabled = false },
+            Xaxis = new XAxis
+            {
+                Type = XAxisType.Datetime,
+                Labels = new XAxisLabels
+                {
+                    Format = "dd/MM"
+                }
+            },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                FontSize = "12px",
+                FontWeight = "600"
+            },
+            Tooltip = new Tooltip { Theme = Mode.Dark }
+        };
+
+        // ─── Budget Bar ───
+        _budgetBarOptions = new ApexChartOptions<ChartItemDto>
+        {
+            Chart = new Chart
+            {
+                FontFamily = font,
+                Background = "transparent",
+                Toolbar = new Toolbar { Show = false }
+            },
+            Colors = new List<string> { "#f59e0b" },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "55%"
+                }
+            },
+            DataLabels = new DataLabels { Enabled = false },
+            Tooltip = new Tooltip { Theme = Mode.Dark }
+        };
+
+        // ─── Cities Horizontal Bar ───
+        _citiesBarOptions = new ApexChartOptions<ChartItemDto>
+        {
+            Chart = new Chart
+            {
+                FontFamily = font,
+                Background = "transparent",
+                Toolbar = new Toolbar { Show = false }
+            },
+            Colors = new List<string> { "#8b5cf6" },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 4,
+                    BarHeight = "70%"
+                }
+            },
+            DataLabels = new DataLabels
+            {
+                Enabled = true,
+                Style = new DataLabelsStyle { FontSize = "12px", FontWeight = "600" }
+            },
+            Tooltip = new Tooltip { Theme = Mode.Dark }
+        };
+
+        // ─── Employee Stacked Bar ───
+        _employeeStackedOptions = new ApexChartOptions<DashboardEmployeeDto>
+        {
+            Chart = new Chart
+            {
+                FontFamily = font,
+                Background = "transparent",
+                Toolbar = new Toolbar { Show = false },
+                Stacked = true,
+                StackType = StackType.Normal
+            },
+            Colors = new List<string> { "#3b82f6", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444" },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 3,
+                    ColumnWidth = "55%"
+                }
+            },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                FontSize = "11px",
+                FontWeight = "600"
+            },
+            Tooltip = new Tooltip { Theme = Mode.Dark }
+        };
+    }
+
+    // ═══════════════════════════════════════
+    //            DATA LOADING
+    // ═══════════════════════════════════════
+
+    private async Task LoadEmployeesAsync()
+    {
+        try { _employees = await LeadsService.GetEmployeesAsync(); }
+        catch { _employees = new(); }
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+        try
+        {
+            _data = await LeadsService.GetDashboardDataAsync(_filter);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("تعذّر تحميل بيانات اللوحة: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    // ═══════════════════════════════════════
+    //           PERIOD & FILTERS
+    // ═══════════════════════════════════════
+
+    private void SelectPeriod(string period)
+    {
+        _selectedPeriod = period;
+        var today = DateTime.Today;
+
+        switch (period)
+        {
+            case "today":
+                _filter.DateFrom = today;
+                _filter.DateTo = today;
+                break;
+            case "week":
+                _filter.DateFrom = today.AddDays(-(int)today.DayOfWeek);
+                _filter.DateTo = today;
+                break;
+            case "month":
+                _filter.DateFrom = new DateTime(today.Year, today.Month, 1);
+                _filter.DateTo = today;
+                break;
+            case "quarter":
+                var qMonth = ((today.Month - 1) / 3) * 3 + 1;
+                _filter.DateFrom = new DateTime(today.Year, qMonth, 1);
+                _filter.DateTo = today;
+                break;
+            case "year":
+                _filter.DateFrom = new DateTime(today.Year, 1, 1);
+                _filter.DateTo = today;
+                break;
+            case "all":
+                _filter.DateFrom = null;
+                _filter.DateTo = null;
+                break;
+            case "custom":
+                return;
+        }
+
+        _ = LoadData();
+    }
+
+    private async Task ApplyCustomPeriod()
+    {
+        await LoadData();
+    }
+
+    private void SetPlatform(string? platform)
+    {
+        _filter.Platform = platform;
+        _ = LoadData();
+    }
+
+    private async Task ResetAllFilters()
+    {
+        _filter = new LeadsDashboardFilterDto();
+        _showAdvanced = false;
+        SelectPeriod("month");
+    }
+
+    // ═══════════════════════════════════════
+    //           UI HELPERS
+    // ═══════════════════════════════════════
+
+    private string GetFunnelWidth(decimal pct) => Math.Max(pct, 15m).ToString("F0");
+
+    private string GetPlatformClass(string? platform) => platform switch
+    {
+        "fb" => "platform-fb",
+        "ig" => "platform-ig",
+        _ => "platform-default"
+    };
+
+    private string GetConvRateClass(decimal rate) => rate switch
+    {
+        >= 20m => "conv-high",
+        >= 10m => "conv-mid",
+        _ => "conv-low"
+    };
+
+    private void GoBack()
+    {
+        Navigation.NavigateTo("/crm/leads");
+    }
+
+    private void ExportExcel()
+    {
+        Snackbar.Add("جاري تجهيز ملف Excel...", Severity.Info);
+    }
+}

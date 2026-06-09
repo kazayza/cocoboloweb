@@ -2197,7 +2197,7 @@ modelBuilder.Entity<LeadsCrm>(entity =>
     entity.Property(e => e.ProjectStageAlt).HasMaxLength(200);
     entity.Property(e => e.BudgetAlt).HasMaxLength(200);
 
-    entity.Property(e => e.LeadStatus).HasMaxLength(50).HasDefaultValue("New");
+    entity.Property(e => e.LeadStatus).HasMaxLength(50).HasDefaultValue("جديد");
 
     entity.Property(e => e.IsConverted).HasDefaultValue(false);
     entity.Property(e => e.ConvertedBy).HasMaxLength(100);

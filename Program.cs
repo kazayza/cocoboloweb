@@ -145,6 +145,7 @@ builder.Services.AddScoped<ICrmSettingsService, CrmSettingsService>();
 builder.Services.AddScoped<ILeadsCrmService, LeadsCrmService>();
 
 
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())

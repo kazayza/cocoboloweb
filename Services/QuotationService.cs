@@ -59,6 +59,14 @@ public class QuotationService : IQuotationService
         if (user.IsInRole("Admin")) return true;
         return user.HasClaim("Permission", $"frmQuotationsList:{permission}");
     }
+    private bool CanViewQuotationCost()
+{
+    var user = CurrentUser;
+    if (user?.Identity?.IsAuthenticated != true) return false;
+
+    return user.IsInRole(SystemRoles.Admin)
+        || user.IsInRole(SystemRoles.AccountManager);
+}
 
     // ============================================================
     //  ⭐ قائمة عروض الأسعار - بدون JOINs (الحل النهائي v5)
@@ -101,6 +109,8 @@ public class QuotationService : IQuotationService
             // الفلاتر
             if (filter.PartyId.HasValue)
                 baseQuery = baseQuery.Where(q => q.PartyId == filter.PartyId.Value);
+            if (filter.EmpId.HasValue)
+                baseQuery = baseQuery.Where(q => q.EmpId == filter.EmpId.Value);
 
             if (filter.DateFrom.HasValue)
                 baseQuery = baseQuery.Where(q => q.QuotationDate >= filter.DateFrom.Value.Date);
@@ -111,15 +121,27 @@ public class QuotationService : IQuotationService
                 baseQuery = baseQuery.Where(q => q.QuotationDate <= endOfDay);
             }
 
-            if (!string.IsNullOrWhiteSpace(filter.Status))
-                baseQuery = baseQuery.Where(q => q.Status == filter.Status);
+            if (filter.PendingOnly == true)
+{
+    baseQuery = baseQuery.Where(q =>
+        q.InvoiceId == null &&
+        (
+            string.IsNullOrEmpty(q.Status) ||
+            q.Status == QuotationStatuses.Draft ||
+            q.Status == QuotationStatuses.Sent
+        ));
+}
+else if (!string.IsNullOrWhiteSpace(filter.Status))
+{
+    baseQuery = baseQuery.Where(q => q.Status == filter.Status);
+}
 
-            if (filter.IsConverted.HasValue)
-            {
-                baseQuery = filter.IsConverted.Value
-                    ? baseQuery.Where(q => q.InvoiceId != null)
-                    : baseQuery.Where(q => q.InvoiceId == null);
-            }
+if (filter.IsConverted.HasValue)
+{
+    baseQuery = filter.IsConverted.Value
+        ? baseQuery.Where(q => q.InvoiceId != null)
+        : baseQuery.Where(q => q.InvoiceId == null);
+}
 
             if (filter.IsExpired.GetValueOrDefault())
             {
@@ -249,6 +271,72 @@ public class QuotationService : IQuotationService
                 foreach (var c in counts)
                     itemsCountDict[c.Id] = c.Cnt;
             }
+            // ✅ Step 6f: حساب تكلفة عروض الأسعار حسب صلاحية المستخدم
+step = "Step 6f: Calculate quotation costs";
+
+var canViewCost = CanViewQuotationCost();
+var costDict = new Dictionary<int, decimal>();
+
+if (canViewCost && quoteIds.Any())
+{
+    // 1) هات تفاصيل عروض الأسعار
+    var costDetailRows = await _db.QuotationDetails.AsNoTracking()
+        .Where(d => quoteIds.Contains(d.QuotationId))
+        .Select(d => new
+        {
+            d.QuotationId,
+            d.ProductId,
+            d.Quantity,
+            d.Notes
+        })
+        .ToListAsync();
+
+    var costProductIds = costDetailRows
+        .Select(d => d.ProductId)
+        .Distinct()
+        .ToList();
+
+    // 2) هات تكلفة المنتجات الحالية من جدول Products
+    var productCostsDict = new Dictionary<int, (decimal? PremiumCost, decimal? EliteCost)>();
+
+    if (costProductIds.Any())
+    {
+        var productCosts = await _db.Products.AsNoTracking()
+            .Where(p => costProductIds.Contains(p.ProductId))
+            .Select(p => new
+            {
+                p.ProductId,
+                p.PurchasePrice,
+                p.PurchasePriceElite
+            })
+            .ToListAsync();
+
+        foreach (var p in productCosts)
+        {
+            productCostsDict[p.ProductId] = (p.PurchasePrice, p.PurchasePriceElite);
+        }
+    }
+
+    // 3) احسب إجمالي تكلفة كل عرض سعر
+    costDict = costDetailRows
+        .GroupBy(d => d.QuotationId)
+        .ToDictionary(
+            g => g.Key,
+            g => g.Sum(d =>
+            {
+                if (!productCostsDict.TryGetValue(d.ProductId, out var productCost))
+                    return 0m;
+
+                var tier = ExtractTier(d.Notes);
+
+                var unitCost = tier == PricingTiers.Elite
+                    ? (productCost.EliteCost ?? productCost.PremiumCost ?? 0m)
+                    : (productCost.PremiumCost ?? 0m);
+
+                return Math.Round(d.Quantity * unitCost, 2);
+            })
+        );
+}
 
             // ✅ Step 7: نركّب الـ DTO النهائي في الذاكرة
             step = "Step 7: Compose final DTOs";
@@ -281,6 +369,7 @@ public class QuotationService : IQuotationService
                     TotalAmount = total,
                     DiscountAmount = r.Discount,
                     GrandTotal = r.Grand ?? total,
+                    TotalCost = canViewCost && costDict.TryGetValue(qid, out var qCost) ? qCost : null,
                     ItemsCount = icnt,
                     Status = string.IsNullOrWhiteSpace(r.Stat) ? QuotationStatuses.Draft : r.Stat,
                     InvoiceId = r.InvId,

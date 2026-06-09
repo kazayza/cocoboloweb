@@ -20,6 +20,12 @@ public class QuotationListDto
     public decimal? DiscountAmount { get; set; }
     public decimal GrandTotal { get; set; }
     public int ItemsCount { get; set; }
+    public decimal? TotalCost { get; set; }
+    public decimal? GrossProfit => TotalCost.HasValue ? GrandTotal - TotalCost.Value : null;
+    public decimal? ProfitMarginPercentage =>
+    TotalCost.HasValue && GrandTotal > 0
+        ? Math.Round(((GrandTotal - TotalCost.Value) / GrandTotal) * 100m, 2)
+        : null;
     public string Status { get; set; } = QuotationStatuses.Draft;
     public int? InvoiceId { get; set; }
     public string? InvoiceReference { get; set; }
@@ -120,11 +126,13 @@ public class QuotationFilterDto
 {
     public string? SearchText { get; set; }
     public int? PartyId { get; set; }
+    public int? EmpId { get; set; }
     public DateTime? DateFrom { get; set; }
     public DateTime? DateTo { get; set; }
     public string? Status { get; set; }
     public bool? IsConverted { get; set; }
     public bool? IsExpired { get; set; }
+    public bool? PendingOnly { get; set; }
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 25;
     public string SortBy { get; set; } = "QuotationDate";

@@ -733,9 +733,9 @@ public async Task<IEnumerable<PartyLookupDto>> SearchPartiesAsync(string search)
                       $"على فاتورة {transaction.ReferenceNumber} بواسطة {currentUserName}";
 
             await _notify.NotifyRoleAsync("💰 إشعار دفعة", msg, SystemRoles.Admin,
-                currentUserName, "frmPayments", "Payments", payment.PaymentId);
+                currentUserName, "payments", "Payments", payment.PaymentId);
             await _notify.NotifyRoleAsync("💰 إشعار دفعة", msg, SystemRoles.SalesManager,
-                currentUserName, "frmPayments", "Payments", payment.PaymentId);
+                currentUserName, "payments", "Payments", payment.PaymentId);
         }
         catch { }
 
@@ -798,7 +798,7 @@ public async Task<IEnumerable<PartyLookupDto>> SearchPartiesAsync(string search)
                           $"على فاتورة {transaction.ReferenceNumber} بواسطة {currentUserName}. السبب: {reason}";
 
                 await _notify.NotifyRoleAsync("⚠️ إلغاء دفعة", msg, SystemRoles.Admin,
-                    currentUserName, "frmPayments", "Payments", paymentId);
+                    currentUserName, "payments", "Payments", paymentId);
             }
             catch { }
 
