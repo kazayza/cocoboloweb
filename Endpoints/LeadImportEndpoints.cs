@@ -109,7 +109,8 @@ public static class LeadImportEndpoints
                 NextAction = nextAction,
                 BestTimeToReach = bestTime,
                 LeadDate = request.LeadDate ?? DateTime.Now,
-                LeadStatus = "New",
+                //LeadStatus = "New",
+                LeadStatus = "جديد",  // ✅ عربي زي باقي السيستم
                 SheetTabName = request.SheetTabName,
                 SheetRowNumber = request.SheetRowNumber,
                 Notes = BuildSummary(request, projectType, projectStage,
