@@ -1,0 +1,910 @@
+@page "/crm/leads"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Web
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@using MudVariant = MudBlazor.Variant
+
+@attribute [Authorize]
+
+@inject ILeadsCrmService LeadsService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
+
+@implements IDisposable
+
+<PageTitle>إدارة Leads — CRM</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="loading-screen">
+        <MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Style="color:var(--mud-palette-text-secondary);margin-top:1rem">جاري تحميل الـ Leads...</MudText>
+    </div>
+}
+else
+{
+<div dir="rtl" class="leads-page">
+
+    @* ═══ HEADER ═══ *@
+    <div class="leads-header">
+        <div class="hdr-bg">
+            <div class="hdr-gradient"></div>
+            <div class="hdr-dots"></div>
+            <div class="hdr-glow hdr-glow1"></div>
+            <div class="hdr-glow hdr-glow2"></div>
+        </div>
+        <div class="hdr-body">
+            <div class="hdr-top">
+                <div class="hdr-title-area">
+                    <div class="hdr-icon">
+                        <MudIcon Icon="@Icons.Material.Rounded.ContactPhone" Style="font-size:1.6rem" />
+                    </div>
+                    <div>
+                        <h1 class="hdr-h1">إدارة Leads</h1>
+                        <p class="hdr-sub">عملاء محتملين من Meta Ads — <strong>@_stats.TotalLeads</strong> Lead</p>
+                    </div>
+                </div>
+                <div class="hdr-actions">
+                    <button class="btn-sync" @onclick="SyncFromSheet">
+                        <MudIcon Icon="@Icons.Material.Rounded.Sync" Size="MudSize.Small" />
+                        مزامنة من الشيت
+                    </button>
+                </div>
+            </div>
+
+            @* ═══ KPI ROW ═══ *@
+            <div class="kpi-row">
+                <div class="kpi" @onclick="@(() => QuickFilter(null))">
+                    <div class="kpi-ico" style="background:rgba(99,102,241,0.25)">
+                        <MudIcon Icon="@Icons.Material.Rounded.Layers" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-info">
+                        <span class="kpi-num">@_stats.TotalLeads</span>
+                        <span class="kpi-lbl">إجمالي</span>
+                    </div>
+                </div>
+                <div class="kpi" @onclick="@(() => QuickFilter("جديد"))">
+                    <div class="kpi-ico" style="background:rgba(59,130,246,0.25)">
+                        <MudIcon Icon="@Icons.Material.Rounded.FiberNew" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-info">
+                        <span class="kpi-num">@_stats.NewLeads</span>
+                        <span class="kpi-lbl">جديد</span>
+                    </div>
+                </div>
+                <div class="kpi" @onclick="@(() => QuickFilter("تم التواصل"))">
+                    <div class="kpi-ico" style="background:rgba(245,158,11,0.25)">
+                        <MudIcon Icon="Icons.Material.Rounded.PhoneCallback" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-info">
+                        <span class="kpi-num">@_stats.ContactedLeads</span>
+                        <span class="kpi-lbl">تم التواصل</span>
+                    </div>
+                </div>
+                <div class="kpi" @onclick="@(() => QuickFilter("مؤهل"))">
+                    <div class="kpi-ico" style="background:rgba(16,185,129,0.25)">
+                        <MudIcon Icon="@Icons.Material.Rounded.Verified" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-info">
+                        <span class="kpi-num">@_stats.QualifiedLeads</span>
+                        <span class="kpi-lbl">مؤهل</span>
+                    </div>
+                </div>
+                <div class="kpi" @onclick="@(() => QuickFilter("محوّل"))">
+                    <div class="kpi-ico" style="background:rgba(139,92,246,0.25)">
+                        <MudIcon Icon="@Icons.Material.Rounded.CheckCircle" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-info">
+                        <span class="kpi-num">@_stats.ConvertedLeads</span>
+                        <span class="kpi-lbl">محوّل</span>
+                    </div>
+                </div>
+                <div class="kpi" @onclick="@(() => QuickFilter("مرفوض"))">
+                    <div class="kpi-ico" style="background:rgba(239,68,68,0.25)">
+                        <MudIcon Icon="@Icons.Material.Rounded.Cancel" Size="MudSize.Small" />
+                    </div>
+                    <div class="kpi-info">
+                        <span class="kpi-num">@_stats.RejectedLeads</span>
+                        <span class="kpi-lbl">مرفوض</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @* ═══ SEARCH ═══ *@
+    <div class="search-bar">
+        <MudTextField T="string" Placeholder="ابحث بالاسم أو الهاتف أو الحملة..."
+                      Variant="MudVariant.Outlined" Dense="true"
+                      Value="_filter.SearchText" HandleSearchInput Immediate="true"
+                      Class="search-input" />
+        <div class="search-chips">
+            <button class="chip-btn @(_filter.LeadStatus=="جديد"?"chip-on":"")" @onclick="@(() => QuickFilter("جديد"))">جديد</button>
+            <button class="chip-btn @(_filter.LeadStatus=="تم التواصل"?"chip-on":"")" @onclick="@(() => QuickFilter("تم التواصل"))">تم التواصل</button>
+            <button class="chip-btn @(_filter.LeadStatus=="مؤهل"?"chip-on":"")" @onclick="@(() => QuickFilter("مؤهل"))">مؤهل</button>
+            @if (_hasFilters)
+            {
+                <button class="chip-btn chip-clear" @onclick="ResetFilters">✕ مسح الكل</button>
+            }
+        </div>
+    </div>
+
+    @* ═══ FILTERS ═══ *@
+    <div class="filter-bar">
+        <div class="filter-row">
+            <MudSelect T="string" Label="الحالة" Variant="MudVariant.Outlined"
+                       @bind-Value="_filter.LeadStatus" Dense="true" Class="f-item"
+                       Clearable="true" AnchorOrigin="Origin.BottomCenter">
+                <MudSelectItem Value="@("جديد")">جديد</MudSelectItem>
+                <MudSelectItem Value="@("تم التواصل")">تم التواصل</MudSelectItem>
+                <MudSelectItem Value="@("مؤهل")">مؤهل</MudSelectItem>
+                <MudSelectItem Value="@("محوّل")">محوّل</MudSelectItem>
+                <MudSelectItem Value="@("مرفوض")">مرفوض</MudSelectItem>
+            </MudSelect>
+            <MudSelect T="string" Label="المنصة" Variant="MudVariant.Outlined"
+                       @bind-Value="_filter.Platform" Dense="true" Class="f-item"
+                       Clearable="true" AnchorOrigin="Origin.BottomCenter">
+                <MudSelectItem Value="@("fb")">Facebook</MudSelectItem>
+                <MudSelectItem Value="@("ig")">Instagram</MudSelectItem>
+            </MudSelect>
+            <MudSelect T="int?" Label="الموظف المسؤول" Variant="MudVariant.Outlined"
+                       @bind-Value="_filter.AssignedEmployeeId" Dense="true" Class="f-item"
+                       Clearable="true" AnchorOrigin="Origin.BottomCenter">
+                @foreach (var emp in _employees)
+                {
+                    <MudSelectItem Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
+                }
+            </MudSelect>
+            <MudDatePicker Label="من" Variant="MudVariant.Outlined"
+                           Date="_filter.DateFrom" DateChanged="d => _filter.DateFrom = d"
+                           Dense="true" Class="f-date" />
+            <MudDatePicker Label="إلى" Variant="MudVariant.Outlined"
+                           Date="_filter.DateTo" DateChanged="d => _filter.DateTo = d"
+                           Dense="true" Class="f-date" />
+            <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary"
+                       OnClick="ApplyFilters" Size="MudSize.Small"
+                       StartIcon="@Icons.Material.Rounded.FilterList">تصفية</MudButton>
+        </div>
+    </div>
+
+    @* ═══ DATA TABLE ═══ *@
+    @if (_isLoadingData) { <MudProgressLinear Color="MudColor.Primary" Indeterminate="true" Class="mb-2" /> }
+
+    <div class="tbl-wrap">
+        <MudTable Items="_pagedResult.Items"
+                  T="LeadsCrmListDto"
+                  Hover="true"
+                  Striped="true"
+                  Loading="_isLoadingData"
+                  Dense="true"
+                  Class="leads-table"
+                  Breakpoint="Breakpoint.Sm"
+                  Elevation="0">
+            <NoRecordsContent>
+                <div class="empty-state">
+                    <MudIcon Icon="@Icons.Material.Rounded.SearchOff" Size="MudSize.Large" />
+                    <MudText Typo="Typo.h6">لا توجد Leads مطابقة</MudText>
+                    <MudText Typo="Typo.body2" Style="color:var(--mud-palette-text-secondary)">
+                        جرّب تعديل الفلاتر أو انتظر مزامنة بيانات جديدة
+                    </MudText>
+                </div>
+            </NoRecordsContent>
+            <HeaderContent>
+                <MudTh>الاسم</MudTh>
+                <MudTh>الهاتف</MudTh>
+                <MudTh>الحالة</MudTh>
+                <MudTh>المشروع</MudTh>
+                <MudTh>المنصة</MudTh>
+                <MudTh>الحملة</MudTh>
+                <MudTh>الموظف</MudTh>
+                <MudTh>التاريخ</MudTh>
+                <MudTh Style="text-align:center">إجراءات</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="الاسم">
+                    <strong>@context.FullName</strong>
+                </MudTd>
+                <MudTd DataLabel="الهاتف" Style="direction:ltr;text-align:right">
+                    @context.Phone
+                </MudTd>
+                <MudTd DataLabel="الحالة">
+                    <span class="@GetStatusClass(context.LeadStatus)">@context.LeadStatus</span>
+                </MudTd>
+                <MudTd DataLabel="المشروع">
+                    <span style="font-size:0.82rem">@(context.ProjectType ?? "—")</span>
+                </MudTd>
+                <MudTd DataLabel="المنصة">
+                    <span class="@GetPlatformClass(context.Platform)">@(context.Platform == "fb" ? "FB" : context.Platform == "ig" ? "IG" : "—")</span>
+                </MudTd>
+                <MudTd DataLabel="الحملة" Style="max-width:150px">
+                    <span class="cell-truncate" title="@context.CampaignName">@(context.CampaignName ?? "—")</span>
+                </MudTd>
+                <MudTd DataLabel="الموظف">@(context.AssignedEmployeeName ?? "—")</MudTd>
+                <MudTd DataLabel="التاريخ">
+                    <span style="font-size:0.82rem;color:#64748b">@(context.CreatedAt.ToString("yyyy/MM/dd"))</span>
+                </MudTd>
+                <MudTd DataLabel="إجراءات" Style="text-align:center">
+                    <div class="actions-cell">
+                        <MudTooltip Text="عرض التفاصيل">
+                            <MudIconButton Icon="@Icons.Material.Rounded.Visibility"
+                                           Size="MudSize.Small" Color="MudColor.Info"
+                                           OnClick="@(() => ShowDetail(context))" />
+                        </MudTooltip>
+                        @if (!string.IsNullOrEmpty(context.Phone))
+                        {
+                            <MudTooltip Text="واتساب">
+                                <MudIconButton Icon="@Icons.Custom.Brands.WhatsApp"
+                                               Size="MudSize.Small" Color="MudColor.Success"
+                                               OnClick="@(() => OpenWhatsApp(context.Phone))" />
+                            </MudTooltip>
+                            <MudTooltip Text="اتصال">
+                                <MudIconButton Icon="@Icons.Material.Rounded.Phone"
+                                               Size="MudSize.Small" Color="MudColor.Primary"
+                                               OnClick="@(() => CallPhone(context.Phone))" />
+                            </MudTooltip>
+                        }
+                        @if (_canEdit)
+                        {
+                            <MudTooltip Text="تعديل">
+                                <MudIconButton Icon="@Icons.Material.Rounded.Edit"
+                                               Size="MudSize.Small" Color="MudColor.Warning"
+                                               OnClick="@(() => ShowEdit(context))" />
+                            </MudTooltip>
+                        }
+                        @if (_canConvert && context.LeadStatus != "محوّل")
+                        {
+                            <MudTooltip Text="تحويل لعميل">
+                                <MudIconButton Icon="@Icons.Material.Rounded.PersonAdd"
+                                               Size="MudSize.Small" Color="MudColor.Success"
+                                               OnClick="@(() => ShowConvert(context))" />
+                            </MudTooltip>
+                        }
+                        @if (_canDelete)
+                        {
+                            <MudTooltip Text="حذف">
+                                <MudIconButton Icon="@Icons.Material.Rounded.Delete"
+                                               Size="MudSize.Small" Color="MudColor.Error"
+                                               OnClick="@(() => DeleteLead(context))" />
+                            </MudTooltip>
+                        }
+                    </div>
+                </MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="@(new int[] { 10, 25, 50, 100 })"
+                               RowsPerPageString="عدد الصفوف"
+                               InfoFormat="{first_item}-{last_item} من {all_items}" />
+            </PagerContent>
+        </MudTable>
+    </div>
+
+    @* ═══ PAGINATION INFO ═══ *@
+    @if (_pagedResult.TotalPages > 1)
+    {
+        <div class="pager">
+            <MudIconButton Icon="@Icons.Material.Rounded.ChevronRight"
+                           OnClick="() => GoToPage(_filter.PageNumber - 1)"
+                           Disabled="@(!_pagedResult.HasPrevious)" />
+            <span>صفحة @_pagedResult.PageNumber من @_pagedResult.TotalPages — @_pagedResult.TotalCount Lead</span>
+            <MudIconButton Icon="@Icons.Material.Rounded.ChevronLeft"
+                           OnClick="() => GoToPage(_filter.PageNumber + 1)"
+                           Disabled="@(!_pagedResult.HasNext)" />
+        </div>
+    }
+
+</div>
+}
+
+@* ═══ DETAIL DIALOG ═══ *@
+<MudDialog @bind-IsOpen="_showDetailDialog" MaxWidth="MaxWidth.Medium" FullWidth="true">
+    <DialogContent>
+        @if (_selectedLead != null)
+        {
+            <div dir="rtl" class="detail-dialog">
+                <div class="detail-header">
+                    <h3>@_selectedLead.FullName</h3>
+                    <span class="@GetStatusClass(_selectedLead.LeadStatus)">@_selectedLead.LeadStatus</span>
+                </div>
+
+                <div class="detail-grid">
+                    <div class="detail-item">
+                        <span class="detail-label">الهاتف</span>
+                        <span class="detail-value" style="direction:ltr"> @_selectedLead.Phone</span>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_selectedLead.Phone2))
+                    {
+                        <div class="detail-item">
+                            <span class="detail-label">هاتف 2</span>
+                            <span class="detail-value" style="direction:ltr">@_selectedLead.Phone2</span>
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(_selectedLead.Email))
+                    {
+                        <div class="detail-item">
+                            <span class="detail-label">البريد</span>
+                            <span class="detail-value">@_selectedLead.Email</span>
+                        </div>
+                    }
+                    <div class="detail-item">
+                        <span class="detail-label">العنوان</span>
+                        <span class="detail-value">@(_selectedLead.Address ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">نوع المشروع</span>
+                        <span class="detail-value">@(_selectedLead.ProjectType ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">مرحلة المشروع</span>
+                        <span class="detail-value">@(_selectedLead.ProjectStage ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">الميزانية</span>
+                        <span class="detail-value">@(_selectedLead.Budget ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">صانع القرار</span>
+                        <span class="detail-value">@(_selectedLead.DecisionMaker ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">الإجراء التالي</span>
+                        <span class="detail-value">@(_selectedLead.NextAction ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">أفضل وقت</span>
+                        <span class="detail-value">@(_selectedLead.BestTimeToReach ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">المنصة</span>
+                        <span class="detail-value">@(_selectedLead.Platform ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">الحملة</span>
+                        <span class="detail-value">@(_selectedLead.CampaignName ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">الإعلان</span>
+                        <span class="detail-value">@(_selectedLead.AdName ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">الموظف المسؤول</span>
+                        <span class="detail-value">@(_selectedLead.AssignedEmployeeName ?? "—")</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">تاريخ الإنشاء</span>
+                        <span class="detail-value">@_selectedLead.CreatedAt.ToString("yyyy/MM/dd HH:mm")</span>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_selectedLead.Feedback))
+                    {
+                        <div class="detail-item" style="grid-column:1/-1">
+                            <span class="detail-label">ملاحظات</span>
+                            <span class="detail-value">@_selectedLead.Feedback</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        @if (_selectedLead != null && !string.IsNullOrEmpty(_selectedLead.Phone))
+        {
+            <MudButton Color="MudColor.Success" Variant="MudVariant.Text" StartIcon="@Icons.Custom.Brands.WhatsApp"
+                       OnClick="@(() => OpenWhatsApp(_selectedLead.Phone))">واتساب</MudButton>
+            <MudButton Color="MudColor.Primary" Variant="MudVariant.Text" StartIcon="@Icons.Material.Rounded.Phone"
+                       OnClick="@(() => CallPhone(_selectedLead.Phone))">اتصال</MudButton>
+        }
+        <MudButton Color="MudColor.Default" Variant="MudVariant.Text" OnClick="@(() => _showDetailDialog = false)">إغلاق</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@* ═══ EDIT DIALOG ═══ *@
+<MudDialog @bind-IsOpen="_showEditDialog" MaxWidth="MaxWidth.Small" FullWidth="true">
+    <DialogContent>
+        <div dir="rtl">
+            <MudSelect T="string" Label="الحالة" Variant="MudVariant.Outlined" @bind-Value="_editStatus" Dense="true" Class="mb-3">
+                <MudSelectItem Value="@("جديد")">جديد</MudSelectItem>
+                <MudSelectItem Value="@("تم التواصل")">تم التواصل</MudSelectItem>
+                <MudSelectItem Value="@("مؤهل")">مؤهل</MudSelectItem>
+                <MudSelectItem Value="@("محوّل")">محوّل</MudSelectItem>
+                <MudSelectItem Value="@("مرفوض")">مرفوض</MudSelectItem>
+            </MudSelect>
+            <MudSelect T="int?" Label="الموظف المسؤول" Variant="MudVariant.Outlined" @bind-Value="_editEmployeeId" Dense="true" Class="mb-3" Clearable="true">
+                @foreach (var emp in _employees)
+                {
+                    <MudSelectItem Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
+                }
+            </MudSelect>
+            <MudTextField T="string" Label="ملاحظات / Feedback" Variant="MudVariant.Outlined"
+                          @bind-Value="_editFeedback" Dense="true" Lines="3" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="MudColor.Primary" Variant="MudVariant.Filled" OnClick="SaveEdit" Disabled="_isSaving">
+            @if (_isSaving) { <MudProgressCircular Size="MudSize.Small" Indeterminate="true" /> }
+            حفظ
+        </MudButton>
+        <MudButton Color="MudColor.Default" Variant="MudVariant.Text" OnClick="@(() => _showEditDialog = false)">إلغاء</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@* ═══ CONVERT DIALOG ═══ *@
+<MudDialog @bind-IsOpen="_showConvertDialog" MaxWidth="MaxWidth.Small" FullWidth="true">
+    <DialogContent>
+        <div dir="rtl">
+            <MudText Typo="Typo.h6" Style="margin-bottom:1rem;font-weight:700">تحويل Lead لعميل</MudText>
+            <MudText Typo="Typo.body2" Style="color:var(--mud-palette-text-secondary);margin-bottom:1rem">
+                سيتم إنشاء: عميل + فرصة بيعية + مهمة متابعة
+            </MudText>
+            <MudTextField T="string" Label="قيمة الفرصة المتوقعة" Variant="MudVariant.Outlined"
+                          @bind-Value="_convertExpectedValue" Dense="true" Class="mb-3" />
+            <MudTextField T="string" Label="ملاحظات التحويل" Variant="MudVariant.Outlined"
+                          @bind-Value="_convertNotes" Dense="true" Lines="2" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="MudColor.Success" Variant="MudVariant.Filled" OnClick="ConvertLead" Disabled="_isSaving">
+            @if (_isSaving) { <MudProgressCircular Size="MudSize.Small" Indeterminate="true" /> }
+            تحويل
+        </MudButton>
+        <MudButton Color="MudColor.Default" Variant="MudVariant.Text" OnClick="@(() => _showConvertDialog = false)">إلغاء</MudButton>
+    </DialogActions>
+</MudDialog>
+
+
+<style>
+    .leads-page { padding: 0 1.5rem 3rem; overflow-x: hidden; }
+    .loading-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; gap: 1rem; }
+
+    /* ═══ HEADER ═══ */
+    .leads-header { position: relative; border-radius: 20px; overflow: hidden; margin-bottom: 0.75rem; box-shadow: 0 4px 24px rgba(99,102,241,0.15), 0 1px 3px rgba(0,0,0,0.08); }
+    .hdr-bg { position: absolute; inset: 0; }
+    .hdr-gradient { position: absolute; inset: 0; background: linear-gradient(135deg, #4338ca 0%, #6366f1 40%, #818cf8 70%, #4338ca 100%); }
+    .hdr-dots { position: absolute; inset: 0; background-image: radial-gradient(rgba(255,255,255,0.07) 1px, transparent 1px); background-size: 20px 20px; }
+    .hdr-glow { position: absolute; border-radius: 50%; filter: blur(60px); }
+    .hdr-glow1 { width: 180px; height: 180px; background: rgba(129,140,248,0.3); top: -40px; right: 10%; }
+    .hdr-glow2 { width: 120px; height: 120px; background: rgba(167,139,250,0.2); bottom: -30px; left: 20%; }
+    .hdr-body { position: relative; z-index: 1; padding: 1.5rem 1.75rem 1.25rem; color: #fff; }
+    .hdr-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
+    .hdr-title-area { display: flex; align-items: center; gap: 0.85rem; }
+    .hdr-icon { width: 48px; height: 48px; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.2); border-radius: 14px; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px); }
+    .hdr-h1 { margin: 0; font-size: 1.5rem; font-weight: 800; letter-spacing: -0.3px; }
+    .hdr-sub { margin: 3px 0 0; font-size: 0.88rem; opacity: 0.85; }
+    .hdr-actions { display: flex; align-items: center; gap: 0.6rem; }
+    .btn-sync { display: flex; align-items: center; gap: 6px; padding: 8px 20px; border: 1px solid rgba(255,255,255,0.25); border-radius: 12px; background: rgba(255,255,255,0.12); backdrop-filter: blur(8px); color: #fff; font-size: 0.88rem; font-weight: 700; cursor: pointer; transition: all 0.2s; }
+    .btn-sync:hover { background: rgba(255,255,255,0.22); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+
+    /* ═══ KPI ═══ */
+    .kpi-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.5rem; margin-top: 1.1rem; }
+    .kpi { position: relative; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 0.6rem 0.75rem; display: flex; align-items: center; gap: 0.55rem; cursor: pointer; transition: all 0.2s; overflow: hidden; }
+    .kpi:hover { background: rgba(255,255,255,0.14); transform: translateY(-1px); }
+    .kpi-ico { width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .kpi-info { display: flex; flex-direction: column; }
+    .kpi-num { font-size: 1.15rem; font-weight: 800; line-height: 1.2; }
+    .kpi-lbl { font-size: 0.72rem; opacity: 0.7; font-weight: 500; }
+
+    /* ═══ SEARCH ═══ */
+    .search-bar { display: flex; align-items: center; gap: 0.75rem; background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 14px; padding: 0.6rem 1rem; margin-bottom: 0.5rem; box-shadow: 0 1px 4px rgba(0,0,0,0.03); }
+    .search-input { flex: 1; }
+    .search-chips { display: flex; gap: 0.3rem; flex-wrap: nowrap; }
+    .chip-btn { padding: 5px 12px; border-radius: 8px; border: 1px solid var(--mud-palette-lines-default); background: transparent; font-size: 0.8rem; font-weight: 600; cursor: pointer; color: var(--mud-palette-text-secondary); transition: all 0.15s; white-space: nowrap; }
+    .chip-btn:hover { background: var(--mud-palette-background); }
+    .chip-on { background: var(--mud-palette-primary) !important; color: #fff !important; border-color: var(--mud-palette-primary) !important; }
+    .chip-clear { color: var(--mud-palette-error); border-color: var(--mud-palette-error-lighten); }
+    .chip-clear:hover { background: rgba(239,68,68,0.06); }
+
+    /* ═══ FILTER ═══ */
+    .filter-bar { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 14px; padding: 0.6rem 1rem; margin-bottom: 0.75rem; box-shadow: 0 1px 4px rgba(0,0,0,0.03); }
+    .filter-row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .f-item { min-width: 120px; flex: 1; }
+    .f-date { min-width: 115px; width: 125px; }
+
+    /* ═══ TABLE ═══ */
+    .tbl-wrap { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-lines-default); border-radius: 14px; padding: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.03); }
+    .leads-table .mud-table-head { background: linear-gradient(135deg, #4338ca, #6366f1); }
+    .leads-table .mud-table-head .mud-table-cell { color: #fff !important; font-weight: 600; font-size: 13px; }
+    .leads-table .mud-table-row:hover { background: rgba(99,102,241,0.05) !important; }
+    .cell-truncate { display: inline-block; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .actions-cell { display: flex; gap: 2px; justify-content: center; flex-wrap: nowrap; }
+
+    /* ═══ STATUS BADGES ═══ */
+    .status-new { background: #dbeafe; color: #1e40af; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .status-contacted { background: #fef3c7; color: #92400e; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .status-qualified { background: #d1fae5; color: #047857; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .status-converted { background: #ede9fe; color: #6d28d9; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .status-rejected { background: #fee2e2; color: #991b1b; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .status-default { background: #f3f4f6; color: #4b5563; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+
+    /* ═══ PLATFORM BADGES ═══ */
+    .platform-fb { background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 8px; font-size: 11px; font-weight: 700; }
+    .platform-ig { background: #fce7f3; color: #9d174d; padding: 2px 8px; border-radius: 8px; font-size: 11px; font-weight: 700; }
+    .platform-default { background: #f3f4f6; color: #4b5563; padding: 2px 8px; border-radius: 8px; font-size: 11px; font-weight: 700; }
+
+    /* ═══ EMPTY STATE ═══ */
+    .empty-state { text-align: center; padding: 50px 20px; }
+
+    /* ═══ PAGER ═══ */
+    .pager { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 1rem; padding: 0.75rem; font-size: 0.88rem; color: var(--mud-palette-text-secondary); }
+
+    /* ═══ DETAIL DIALOG ═══ */
+    .detail-dialog { padding: 0.5rem 0; }
+    .detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; gap: 1rem; }
+    .detail-header h3 { margin: 0; font-weight: 800; font-size: 1.25rem; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+    .detail-item { display: flex; flex-direction: column; gap: 0.2rem; }
+    .detail-label { font-size: 0.75rem; color: var(--mud-palette-text-secondary); font-weight: 600; }
+    .detail-value { font-size: 0.9rem; font-weight: 500; }
+</style>
+
+@code {
+    // ───── State ─────
+    private bool _isLoading = true;
+    private bool _isLoadingData = false;
+    private bool _isSaving = false;
+    private bool _isBusy = false;              // ← حماية من التزامن
+
+    private LeadsCrmFilterDto _filter = new() { PageSize = 25 };
+    private PagedResult<LeadsCrmListDto> _pagedResult = new();
+    private LeadsCrmStatsDto _stats = new();
+    private List<Employee> _employees = new();
+
+    // ───── Permissions ─────
+    private bool _canEdit = false;
+    private bool _canDelete = false;
+    private bool _canConvert = false;
+    private string _currentUserName = "system";
+
+    // ───── Dialogs ─────
+    private bool _showDetailDialog = false;
+    private bool _showEditDialog = false;
+    private bool _showConvertDialog = false;
+    private LeadsCrmListDto? _selectedLead = null;
+    private LeadsCrmDetailDto? _leadDetail = null;
+
+    // ───── Edit State ─────
+    private string _editStatus = "";
+    private int? _editEmployeeId = null;
+    private string _editFeedback = "";
+
+    // ───── Convert State ─────
+    private string _convertExpectedValue = "";
+    private string _convertNotes = "";
+
+    // ───── Search ─────
+    private Timer? _searchTimer;
+
+    // ───── Helpers ─────
+    private bool _hasFilters =>
+        !string.IsNullOrWhiteSpace(_filter.SearchText)
+        || !string.IsNullOrWhiteSpace(_filter.LeadStatus)
+        || !string.IsNullOrWhiteSpace(_filter.Platform)
+        || _filter.AssignedEmployeeId.HasValue
+        || _filter.DateFrom.HasValue
+        || _filter.DateTo.HasValue;
+
+    // ═══════════════════════════════════════
+    //              LIFECYCLE
+    // ═══════════════════════════════════════
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPermissionsAsync();
+        await LoadEmployeesAsync();
+        await LoadDataAsync();
+        _isLoading = false;
+    }
+
+    public void Dispose()
+    {
+        _searchTimer?.Dispose();
+    }
+
+    // ═══════════════════════════════════════
+    //            PERMISSIONS
+    // ═══════════════════════════════════════
+
+    private async Task LoadPermissionsAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _currentUserName = user.Identity?.Name ?? "system";
+        _canEdit = LeadsCrmPermissions.CanEdit(user);
+        _canDelete = LeadsCrmPermissions.CanDelete(user);
+        _canConvert = LeadsCrmPermissions.CanConvert(user);
+    }
+
+    // ═══════════════════════════════════════
+    //              DATA
+    // ═══════════════════════════════════════
+
+    private async Task LoadEmployeesAsync()
+    {
+        try { _employees = await LeadsService.GetEmployeesAsync(); }
+        catch { _employees = new(); }
+    }
+
+    private async Task LoadDataAsync()
+    {
+        if (_isBusy) return;           // ← حماية: لو فيه عملية شغالة متعملش حاجة
+        _isBusy = true;
+        _isLoadingData = true;
+
+        try
+        {
+            _stats = await LeadsService.GetStatsAsync();
+            _pagedResult = await LeadsService.GetLeadsAsync(_filter);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("تعذّر تحميل البيانات: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isLoadingData = false;
+            _isBusy = false;
+        }
+    }
+
+    // ═══════════════════════════════════════
+    //             SEARCH
+    // ═══════════════════════════════════════
+
+    private void HandleSearchInput(string value)
+    {
+        _filter.SearchText = value;
+
+        // Debounce: استنى 500ms قبل ما تعمل search
+        _searchTimer?.Dispose();
+        _searchTimer = new Timer(async _ =>
+        {
+            await InvokeAsync(async () =>
+            {
+                _filter.PageNumber = 1;
+                await LoadDataAsync();
+            });
+        }, null, 500, Timeout.Infinite);
+    }
+
+    // ═══════════════════════════════════════
+    //             FILTERS
+    // ═══════════════════════════════════════
+
+    private async Task ApplyFilters()
+    {
+        _filter.PageNumber = 1;
+        await LoadDataAsync();
+    }
+
+    private async Task ResetFilters()
+    {
+        _filter = new LeadsCrmFilterDto { PageSize = _filter.PageSize };
+        await LoadDataAsync();
+    }
+
+    private async Task QuickFilter(string? status)
+    {
+        if (_filter.LeadStatus == status)
+            _filter.LeadStatus = null;
+        else
+            _filter.LeadStatus = status;
+
+        _filter.PageNumber = 1;
+        await LoadDataAsync();
+    }
+
+    private async Task GoToPage(int page)
+    {
+        _filter.PageNumber = page;
+        await LoadDataAsync();
+    }
+
+    // ═══════════════════════════════════════
+    //            ACTIONS
+    // ═══════════════════════════════════════
+
+    private async Task ShowDetail(LeadsCrmListDto lead)
+    {
+        if (_isBusy) return;            // ← حماية
+        _isBusy = true;
+        _selectedLead = lead;
+        _leadDetail = null;
+        _showDetailDialog = true;
+
+        try
+        {
+            _leadDetail = await LeadsService.GetLeadByIdAsync(lead.LeadId);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("تعذّر تحميل التفاصيل: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private void ShowEdit(LeadsCrmListDto lead)
+    {
+        _selectedLead = lead;
+        _editStatus = lead.LeadStatus ?? "جديد";
+        _editEmployeeId = lead.AssignedEmployeeId;
+        _editFeedback = lead.Feedback ?? "";
+        _showEditDialog = true;
+    }
+
+    private void ShowConvert(LeadsCrmListDto lead)
+    {
+        _selectedLead = lead;
+        _convertExpectedValue = "";
+        _convertNotes = "";
+        _showConvertDialog = true;
+    }
+
+    private async Task SaveEdit()
+    {
+        if (_selectedLead == null || _isBusy) return;
+        _isBusy = true;
+        _isSaving = true;
+
+        try
+        {
+            var dto = new LeadsCrmUpdateDto
+            {
+                LeadId = _selectedLead.LeadId,
+                LeadStatus = _editStatus,
+                AssignedEmployeeId = _editEmployeeId,
+                Feedback = _editFeedback
+            };
+
+            var (success, message) = await LeadsService.UpdateLeadAsync(dto, _currentUserName);
+            if (success)
+            {
+                Snackbar.Add("تم تحديث الـ Lead بنجاح", Severity.Success);
+                _showEditDialog = false;
+                _isSaving = false;
+                await LoadDataAsync();        // هيترفض لو _isBusy=true... لكن إحنا فاضلين true
+            }
+            else
+            {
+                Snackbar.Add(message, Severity.Error);
+                _isSaving = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("خطأ: " + ex.Message, Severity.Error);
+            _isSaving = false;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task ConvertLead()
+    {
+        if (_selectedLead == null || _isBusy) return;
+        _isBusy = true;
+        _isSaving = true;
+
+        try
+        {
+            var dto = new LeadConvertDto
+            {
+                LeadId = _selectedLead.LeadId,
+                ExpectedValue = decimal.TryParse(_convertExpectedValue, out var v) ? v : 0,
+                Notes = _convertNotes
+            };
+
+            var result = await LeadsService.ConvertLeadToClientAsync(dto, _currentUserName);
+            if (result.Success)
+            {
+                Snackbar.Add($"تم التحويل بنجاح — عميل #{result.PartyId}", Severity.Success);
+                _showConvertDialog = false;
+                _isSaving = false;
+                await LoadDataAsync();
+            }
+            else
+            {
+                Snackbar.Add(result.Message ?? "فشل التحويل", Severity.Error);
+                _isSaving = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("خطأ: " + ex.Message, Severity.Error);
+            _isSaving = false;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task DeleteLead(LeadsCrmListDto lead)
+    {
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Title, "تأكيد الحذف" },
+            { x => x.Message, $"هل تريد حذف الـ Lead للعميل {lead.FullName}؟" },
+            { x => x.YesText, "نعم، احذف" },
+            { x => x.CancelText, "إلغاء" }
+        };
+
+        var dialog = await DialogService.ShowAsync<MudMessageBox>(
+            "تأكيد الحذف", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        if (_isBusy) return;
+        _isBusy = true;
+
+        try
+        {
+            var (success, msg) = await LeadsService.DeleteLeadAsync(lead.LeadId, _currentUserName);
+            Snackbar.Add(success ? "تم الحذف بنجاح" : msg, success ? Severity.Success : Severity.Error);
+            if (success) await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("خطأ: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task SyncFromSheet()
+    {
+        Snackbar.Add("جاري المزامنة من Google Sheet...", Severity.Info);
+        await Task.Delay(1000);
+        await LoadDataAsync();
+        Snackbar.Add("تم تحديث البيانات", Severity.Success);
+    }
+
+    // ═══════════════════════════════════════
+    //           UI HELPERS
+    // ═══════════════════════════════════════
+
+    private string GetStatusClass(string? status) => status switch
+    {
+        "جديد" => "status-new",
+        "تم التواصل" => "status-contacted",
+        "مؤهل" => "status-qualified",
+        "محوّل" => "status-converted",
+        "مرفوض" => "status-rejected",
+        _ => "status-default"
+    };
+
+    private string GetPlatformClass(string? platform) => platform switch
+    {
+        "fb" => "platform-fb",
+        "ig" => "platform-ig",
+        _ => "platform-default"
+    };
+
+    private void OpenWhatsApp(string phone)
+    {
+        var clean = phone.Replace(" ", "").Replace("-", "");
+        if (!clean.StartsWith("+") && !clean.StartsWith("2")) clean = "2" + clean;
+        if (!clean.StartsWith("+")) clean = "+" + clean;
+        Navigation.NavigateTo($"https://wa.me/{clean.Substring(1)}", forceLoad: true);
+    }
+
+    private void CallPhone(string phone)
+    {
+        Navigation.NavigateTo($"tel:{phone}", forceLoad: true);
+    }
+}

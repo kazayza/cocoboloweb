@@ -142,6 +142,7 @@ builder.Services.AddScoped<IOpportunityService, OpportunityService>();
 builder.Services.AddScoped<IInteractionService, InteractionService>();
 builder.Services.AddScoped<ITaskService, TaskService>();
 builder.Services.AddScoped<ICrmSettingsService, CrmSettingsService>();
+builder.Services.AddScoped<ILeadsCrmService, LeadsCrmService>();
 
 
 var app = builder.Build();
