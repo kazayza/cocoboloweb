@@ -13,6 +13,7 @@
 
 @inject ILeadsCrmService LeadsService
 @inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 
@@ -20,10 +21,25 @@
 
 @if (_isLoading)
 {
-    <div class="dash-loading">
-        <MudProgressCircular Color="MudColor.Secondary" Size="MudSize.Large" Indeterminate="true" />
-        <MudText Typo="Typo.h6" Style="color:var(--mud-palette-text-secondary);margin-top:1rem">جاري تحميل لوحة التحليلات...</MudText>
+    <div class="loading-container">
+        <MudProgressCircular Color="MudBlazor.Color.Primary" Size="MudBlazor.Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل البيانات...</MudText>
     </div>
+}
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+        حدث خطأ أثناء تحميل بيانات الشاشة:
+        <br />
+        @_loadError
+    </MudAlert>
+
+    <MudButton Variant="Variant.Filled"
+               Color="MudBlazor.Color.Primary"
+               Class="ma-4"
+               OnClick="LoadData">
+        إعادة المحاولة
+    </MudButton>
 }
 else
 {
@@ -67,7 +83,7 @@ else
                 @foreach (var p in _periods)
                 {
                     <button class="period-btn @(_selectedPeriod == p.Key ? "period-on" : "")"
-                            @onclick="@(() => SelectPeriod(p.Key))">
+                            @onclick="@(async () => await SelectPeriod(p.Key))">
                         @p.Value
                     </button>
                 }
@@ -86,15 +102,19 @@ else
             <div class="quick-filters">
                 <div class="qf-group">
                     <span class="qf-label">المنصة:</span>
-                    <button class="qf-btn @(_filter.Platform == null ? "qf-on" : "")" @onclick="@(() => SetPlatform(null))">الكل</button>
-                    <button class="qf-btn @(_filter.Platform == "fb" ? "qf-on" : "")" @onclick="@(() => SetPlatform("fb"))">Facebook</button>
-                    <button class="qf-btn @(_filter.Platform == "ig" ? "qf-on" : "")" @onclick="@(() => SetPlatform("ig"))">Instagram</button>
+                    <button class="qf-btn @(_filter.Platform == null ? "qf-on" : "")" @onclick="@(async () => await SetPlatform(null))">الكل</button>
+                    <button class="qf-btn @(_filter.Platform == "fb" ? "qf-on" : "")" @onclick="@(async () => await SetPlatform("fb"))">Facebook</button>
+                    <button class="qf-btn @(_filter.Platform == "ig" ? "qf-on" : "")" @onclick="@(async () => await SetPlatform("ig"))">Instagram</button>
                 </div>
                 <div class="qf-group">
                     <span class="qf-label">الموظف:</span>
-                    <MudSelect T="int?" Variant="MudVariant.Outlined"
-                               @bind-Value="_filter.EmployeeId" Dense="true" Class="qf-select"
-                               Clearable="true" Placeholder="الكل">
+                    <MudSelect T="int?"
+           Value="_filter.EmployeeId"
+           ValueChanged="@(async (int? v) => { _filter.EmployeeId = v; await LoadData(); })"
+           Dense="true"
+           Class="qf-select"
+           Clearable="true"
+           Placeholder="الكل">
                         @foreach (var emp in _employees)
                         {
                             <MudSelectItem Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
@@ -607,6 +627,7 @@ else
 @code {
     // ───── State ─────
     private bool _isLoading = true;
+    private string? _loadError;
     private bool _showAdvanced = false;
     private string _selectedPeriod = "month";
     private LeadsDashboardDataDto _data = new();
@@ -637,11 +658,24 @@ else
     // ═══════════════════════════════════════
 
     protected override async Task OnInitializedAsync()
+{
+    try
     {
         InitChartOptions();
         await LoadEmployeesAsync();
-        SelectPeriod("month");
+        await SelectPeriod("month");
     }
+    catch (Exception ex)
+    {
+        _loadError = ex.GetBaseException().Message;
+        Snackbar.Add("تعذّر تحميل شاشة Leads Dashboard: " + _loadError, Severity.Error);
+    }
+    finally
+    {
+        _isLoading = false;
+        await InvokeAsync(StateHasChanged);
+    }
+}
 
     // ═══════════════════════════════════════
     //          CHART OPTIONS INIT
@@ -845,82 +879,101 @@ else
     }
 
     private async Task LoadData()
+{
+    _isLoading = true;
+    _loadError = null;
+    await InvokeAsync(StateHasChanged);
+
+    try
     {
-        _isLoading = true;
-        try
-        {
-            _data = await LeadsService.GetDashboardDataAsync(_filter);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add("تعذّر تحميل بيانات اللوحة: " + ex.Message, Severity.Error);
-        }
-        finally
-        {
-            _isLoading = false;
-        }
+        _data = await LeadsService
+            .GetDashboardDataAsync(_filter)
+            .WaitAsync(TimeSpan.FromSeconds(30));
     }
+    catch (TimeoutException)
+    {
+        _loadError = "تحميل بيانات لوحة Leads استغرق أكثر من 30 ثانية. غالبًا يوجد استعلام بطيء في قاعدة البيانات.";
+        Snackbar.Add(_loadError, Severity.Warning);
+    }
+    catch (Exception ex)
+    {
+        _loadError = ex.GetBaseException().Message;
+        Snackbar.Add("تعذّر تحميل بيانات اللوحة: " + _loadError, Severity.Error);
+    }
+    finally
+    {
+        _isLoading = false;
+        await InvokeAsync(StateHasChanged);
+    }
+}
 
     // ═══════════════════════════════════════
     //           PERIOD & FILTERS
     // ═══════════════════════════════════════
 
-    private void SelectPeriod(string period)
+    private async Task SelectPeriod(string period)
+{
+    _selectedPeriod = period;
+
+    var today = DateTime.Today;
+
+    switch (period)
     {
-        _selectedPeriod = period;
-        var today = DateTime.Today;
+        case "today":
+            _filter.DateFrom = today;
+            _filter.DateTo = today;
+            break;
 
-        switch (period)
-        {
-            case "today":
-                _filter.DateFrom = today;
-                _filter.DateTo = today;
-                break;
-            case "week":
-                _filter.DateFrom = today.AddDays(-(int)today.DayOfWeek);
-                _filter.DateTo = today;
-                break;
-            case "month":
-                _filter.DateFrom = new DateTime(today.Year, today.Month, 1);
-                _filter.DateTo = today;
-                break;
-            case "quarter":
-                var qMonth = ((today.Month - 1) / 3) * 3 + 1;
-                _filter.DateFrom = new DateTime(today.Year, qMonth, 1);
-                _filter.DateTo = today;
-                break;
-            case "year":
-                _filter.DateFrom = new DateTime(today.Year, 1, 1);
-                _filter.DateTo = today;
-                break;
-            case "all":
-                _filter.DateFrom = null;
-                _filter.DateTo = null;
-                break;
-            case "custom":
-                return;
-        }
+        case "week":
+            _filter.DateFrom = today.AddDays(-(int)today.DayOfWeek);
+            _filter.DateTo = today;
+            break;
 
-        _ = LoadData();
+        case "month":
+            _filter.DateFrom = new DateTime(today.Year, today.Month, 1);
+            _filter.DateTo = today;
+            break;
+
+        case "quarter":
+            var qMonth = ((today.Month - 1) / 3) * 3 + 1;
+            _filter.DateFrom = new DateTime(today.Year, qMonth, 1);
+            _filter.DateTo = today;
+            break;
+
+        case "year":
+            _filter.DateFrom = new DateTime(today.Year, 1, 1);
+            _filter.DateTo = today;
+            break;
+
+        case "all":
+            _filter.DateFrom = null;
+            _filter.DateTo = null;
+            break;
+
+        case "custom":
+            return;
     }
+
+    await LoadData();
+}
 
     private async Task ApplyCustomPeriod()
     {
         await LoadData();
     }
 
-    private void SetPlatform(string? platform)
-    {
-        _filter.Platform = platform;
-        _ = LoadData();
-    }
+    private async Task SetPlatform(string? platform)
+{
+    _filter.Platform = platform;
+    await LoadData();
+}
 
     private async Task ResetAllFilters()
-    {
-        _filter = new LeadsDashboardFilterDto();
-        _showAdvanced = false;
-        SelectPeriod("month");
-    }
+{
+    _filter = new LeadsDashboardFilterDto();
+    _showAdvanced = false;
+    await SelectPeriod("month");
+}
 
     // ═══════════════════════════════════════
     //           UI HELPERS
