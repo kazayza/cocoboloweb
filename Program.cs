@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 using MudBlazor.Services;
+using ApexCharts;
 using COCOBOLOERPNEW.Helpers;
 using COCOBOLOERPNEW.Endpoints;
 using QuestPDF.Infrastructure;
@@ -26,6 +27,7 @@ builder.Services.AddRazorComponents()
 
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddMudServices();
+builder.Services.AddApexCharts();
 
 // ⭐ Rate Limiting - حماية من Brute Force
 builder.Services.AddRateLimiter(options =>

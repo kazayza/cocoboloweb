@@ -471,31 +471,26 @@ public class LeadsCrmService : ILeadsCrmService
             var prevQuery = _db.LeadsCRMs.AsNoTracking().AsQueryable();
             prevQuery = ApplyDashboardFilter(prevQuery, prevFilter);
 
-            var prevLeadsTask = prevQuery.Select(l => new
-            {
-                l.LeadStatus,
-                l.IsDuplicate,
-                l.IsConverted,
-                l.ConvertedDate,
-                l.CreatedAt
-            }).ToListAsync();
+            var prevLeads = await prevQuery.Select(l => new
+{
+    l.LeadStatus,
+    l.IsDuplicate,
+    l.IsConverted,
+    l.ConvertedDate,
+    l.CreatedAt
+}).ToListAsync();
 
-            var empIds = leads
-                .Where(l => l.AssignedEmployeeId.HasValue)
-                .Select(l => l.AssignedEmployeeId!.Value)
-                .Distinct()
-                .ToList();
+var empIds = leads
+    .Where(l => l.AssignedEmployeeId.HasValue)
+    .Select(l => l.AssignedEmployeeId!.Value)
+    .Distinct()
+    .ToList();
 
-            var empNamesTask = empIds.Count > 0
-                ? _db.Employees.AsNoTracking()
-                    .Where(e => empIds.Contains(e.EmployeeId))
-                    .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName)
-                : Task.FromResult(new Dictionary<int, string>());
-
-            await Task.WhenAll(prevLeadsTask, empNamesTask);
-
-            var prevLeads = await prevLeadsTask;
-            var empNames = await empNamesTask;
+var empNames = empIds.Count > 0
+    ? await _db.Employees.AsNoTracking()
+        .Where(e => empIds.Contains(e.EmployeeId))
+        .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName ?? "")
+    : new Dictionary<int, string>();
 
             // ═══════════════════════════════════════════
             //  كل الحسابات بعد كده في الذاكرة — صفر استعلامات
@@ -720,9 +715,10 @@ public class LeadsCrmService : ILeadsCrmService
                 .Where(l => l.CampaignName != null).Select(l => l.CampaignName!).Distinct().OrderBy(c => c).ToList();
         }
         catch (Exception ex)
-        {
-            _logger.LogError(ex, "Leads Dashboard load failed: {Msg}", ex.Message);
-        }
+{
+    _logger.LogError(ex, "Leads Dashboard load failed: {Msg}", ex.Message);
+    throw;
+}
 
         return result;
     }
