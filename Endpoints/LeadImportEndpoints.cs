@@ -20,6 +20,7 @@ public static class LeadImportEndpoints
         group.MapPost("/import", async (
             LeadImportRequest request,
             IAuditService auditService,
+            NotificationService notify,
             IConfiguration config,
             db24804Context db) =>
         {
@@ -96,10 +97,10 @@ public static class LeadImportEndpoints
                 City = request.City?.Trim(),
                 Area = request.Area?.Trim(),
                 Address = BuildAddress(request),
-                //MetaLeadId = request.LeadId?.ToString(),
+                MetaLeadId = request.LeadId?.ToString(),
                 CampaignName = request.CampaignName?.Trim(),
                 AdName = request.AdName?.Trim(),
-                //AdSetName = request.AdSet?.Trim(),
+                AdSetName = request.AdSet?.Trim(),
                 FormName = request.FormName?.Trim(),
                 FormId = request.FormId?.Trim(),
                 Platform = request.Platform?.Trim(),
@@ -125,6 +126,8 @@ public static class LeadImportEndpoints
             await auditService.LogAsync("LeadsCRM", "Created",
                 lead.LeadId.ToString(), null, lead, "MetaIntegration");
 
+            await NotifyNewLeadAsync(notify, lead);
+
             return Results.Ok(new LeadImportResult
             {
                 Success = true,
@@ -142,6 +145,7 @@ public static class LeadImportEndpoints
         group.MapPost("/import-batch", async (
             BatchLeadImportRequest batchRequest,
             IAuditService auditService,
+            NotificationService notify,
             IConfiguration config,
             db24804Context db) =>
         {
@@ -266,6 +270,8 @@ public static class LeadImportEndpoints
                 }
             }
 
+            await NotifyBatchImportSummaryAsync(notify, result);
+
             return Results.Ok(result);
         });
 
@@ -283,6 +289,81 @@ public static class LeadImportEndpoints
                 Time = DateTime.Now
             });
         });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Notifications
+    // ═══════════════════════════════════════════════════════════
+
+    private static async Task NotifyNewLeadAsync(NotificationService notify, LeadsCrm lead)
+    {
+        try
+        {
+            var title = "📥 Lead جديد وصل من Meta";
+            var campaignPart = string.IsNullOrWhiteSpace(lead.CampaignName)
+                ? string.Empty
+                : $" من حملة: {lead.CampaignName}";
+
+            var message = $"وصل Lead جديد: {lead.FullName} - {lead.Phone}{campaignPart}. برجاء المتابعة أو اتخاذ إجراء.";
+
+            await notify.NotifyRoleAsync(
+                title: title,
+                message: message,
+                role: SystemRoles.Admin,
+                createdBy: "MetaIntegration",
+                formName: "crm/leads",
+                relatedTable: "LeadsCRM",
+                relatedId: lead.LeadId);
+
+            await notify.NotifyRoleAsync(
+                title: title,
+                message: message,
+                role: SystemRoles.SalesManager,
+                createdBy: "MetaIntegration",
+                formName: "crm/leads",
+                relatedTable: "LeadsCRM",
+                relatedId: lead.LeadId);
+        }
+        catch (Exception ex)
+        {
+            // لا نوقف الاستيراد لو الإشعار فشل
+            Console.WriteLine($"[WARN] Failed to send new lead notification. LeadId={lead.LeadId}. Error={ex.Message}");
+        }
+    }
+
+    private static async Task NotifyBatchImportSummaryAsync(NotificationService notify, BatchLeadImportResult result)
+    {
+        if (result.TotalCreated <= 0) return;
+
+        try
+        {
+            var title = $"📥 تم استيراد {result.TotalCreated} Lead جديد";
+            var message =
+                $"تم استيراد {result.TotalCreated} Lead جديد من Google Sheet. " +
+                $"المكرر: {result.TotalDuplicates}، الفاشل: {result.TotalFailed}. " +
+                "برجاء مراجعة قائمة Leads واتخاذ إجراء.";
+
+            await notify.NotifyRoleAsync(
+                title: title,
+                message: message,
+                role: SystemRoles.Admin,
+                createdBy: "MetaIntegration",
+                formName: "crm/leads",
+                relatedTable: "LeadsCRM");
+
+            await notify.NotifyRoleAsync(
+                title: title,
+                message: message,
+                role: SystemRoles.SalesManager,
+                createdBy: "MetaIntegration",
+                formName: "crm/leads",
+                relatedTable: "LeadsCRM");
+        }
+        catch (Exception ex)
+        {
+            // لا نوقف الاستيراد لو الإشعار فشل
+            Console.WriteLine($"[WARN] Failed to send batch lead notification. Error={ex.Message}");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════

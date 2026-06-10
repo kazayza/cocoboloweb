@@ -8,14 +8,20 @@ public class LeadsCrmService : ILeadsCrmService
 {
     private readonly db24804Context _db;
     private readonly IAuditService _audit;
+    private readonly NotificationService _notify;
     private readonly ILogger<LeadsCrmService> _logger;
 
-    public LeadsCrmService(db24804Context db, IAuditService audit, ILogger<LeadsCrmService> logger)
-    {
-        _db = db;
-        _audit = audit;
-        _logger = logger;
-    }
+    public LeadsCrmService(
+    db24804Context db,
+    IAuditService audit,
+    NotificationService notify,
+    ILogger<LeadsCrmService> logger)
+{
+    _db = db;
+    _audit = audit;
+    _notify = notify;
+    _logger = logger;
+}
 
     // ═══════════════════════════════════════════════════════════
     //  عرض كل الـ Leads مع فلترة وصفحات (مُحسّن — بدون N+1)
@@ -71,6 +77,17 @@ public class LeadsCrmService : ILeadsCrmService
 
         if (filter.DateTo.HasValue)
             query = query.Where(l => l.CreatedAt <= filter.DateTo.Value.AddDays(1));
+        if (filter.LateFollowUpOnly)
+{
+    var lateCutoff = DateTime.Now.AddHours(-1);
+
+    query = query.Where(l =>
+        !l.IsConverted &&
+        l.LeadStatus != "محوّل" &&
+        l.LeadStatus != "مرفوض" &&
+        !l.LastContactDate.HasValue &&
+        l.CreatedAt <= lateCutoff);
+}
 
         var totalCount = await query.CountAsync();
 
@@ -126,7 +143,8 @@ public class LeadsCrmService : ILeadsCrmService
             Feedback = l.Feedback,
             SheetTabName = l.SheetTabName,
             LeadDate = l.LeadDate,
-            CreatedAt = l.CreatedAt
+            CreatedAt = l.CreatedAt,
+            LastContactDate = l.LastContactDate
         }).ToList();
 
         return new PagedResult<LeadsCrmListDto>
@@ -215,40 +233,124 @@ public class LeadsCrmService : ILeadsCrmService
     //  تحديث حالة Lead أو فيدباك
     // ═══════════════════════════════════════════════════════════
     public async Task<(bool Success, string Message)> UpdateLeadAsync(
-        LeadsCrmUpdateDto dto, string userName)
+    LeadsCrmUpdateDto dto, string userName)
+{
+    var lead = await _db.LeadsCRMs.FindAsync(dto.LeadId);
+    if (lead == null) return (false, "Lead غير موجود");
+
+    var oldStatus = lead.LeadStatus;
+    var oldAssignedEmployeeId = lead.AssignedEmployeeId;
+    var now = DateTime.Now;
+
+    // هل حصل تواصل فعلي؟
+    var hasContactAction = false;
+
+    if (!string.IsNullOrWhiteSpace(dto.LeadStatus))
     {
-        var lead = await _db.LeadsCRMs.FindAsync(dto.LeadId);
-        if (lead == null) return (false, "Lead غير موجود");
+        lead.LeadStatus = dto.LeadStatus;
 
-        var oldStatus = lead.LeadStatus;
+        if (dto.LeadStatus == "تم التواصل")
+            hasContactAction = true;
 
-        if (!string.IsNullOrWhiteSpace(dto.LeadStatus))
+        if (dto.LeadStatus == "مؤهل")
         {
-            lead.LeadStatus = dto.LeadStatus;
+            hasContactAction = true;
 
-            if (dto.LeadStatus == "مؤهل" && oldStatus != "مؤهل")
-                lead.QualifiedDate = DateTime.Now;
-
-            if (dto.LeadStatus == "تم التواصل")
-                lead.LastContactDate = DateTime.Now;
-
-            if (dto.LeadStatus == "مرفوض" && !string.IsNullOrWhiteSpace(dto.RejectedReason))
-                lead.RejectedReason = dto.RejectedReason;
+            if (oldStatus != "مؤهل")
+                lead.QualifiedDate = now;
         }
 
-        if (dto.Feedback != null)
-            lead.Feedback = dto.Feedback;
+        if (dto.LeadStatus == "مرفوض")
+        {
+            if (!string.IsNullOrWhiteSpace(dto.RejectedReason))
+                lead.RejectedReason = dto.RejectedReason;
 
-        if (dto.AssignedEmployeeId.HasValue)
-            lead.AssignedEmployeeId = dto.AssignedEmployeeId;
-
-        await _db.SaveChangesAsync();
-
-        await _audit.LogAsync("LeadsCRM", "Update",
-            dto.LeadId.ToString(), null, dto, userName);
-
-        return (true, "تم التحديث بنجاح");
+            hasContactAction = true;
+        }
     }
+
+    if (dto.Feedback != null)
+    {
+        lead.Feedback = dto.Feedback;
+
+        if (!string.IsNullOrWhiteSpace(dto.Feedback))
+            hasContactAction = true;
+    }
+
+    // مهم: نسمح بالتعيين أو مسح التعيين
+    lead.AssignedEmployeeId = dto.AssignedEmployeeId;
+
+    if (hasContactAction)
+        lead.LastContactDate = now;
+
+    await _db.SaveChangesAsync();
+
+    await _audit.LogAsync("LeadsCRM", "Update",
+        dto.LeadId.ToString(), null, dto, userName);
+
+    // إرسال إشعار لو الـ Lead اتسند لموظف جديد
+    if (dto.AssignedEmployeeId.HasValue &&
+        oldAssignedEmployeeId != dto.AssignedEmployeeId.Value)
+    {
+        await NotifyLeadAssignedAsync(lead, dto.AssignedEmployeeId.Value, userName);
+    }
+
+    return (true, "تم التحديث بنجاح");
+}
+private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string assignedBy)
+{
+    try
+    {
+        // نجيب اليوزر المرتبط بالموظف
+        var user = await _db.Users
+            .AsNoTracking()
+            .Where(u => u.EmployeeId == employeeId && u.IsActive == true)
+            .Select(u => new
+            {
+                u.Username,
+                u.FullName
+            })
+            .FirstOrDefaultAsync();
+
+        if (user == null || string.IsNullOrWhiteSpace(user.Username))
+        {
+            _logger.LogWarning(
+                "Lead {LeadId} assigned to Employee {EmployeeId}, but no active user is linked to this employee.",
+                lead.LeadId,
+                employeeId);
+
+            return;
+        }
+
+        var title = "📌 تم إسناد Lead جديد لك";
+
+        var campaignPart = string.IsNullOrWhiteSpace(lead.CampaignName)
+            ? ""
+            : $" من حملة: {lead.CampaignName}";
+
+        var message =
+            $"تم إسناد Lead لك: {lead.FullName} - {lead.Phone}{campaignPart}. " +
+            "برجاء المتابعة واتخاذ إجراء.";
+
+        await _notify.AddAsync(
+            title: title,
+            message: message,
+            recipientUser: user.Username,
+            createdBy: assignedBy,
+            formName: "crm/leads/my",
+            relatedTable: "LeadsCRM",
+            relatedId: lead.LeadId);
+    }
+    catch (Exception ex)
+    {
+        // لا نوقف التحديث لو الإشعار فشل
+        _logger.LogWarning(
+            ex,
+            "Failed to send lead assignment notification. LeadId={LeadId}, EmployeeId={EmployeeId}",
+            lead.LeadId,
+            employeeId);
+    }
+}
 
     // ═══════════════════════════════════════════════════════════
     //  تحويل Lead لعميل (Party + Opportunity + Task)
@@ -382,16 +484,19 @@ public class LeadsCrmService : ILeadsCrmService
         var today = DateTime.Today;
         var weekStart = today.AddDays(-(int)today.DayOfWeek);
         var monthStart = new DateTime(today.Year, today.Month, 1);
+        var lateCutoff = DateTime.Now.AddHours(-1);
 
         // ⭐ استعلام واحد: نحمل كل اللي محتاجينه في الذاكرة
         var leadsData = await _db.LeadsCRMs.AsNoTracking()
-            .Select(l => new
-            {
-                l.LeadStatus,
-                l.IsDuplicate,
-                l.CreatedAt
-            })
-            .ToListAsync();
+    .Select(l => new
+    {
+        l.LeadStatus,
+        l.IsDuplicate,
+        l.IsConverted,
+        l.LastContactDate,
+        l.CreatedAt
+    })
+    .ToListAsync();
 
         // كمان استعلام واحد للحملات والمنصات
         var campaignData = await _db.LeadsCRMs.AsNoTracking()
@@ -426,6 +531,12 @@ public class LeadsCrmService : ILeadsCrmService
             QualifiedLeads = leadsData.Count(l => l.LeadStatus == "مؤهل"),
             ConvertedLeads = leadsData.Count(l => l.LeadStatus == "محوّل"),
             RejectedLeads = leadsData.Count(l => l.LeadStatus == "مرفوض"),
+            LateFollowUpLeads = leadsData.Count(l =>
+    !l.IsConverted &&
+    l.LeadStatus != "محوّل" &&
+    l.LeadStatus != "مرفوض" &&
+    !l.LastContactDate.HasValue &&
+    l.CreatedAt <= lateCutoff),
             DuplicateLeads = leadsData.Count(l => l.IsDuplicate),
             TodayLeads = leadsData.Count(l => l.CreatedAt >= today),
             ThisWeekLeads = leadsData.Count(l => l.CreatedAt >= weekStart),

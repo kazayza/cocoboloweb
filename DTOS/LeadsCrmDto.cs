@@ -19,6 +19,7 @@ public class LeadsCrmFilterDto
     public bool? IsConverted { get; set; }
     public DateTime? DateFrom { get; set; }
     public DateTime? DateTo { get; set; }
+    public bool LateFollowUpOnly { get; set; }
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 25;
 }
@@ -178,6 +179,7 @@ public class LeadsCrmStatsDto
     public int QualifiedLeads { get; set; }
     public int ConvertedLeads { get; set; }
     public int RejectedLeads { get; set; }
+    public int LateFollowUpLeads { get; set; }
     public int DuplicateLeads { get; set; }
     public int TodayLeads { get; set; }
     public int ThisWeekLeads { get; set; }

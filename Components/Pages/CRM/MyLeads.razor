@@ -1,0 +1,517 @@
+@page "/crm/leads/my"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@using MudVariant = MudBlazor.Variant
+
+@attribute [Authorize]
+
+@inject ILeadsCrmService LeadsService
+@inject IInvoiceService InvoiceService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+
+<PageTitle>My Leads — CRM</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="my-loading">
+        <MudProgressCircular Color="MudColor.Primary" Size="MudSize.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-3">جاري تحميل Leads الخاصة بك...</MudText>
+    </div>
+}
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="my-leads-page" dir="rtl">
+        <MudAlert Severity="Severity.Error" Variant="MudVariant.Filled" Class="mb-3">
+            @_loadError
+        </MudAlert>
+        <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" OnClick="LoadDataAsync">
+            إعادة المحاولة
+        </MudButton>
+    </div>
+}
+else
+{
+    <div class="my-leads-page" dir="rtl">
+        <div class="my-header">
+            <div>
+                <h1>
+                    <MudIcon Icon="@Icons.Material.Rounded.AssignmentInd" />
+                    My Leads
+                </h1>
+                <p>Leads المسندة لك للمتابعة اليومية — @(_employeeName ?? _currentUserName)</p>
+            </div>
+            <div class="my-header-actions">
+                <MudButton Variant="MudVariant.Outlined" Color="MudColor.Inherit"
+                           StartIcon="@Icons.Material.Rounded.Refresh"
+                           OnClick="LoadDataAsync">
+                    تحديث
+                </MudButton>
+                <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary"
+                           StartIcon="@Icons.Material.Rounded.ListAlt"
+                           OnClick="@(() => Navigation.NavigateTo("/crm/leads"))">
+                    كل الـ Leads
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="my-kpis">
+            <button class="my-kpi @GetQuickClass(null)" @onclick="@(() => SetStatusFilter(null))">
+                <span class="kpi-num">@_totalCount</span>
+                <span class="kpi-label">الإجمالي</span>
+            </button>
+            <button class="my-kpi @GetQuickClass("جديد")" @onclick="@(() => SetStatusFilter("جديد"))">
+                <span class="kpi-num">@_newCount</span>
+                <span class="kpi-label">جديد</span>
+            </button>
+            <button class="my-kpi @GetQuickClass("تم التواصل")" @onclick="@(() => SetStatusFilter("تم التواصل"))">
+                <span class="kpi-num">@_contactedCount</span>
+                <span class="kpi-label">تم التواصل</span>
+            </button>
+            <button class="my-kpi @GetQuickClass("مؤهل")" @onclick="@(() => SetStatusFilter("مؤهل"))">
+                <span class="kpi-num">@_qualifiedCount</span>
+                <span class="kpi-label">مؤهل</span>
+            </button>
+            <button class="my-kpi late @(_lateOnly ? "active" : "")" @onclick="ToggleLateOnly">
+                <span class="kpi-num">@_lateCount</span>
+                <span class="kpi-label">متأخر</span>
+            </button>
+        </div>
+
+        <div class="my-toolbar">
+            <MudTextField T="string"
+                          Value="_searchText"
+                          ValueChanged="@(async v => { _searchText = v; await SearchAsync(); })"
+                          Placeholder="بحث بالاسم أو الهاتف أو الحملة..."
+                          Variant="MudVariant.Outlined"
+                          Margin="Margin.Dense"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Rounded.Search"
+                          Clearable="true"
+                          Class="my-search" />
+
+            @if (_lateOnly || !string.IsNullOrWhiteSpace(_statusFilter) || !string.IsNullOrWhiteSpace(_searchText))
+            {
+                <MudButton Variant="MudVariant.Text" Color="MudColor.Error"
+                           StartIcon="@Icons.Material.Rounded.FilterAltOff"
+                           OnClick="ResetFiltersAsync">
+                    مسح الفلاتر
+                </MudButton>
+            }
+        </div>
+
+        <MudPaper Class="my-table-wrap" Elevation="0">
+            <MudTable Items="_visibleItems" Dense="true" Hover="true" Breakpoint="Breakpoint.Sm" Elevation="0">
+                <NoRecordsContent>
+                    <div class="empty-box">
+                        <MudIcon Icon="@Icons.Material.Rounded.SearchOff" Size="MudSize.Large" />
+                        <strong>لا توجد Leads مطابقة</strong>
+                        <span>جرّب تغيير الفلاتر أو تحديث البيانات.</span>
+                    </div>
+                </NoRecordsContent>
+                <HeaderContent>
+                    <MudTh>العميل</MudTh>
+                    <MudTh>الهاتف</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh>الحملة</MudTh>
+                    <MudTh>المتابعة</MudTh>
+                    <MudTh Style="text-align:center">إجراءات</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="العميل">
+                        <div class="lead-name-cell">
+                            <strong>@context.FullName</strong>
+                            <span>@(context.ProjectType ?? context.City ?? "—")</span>
+                        </div>
+                    </MudTd>
+                    <MudTd DataLabel="الهاتف" Style="direction:ltr;text-align:right">
+                        @context.Phone
+                    </MudTd>
+                    <MudTd DataLabel="الحالة">
+                        <span class="@GetStatusClass(context.LeadStatus)">@context.LeadStatus</span>
+                    </MudTd>
+                    <MudTd DataLabel="الحملة">
+                        <span class="campaign-text" title="@context.CampaignName">@(context.CampaignName ?? "—")</span>
+                    </MudTd>
+                    <MudTd DataLabel="المتابعة">
+                        <MudTooltip Text="@GetFollowTooltip(context)">
+                            <span class="@GetFollowClass(context)">@GetFollowText(context)</span>
+                        </MudTooltip>
+                    </MudTd>
+                    <MudTd DataLabel="إجراءات" Style="text-align:center">
+                        <div class="row-actions">
+                            @if (!string.IsNullOrWhiteSpace(context.Phone))
+                            {
+                                <MudIconButton Icon="@Icons.Custom.Brands.WhatsApp" Color="MudColor.Success" Size="MudSize.Small"
+                                               Title="واتساب" OnClick="@(() => OpenWhatsApp(context.Phone))" />
+                                <MudIconButton Icon="@Icons.Material.Rounded.Phone" Color="MudColor.Primary" Size="MudSize.Small"
+                                               Title="اتصال" OnClick="@(() => CallPhone(context.Phone))" />
+                            }
+
+                            @if (context.LeadStatus != "تم التواصل" && context.LeadStatus != "محوّل" && context.LeadStatus != "مرفوض")
+                            {
+                                <MudButton Variant="MudVariant.Outlined" Color="MudColor.Info" Size="MudSize.Small"
+                                           OnClick="@(() => MarkStatusAsync(context, "تم التواصل"))">
+                                    تم التواصل
+                                </MudButton>
+                            }
+
+                            @if (context.LeadStatus != "مؤهل" && context.LeadStatus != "محوّل" && context.LeadStatus != "مرفوض")
+                            {
+                                <MudButton Variant="MudVariant.Outlined" Color="MudColor.Success" Size="MudSize.Small"
+                                           OnClick="@(() => MarkStatusAsync(context, "مؤهل"))">
+                                    مؤهل
+                                </MudButton>
+                            }
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
+    </div>
+}
+
+<style>
+    .my-leads-page { padding: 1rem 1.5rem 3rem; max-width: 1800px; margin: 0 auto; }
+    .my-loading { min-height: 60vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+
+    .my-header {
+        background: linear-gradient(135deg, #0f172a, #2563eb);
+        border-radius: 18px;
+        color: white;
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 1rem;
+        display:flex;
+        justify-content:space-between;
+        gap:1rem;
+        flex-wrap:wrap;
+        align-items:center;
+        box-shadow: 0 10px 30px rgba(37,99,235,.18);
+    }
+    .my-header h1 { margin:0; display:flex; align-items:center; gap:.5rem; font-size:1.45rem; font-weight:900; }
+    .my-header p { margin:.25rem 0 0; opacity:.85; }
+    .my-header-actions { display:flex; gap:.5rem; flex-wrap:wrap; }
+
+    .my-kpis {
+        display:grid;
+        grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+        gap:.65rem;
+        margin-bottom:.85rem;
+    }
+    .my-kpi {
+        border:1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-surface);
+        border-radius:14px;
+        padding:.8rem 1rem;
+        display:flex;
+        flex-direction:column;
+        align-items:flex-start;
+        cursor:pointer;
+        transition:.18s ease;
+        text-align:right;
+    }
+    .my-kpi:hover { transform:translateY(-2px); box-shadow:0 8px 18px rgba(0,0,0,.08); }
+    .my-kpi.active { border-color:#2563eb; background:#eff6ff; }
+    .my-kpi.late.active { border-color:#dc2626; background:#fef2f2; }
+    .kpi-num { font-size:1.35rem; font-weight:900; line-height:1; }
+    .kpi-label { font-size:.78rem; color:var(--mud-palette-text-secondary); margin-top:.3rem; }
+
+    .my-toolbar {
+        background: var(--mud-palette-surface);
+        border:1px solid var(--mud-palette-divider);
+        border-radius:14px;
+        padding:.7rem;
+        display:flex;
+        gap:.6rem;
+        align-items:center;
+        margin-bottom:.85rem;
+        flex-wrap:wrap;
+    }
+    .my-search { flex:1; min-width:260px; }
+
+    .my-table-wrap { border:1px solid var(--mud-palette-divider); border-radius:14px; padding:8px; overflow:hidden; }
+    .lead-name-cell { display:flex; flex-direction:column; gap:.15rem; }
+    .lead-name-cell span { color:var(--mud-palette-text-secondary); font-size:.75rem; }
+    .campaign-text { display:inline-block; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .row-actions { display:flex; align-items:center; justify-content:center; gap:.25rem; flex-wrap:wrap; }
+    .empty-box { padding:2rem; display:flex; flex-direction:column; align-items:center; gap:.5rem; color:var(--mud-palette-text-secondary); }
+
+    .status-new, .status-contacted, .status-qualified, .status-converted, .status-rejected, .status-default {
+        display:inline-flex; padding:4px 10px; border-radius:999px; font-size:.74rem; font-weight:800; white-space:nowrap;
+    }
+    .status-new { background:#dbeafe; color:#1d4ed8; }
+    .status-contacted { background:#fef3c7; color:#92400e; }
+    .status-qualified { background:#dcfce7; color:#166534; }
+    .status-converted { background:#ede9fe; color:#6d28d9; }
+    .status-rejected { background:#fee2e2; color:#991b1b; }
+    .status-default { background:#f3f4f6; color:#374151; }
+
+    .follow-badge {
+        display:inline-flex; align-items:center; justify-content:center;
+        min-width:92px; padding:4px 9px; border-radius:999px;
+        font-size:.72rem; font-weight:900; white-space:nowrap;
+    }
+    .follow-new { background:#dbeafe; color:#1d4ed8; }
+    .follow-warn { background:#fef3c7; color:#92400e; }
+    .follow-late { background:#fee2e2; color:#991b1b; animation:pulseLate 1.8s infinite; }
+    .follow-contact { background:#e0f2fe; color:#0369a1; }
+    .follow-done { background:#dcfce7; color:#166534; }
+    .follow-rejected { background:#f3f4f6; color:#4b5563; }
+
+    @@keyframes pulseLate {
+        0%,100% { box-shadow:0 0 0 0 rgba(239,68,68,.25); }
+        50% { box-shadow:0 0 0 5px rgba(239,68,68,0); }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private string? _loadError;
+    private string _currentUserName = "system";
+    private int? _employeeId;
+    private string? _employeeName;
+
+    private LeadsCrmFilterDto _filter = new() { PageSize = 300 };
+    private List<LeadsCrmListDto> _allItems = new();
+    private List<LeadsCrmListDto> _visibleItems = new();
+
+    private string _searchText = "";
+    private string? _statusFilter;
+    private bool _lateOnly;
+
+    private int _totalCount;
+    private int _newCount;
+    private int _contactedCount;
+    private int _qualifiedCount;
+    private int _lateCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            _currentUserName = auth.User.Identity?.Name ?? "system";
+
+            _employeeId = await InvoiceService.GetEmployeeIdByUserNameAsync(_currentUserName);
+            if (!_employeeId.HasValue)
+            {
+                _loadError = "المستخدم الحالي غير مربوط بموظف. برجاء ربط حساب المستخدم بموظف لاستخدام شاشة My Leads.";
+                return;
+            }
+
+            _employeeName = await InvoiceService.GetEmployeeNameByIdAsync(_employeeId.Value);
+            _filter.AssignedEmployeeId = _employeeId;
+
+            await LoadCountersAsync();
+            await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.GetBaseException().Message;
+            Snackbar.Add("تعذّر تحميل My Leads: " + _loadError, Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task LoadDataAsync()
+    {
+        if (!_employeeId.HasValue) return;
+
+        _isLoading = true;
+        _loadError = null;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            _filter.AssignedEmployeeId = _employeeId;
+            _filter.SearchText = string.IsNullOrWhiteSpace(_searchText) ? null : _searchText.Trim();
+            _filter.LeadStatus = _lateOnly ? null : _statusFilter;
+            _filter.PageNumber = 1;
+            _filter.PageSize = 300;
+
+            var result = await LeadsService.GetLeadsAsync(_filter);
+            _allItems = result.Items.ToList();
+            ApplyLocalFilters();
+            await LoadCountersAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.GetBaseException().Message;
+            Snackbar.Add("تعذّر تحميل Leads الخاصة بك: " + _loadError, Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ApplyLocalFilters()
+    {
+        _visibleItems = _lateOnly
+            ? _allItems.Where(IsLate).ToList()
+            : _allItems.ToList();
+    }
+
+    private async Task LoadCountersAsync()
+    {
+        if (!_employeeId.HasValue) return;
+
+        _totalCount = await CountByStatusAsync(null);
+        _newCount = await CountByStatusAsync("جديد");
+        _contactedCount = await CountByStatusAsync("تم التواصل");
+        _qualifiedCount = await CountByStatusAsync("مؤهل");
+
+        var openFilter = new LeadsCrmFilterDto
+        {
+            AssignedEmployeeId = _employeeId,
+            PageNumber = 1,
+            PageSize = 300
+        };
+        var open = await LeadsService.GetLeadsAsync(openFilter);
+        _lateCount = open.Items.Count(IsLate);
+    }
+
+    private async Task<int> CountByStatusAsync(string? status)
+    {
+        var f = new LeadsCrmFilterDto
+        {
+            AssignedEmployeeId = _employeeId,
+            LeadStatus = status,
+            PageNumber = 1,
+            PageSize = 1
+        };
+
+        return (await LeadsService.GetLeadsAsync(f)).TotalCount;
+    }
+
+    private async Task SearchAsync()
+    {
+        await LoadDataAsync();
+    }
+
+    private async Task SetStatusFilter(string? status)
+    {
+        _lateOnly = false;
+        _statusFilter = _statusFilter == status ? null : status;
+        await LoadDataAsync();
+    }
+
+    private async Task ToggleLateOnly()
+    {
+        _lateOnly = !_lateOnly;
+        if (_lateOnly) _statusFilter = null;
+        await LoadDataAsync();
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _searchText = "";
+        _statusFilter = null;
+        _lateOnly = false;
+        await LoadDataAsync();
+    }
+
+    private async Task MarkStatusAsync(LeadsCrmListDto lead, string status)
+    {
+        try
+        {
+            var dto = new LeadsCrmUpdateDto
+            {
+                LeadId = lead.LeadId,
+                LeadStatus = status,
+                AssignedEmployeeId = lead.AssignedEmployeeId,
+                Feedback = status == "تم التواصل" ? "تم التواصل من شاشة My Leads" : null
+            };
+
+            var (ok, msg) = await LeadsService.UpdateLeadAsync(dto, _currentUserName);
+            Snackbar.Add(ok ? "تم تحديث الحالة" : msg, ok ? Severity.Success : Severity.Error);
+            if (ok) await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("تعذّر تحديث الحالة: " + ex.Message, Severity.Error);
+        }
+    }
+
+    private string GetQuickClass(string? status)
+        => !_lateOnly && _statusFilter == status ? "active" : "";
+
+    private bool IsLate(LeadsCrmListDto lead)
+    {
+        if (lead.IsConverted || lead.LeadStatus == "محوّل" || lead.LeadStatus == "مرفوض") return false;
+        if (lead.LastContactDate.HasValue) return false;
+        return (DateTime.Now - lead.CreatedAt).TotalHours >= 1;
+    }
+
+    private string GetFollowText(LeadsCrmListDto lead)
+    {
+        if (lead.IsConverted || lead.LeadStatus == "محوّل") return "تم التحويل";
+        if (lead.LeadStatus == "مرفوض") return "مرفوض";
+        if (lead.LastContactDate.HasValue) return $"آخر تواصل {FormatElapsed(lead.LastContactDate.Value)}";
+        return $"وصل {FormatElapsed(lead.CreatedAt)}";
+    }
+
+    private string GetFollowTooltip(LeadsCrmListDto lead)
+    {
+        var created = $"تاريخ الوصول: {lead.CreatedAt:yyyy/MM/dd HH:mm}";
+        if (lead.LastContactDate.HasValue)
+            return $"{created} — آخر تواصل: {lead.LastContactDate.Value:yyyy/MM/dd HH:mm}";
+        if (IsLate(lead)) return $"{created} — متأخر عن المتابعة.";
+        return $"{created} — في انتظار أول تواصل.";
+    }
+
+    private string GetFollowClass(LeadsCrmListDto lead)
+    {
+        if (lead.IsConverted || lead.LeadStatus == "محوّل") return "follow-badge follow-done";
+        if (lead.LeadStatus == "مرفوض") return "follow-badge follow-rejected";
+        if (lead.LastContactDate.HasValue) return "follow-badge follow-contact";
+
+        var age = DateTime.Now - lead.CreatedAt;
+        if (age.TotalHours >= 1) return "follow-badge follow-late";
+        if (age.TotalMinutes >= 15) return "follow-badge follow-warn";
+        return "follow-badge follow-new";
+    }
+
+    private static string FormatElapsed(DateTime date)
+    {
+        var span = DateTime.Now - date;
+        if (span.TotalMinutes < 1) return "الآن";
+        if (span.TotalMinutes < 60) return $"منذ {(int)span.TotalMinutes} د";
+        if (span.TotalHours < 24) return $"منذ {(int)span.TotalHours} س";
+        if (span.TotalDays < 30) return $"منذ {(int)span.TotalDays} يوم";
+        return date.ToString("yyyy/MM/dd");
+    }
+
+    private string GetStatusClass(string? status) => status switch
+    {
+        "جديد" => "status-new",
+        "تم التواصل" => "status-contacted",
+        "مؤهل" => "status-qualified",
+        "محوّل" => "status-converted",
+        "مرفوض" => "status-rejected",
+        _ => "status-default"
+    };
+
+    private void OpenWhatsApp(string phone)
+    {
+        var clean = phone.Replace(" ", "").Replace("-", "");
+        if (!clean.StartsWith("+") && !clean.StartsWith("2")) clean = "2" + clean;
+        if (!clean.StartsWith("+")) clean = "+" + clean;
+        Navigation.NavigateTo($"https://wa.me/{clean[1..]}", forceLoad: true);
+    }
+
+    private void CallPhone(string phone)
+    {
+        Navigation.NavigateTo($"tel:{phone}", forceLoad: true);
+    }
+}
