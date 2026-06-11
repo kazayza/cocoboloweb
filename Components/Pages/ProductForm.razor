@@ -98,11 +98,13 @@ else
                                 </MudItem>
                                 <MudItem xs="12" md="6">
                                     <div class="form-field">
-                                        <label>مجموعة المنتج</label>
+                                        <label>مجموعة المنتج <span class="required">*</span></label>
                                         <MudSelect T="int"
                                                    @bind-Value="_model.ProductGroupId"
                                                    Variant="Variant.Outlined"
                                                    Placeholder="اختر المجموعة"
+                                                   Required="true"
+                                                   RequiredError="مجموعة المنتج مطلوبة"
                                                    Adornment="Adornment.Start"
                                                    AdornmentIcon="@Icons.Material.Filled.Category">
                                             @foreach (var g in _groups)
@@ -2190,22 +2192,51 @@ private void SetPreviewAsPrimary()
                 CustomerName = _selectedCustomer?.PartyName ?? "غير محدد"
             };
 
+            // ─── الخطوة 1: تجهيز البيانات ───
             if (ctx.IsNew) PrepareNewProduct(isDraft);
             else           await PrepareExistingProduct(ctx);
 
-            await Db.SaveChangesAsync();
+            // ─── الخطوة 2: الحفظ في الداتابيز ───
+            try
+            {
+                await Db.SaveChangesAsync();
+            }
+            catch (Exception dbEx)
+            {
+                // هنا بالظبط خطأ الداتابيز — نعرضه واضح
+                var dbMsg = dbEx.InnerException?.Message ?? dbEx.Message;
+                Console.WriteLine($"[ProductForm] DB Save Error: {dbEx}");
+                Console.WriteLine($"[ProductForm] Inner: {dbEx.InnerException}");
+                ShowError(TranslateDbError(dbMsg));
+                return;
+            }
 
-            // ✅ تسجيل المراجعة (Audit Log) بالبيانات القديمة والجديدة
-            await AuditService.LogAsync(
-                "Products",
-                ctx.IsNew ? "INSERT" : "UPDATE",
-                _model.ProductId.ToString(),
-                ctx.OldProduct,  // البيانات القديمة (null لو منتج جديد)
-                _model,          // البيانات الجديدة
-                _currentUserName ?? "System"
-            );
+            // ─── الخطوة 3: تسجيل المراجعة (لو فشلت مش مشكلة) ───
+            try
+            {
+                await AuditService.LogAsync(
+                    "Products",
+                    ctx.IsNew ? "INSERT" : "UPDATE",
+                    _model.ProductId.ToString(),
+                    ctx.OldProduct,
+                    _model,
+                    _currentUserName ?? "System"
+                );
+            }
+            catch (Exception auditEx)
+            {
+                Console.WriteLine($"[ProductForm] Audit Log Warning: {auditEx.Message}");
+            }
 
-            if (!isDraft) await SendNotifications(ctx);
+            // ─── الخطوة 4: إرسال الإشعارات (لو فشلت مش مشكلة) ───
+            try
+            {
+                if (!isDraft) await SendNotifications(ctx);
+            }
+            catch (Exception notifyEx)
+            {
+                Console.WriteLine($"[ProductForm] Notification Warning: {notifyEx.Message}");
+            }
 
             _isDirty = false;
             Snackbar.Add(isDraft ? "تم حفظ المسودة بنجاح" : "تم الحفظ بنجاح", Severity.Success);
@@ -2213,13 +2244,43 @@ private void SetPreviewAsPrimary()
         }
         catch (Exception ex)
         {
-            ShowError("خطأ أثناء الحفظ. يرجى المحاولة مرة أخرى.");
-            Console.WriteLine($"[ProductForm] Save Error: {ex}");
+            Console.WriteLine($"[ProductForm] Unexpected Save Error: {ex}");
+            ShowError($"خطأ غير متوقع: {ex.InnerException?.Message ?? ex.Message}");
         }
         finally
         {
             _isSaving = false;
         }
+    }
+
+    private static string TranslateDbError(string msg)
+    {
+        if (msg.Contains("FK__Products__Produc", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("ProductGroup", StringComparison.OrdinalIgnoreCase))
+            return $"خطأ في مجموعة المنتج — تأكد إن المجموعة موجودة في الداتابيز. ({msg})";
+
+        if (msg.Contains("FK_Products_ProductPricingStatus", StringComparison.OrdinalIgnoreCase))
+            return $"خطأ في حالة التسعير. ({msg})";
+
+        if (msg.Contains("Cannot insert the value NULL", StringComparison.OrdinalIgnoreCase))
+            return $"عمود مطلوب فارغ — {msg}";
+
+        if (msg.Contains("PRIMARY KEY", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("PK__Products", StringComparison.OrdinalIgnoreCase))
+            return $"خطأ في المفتاح الرئيسي. ({msg})";
+
+        if (msg.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
+            return $"انتهى وقت الاتصال بالداتابيز — حاول مرة تانية. ({msg})";
+
+        if (msg.Contains("Cannot open database", StringComparison.OrdinalIgnoreCase))
+            return $"مشكلة في الاتصال بالداتابيز. ({msg})";
+
+        if (msg.Contains("Login failed", StringComparison.OrdinalIgnoreCase))
+            return $"مشكلة في صلاحيات الداتابيز. ({msg})";
+
+        // رسالة الخطأ الأصلية عشان نعرف السبب بالظبط
+        return $"خطأ من الداتابيز: {msg}";
     }
 
     private bool ValidateProduct()
