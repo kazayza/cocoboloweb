@@ -83,7 +83,7 @@ public class LeadsCrmService : ILeadsCrmService
 
     query = query.Where(l =>
         !l.IsConverted &&
-        l.LeadStatus != "محوّل" &&
+        l.LeadStatus != "محول" &&
         l.LeadStatus != "مرفوض" &&
         !l.LastContactDate.HasValue &&
         l.CreatedAt <= lateCutoff);
@@ -355,7 +355,7 @@ public async Task<(bool Success, string Message)> AddLeadInteractionAsync(
             if (!string.IsNullOrWhiteSpace(dto.RejectedReason))
                 lead.RejectedReason = dto.RejectedReason.Trim();
         }
-        else if (newStatus == "محوّل")
+        else if (newStatus == "محول")
         {
             lead.LastContactDate = now;
         }
@@ -682,7 +682,7 @@ if (initialStageId == 0)
             lead.ConvertedOpportunityId = opportunity.OpportunityId;
             lead.ConvertedDate = now;
             lead.ConvertedBy = userName;
-            lead.LeadStatus = "محوّل";
+            lead.LeadStatus = "محول";
             lead.LastContactDate = now;
             _db.LeadInteractions.Add(new LeadInteraction
 {
@@ -693,7 +693,7 @@ if (initialStageId == 0)
     Summary = $"تم تحويل الـ Lead إلى فرصة بيع #{opportunity.OpportunityId}",
     Notes = dto.Notes ?? lead.Notes,
     OldLeadStatus = oldLeadStatus,
-    NewLeadStatus = "محوّل",
+    NewLeadStatus = "محول",
     IsSystemGenerated = true,
     CreatedBy = userName,
     CreatedAt = now
@@ -769,11 +769,11 @@ if (initialStageId == 0)
             AssignedLeads = leadsData.Count(l => l.LeadStatus == "تم الإسناد"),
             ContactedLeads = leadsData.Count(l => l.LeadStatus == "تم التواصل"),
             QualifiedLeads = leadsData.Count(l => l.LeadStatus == "مؤهل"),
-            ConvertedLeads = leadsData.Count(l => l.LeadStatus == "محوّل"),
+            ConvertedLeads = leadsData.Count(l => l.LeadStatus == "محول"),
             RejectedLeads = leadsData.Count(l => l.LeadStatus == "مرفوض"),
             LateFollowUpLeads = leadsData.Count(l =>
     !l.IsConverted &&
-    l.LeadStatus != "محوّل" &&
+    l.LeadStatus != "محول" &&
     l.LeadStatus != "مرفوض" &&
     !l.LastContactDate.HasValue &&
     l.CreatedAt <= lateCutoff),
@@ -848,13 +848,13 @@ var empNames = empIds.Count > 0
             // ═══════════════════════════════════════════
 
             var totalLeads = leads.Count;
-            var convertedCount = leads.Count(l => l.LeadStatus == "محوّل");
+            var convertedCount = leads.Count(l => l.LeadStatus == "محول");
             var duplicateCount = leads.Count(l => l.IsDuplicate);
             var rejectedCount = leads.Count(l => l.LeadStatus == "مرفوض");
 
             // متوسط أيام التحويل
             var convertedWithDate = leads
-                .Where(l => l.LeadStatus == "محوّل" && l.ConvertedDate.HasValue && l.CreatedAt != default)
+                .Where(l => l.LeadStatus == "محول" && l.ConvertedDate.HasValue && l.CreatedAt != default)
                 .ToList();
             double avgDays = convertedWithDate.Count > 0
                 ? convertedWithDate.Average(l => (l.ConvertedDate!.Value - l.CreatedAt).TotalDays)
@@ -862,12 +862,12 @@ var empNames = empIds.Count > 0
 
             // ─── KPIs الفترة السابقة ───
             var prevTotal = prevLeads.Count;
-            var prevConverted = prevLeads.Count(l => l.LeadStatus == "محوّل");
+            var prevConverted = prevLeads.Count(l => l.LeadStatus == "محول");
             var prevDuplicate = prevLeads.Count(l => l.IsDuplicate);
             var prevRejected = prevLeads.Count(l => l.LeadStatus == "مرفوض");
 
             var prevConvertedWithDate = prevLeads
-                .Where(l => l.LeadStatus == "محوّل" && l.ConvertedDate.HasValue && l.CreatedAt != default)
+                .Where(l => l.LeadStatus == "محول" && l.ConvertedDate.HasValue && l.CreatedAt != default)
                 .ToList();
             double prevAvgDays = prevConvertedWithDate.Count > 0
                 ? prevConvertedWithDate.Average(l => (l.ConvertedDate!.Value - l.CreatedAt).TotalDays)
@@ -903,7 +903,7 @@ var empNames = empIds.Count > 0
                 { "تم الإسناد", "#0ea5e9" },
                 { "تم التواصل", "#f59e0b" },
                 { "مؤهل", "#10b981" },
-                { "محوّل", "#8b5cf6" },
+                { "محول", "#8b5cf6" },
                 { "مرفوض", "#ef4444" }
             };
 
@@ -951,7 +951,7 @@ var empNames = empIds.Count > 0
                 {
                     Date = d,
                     Leads = dayLeads?.Count ?? 0,
-                    Converted = dayLeads?.Count(l => l.LeadStatus == "محوّل") ?? 0
+                    Converted = dayLeads?.Count(l => l.LeadStatus == "محول") ?? 0
                 };
             }).ToList();
 
@@ -983,7 +983,7 @@ var empNames = empIds.Count > 0
                     NewCount = g.Count(l => l.LeadStatus == "جديد"),
                     ContactedCount = g.Count(l => l.LeadStatus == "تم التواصل"),
                     QualifiedCount = g.Count(l => l.LeadStatus == "مؤهل"),
-                    ConvertedCount = g.Count(l => l.LeadStatus == "محوّل"),
+                    ConvertedCount = g.Count(l => l.LeadStatus == "محول"),
                     RejectedCount = g.Count(l => l.LeadStatus == "مرفوض")
                 })
                 .Select(e => { e.Total = e.NewCount + e.ContactedCount + e.QualifiedCount + e.ConvertedCount + e.RejectedCount; return e; })
@@ -1001,7 +1001,7 @@ var empNames = empIds.Count > 0
                 new() { Stage = "جديد", Count = newCount, Percentage = totalLeads > 0 ? Math.Round((decimal)newCount / totalLeads * 100, 1) : 0, Color = "#3b82f6" },
                 new() { Stage = "تم التواصل", Count = contactedCount, Percentage = totalLeads > 0 ? Math.Round((decimal)contactedCount / totalLeads * 100, 1) : 0, Color = "#f59e0b" },
                 new() { Stage = "مؤهل", Count = qualifiedCount, Percentage = totalLeads > 0 ? Math.Round((decimal)qualifiedCount / totalLeads * 100, 1) : 0, Color = "#10b981" },
-                new() { Stage = "محوّل", Count = convertedCount, Percentage = totalLeads > 0 ? Math.Round((decimal)convertedCount / totalLeads * 100, 1) : 0, Color = "#8b5cf6" },
+                new() { Stage = "محول", Count = convertedCount, Percentage = totalLeads > 0 ? Math.Round((decimal)convertedCount / totalLeads * 100, 1) : 0, Color = "#8b5cf6" },
                 new() { Stage = "مرفوض", Count = rejectedCount, Percentage = totalLeads > 0 ? Math.Round((decimal)rejectedCount / totalLeads * 100, 1) : 0, Color = "#ef4444" }
             };
 
@@ -1014,9 +1014,9 @@ var empNames = empIds.Count > 0
                     CampaignName = g.Key.CampaignName!,
                     Platform = g.Key.Platform ?? "",
                     TotalLeads = g.Count(),
-                    ConvertedLeads = g.Count(l => l.LeadStatus == "محوّل"),
+                    ConvertedLeads = g.Count(l => l.LeadStatus == "محول"),
                     ConversionRate = g.Count() > 0
-                        ? Math.Round((decimal)g.Count(l => l.LeadStatus == "محوّل") / g.Count() * 100, 1) : 0
+                        ? Math.Round((decimal)g.Count(l => l.LeadStatus == "محول") / g.Count() * 100, 1) : 0
                 })
                 .OrderByDescending(x => x.TotalLeads)
                 .Take(10)
@@ -1030,9 +1030,9 @@ var empNames = empIds.Count > 0
                 {
                     ProjectType = g.Key!,
                     TotalLeads = g.Count(),
-                    ConvertedLeads = g.Count(l => l.LeadStatus == "محوّل"),
+                    ConvertedLeads = g.Count(l => l.LeadStatus == "محول"),
                     ConversionRate = g.Count() > 0
-                        ? Math.Round((decimal)g.Count(l => l.LeadStatus == "محوّل") / g.Count() * 100, 1) : 0
+                        ? Math.Round((decimal)g.Count(l => l.LeadStatus == "محول") / g.Count() * 100, 1) : 0
                 })
                 .OrderByDescending(x => x.TotalLeads)
                 .Take(10)
@@ -1040,7 +1040,7 @@ var empNames = empIds.Count > 0
 
             // ─── Recent Converted ───
             result.RecentConverted = leads
-                .Where(l => l.LeadStatus == "محوّل" && l.ConvertedDate.HasValue)
+                .Where(l => l.LeadStatus == "محول" && l.ConvertedDate.HasValue)
                 .OrderByDescending(l => l.ConvertedDate)
                 .Take(10)
                 .Select(l => new RecentConvertedDto

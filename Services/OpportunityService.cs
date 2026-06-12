@@ -52,7 +52,7 @@ public class OpportunityService : IOpportunityService
         var icDict = oppIds.Any() ? (await _db.CustomerInteractions.AsNoTracking().Where(ci => oppIds.Contains(ci.OpportunityId)).GroupBy(ci => ci.OpportunityId).Select(g => new { g.Key, Count = g.Count() }).ToListAsync()).ToDictionary(x => x.Key, x => x.Count) : new();
         var tcDict = oppIds.Any() ? (await _db.CrmTasks.AsNoTracking().Where(t => t.OpportunityId != null && oppIds.Contains(t.OpportunityId.Value)).GroupBy(t => t.OpportunityId!.Value).Select(g => new { g.Key, Count = g.Count() }).ToListAsync()).ToDictionary(x => x.Key, x => x.Count) : new();
         var today = DateTime.Today;
-        return new KanbanBoardDto { Columns = stages.Select(s => { var cards = opps.Where(o => o.StageId == s.StageId).Select(o => { parties.TryGetValue(o.PartyId, out var p); emps.TryGetValue(o.EmployeeId ?? 0, out var en); srcs.TryGetValue(o.SourceId ?? 0, out var sn); return new KanbanCardDto { OpportunityId = o.OpportunityId, PartyId = o.PartyId, ClientName = p.PartyName ?? "—", Phone = p.Phone, ExpectedValue = o.ExpectedValue, EmployeeId = o.EmployeeId, EmployeeName = en, InterestedProduct = o.InterestedProduct, SourceId = o.SourceId, SourceName = sn, NextFollowUpDate = o.NextFollowUpDate, StageId = s.StageId, InteractionsCount = icDict.TryGetValue(o.OpportunityId, out var ic) ? ic : 0, TasksCount = tcDict.TryGetValue(o.OpportunityId, out var tc) ? tc : 0, IsOverdue = o.NextFollowUpDate.HasValue && o.NextFollowUpDate.Value < today }; }).ToList(); return new KanbanColumnDto { StageId = s.StageId, StageName = s.StageName ?? "", StageNameAr = s.StageNameAr ?? s.StageName ?? "", StageColor = s.StageColor ?? "#94a3b8", StageOrder = s.StageOrder, Count = cards.Count, Value = cards.Sum(c => c.ExpectedValue ?? 0), Cards = cards }; }).ToList() };
+        return new KanbanBoardDto { Columns = stages.Select(s => { var cards = opps.Where(o => o.StageId == s.StageId).Select(o => { parties.TryGetValue(o.PartyId, out var p); emps.TryGetValue(o.EmployeeId ?? 0, out var en); srcs.TryGetValue(o.SourceId ?? 0, out var sn); return new KanbanCardDto { OpportunityId = o.OpportunityId, PartyId = o.PartyId, ClientName = p.PartyName ?? "—", Phone = p.Phone, ExpectedValue = o.ExpectedValue, EmployeeId = o.EmployeeId, EmployeeName = en, InterestedProduct = o.InterestedProduct, SourceId = o.SourceId, SourceName = sn, NextFollowUpDate = o.NextFollowUpDate, StageId = s.StageId, InteractionsCount = icDict.TryGetValue(o.OpportunityId, out var ic) ? ic : 0, TasksCount = tcDict.TryGetValue(o.OpportunityId, out var tc) ? tc : 0, CreatedAt = o.CreatedAt,IsOverdue = o.NextFollowUpDate.HasValue && o.NextFollowUpDate.Value < today }; }).ToList(); return new KanbanColumnDto { StageId = s.StageId, StageName = s.StageName ?? "", StageNameAr = s.StageNameAr ?? s.StageName ?? "", StageColor = s.StageColor ?? "#94a3b8", StageOrder = s.StageOrder, Count = cards.Count, Value = cards.Sum(c => c.ExpectedValue ?? 0), Cards = cards }; }).ToList() };
     }
 
     // ════════════════════ MOVE STAGE ════════════════════
@@ -260,9 +260,16 @@ private static IQueryable<SalesOpportunity> ApplyStatsFilters(
     if (f.MaxValue.HasValue)
         q = q.Where(o => o.ExpectedValue <= f.MaxValue.Value);
     if (f.DateFrom.HasValue)
-        q = q.Where(o => o.CreatedAt >= f.DateFrom.Value);
-    if (f.DateTo.HasValue)
-        q = q.Where(o => o.CreatedAt <= f.DateTo.Value);
+{
+    var from = f.DateFrom.Value.Date;
+    q = q.Where(o => o.CreatedAt >= from);
+}
+
+if (f.DateTo.HasValue)
+{
+    var to = f.DateTo.Value.Date.AddDays(1).AddTicks(-1);
+    q = q.Where(o => o.CreatedAt <= to);
+}
     if (f.IsOverdueFollowUp == true)
         q = q.Where(o => o.NextFollowUpDate.HasValue && 
                          o.NextFollowUpDate.Value < DateTime.Today);
@@ -321,8 +328,17 @@ private static IQueryable<SalesOpportunity> ApplyStatsFilters(
         if (f.IsActive.HasValue) q = q.Where(o => o.IsActive == f.IsActive.Value);
         if (f.MinValue.HasValue) q = q.Where(o => o.ExpectedValue >= f.MinValue.Value);
         if (f.MaxValue.HasValue) q = q.Where(o => o.ExpectedValue <= f.MaxValue.Value);
-        if (f.DateFrom.HasValue) q = q.Where(o => o.CreatedAt >= f.DateFrom.Value);
-        if (f.DateTo.HasValue) q = q.Where(o => o.CreatedAt <= f.DateTo.Value);
+        if (f.DateFrom.HasValue)
+{
+    var from = f.DateFrom.Value.Date;
+    q = q.Where(o => o.CreatedAt >= from);
+}
+
+if (f.DateTo.HasValue)
+{
+    var to = f.DateTo.Value.Date.AddDays(1).AddTicks(-1);
+    q = q.Where(o => o.CreatedAt <= to);
+}
         if (f.IsOverdueFollowUp == true) q = q.Where(o => o.NextFollowUpDate.HasValue && o.NextFollowUpDate.Value < DateTime.Today);
         if (f.HasFollowUp == true) q = q.Where(o => o.NextFollowUpDate.HasValue);
         if (!string.IsNullOrWhiteSpace(f.SearchText)) { var s = f.SearchText.Trim(); q = q.Where(o => (o.ClientName != null && o.ClientName.Contains(s)) || (o.Phone1 != null && o.Phone1.Contains(s)) || (o.InterestedProduct != null && o.InterestedProduct.Contains(s)) || (o.EmployeeName != null && o.EmployeeName.Contains(s))); }
@@ -336,8 +352,17 @@ private static IQueryable<SalesOpportunity> ApplyStatsFilters(
         if (f.CategoryId.HasValue) q = q.Where(o => o.CategoryId == f.CategoryId.Value);
         if (f.MinValue.HasValue) q = q.Where(o => o.ExpectedValue >= f.MinValue);
         if (f.MaxValue.HasValue) q = q.Where(o => o.ExpectedValue <= f.MaxValue);
-        if (f.DateFrom.HasValue) q = q.Where(o => o.CreatedAt >= f.DateFrom.Value);
-        if (f.DateTo.HasValue) q = q.Where(o => o.CreatedAt <= f.DateTo.Value);
+        if (f.DateFrom.HasValue)
+{
+    var from = f.DateFrom.Value.Date;
+    q = q.Where(o => o.CreatedAt >= from);
+}
+
+if (f.DateTo.HasValue)
+{
+    var to = f.DateTo.Value.Date.AddDays(1).AddTicks(-1);
+    q = q.Where(o => o.CreatedAt <= to);
+}
         if (f.IsOverdueFollowUp == true) q = q.Where(o => o.NextFollowUpDate.HasValue && o.NextFollowUpDate.Value < DateTime.Today);
         if (f.HasFollowUp == true) q = q.Where(o => o.NextFollowUpDate.HasValue);
         return q;
