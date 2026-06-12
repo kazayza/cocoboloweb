@@ -74,10 +74,7 @@ else
                 <span class="kpi-num">@_contactedCount</span>
                 <span class="kpi-label">تم التواصل</span>
             </button>
-            <button class="my-kpi @GetQuickClass("مؤهل")" @onclick="@(() => SetStatusFilter("مؤهل"))">
-                <span class="kpi-num">@_qualifiedCount</span>
-                <span class="kpi-label">مؤهل</span>
-            </button>
+            
             <button class="my-kpi late @(_lateOnly ? "active" : "")" @onclick="ToggleLateOnly">
                 <span class="kpi-num">@_lateCount</span>
                 <span class="kpi-label">متأخر</span>
@@ -154,28 +151,129 @@ else
                                                Title="اتصال" OnClick="@(() => CallPhone(context.Phone))" />
                             }
 
-                            @if (context.LeadStatus != "تم التواصل" && context.LeadStatus != "محوّل" && context.LeadStatus != "مرفوض")
-                            {
-                                <MudButton Variant="MudVariant.Outlined" Color="MudColor.Info" Size="MudSize.Small"
-                                           OnClick="@(() => MarkStatusAsync(context, "تم التواصل"))">
-                                    تم التواصل
-                                </MudButton>
-                            }
+                            @if (context.LeadStatus != "محوّل" && context.LeadStatus != "مرفوض")
+{
+    <MudButton Variant="MudVariant.Outlined"
+               Color="MudColor.Primary"
+               Size="MudSize.Small"
+               StartIcon="@Icons.Material.Rounded.AddComment"
+               OnClick="@(() => OpenInteractionDialog(context))">
+        تسجيل تواصل
+    </MudButton>
+}
+@if (context.LeadStatus == "تم التواصل" && !context.IsConverted)
+{
+    <MudButton Variant="MudVariant.Filled"
+               Color="MudColor.Success"
+               Size="MudSize.Small"
+               StartIcon="@Icons.Material.Rounded.PersonAdd"
+               OnClick="@(() => Navigation.NavigateTo($"/crm/leads/{context.LeadId}"))">
+        تحويل لفرصة
+    </MudButton>
+}
 
-                            @if (context.LeadStatus != "مؤهل" && context.LeadStatus != "محوّل" && context.LeadStatus != "مرفوض")
-                            {
-                                <MudButton Variant="MudVariant.Outlined" Color="MudColor.Success" Size="MudSize.Small"
-                                           OnClick="@(() => MarkStatusAsync(context, "مؤهل"))">
-                                    مؤهل
-                                </MudButton>
-                            }
-                        </div>
+                            </div>
                     </MudTd>
                 </RowTemplate>
             </MudTable>
         </MudPaper>
     </div>
 }
+<MudDialog @bind-Visible="_showInteractionDialog"
+           Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true })">
+    <TitleContent>
+        <div style="display:flex;align-items:center;gap:.5rem;">
+            <MudIcon Icon="@Icons.Material.Rounded.AddComment" Color="MudColor.Primary" />
+            <MudText Typo="Typo.h6">تسجيل تواصل مع Lead</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div dir="rtl" style="display:flex;flex-direction:column;gap:1rem;">
+
+            @if (_interactionLead != null)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true">
+                    العميل: <strong>@_interactionLead.FullName</strong>
+                    <br />
+                    الهاتف: @_interactionLead.Phone
+                </MudAlert>
+            }
+
+            <MudSelect T="string"
+                       Label="نوع التواصل"
+                       Variant="MudVariant.Outlined"
+                       @bind-Value="_interactionModel.InteractionType"
+                       Dense="true">
+                @foreach (var t in LeadInteractionTypes.All)
+                {
+                    <MudSelectItem T="string" Value="@t.Key">@t.Value</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField T="string"
+                          Label="ملخص التواصل *"
+                          Variant="MudVariant.Outlined"
+                          @bind-Value="_interactionModel.Summary"
+                          Dense="true"
+                          Lines="2"
+                          Placeholder="مثال: تم الاتصال والعميل مهتم بالتفاصيل" />
+
+            <MudTextField T="string"
+                          Label="ملاحظات"
+                          Variant="MudVariant.Outlined"
+                          @bind-Value="_interactionModel.Notes"
+                          Dense="true"
+                          Lines="3" />
+
+            <MudDatePicker Label="تاريخ متابعة قادم"
+                           Variant="MudVariant.Outlined"
+                           @bind-Date="_interactionModel.NextFollowUpDate"
+                           Dense="true"
+                           Clearable="true" />
+
+            <MudSelect T="string"
+                       Label="تحديث الحالة بعد التواصل"
+                       Variant="MudVariant.Outlined"
+                       @bind-Value="_interactionModel.NewLeadStatus"
+                       Dense="true"
+                       Clearable="true">
+                <MudSelectItem T="string" Value="@("تم التواصل")">تم التواصل</MudSelectItem>
+                <MudSelectItem T="string" Value="@("مرفوض")">مرفوض</MudSelectItem>
+            </MudSelect>
+
+            @if (_interactionModel.NewLeadStatus == "مرفوض")
+            {
+                <MudTextField T="string"
+                              Label="سبب الرفض"
+                              Variant="MudVariant.Outlined"
+                              @bind-Value="_interactionModel.RejectedReason"
+                              Dense="true"
+                              Lines="2" />
+            }
+
+        </div>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="MudVariant.Text"
+                   Color="MudColor.Default"
+                   OnClick="@(() => _showInteractionDialog = false)">
+            إلغاء
+        </MudButton>
+
+        <MudButton Variant="MudVariant.Filled"
+                   Color="MudColor.Primary"
+                   Disabled="_isSavingInteraction"
+                   OnClick="SaveInteractionAsync">
+            @if (_isSavingInteraction)
+            {
+                <MudProgressCircular Size="MudSize.Small" Indeterminate="true" Class="me-2" />
+            }
+            حفظ التواصل
+        </MudButton>
+    </DialogActions>
+</MudDialog>
 
 <style>
     .my-leads-page { padding: 1rem 1.5rem 3rem; max-width: 1800px; margin: 0 auto; }
@@ -284,11 +382,14 @@ else
     private string _searchText = "";
     private string? _statusFilter;
     private bool _lateOnly;
+    private bool _showInteractionDialog = false;
+private bool _isSavingInteraction = false;
+private LeadsCrmListDto? _interactionLead;
+private LeadInteractionCreateDto _interactionModel = new();
 
     private int _totalCount;
     private int _newCount;
     private int _contactedCount;
-    private int _qualifiedCount;
     private int _lateCount;
 
     protected override async Task OnInitializedAsync()
@@ -369,7 +470,7 @@ else
         _totalCount = await CountByStatusAsync(null);
         _newCount = await CountByStatusAsync("جديد");
         _contactedCount = await CountByStatusAsync("تم التواصل");
-        _qualifiedCount = await CountByStatusAsync("مؤهل");
+        
 
         var openFilter = new LeadsCrmFilterDto
         {
@@ -442,6 +543,70 @@ else
             Snackbar.Add("تعذّر تحديث الحالة: " + ex.Message, Severity.Error);
         }
     }
+    private void OpenInteractionDialog(LeadsCrmListDto lead)
+{
+    _interactionLead = lead;
+
+    _interactionModel = new LeadInteractionCreateDto
+    {
+        LeadId = lead.LeadId,
+        EmployeeId = _employeeId ?? lead.AssignedEmployeeId,
+        InteractionType = LeadInteractionTypes.Call,
+        NewLeadStatus = "تم التواصل"
+    };
+
+    _showInteractionDialog = true;
+}
+
+private async Task SaveInteractionAsync()
+{
+    if (_interactionLead == null)
+        return;
+
+    if (string.IsNullOrWhiteSpace(_interactionModel.Summary))
+    {
+        Snackbar.Add("يرجى كتابة ملخص التواصل", Severity.Warning);
+        return;
+    }
+
+    if (_interactionModel.NewLeadStatus == "مرفوض" &&
+        string.IsNullOrWhiteSpace(_interactionModel.RejectedReason))
+    {
+        Snackbar.Add("يرجى كتابة سبب الرفض", Severity.Warning);
+        return;
+    }
+
+    _isSavingInteraction = true;
+
+    try
+    {
+        _interactionModel.LeadId = _interactionLead.LeadId;
+        _interactionModel.EmployeeId = _employeeId ?? _interactionLead.AssignedEmployeeId;
+
+        var (success, message) = await LeadsService.AddLeadInteractionAsync(
+            _interactionModel,
+            _currentUserName);
+
+        if (success)
+        {
+            Snackbar.Add("تم تسجيل التواصل بنجاح", Severity.Success);
+            _showInteractionDialog = false;
+            await LoadDataAsync();
+        }
+        else
+        {
+            Snackbar.Add(message, Severity.Error);
+        }
+    }
+    catch (Exception ex)
+    {
+        Snackbar.Add("تعذّر تسجيل التواصل: " + ex.Message, Severity.Error);
+    }
+    finally
+    {
+        _isSavingInteraction = false;
+    }
+}
 
     private string GetQuickClass(string? status)
         => !_lateOnly && _statusFilter == status ? "active" : "";

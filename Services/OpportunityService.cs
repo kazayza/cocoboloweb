@@ -119,11 +119,39 @@ public class OpportunityService : IOpportunityService
 
     // ════════════════════ GET OPPORTUNITY DETAIL ════════════════════
     public async Task<OpportunityListDto?> GetOpportunityDetailAsync(int opportunityId)
+{
+    var opp = await _db.VwSalesOpportunities
+        .AsNoTracking()
+        .FirstOrDefaultAsync(o => o.OpportunityId == opportunityId);
+
+    if (opp == null) return null;
+
+    var dto = MapToListDto(opp);
+
+    var sourceLead = await _db.LeadsCRMs
+        .AsNoTracking()
+        .Where(l => l.ConvertedOpportunityId == opportunityId)
+        .Select(l => new
+        {
+            l.LeadId,
+            l.FullName,
+            l.Phone,
+            l.CampaignName,
+            l.Platform
+        })
+        .FirstOrDefaultAsync();
+
+    if (sourceLead != null)
     {
-        var opp = await _db.VwSalesOpportunities.AsNoTracking().FirstOrDefaultAsync(o => o.OpportunityId == opportunityId);
-        if (opp == null) return null;
-        return MapToListDto(opp);
+        dto.SourceLeadId = sourceLead.LeadId;
+        dto.SourceLeadName = sourceLead.FullName;
+        dto.SourceLeadPhone = sourceLead.Phone;
+        dto.SourceLeadCampaign = sourceLead.CampaignName;
+        dto.SourceLeadPlatform = sourceLead.Platform;
     }
+
+    return dto;
+}
 
     // ════════════════════ GET ALL EMPLOYEES ════════════════════
     public async Task<List<Employee>> GetEmployeesAsync()

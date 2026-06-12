@@ -58,6 +58,12 @@ public class OpportunityListDto
     public string FollowUpStatus { get; set; } = ""; // Overdue, Today, Upcoming, None
     public int InteractionsCount { get; set; }
     public int TasksCount { get; set; }
+    // مصدر الفرصة لو جاءت من Lead
+public int? SourceLeadId { get; set; }
+public string? SourceLeadName { get; set; }
+public string? SourceLeadPhone { get; set; }
+public string? SourceLeadCampaign { get; set; }
+public string? SourceLeadPlatform { get; set; }
 }
 
 // ═══════════════════════════════════════════════════════════════

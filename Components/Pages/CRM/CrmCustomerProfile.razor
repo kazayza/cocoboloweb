@@ -1110,6 +1110,7 @@ else
     private List<TaskListDto> _tasks = new();
     private List<Transaction> _invoices = new();
     private List<Quotation> _clientQuotations = new(); // ⭐ عروض الأسعار
+    private List<LeadInteractionTimelineRow> _leadInteractions = new();
     private List<TimelineActivity> _activities = new();
     
     private int _tab;
@@ -1334,9 +1335,78 @@ else
                 .OrderByDescending(q => q.QuotationDate)
                 .ToListAsync();
         }
+        // ── 6. Load Lead Interactions قبل التحويل إن كان العميل أصله Lead ──
+var convertedLeads = await db.LeadsCRMs
+    .AsNoTracking()
+    .Where(l => l.ConvertedPartyId == PartyId.Value)
+    .Select(l => new
+    {
+        l.LeadId,
+        l.FullName,
+        l.CampaignName
+    })
+    .ToListAsync();
 
-        // ── 6. Build Unified Timeline Activities ──
+var leadIds = convertedLeads.Select(l => l.LeadId).ToList();
+
+if (leadIds.Any())
+{
+    var leadInfo = convertedLeads.ToDictionary(l => l.LeadId);
+
+    _leadInteractions = await db.LeadInteractions
+        .AsNoTracking()
+        .Where(i => leadIds.Contains(i.LeadId))
+        .OrderByDescending(i => i.InteractionDate)
+        .Select(i => new LeadInteractionTimelineRow
+        {
+            LeadId = i.LeadId,
+            InteractionType = i.InteractionType,
+            InteractionDate = i.InteractionDate,
+            Summary = i.Summary,
+            Notes = i.Notes,
+            CreatedBy = i.CreatedBy,
+            CreatedAt = i.CreatedAt
+        })
+        .ToListAsync();
+
+    foreach (var item in _leadInteractions)
+    {
+        if (leadInfo.TryGetValue(item.LeadId, out var lead))
+        {
+            item.LeadName = lead.FullName;
+            item.LeadCampaign = lead.CampaignName;
+        }
+    }
+}
+else
+{
+    _leadInteractions = new();
+}
+
+        // ── 7. Build Unified Timeline Activities ──
         _activities = new List<TimelineActivity>();
+            foreach (var li in _leadInteractions)
+{
+    var desc = li.Summary ?? li.Notes ?? "تواصل مسجل على الـ Lead قبل التحويل";
+
+    if (!string.IsNullOrWhiteSpace(li.LeadCampaign))
+        desc += $" — الحملة: {li.LeadCampaign}";
+
+    if (!string.IsNullOrWhiteSpace(li.CreatedBy))
+        desc += $" — بواسطة: {li.CreatedBy}";
+
+    _activities.Add(new TimelineActivity
+    {
+        Date = li.InteractionDate,
+        Title = $"Lead: {li.InteractionType}",
+        Description = desc,
+        Type = "LeadInteraction",
+        Icon = GetLeadInteractionIcon(li.InteractionType),
+        Color = GetLeadInteractionColor(li.InteractionType),
+        BadgeText = "قبل التحويل",
+        Link = $"/crm/leads/{li.LeadId}"
+    });
+}
 
         foreach (var opp in _opportunities)
         {
@@ -1521,6 +1591,27 @@ else
         _showSearch = false;
         Nav.NavigateTo($"/crm/customers/{partyId}", forceLoad: true);
     }
+    private static string GetLeadInteractionIcon(string? type) => type switch
+{
+    "إسناد" => Icons.Material.Rounded.AssignmentInd,
+    "اتصال" => Icons.Material.Rounded.Phone,
+    "واتساب" => Icons.Custom.Brands.WhatsApp,
+    "متابعة" => Icons.Material.Rounded.EventRepeat,
+    "تحويل" => Icons.Material.Rounded.PersonAdd,
+    "رفض" => Icons.Material.Rounded.Cancel,
+    _ => Icons.Material.Rounded.Notes
+};
+
+private static string GetLeadInteractionColor(string? type) => type switch
+{
+    "إسناد" => "#0ea5e9",
+    "اتصال" => "#2563eb",
+    "واتساب" => "#16a34a",
+    "متابعة" => "#f59e0b",
+    "تحويل" => "#7c3aed",
+    "رفض" => "#dc2626",
+    _ => "#64748b"
+};
 
     // ═══ HELPERS ═══
     private static string GetInitials(string? n)
@@ -1566,6 +1657,18 @@ else
         }
         else Snackbar.Add(msg, Severity.Error);
     }
+    private class LeadInteractionTimelineRow
+{
+    public int LeadId { get; set; }
+    public string? LeadName { get; set; }
+    public string? LeadCampaign { get; set; }
+    public string InteractionType { get; set; } = "";
+    public DateTime InteractionDate { get; set; }
+    public string? Summary { get; set; }
+    public string? Notes { get; set; }
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
 
     // ── Unified Timeline Activity Model ──
     public class TimelineActivity

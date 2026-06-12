@@ -149,6 +149,7 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
     public virtual DbSet<EmployeeLoan>     EmployeeLoans     { get; set; }
     public virtual DbSet<LoanInstallment>  LoanInstallments  { get; set; }
     public virtual DbSet<LeadsCrm> LeadsCRMs { get; set; }
+    public virtual DbSet<LeadInteraction> LeadInteractions { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -2213,6 +2214,76 @@ modelBuilder.Entity<LeadsCrm>(entity =>
 
     entity.Property(e => e.CreatedBy).HasMaxLength(100).HasDefaultValue("MetaIntegration");
     entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETDATE()");
+});
+modelBuilder.Entity<LeadInteraction>(entity =>
+{
+    entity.ToTable("LeadInteractions");
+
+    entity.HasKey(e => e.LeadInteractionId)
+        .HasName("PK_LeadInteractions");
+
+    entity.Property(e => e.LeadInteractionId)
+        .HasColumnName("LeadInteractionId");
+
+    entity.Property(e => e.LeadId)
+        .HasColumnName("LeadId");
+
+    entity.Property(e => e.EmployeeId)
+        .HasColumnName("EmployeeId");
+
+    entity.Property(e => e.InteractionType)
+        .HasMaxLength(50)
+        .IsRequired();
+
+    entity.Property(e => e.InteractionDate)
+        .HasColumnType("datetime")
+        .HasDefaultValueSql("(getdate())");
+
+    entity.Property(e => e.Summary)
+        .HasMaxLength(500);
+
+    entity.Property(e => e.OldLeadStatus)
+        .HasMaxLength(50);
+
+    entity.Property(e => e.NewLeadStatus)
+        .HasMaxLength(50);
+
+    entity.Property(e => e.NextFollowUpDate)
+        .HasColumnType("datetime");
+
+    entity.Property(e => e.IsSystemGenerated)
+        .HasDefaultValue(false);
+
+    entity.Property(e => e.CreatedBy)
+        .HasMaxLength(100);
+
+    entity.Property(e => e.CreatedAt)
+        .HasColumnType("datetime")
+        .HasDefaultValueSql("(getdate())");
+
+    entity.HasIndex(e => e.LeadId)
+        .HasDatabaseName("IX_LeadInteractions_LeadId");
+
+    entity.HasIndex(e => new { e.LeadId, e.InteractionDate })
+        .HasDatabaseName("IX_LeadInteractions_LeadId_InteractionDate");
+
+    entity.HasIndex(e => e.EmployeeId)
+        .HasDatabaseName("IX_LeadInteractions_EmployeeId");
+
+    entity.HasIndex(e => e.NextFollowUpDate)
+        .HasDatabaseName("IX_LeadInteractions_NextFollowUpDate");
+
+    entity.HasOne(e => e.Lead)
+        .WithMany()
+        .HasForeignKey(e => e.LeadId)
+        .OnDelete(DeleteBehavior.Cascade)
+        .HasConstraintName("FK_LeadInteractions_LeadsCRM");
+
+    entity.HasOne(e => e.Employee)
+        .WithMany()
+        .HasForeignKey(e => e.EmployeeId)
+        .OnDelete(DeleteBehavior.NoAction)
+        .HasConstraintName("FK_LeadInteractions_Employees");
 });
 
         OnModelCreatingPartial(modelBuilder);

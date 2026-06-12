@@ -230,6 +230,160 @@ public class LeadsCrmService : ILeadsCrmService
     }
 
     // ═══════════════════════════════════════════════════════════
+//  تواصلات / حركات الـ Lead
+// ═══════════════════════════════════════════════════════════
+public async Task<List<LeadInteractionDto>> GetLeadInteractionsAsync(int leadId)
+{
+    var interactions = await _db.LeadInteractions
+        .AsNoTracking()
+        .Where(i => i.LeadId == leadId)
+        .OrderByDescending(i => i.InteractionDate)
+        .ThenByDescending(i => i.LeadInteractionId)
+        .Select(i => new
+        {
+            i.LeadInteractionId,
+            i.LeadId,
+            i.EmployeeId,
+            i.InteractionType,
+            i.InteractionDate,
+            i.Summary,
+            i.Notes,
+            i.OldLeadStatus,
+            i.NewLeadStatus,
+            i.NextFollowUpDate,
+            i.IsSystemGenerated,
+            i.CreatedBy,
+            i.CreatedAt
+        })
+        .ToListAsync();
+
+    var employeeIds = interactions
+        .Where(i => i.EmployeeId.HasValue)
+        .Select(i => i.EmployeeId!.Value)
+        .Distinct()
+        .ToList();
+
+    var employeeNames = new Dictionary<int, string>();
+
+    if (employeeIds.Any())
+    {
+        employeeNames = await _db.Employees
+            .AsNoTracking()
+            .Where(e => employeeIds.Contains(e.EmployeeId))
+            .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName);
+    }
+
+    return interactions.Select(i => new LeadInteractionDto
+    {
+        LeadInteractionId = i.LeadInteractionId,
+        LeadId = i.LeadId,
+        EmployeeId = i.EmployeeId,
+        EmployeeName = i.EmployeeId.HasValue && employeeNames.TryGetValue(i.EmployeeId.Value, out var empName)
+            ? empName
+            : null,
+        InteractionType = i.InteractionType,
+        InteractionDate = i.InteractionDate,
+        Summary = i.Summary,
+        Notes = i.Notes,
+        OldLeadStatus = i.OldLeadStatus,
+        NewLeadStatus = i.NewLeadStatus,
+        NextFollowUpDate = i.NextFollowUpDate,
+        IsSystemGenerated = i.IsSystemGenerated,
+        CreatedBy = i.CreatedBy,
+        CreatedAt = i.CreatedAt
+    }).ToList();
+}
+
+public async Task<(bool Success, string Message)> AddLeadInteractionAsync(
+    LeadInteractionCreateDto dto, string userName)
+{
+    var lead = await _db.LeadsCRMs.FindAsync(dto.LeadId);
+    if (lead == null)
+        return (false, "Lead غير موجود");
+
+    var now = DateTime.Now;
+    var oldStatus = lead.LeadStatus;
+
+    var interactionType = string.IsNullOrWhiteSpace(dto.InteractionType)
+        ? LeadInteractionTypes.Note
+        : dto.InteractionType.Trim();
+
+    var newStatus = string.IsNullOrWhiteSpace(dto.NewLeadStatus)
+        ? null
+        : dto.NewLeadStatus.Trim();
+
+    var interaction = new LeadInteraction
+    {
+        LeadId = dto.LeadId,
+        EmployeeId = dto.EmployeeId ?? lead.AssignedEmployeeId,
+        InteractionType = interactionType,
+        InteractionDate = now,
+        Summary = dto.Summary?.Trim(),
+        Notes = dto.Notes?.Trim(),
+        OldLeadStatus = oldStatus,
+        NewLeadStatus = newStatus,
+        NextFollowUpDate = dto.NextFollowUpDate,
+        IsSystemGenerated = false,
+        CreatedBy = userName,
+        CreatedAt = now
+    };
+
+    _db.LeadInteractions.Add(interaction);
+
+    // لو فيه موظف في التفاعل والـ Lead غير مسند، نسنده لنفس الموظف
+    if (!lead.AssignedEmployeeId.HasValue && interaction.EmployeeId.HasValue)
+    {
+        lead.AssignedEmployeeId = interaction.EmployeeId.Value;
+
+        if (lead.LeadStatus == "جديد")
+            lead.LeadStatus = "تم الإسناد";
+    }
+
+    // تحديث الحالة لو المستخدم اختار حالة جديدة
+    if (!string.IsNullOrWhiteSpace(newStatus))
+    {
+        lead.LeadStatus = newStatus;
+
+        if (newStatus == "تم التواصل")
+        {
+            lead.LastContactDate = now;
+        }
+        else if (newStatus == "مرفوض")
+        {
+            lead.LastContactDate = now;
+
+            if (!string.IsNullOrWhiteSpace(dto.RejectedReason))
+                lead.RejectedReason = dto.RejectedReason.Trim();
+        }
+        else if (newStatus == "محوّل")
+        {
+            lead.LastContactDate = now;
+        }
+    }
+    else
+    {
+        // لو لم يحدد حالة، لكن نوع التفاعل يدل على تواصل فعلي
+        if (interactionType == LeadInteractionTypes.Call ||
+            interactionType == LeadInteractionTypes.WhatsApp ||
+            interactionType == LeadInteractionTypes.FollowUp ||
+            interactionType == LeadInteractionTypes.Note)
+        {
+            lead.LastContactDate = now;
+
+            if (lead.LeadStatus == "جديد" || lead.LeadStatus == "تم الإسناد")
+                lead.LeadStatus = "تم التواصل";
+        }
+    }
+
+    await _db.SaveChangesAsync();
+
+    await _audit.LogAsync("LeadInteractions", "Insert",
+        interaction.LeadInteractionId.ToString(), null, interaction, userName);
+
+    return (true, "تم تسجيل التواصل بنجاح");
+}
+
+    // ═══════════════════════════════════════════════════════════
     //  تحديث حالة Lead أو فيدباك
     // ═══════════════════════════════════════════════════════════
     public async Task<(bool Success, string Message)> UpdateLeadAsync(
@@ -238,13 +392,14 @@ public class LeadsCrmService : ILeadsCrmService
     var lead = await _db.LeadsCRMs.FindAsync(dto.LeadId);
     if (lead == null) return (false, "Lead غير موجود");
 
-    var oldStatus = lead.LeadStatus;
-    var oldAssignedEmployeeId = lead.AssignedEmployeeId;
     var now = DateTime.Now;
 
-    // هل حصل تواصل فعلي؟
+    var oldStatus = lead.LeadStatus;
+    var oldAssignedEmployeeId = lead.AssignedEmployeeId;
+
     var hasContactAction = false;
 
+    // 1) تحديث الحالة لو المستخدم اختار حالة
     if (!string.IsNullOrWhiteSpace(dto.LeadStatus))
     {
         lead.LeadStatus = dto.LeadStatus;
@@ -252,6 +407,7 @@ public class LeadsCrmService : ILeadsCrmService
         if (dto.LeadStatus == "تم التواصل")
             hasContactAction = true;
 
+        // نترك مؤهل مؤقتًا للداتا القديمة لو موجودة، لكن لن نعتمد عليها في الواجهة الجديدة
         if (dto.LeadStatus == "مؤهل")
         {
             hasContactAction = true;
@@ -269,6 +425,7 @@ public class LeadsCrmService : ILeadsCrmService
         }
     }
 
+    // 2) تحديث الفيدباك
     if (dto.Feedback != null)
     {
         lead.Feedback = dto.Feedback;
@@ -277,9 +434,53 @@ public class LeadsCrmService : ILeadsCrmService
             hasContactAction = true;
     }
 
-    // مهم: نسمح بالتعيين أو مسح التعيين
+    // 3) تحديث الموظف المسؤول
+    var assignmentChanged = oldAssignedEmployeeId != dto.AssignedEmployeeId;
+
     lead.AssignedEmployeeId = dto.AssignedEmployeeId;
 
+    // 4) لو تم إسناد Lead جديد لموظف، نحوله إلى "تم الإسناد"
+    if (assignmentChanged && dto.AssignedEmployeeId.HasValue)
+    {
+        var statusBeforeAssignment = lead.LeadStatus;
+
+        if (lead.LeadStatus == "جديد")
+            lead.LeadStatus = "تم الإسناد";
+
+        _db.LeadInteractions.Add(new LeadInteraction
+        {
+            LeadId = lead.LeadId,
+            EmployeeId = dto.AssignedEmployeeId.Value,
+            InteractionType = LeadInteractionTypes.Assigned,
+            InteractionDate = now,
+            Summary = "تم إسناد الـ Lead إلى موظف مسؤول.",
+            OldLeadStatus = statusBeforeAssignment,
+            NewLeadStatus = lead.LeadStatus,
+            IsSystemGenerated = true,
+            CreatedBy = userName,
+            CreatedAt = now
+        });
+    }
+
+    // 5) لو تم مسح الإسناد، نسجل حركة اختيارية
+    if (assignmentChanged && !dto.AssignedEmployeeId.HasValue && oldAssignedEmployeeId.HasValue)
+    {
+        _db.LeadInteractions.Add(new LeadInteraction
+        {
+            LeadId = lead.LeadId,
+            EmployeeId = oldAssignedEmployeeId.Value,
+            InteractionType = LeadInteractionTypes.Note,
+            InteractionDate = now,
+            Summary = "تم إلغاء إسناد الـ Lead من الموظف السابق.",
+            OldLeadStatus = oldStatus,
+            NewLeadStatus = lead.LeadStatus,
+            IsSystemGenerated = true,
+            CreatedBy = userName,
+            CreatedAt = now
+        });
+    }
+
+    // 6) تحديث آخر تواصل لو حصل تواصل فعلي
     if (hasContactAction)
         lead.LastContactDate = now;
 
@@ -288,9 +489,8 @@ public class LeadsCrmService : ILeadsCrmService
     await _audit.LogAsync("LeadsCRM", "Update",
         dto.LeadId.ToString(), null, dto, userName);
 
-    // إرسال إشعار لو الـ Lead اتسند لموظف جديد
-    if (dto.AssignedEmployeeId.HasValue &&
-        oldAssignedEmployeeId != dto.AssignedEmployeeId.Value)
+    // 7) إشعار الموظف الجديد لو تم الإسناد
+    if (assignmentChanged && dto.AssignedEmployeeId.HasValue)
     {
         await NotifyLeadAssignedAsync(lead, dto.AssignedEmployeeId.Value, userName);
     }
@@ -375,6 +575,29 @@ private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string
         try
         {
             var now = DateTime.Now;
+            var oldLeadStatus = lead.LeadStatus;
+            
+
+var initialStageId = await _db.SalesStages
+    .AsNoTracking()
+    .Where(s => s.IsActive &&
+           (s.StageName == "Potential" || s.StageNameAr == "مهتم"))
+    .OrderBy(s => s.StageOrder)
+    .Select(s => s.StageId)
+    .FirstOrDefaultAsync();
+
+if (initialStageId == 0)
+{
+    initialStageId = await _db.SalesStages
+        .AsNoTracking()
+        .Where(s => s.IsActive)
+        .OrderBy(s => s.StageOrder)
+        .Select(s => s.StageId)
+        .FirstOrDefaultAsync();
+}
+
+if (initialStageId == 0)
+    return (false, "لا توجد مراحل بيع مفعّلة.", 0, 0);
 
             // 1. إنشاء العميل
             var party = new Party
@@ -398,7 +621,8 @@ private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string
                 EmployeeId = dto.EmployeeId,
                 SourceId = dto.SourceId,
                 AdTypeId = dto.AdTypeId,
-                StageId = 1,
+                //StageId = 1,
+                StageId = initialStageId,
                 CategoryId = dto.CategoryId,
                 InterestedProduct = lead.ProjectType,
                 FirstContactDate = lead.LeadDate ?? now,
@@ -422,7 +646,8 @@ private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string
                 InteractionDate = now,
                 Summary = $"تحويل Lead من إعلان Meta - كامبين: {lead.CampaignName ?? "غير محدد"}",
                 StageBeforeId = null,
-                StageAfterId = 1,
+                //StageAfterId = 1,
+                StageAfterId = initialStageId,
                 NextFollowUpDate = now.AddDays(1),
                 Notes = dto.Notes ?? lead.Notes,
                 CreatedBy = userName,
@@ -459,6 +684,20 @@ private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string
             lead.ConvertedBy = userName;
             lead.LeadStatus = "محوّل";
             lead.LastContactDate = now;
+            _db.LeadInteractions.Add(new LeadInteraction
+{
+    LeadId = lead.LeadId,
+    EmployeeId = dto.EmployeeId ?? lead.AssignedEmployeeId,
+    InteractionType = LeadInteractionTypes.Converted,
+    InteractionDate = now,
+    Summary = $"تم تحويل الـ Lead إلى فرصة بيع #{opportunity.OpportunityId}",
+    Notes = dto.Notes ?? lead.Notes,
+    OldLeadStatus = oldLeadStatus,
+    NewLeadStatus = "محوّل",
+    IsSystemGenerated = true,
+    CreatedBy = userName,
+    CreatedAt = now
+});
 
             await _db.SaveChangesAsync();
             await transaction.CommitAsync();
@@ -527,6 +766,7 @@ private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string
         {
             TotalLeads = leadsData.Count,
             NewLeads = leadsData.Count(l => l.LeadStatus == "جديد"),
+            AssignedLeads = leadsData.Count(l => l.LeadStatus == "تم الإسناد"),
             ContactedLeads = leadsData.Count(l => l.LeadStatus == "تم التواصل"),
             QualifiedLeads = leadsData.Count(l => l.LeadStatus == "مؤهل"),
             ConvertedLeads = leadsData.Count(l => l.LeadStatus == "محوّل"),
@@ -660,6 +900,7 @@ var empNames = empIds.Count > 0
             var statusColors = new Dictionary<string, string>
             {
                 { "جديد", "#3b82f6" },
+                { "تم الإسناد", "#0ea5e9" },
                 { "تم التواصل", "#f59e0b" },
                 { "مؤهل", "#10b981" },
                 { "محوّل", "#8b5cf6" },
@@ -864,6 +1105,30 @@ var empNames = empIds.Count > 0
             .OrderBy(e => e.FullName)
             .ToListAsync();
     }
+    public async Task<List<Employee>> GetAssignableEmployeesAsync()
+{
+    var allowedDepartments = new[]
+    {
+        "المبيعات",
+        "إدارة العلاقات العامة"
+    };
+
+    return await _db.Employees
+        .AsNoTracking()
+        .Where(e =>
+            (e.Status == "نشط" || e.Status == "Active") &&
+            e.Department != null &&
+            allowedDepartments.Contains(e.Department))
+        .OrderBy(e => e.FullName)
+        .Select(e => new Employee
+        {
+            EmployeeId = e.EmployeeId,
+            FullName = e.FullName,
+            Department = e.Department,
+            Status = e.Status
+        })
+        .ToListAsync();
+}
 
     // ═══════════════════════════════════════════════════════════
     //  HELPERS

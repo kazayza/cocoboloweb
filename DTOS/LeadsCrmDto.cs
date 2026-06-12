@@ -128,6 +128,83 @@ public class LeadsCrmDetailDto
     public DateTime CreatedAt { get; set; }
     public string? CreatedBy { get; set; }
 }
+/// <summary>
+/// نوع تفاعل Lead
+/// </summary>
+public static class LeadInteractionTypes
+{
+    public const string Assigned = "إسناد";
+    public const string Call = "اتصال";
+    public const string WhatsApp = "واتساب";
+    public const string Note = "ملاحظة";
+    public const string FollowUp = "متابعة";
+    public const string Converted = "تحويل";
+    public const string Rejected = "رفض";
+
+    public static readonly Dictionary<string, string> All = new()
+    {
+        { Assigned, "إسناد" },
+        { Call, "اتصال" },
+        { WhatsApp, "واتساب" },
+        { Note, "ملاحظة" },
+        { FollowUp, "متابعة" },
+        { Converted, "تحويل" },
+        { Rejected, "رفض" }
+    };
+}
+
+/// <summary>
+/// عنصر تواصل / حركة على Lead
+/// </summary>
+public class LeadInteractionDto
+{
+    public int LeadInteractionId { get; set; }
+    public int LeadId { get; set; }
+    public int? EmployeeId { get; set; }
+    public string? EmployeeName { get; set; }
+
+    public string InteractionType { get; set; } = LeadInteractionTypes.Note;
+    public DateTime InteractionDate { get; set; }
+
+    public string? Summary { get; set; }
+    public string? Notes { get; set; }
+
+    public string? OldLeadStatus { get; set; }
+    public string? NewLeadStatus { get; set; }
+
+    public DateTime? NextFollowUpDate { get; set; }
+
+    public bool IsSystemGenerated { get; set; }
+
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+/// <summary>
+/// إضافة تواصل / حركة على Lead
+/// </summary>
+public class LeadInteractionCreateDto
+{
+    public int LeadId { get; set; }
+
+    public int? EmployeeId { get; set; }
+
+    public string InteractionType { get; set; } = LeadInteractionTypes.Note;
+
+    public string? Summary { get; set; }
+
+    public string? Notes { get; set; }
+
+    public DateTime? NextFollowUpDate { get; set; }
+
+    /// <summary>
+    /// حالة جديدة اختيارية بعد تسجيل التواصل
+    /// مثال: تم التواصل / مرفوض
+    /// </summary>
+    public string? NewLeadStatus { get; set; }
+
+    public string? RejectedReason { get; set; }
+}
 
 /// <summary>
 /// تحديث Lead
@@ -175,6 +252,7 @@ public class LeadsCrmStatsDto
 {
     public int TotalLeads { get; set; }
     public int NewLeads { get; set; }
+    public int AssignedLeads { get; set; }
     public int ContactedLeads { get; set; }
     public int QualifiedLeads { get; set; }
     public int ConvertedLeads { get; set; }
