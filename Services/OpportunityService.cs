@@ -41,7 +41,7 @@ public class OpportunityService : IOpportunityService
         var query = _db.SalesOpportunities.AsNoTracking().Where(o => o.IsActive);
         if (crmAccess.HasValue) query = query.Where(o => o.CreatedAt >= crmAccess.Value);
         query = ApplyOppFilters(query, filter);
-        var opps = await query.Select(o => new { o.OpportunityId, o.PartyId, o.StageId, o.ExpectedValue, o.EmployeeId, o.NextFollowUpDate, o.InterestedProduct, o.SourceId }).ToListAsync();
+        var opps = await query.Select(o => new { o.OpportunityId, o.PartyId, o.StageId, o.ExpectedValue, o.EmployeeId, o.NextFollowUpDate, o.InterestedProduct, o.SourceId, o.CreatedAt }).ToListAsync();
         var partyIds = opps.Select(o => o.PartyId).Distinct().ToList();
         var parties = partyIds.Any() ? (await _db.Parties.AsNoTracking().Where(p => partyIds.Contains(p.PartyId)).Select(p => new { p.PartyId, p.PartyName, p.Phone }).ToListAsync()).ToDictionary(p => p.PartyId, p => (p.PartyName, p.Phone)) : new();
         var empIds = opps.Where(o => o.EmployeeId.HasValue).Select(o => o.EmployeeId!.Value).Distinct().ToList();
