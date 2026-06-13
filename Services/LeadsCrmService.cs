@@ -813,6 +813,7 @@ if (initialStageId == 0)
                 l.AssignedEmployeeId,
                 l.IsDuplicate,
                 l.IsConverted,
+                l.ConvertedOpportunityId,
                 l.ConvertedDate,
                 l.CreatedAt
             }).ToListAsync();
@@ -1073,6 +1074,91 @@ var empNames = empIds.Count > 0
 }
 
         return result;
+    }
+
+
+        // ═══════════════════════════════════════════════════════════
+    //  إنشاء Lead يدوياً
+    // ═══════════════════════════════════════════════════════════
+    public async Task<(bool Success, string Message, int LeadId)> CreateLeadAsync(LeadsCrmCreateDto dto, string userName)
+    {
+        if (string.IsNullOrWhiteSpace(dto.FullName))
+            return (false, "اسم العميل مطلوب", 0);
+
+        if (string.IsNullOrWhiteSpace(dto.Phone))
+            return (false, "رقم الهاتف مطلوب", 0);
+
+        // التحقق من التكرار بناءً على رقم الهاتف
+        var existingPhone = await _db.LeadsCRMs
+            .AnyAsync(l => l.Phone == dto.Phone.Trim());
+        if (existingPhone)
+            return (false, "رقم الهاتف موجود بالفعل في الـ Leads", 0);
+
+        var now = DateTime.Now;
+        var lead = new LeadsCrm
+        {
+            FullName = dto.FullName.Trim(),
+            Phone = dto.Phone.Trim(),
+            Phone2 = dto.Phone2?.Trim(),
+            Email = dto.Email?.Trim(),
+            City = dto.City?.Trim(),
+            Area = dto.Area?.Trim(),
+            Address = dto.Address?.Trim(),
+            ProjectType = dto.ProjectType?.Trim(),
+            ProjectStage = dto.ProjectStage?.Trim(),
+            Budget = dto.Budget?.Trim(),
+            DecisionMaker = dto.DecisionMaker?.Trim(),
+            NextAction = dto.NextAction?.Trim(),
+            BestTimeToReach = dto.BestTimeToReach?.Trim(),
+            AssignedEmployeeId = dto.AssignedEmployeeId,
+            Notes = dto.Notes?.Trim(),
+            LeadStatus = "جديد",
+            IsDuplicate = false,
+            IsConverted = false,
+            Platform = "manual",
+            CreatedAt = now,
+            CreatedBy = userName
+        };
+
+        _db.LeadsCRMs.Add(lead);
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync("LeadsCRM", "Create",
+            lead.LeadId.ToString(), null, dto, userName);
+
+        // إرسال إشعار للموظف المسؤول
+        if (lead.AssignedEmployeeId.HasValue)
+        {
+            try
+            {
+                var emp = await _db.Employees.FindAsync(lead.AssignedEmployeeId.Value);
+                if (emp != null)
+                {
+                    var user = await _db.Users.AsNoTracking()
+                        .FirstOrDefaultAsync(u => u.EmployeeId == emp.EmployeeId);
+
+                    if (user != null)
+                    {
+                        await _notify.AddAsync(
+                            title: "📌 تم إسناد Lead جديد لك",
+                            message: $"تم إسناد Lead لك: {lead.FullName} - {lead.Phone}. برجاء المتابعة واتخاذ إجراء.",
+                            recipientUser: user.Username,
+                            createdBy: userName,
+                            formName: "crm/leads/my",
+                            relatedTable: "LeadsCRM",
+                            relatedId: lead.LeadId);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to send lead assignment notification. LeadId={LeadId}",
+                    lead.LeadId);
+            }
+        }
+
+        return (true, "تم إنشاء الـ Lead بنجاح", lead.LeadId);
     }
 
     // ═══════════════════════════════════════════════════════════

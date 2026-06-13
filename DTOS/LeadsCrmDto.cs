@@ -283,3 +283,24 @@ public class LeadsByPlatformDto
     public string Platform { get; set; } = "";
     public int Count { get; set; }
 }
+/// <summary>
+/// إنشاء Lead يدوياً
+/// </summary>
+public class LeadsCrmCreateDto
+{
+    public string FullName { get; set; } = "";
+    public string Phone { get; set; } = "";
+    public string? Phone2 { get; set; }
+    public string? Email { get; set; }
+    public string? City { get; set; }
+    public string? Area { get; set; }
+    public string? Address { get; set; }
+    public string? ProjectType { get; set; }
+    public string? ProjectStage { get; set; }
+    public string? Budget { get; set; }
+    public string? DecisionMaker { get; set; }
+    public string? NextAction { get; set; }
+    public string? BestTimeToReach { get; set; }
+    public int? AssignedEmployeeId { get; set; }
+    public string? Notes { get; set; }
+}
