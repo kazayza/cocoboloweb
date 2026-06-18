@@ -1610,6 +1610,7 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.CreatedBy).HasMaxLength(50);
             entity.Property(e => e.EmployeeId).HasColumnName("EmployeeID");
             entity.Property(e => e.ExpectedValue).HasColumnType("decimal(18, 2)");
+            entity.Property(e => e.ActualValue).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.FirstContactDate)
                 .HasDefaultValueSql("(getdate())")
                 .HasColumnType("datetime");

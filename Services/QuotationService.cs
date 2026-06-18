@@ -1226,15 +1226,18 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
 
     private static void CalculateTotals(QuotationFormDto dto)
 {
-    dto.TotalAmount = Math.Round(dto.Items.Sum(i => i.TotalAmount), 2);
+    // ⭐ احسب الحد الأدنى (مجموع الأسعار الأساسية)
+var baseTotal = Math.Round(dto.Items.Sum(i => 
+    i.Quantity * (i.SalePricePremium ?? 0)), 2);
+var maxDiscount = Math.Max(0, dto.TotalAmount - baseTotal);
 
     // ⭐ الأولوية للـ DiscountAmount لو موجود (لأنه هو اللي اتسجل)
     // النسبة بتتحسب من القيمة، مش العكس
     if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
     {
         // لو القيمة أكبر من الإجمالي، قللها
-        if (dto.DiscountAmount.Value > dto.TotalAmount)
-            dto.DiscountAmount = dto.TotalAmount;
+        if (dto.DiscountAmount.Value > maxDiscount)
+    dto.DiscountAmount = maxDiscount;
         
         // احسب النسبة من القيمة (للعرض فقط)
         dto.DiscountPercentage = dto.TotalAmount > 0
@@ -1248,8 +1251,8 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
         dto.DiscountAmount = Math.Round(rawAmount / 100m, 0) * 100m;
         
         // لو القيمة أكبر من الإجمالي، قللها
-        if (dto.DiscountAmount > dto.TotalAmount)
-            dto.DiscountAmount = dto.TotalAmount;
+        if (dto.DiscountAmount > maxDiscount)
+    dto.DiscountAmount = maxDiscount;
     }
     else
     {

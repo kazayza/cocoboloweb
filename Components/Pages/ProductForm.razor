@@ -52,7 +52,7 @@ else
                 </div>
             </div>
         </div>
-
+        @*
         @if (!string.IsNullOrEmpty(_errorMessage))
         {
             <MudAlert Severity="Severity.Error"
@@ -63,7 +63,7 @@ else
                       Style="border-radius: 12px;">
                 @_errorMessage
             </MudAlert>
-        }
+        }*@
 
         <MudPaper Class="tabs-container" Elevation="0">
             <MudForm @ref="_form" @bind-IsValid="_formIsValid">
@@ -148,11 +148,15 @@ else
                                     <div class="form-field">
                                         <label>الوصف</label>
                                         <MudTextField @bind-Value="_model.ProductDescription"
-                                                      Lines="4"
-                                                      Variant="Variant.Outlined"
-                                                      Placeholder="أدخل وصف تفصيلي للمنتج..."
-                                                      Adornment="Adornment.Start"
-                                                      AdornmentIcon="@Icons.Material.Filled.Description" />
+              Lines="3"
+              Variant="Variant.Outlined"
+              Placeholder="أدخل وصف المنتج..."
+              Required="true"
+              RequiredError="وصف المنتج مطلوب"
+              MaxLength="150"
+              HelperText="حد أقصى 150 حرف"
+              Adornment="Adornment.Start"
+              AdornmentIcon="@Icons.Material.Filled.Description" />
                                     </div>
                                 </MudItem>
                             </MudGrid>
@@ -1847,6 +1851,8 @@ else
     private string? _currentRole;
     private string? _currentUserName;
     private string? _errorMessage;
+    private string? _originalPdfPath;
+    private bool _pdfChangedBySales;
 
     private bool _isLoading        = true;
     private bool _isSaving         = false;
@@ -1893,6 +1899,7 @@ private ProductImage? _previewImage = null;
     private bool IsAdmin                => _currentRole == Roles.Admin;
     private bool IsFactory              => _currentRole == Roles.Factory;
     private bool IsAdminOrAccountManager => _currentRole == Roles.Admin || _currentRole == Roles.AccountManager;
+    private bool IsSalesOrSalesManager => _currentRole == Roles.Sales || _currentRole == Roles.SalesManager;
     private bool IsFactoryOrAdmin       => _currentRole == Roles.Factory || _currentRole == Roles.Admin;
 
     private bool ShowCost    => IsAdminOrAccountManager || IsFactory;
@@ -1970,6 +1977,8 @@ private ProductImage? _previewImage = null;
             ?? new Product();
 
         _selectedCustomer = _customers.FirstOrDefault(c => c.PartyId == _model.Customer);
+        _originalPdfPath = _model.PdfPath;
+        _pdfChangedBySales = false;
 
         _priceHistories = await Db.PriceHistories
             .Where(ph => ph.ProductId == productId)
@@ -2189,7 +2198,8 @@ private void SetPreviewAsPrimary()
             {
                 IsNew        = IsNewProduct,
                 IsDraft      = isDraft,
-                CustomerName = _selectedCustomer?.PartyName ?? "غير محدد"
+                CustomerName = _selectedCustomer?.PartyName ?? "غير محدد",
+                PdfChangedBySales = _pdfChangedBySales
             };
 
             // ─── الخطوة 1: تجهيز البيانات ───
@@ -2283,7 +2293,7 @@ private void SetPreviewAsPrimary()
         return $"خطأ من الداتابيز: {msg}";
     }
 
-    private bool ValidateProduct()
+   @* private bool ValidateProduct()
     {
         if (string.IsNullOrWhiteSpace(_model.ProductName))
         {
@@ -2296,7 +2306,87 @@ private void SetPreviewAsPrimary()
             return false;
         }
         return true;
+    }*@
+    private bool ValidateProduct()
+{
+    var errors = new List<string>();
+
+    // ProductName nvarchar(100) NOT NULL
+    if (string.IsNullOrWhiteSpace(_model.ProductName))
+    {
+        errors.Add("اسم المنتج مطلوب");
     }
+    else if (_model.ProductName.Trim().Length > 100)
+    {
+        errors.Add("اسم المنتج لا يجب أن يزيد عن 100 حرف");
+    }
+
+    // ProductDescription nvarchar(150) NOT NULL
+    if (string.IsNullOrWhiteSpace(_model.ProductDescription))
+    {
+        errors.Add("وصف المنتج مطلوب");
+    }
+    else if (_model.ProductDescription.Trim().Length > 150)
+    {
+        errors.Add("وصف المنتج لا يجب أن يزيد عن 150 حرف");
+    }
+
+    // ProductGroupID int NOT NULL
+    if (_model.ProductGroupId <= 0)
+    {
+        errors.Add("مجموعة المنتج مطلوبة");
+    }
+
+    // PricingStatusID int NOT NULL
+    // غالبًا يتم ضبطها في الكود عند الحفظ، لكن نضمن عدم تركها صفر
+    if (_model.PricingStatusId <= 0)
+    {
+        _model.PricingStatusId = StatusIds.Draft;
+    }
+
+    // قيم اختيارية لكن لا يصح أن تكون سالبة
+    if (_model.PurchasePrice.HasValue && _model.PurchasePrice.Value < 0)
+        errors.Add("تكلفة Premium لا يمكن أن تكون سالبة");
+
+    if (_model.SuggestedSalePrice.HasValue && _model.SuggestedSalePrice.Value < 0)
+        errors.Add("سعر بيع Premium لا يمكن أن يكون سالبًا");
+
+    if (_model.PurchasePriceElite.HasValue && _model.PurchasePriceElite.Value < 0)
+        errors.Add("تكلفة Elite لا يمكن أن تكون سالبة");
+
+    if (_model.SuggestedSalePriceElite.HasValue && _model.SuggestedSalePriceElite.Value < 0)
+        errors.Add("سعر بيع Elite لا يمكن أن يكون سالبًا");
+
+    if (_model.Qty.HasValue && _model.Qty.Value < 0)
+        errors.Add("الكمية لا يمكن أن تكون سالبة");
+
+    if (_model.Period.HasValue && _model.Period.Value < 0)
+        errors.Add("المدة لا يمكن أن تكون سالبة");
+
+    if (!string.IsNullOrWhiteSpace(_model.PricingType) && _model.PricingType.Length > 50)
+        errors.Add("نوع التسعير لا يجب أن يزيد عن 50 حرف");
+
+    if (!string.IsNullOrWhiteSpace(_model.PdfPath) && _model.PdfPath.Length > 500)
+        errors.Add("مسار ملف PDF لا يجب أن يزيد عن 500 حرف");
+
+    if (IsNewProductByFactory)
+    {
+        errors.Add("ليس لديك صلاحية إضافة منتج جديد");
+    }
+
+    if (errors.Any())
+    {
+        _errorMessage = null;
+
+        Snackbar.Add(
+            "برجاء مراجعة البيانات: " + string.Join(" - ", errors),
+            Severity.Warning);
+
+        return false;
+    }
+
+    return true;
+}
 
     private void PrepareNewProduct(bool isDraft)
     {
@@ -2312,11 +2402,31 @@ private void SetPreviewAsPrimary()
             .FirstOrDefaultAsync(p => p.ProductId == _model.ProductId);
 
         if (old != null)
-        {
-            TrackPriceChanges(old, ctx);
-            ctx.OldProduct = old; // ✅ حفظ البيانات القديمة للمراجعة
-        }
+{
+    TrackPriceChanges(old, ctx);
+    ctx.OldProduct = old; // ✅ حفظ البيانات القديمة للمراجعة
 
+    if (ctx.PdfChangedBySales &&
+        !ctx.IsDraft &&
+        !string.IsNullOrWhiteSpace(old.PdfPath) &&
+        !string.Equals(old.PdfPath, _model.PdfPath, StringComparison.OrdinalIgnoreCase))
+    {
+        _model.PricingStatusId = StatusIds.CostChangeRequested;
+        ctx.PdfRepriceRequested = true;
+
+        Db.PriceHistories.Add(new PriceHistory
+        {
+            ProductId = _model.ProductId,
+            PriceType = "PDF_JobOrder_Changed",
+            OldPrice = 0,
+            NewPrice = 0,
+            ChangedBy = _currentUserName ?? "System",
+            ChangedAt = DateTime.Now,
+            ChangeReason = "قام البائع بتغيير ملف PDF / Job Order ويحتاج المنتج إلى إعادة تسعير"
+        });
+    }
+}
+        
         if (!ctx.IsDraft && _model.PricingStatusId == StatusIds.Draft)
         {
             _model.PricingStatusId = StatusIds.WaitingForPricing;
@@ -2370,6 +2480,24 @@ private void SetPreviewAsPrimary()
     {
         string productInfo  = _model.ProductName;
         string customerInfo = ctx.CustomerName;
+        if (ctx.PdfRepriceRequested)
+{
+    var message =
+        $"قام البائع {_currentUserName ?? "System"} بتغيير ملف PDF / Job Order للمنتج: {productInfo} " +
+        $"للعميل: {customerInfo}. برجاء إعادة التسعير طبقًا لملف الـ Job Order الجديد.";
+
+    await NotifyRole(Roles.Factory,
+        "طلب إعادة تسعير بسبب تغيير Job Order",
+        message);
+
+    await NotifyRole(Roles.Admin,
+        "تنبيه: تغيير ملف Job Order",
+        message);
+
+    await NotifyRole(Roles.AccountManager,
+        "تنبيه: تغيير ملف Job Order",
+        message);
+}
 
         if (ctx.IsNew || ctx.SentForPricing)
             await NotifyRole(Roles.Factory,
@@ -2593,19 +2721,42 @@ private void SetPreviewAsPrimary()
 }
 
     private async Task UploadPdf(InputFileChangeEventArgs e)
+{
+    try
     {
-        try
+        var oldPdfPath = _model.PdfPath;
+
+        _model.PdfPath = await SaveFile(e.File, "pdf", MaxPdfSize);
+        _isDirty = true;
+
+        _pdfChangedBySales =
+            !IsNewProduct &&
+            IsSalesOrSalesManager &&
+            !string.IsNullOrWhiteSpace(oldPdfPath) &&
+            !string.Equals(oldPdfPath, _model.PdfPath, StringComparison.OrdinalIgnoreCase);
+
+        if (_pdfChangedBySales)
         {
-            _model.PdfPath = await SaveFile(e.File, "pdf", MaxPdfSize);
-            _isDirty = true;
+            Snackbar.Add(
+                "تنبيه: تم تغيير ملف PDF / Job Order. لن يتم إخطار المصنع والأدمن ومدير الحسابات إلا بعد الضغط على حفظ.",
+                Severity.Warning,
+                cfg =>
+                {
+                    cfg.VisibleStateDuration = 9000;
+                    cfg.ShowCloseIcon = true;
+                });
+        }
+        else
+        {
             Snackbar.Add("تم رفع ملف PDF بنجاح", Severity.Success);
         }
-        catch (Exception ex)
-        {
-            ShowError("خطأ في رفع الملف. تأكد أن حجمه لا يتجاوز 10 ميجا.");
-            Console.WriteLine($"[ProductForm] Upload PDF Error: {ex}");
-        }
     }
+    catch (Exception ex)
+    {
+        ShowError("خطأ في رفع الملف. تأكد أن حجمه لا يتجاوز 10 ميجا.");
+        Console.WriteLine($"[ProductForm] Upload PDF Error: {ex}");
+    }
+}
 
     private async Task<string> SaveFile(IBrowserFile file, string subfolder, long maxSize)
     {
@@ -2624,12 +2775,16 @@ private void SetPreviewAsPrimary()
     // ============================
     // Error Handling
     // ============================
-    private void ShowError(string message)
+    @*private void ShowError(string message)
     {
         _errorMessage = message;
         StateHasChanged();
-    }
-        
+    }*@
+    private void ShowError(string message)
+{
+    _errorMessage = null;
+    Snackbar.Add(message, Severity.Error);
+}       
     
 
     // ============================
@@ -2643,6 +2798,8 @@ private void SetPreviewAsPrimary()
         public bool   FactoryPriced   { get; set; }
         public bool   SalePriceChanged { get; set; }
         public bool   SentForPricing  { get; set; }
+        public bool PdfChangedBySales { get; set; }
+        public bool PdfRepriceRequested { get; set; }
         public Product? OldProduct { get; set; } // ✅ عشان نمسك بيانات المنتج القديمة
     }
 }

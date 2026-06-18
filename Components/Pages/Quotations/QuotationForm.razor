@@ -562,7 +562,7 @@ else
                      T="decimal"
                      Variant="Variant.Outlined"
                      Margin="Margin.Dense"
-                     Min="@GetBaseSalePrice(item)"
+                     Min="@(_canOverrideBasePrice ? 0m : GetBaseSalePrice(item))"
                      HideSpinButtons="true"
                      Class="table-input price-input"
                      Disabled="@_isReadOnly" />
@@ -649,7 +649,7 @@ else
     @if (GetProfitMarginPercentage().HasValue)
     {
         <div class="summary-row margin-summary-row">
-            <span>هامش الربح:</span>
+            <span>نسبة الربح:</span>
             <strong>@($"{GetProfitMarginPercentage()!.Value:N2}%")</strong>
         </div>
     }
@@ -1890,6 +1890,7 @@ private string? _rejectedBy;
     private bool _canAdd;
     // صلاحية رؤية التكلفة: Admin + AccountManager فقط
     private bool _canViewCost;
+    private bool _canOverrideBasePrice;
 
 // نسبة زيادة السعر الافتراضية
     private decimal _priceIncreasePercentage = 10m;
@@ -1907,8 +1908,9 @@ private string? _rejectedBy;
 
             _canEdit = user.HasClaim("Permission", "frmNewQuotation:Edit") || user.IsInRole("Admin");
             _canAdd= user.HasClaim("Permission", "frmNewQuotation:Add") || user.IsInRole("Admin");
-            _canViewCost = user.IsInRole("Admin")
-            || user.IsInRole("AccountManager");
+            _canViewCost = user.IsInRole("Admin") || user.IsInRole("AccountManager");
+            _canOverrideBasePrice = user.IsInRole("Admin");  // ← الأدمن يقدر يتخطى الحد
+            
 
 
             _warehouses = await InvoiceService.GetWarehousesAsync() ?? new();
@@ -2074,6 +2076,18 @@ private decimal GetBaseSalePrice(QuotationItemDto item)
 {
     return GetPriceByTier(item, item.PricingTier);
 }
+/// <summary>مجموع الأسعار الأساسية لكل الأصناف — الحد الأدنى للإجمالي</summary>
+private decimal GetBaseTotal()
+{
+    return Math.Round(_form.Items.Sum(i => i.Quantity * GetBaseSalePrice(i)), 2);
+}
+
+/// <summary>أقصى خصم مسموح به = الإجمالي - الحد الأدنى</summary>
+private decimal GetMaxDiscount()
+{
+    if (_canOverrideBasePrice) return _form.TotalAmount;  // ← الأدمن مفيش حد
+    return Math.Max(0, _form.TotalAmount - GetBaseTotal());
+}
 private static decimal RoundPriceToNearest100(decimal value)
 {
     return Math.Round(value / 100m, 0, MidpointRounding.AwayFromZero) * 100m;
@@ -2087,12 +2101,9 @@ private static decimal RoundPriceUpTo100(decimal value)
 private decimal NormalizeSalePrice(QuotationItemDto item, decimal rawPrice)
 {
     var basePrice = GetBaseSalePrice(item);
-
     var rounded = RoundPriceToNearest100(rawPrice);
-
-    if (rounded < basePrice)
+    if (!_canOverrideBasePrice && rounded < basePrice)
         rounded = RoundPriceUpTo100(basePrice);
-
     return rounded;
 }
 
@@ -2135,11 +2146,19 @@ private decimal GetGrossProfit()
 /// <summary>
 /// هامش الربح من البيع.
 /// </summary>
+//private decimal? GetProfitMarginPercentage()
+//{
+   // if (_form.GrandTotal <= 0) return null;
+
+   // return Math.Round((GetGrossProfit() / _form.GrandTotal) * 100m, 2);
+//}
 private decimal? GetProfitMarginPercentage()
 {
-    if (_form.GrandTotal <= 0) return null;
+    var totalCost = GetTotalCost();
 
-    return Math.Round((GetGrossProfit() / _form.GrandTotal) * 100m, 2);
+    if (totalCost <= 0) return null;
+
+    return Math.Round((GetGrossProfit() / totalCost) * 100m, 2);
 }
 /// <summary>
 /// عند تغيير سعر البيع يدويًا، يمنع أن يقل عن سعر البيع الأساسي من جدول المنتجات.
@@ -2338,8 +2357,19 @@ private void RecalculateTotals()
         }
     }
 
-    _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
-    _form.GrandTotal = _form.NetTotalAmount ?? 0;
+   // _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
+   // _form.GrandTotal = _form.NetTotalAmount ?? 0;
+   // ⭐ لا تسمح بأن ينزل الإجمالي تحت مجموع الأسعار الأساسية
+var maxDiscount = GetMaxDiscount();
+if ((_form.DiscountAmount ?? 0) > maxDiscount)
+{
+    _form.DiscountAmount = maxDiscount;
+    _form.DiscountPercentage = _form.TotalAmount > 0
+        ? Math.Round((maxDiscount / _form.TotalAmount) * 100, 2)
+        : 0;
+}
+_form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
+_form.GrandTotal = _form.NetTotalAmount ?? 0;
 
     StateHasChanged();
 }
@@ -2360,9 +2390,18 @@ private void OnDiscountPercentageChanged(decimal? newPercentage)
         var rawAmount = _form.TotalAmount * (newPercentage.Value / 100m);
         _form.DiscountAmount = Math.Round(rawAmount / 100m, 0) * 100m;
 
-        // لو القيمة أكبر من الإجمالي، قللها
-        if (_form.DiscountAmount > _form.TotalAmount)
-            _form.DiscountAmount = _form.TotalAmount;
+        // ⭐ لا تسمح بأن ينزل الإجمالي تحت مجموع الأسعار الأساسية
+var maxDiscount = GetMaxDiscount();
+if (_form.DiscountAmount > maxDiscount)
+{
+    _form.DiscountAmount = maxDiscount;
+    _form.DiscountPercentage = _form.TotalAmount > 0
+        ? Math.Round((maxDiscount / _form.TotalAmount) * 100, 2)
+        : 0;
+    Snackbar.Add("الخصم يتخطى الحد المسموح — الإجمالي لا يمكن أن يقل عن الأسعار الأساسية", Severity.Warning);
+}
+else if (_form.DiscountAmount > _form.TotalAmount)
+    _form.DiscountAmount = _form.TotalAmount;
     }
     else
     {
@@ -2380,7 +2419,14 @@ private void OnDiscountAmountChanged(decimal? newAmount)
     // ⭐ تقريب القيمة المُدخلة لأقرب جنيه
     var rounded = newAmount.HasValue ? Math.Round(newAmount.Value, 0) : 0;
     
-    if (rounded > _form.TotalAmount) rounded = _form.TotalAmount;
+    // ⭐ لا تسمح بأن ينزل الإجمالي تحت مجموع الأسعار الأساسية
+var maxDiscount = GetMaxDiscount();
+if (rounded > maxDiscount)
+{
+    rounded = maxDiscount;
+    Snackbar.Add("الخصم يتخطى الحد المسموح — الإجمالي لا يمكن أن يقل عن الأسعار الأساسية", Severity.Warning);
+}
+else if (rounded > _form.TotalAmount) rounded = _form.TotalAmount;
     
     _form.DiscountAmount = rounded;
 
@@ -2404,6 +2450,15 @@ private void ClearDiscount()
 /// <summary>تحديث الإجمالي النهائي</summary>
 private void UpdateGrandTotal()
 {
+    // ⭐ لا تسمح بأن ينزل الإجمالي تحت مجموع الأسعار الأساسية
+    var maxDiscount = GetMaxDiscount();
+    if ((_form.DiscountAmount ?? 0) > maxDiscount)
+    {
+        _form.DiscountAmount = maxDiscount;
+        _form.DiscountPercentage = _form.TotalAmount > 0
+            ? Math.Round((maxDiscount / _form.TotalAmount) * 100, 2)
+            : 0;
+    }
     _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
     _form.GrandTotal = _form.NetTotalAmount ?? 0;
     StateHasChanged();

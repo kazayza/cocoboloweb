@@ -23,6 +23,7 @@ public class OpportunityWorkflowDto
     public int? StatusId { get; set; }
     public int? CategoryId { get; set; }
     public string? InterestedProduct { get; set; }
+    public decimal? ExpectedValue { get; set; }
     public DateTime? FirstContactDate { get; set; } = DateTime.Today;
     public DateTime? NextFollowUpDate { get; set; } = DateTime.Today.AddDays(1);
     public string? Location { get; set; }

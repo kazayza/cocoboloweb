@@ -24,6 +24,7 @@ public partial class SalesOpportunity
     public string? InterestedProduct { get; set; }
 
     public decimal? ExpectedValue { get; set; }
+    public decimal? ActualValue { get; set; }
 
     public string? Location { get; set; }
 

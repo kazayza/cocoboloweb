@@ -57,27 +57,46 @@ public class OpportunityService : IOpportunityService
 
     // ════════════════════ MOVE STAGE ════════════════════
     public async Task<(bool Success, string Message)> MoveStageAsync(int opportunityId, int newStageId, string userName)
+{
+    try
     {
-        try
+        var opp = await _db.SalesOpportunities.FindAsync(opportunityId);
+        if (opp == null) return (false, "الفرصة غير موجودة");
+        var oldStageId = opp.StageId;
+        if (oldStageId == newStageId) return (true, "لم يتغير شيء");
+        var oldStage = await _db.SalesStages.FindAsync(oldStageId);
+        var newStage = await _db.SalesStages.FindAsync(newStageId);
+        opp.StageId = newStageId; opp.LastUpdatedBy = userName; opp.LastUpdatedAt = DateTime.Now; opp.LastContactDate = DateTime.Now;
+
+        var stages = await _db.SalesStages.AsNoTracking().ToListAsync();
+        var wonIds = stages.Where(s => WonKeywords.Any(k => (s.StageNameAr ?? "").Contains(k) || (s.StageName ?? "").Contains(k))).Select(s => s.StageId).ToHashSet();
+
+        // لو المرحلة الجديدة رابحة → املأ القيمة الفعلية
+        if (wonIds.Contains(newStageId) && opp.ActualValue == null)
         {
-            var opp = await _db.SalesOpportunities.FindAsync(opportunityId);
-            if (opp == null) return (false, "الفرصة غير موجودة");
-            var oldStageId = opp.StageId;
-            if (oldStageId == newStageId) return (true, "لم يتغير شيء");
-            var oldStage = await _db.SalesStages.FindAsync(oldStageId);
-            var newStage = await _db.SalesStages.FindAsync(newStageId);
-            opp.StageId = newStageId; opp.LastUpdatedBy = userName; opp.LastUpdatedAt = DateTime.Now; opp.LastContactDate = DateTime.Now;
-            var stages = await _db.SalesStages.AsNoTracking().ToListAsync();
-            var wonIds = stages.Where(s => WonKeywords.Any(k => (s.StageNameAr ?? "").Contains(k) || (s.StageName ?? "").Contains(k))).Select(s => s.StageId).ToHashSet();
-            opp.NextFollowUpDate = wonIds.Contains(newStageId) ? DateTime.Today.AddDays(7) : (!opp.NextFollowUpDate.HasValue || opp.NextFollowUpDate.Value < DateTime.Today ? DateTime.Today.AddDays(3) : opp.NextFollowUpDate);
-            _db.CustomerInteractions.Add(new CustomerInteraction { OpportunityId = opportunityId, PartyId = opp.PartyId, StageBeforeId = oldStageId, StageAfterId = newStageId, Summary = $"نقل تلقائي: {(oldStage?.StageNameAr ?? "—")} → {(newStage?.StageNameAr ?? "—")}", InteractionDate = DateTime.Now, CreatedBy = userName, CreatedAt = DateTime.Now, NextFollowUpDate = opp.NextFollowUpDate });
-            var party = await _db.Parties.FindAsync(opp.PartyId);
-            if (party != null) party.LastContactDate = DateTime.Now;
-            await _db.SaveChangesAsync();
-            return (true, $"تم النقل إلى {(newStage?.StageNameAr ?? newStage?.StageName ?? "—")}");
+            if (opp.TransactionId.HasValue)
+            {
+                var txn = await _db.Transactions.AsNoTracking()
+                    .Where(t => t.TransactionId == opp.TransactionId.Value && t.TransactionType == "Sale")
+                    .Select(t => new { t.GrandTotal })
+                    .FirstOrDefaultAsync();
+                opp.ActualValue = txn?.GrandTotal ?? opp.ExpectedValue;
+            }
+            else
+            {
+                opp.ActualValue = opp.ExpectedValue;
+            }
         }
-        catch (Exception ex) { _logger.LogError(ex, "MoveStage failed"); return (false, $"خطأ: {ex.Message}"); }
+
+        opp.NextFollowUpDate = wonIds.Contains(newStageId) ? DateTime.Today.AddDays(7) : (!opp.NextFollowUpDate.HasValue || opp.NextFollowUpDate.Value < DateTime.Today ? DateTime.Today.AddDays(3) : opp.NextFollowUpDate);
+        _db.CustomerInteractions.Add(new CustomerInteraction { OpportunityId = opportunityId, PartyId = opp.PartyId, StageBeforeId = oldStageId, StageAfterId = newStageId, Summary = $"نقل تلقائي: {(oldStage?.StageNameAr ?? "—")} → {(newStage?.StageNameAr ?? "—")}", InteractionDate = DateTime.Now, CreatedBy = userName, CreatedAt = DateTime.Now, NextFollowUpDate = opp.NextFollowUpDate });
+        var party = await _db.Parties.FindAsync(opp.PartyId);
+        if (party != null) party.LastContactDate = DateTime.Now;
+        await _db.SaveChangesAsync();
+        return (true, $"تم النقل إلى {(newStage?.StageNameAr ?? newStage?.StageName ?? "—")}");
     }
+    catch (Exception ex) { _logger.LogError(ex, "MoveStage failed"); return (false, $"خطأ: {ex.Message}"); }
+}
 
     // ════════════════════ GET FOR EDIT ════════════════════
     public async Task<OpportunityFormDto?> GetOpportunityForEditAsync(int opportunityId)
@@ -208,7 +227,9 @@ public async Task<OpportunityStatsDto> GetStatsAsync(OpportunityFilterDto filter
             { 
                 o.StageId, 
                 o.ExpectedValue, 
-                o.NextFollowUpDate 
+                o.ActualValue,
+                o.NextFollowUpDate,
+                o.TransactionId
             })
             .ToListAsync();
 
@@ -227,6 +248,9 @@ public async Task<OpportunityStatsDto> GetStatsAsync(OpportunityFilterDto filter
                 .Where(o => !wonIds.Contains(o.StageId) && 
                             !lostIds.Contains(o.StageId))
                 .Sum(o => o.ExpectedValue ?? 0),
+            ActualValue = opps
+    .Where(o => wonIds.Contains(o.StageId))
+    .Sum(o => o.ExpectedValue ?? 0),
             OverdueFollowUpCount = opps.Count(o => 
                 o.NextFollowUpDate.HasValue && 
                 o.NextFollowUpDate.Value < today),
@@ -288,6 +312,24 @@ if (f.DateTo.HasValue)
             if (isNew) { opp = new SalesOpportunity { PartyId = dto.PartyId, CreatedBy = userName, CreatedAt = DateTime.Now, IsActive = true }; _db.SalesOpportunities.Add(opp); }
             else { opp = await _db.SalesOpportunities.FindAsync(dto.OpportunityId); if (opp == null) return (false, "الفرصة غير موجودة", 0); opp.LastUpdatedBy = userName; opp.LastUpdatedAt = DateTime.Now; }
             opp.EmployeeId = dto.EmployeeId; opp.SourceId = dto.SourceId; opp.AdTypeId = dto.AdTypeId; opp.StageId = dto.StageId; opp.StatusId = dto.StatusId; opp.CategoryId = dto.CategoryId; opp.InterestedProduct = dto.InterestedProduct; opp.ExpectedValue = dto.ExpectedValue; opp.Location = dto.Location; opp.FirstContactDate = dto.FirstContactDate; opp.NextFollowUpDate = dto.NextFollowUpDate; opp.LostReasonId = dto.LostReasonId; opp.LostNotes = dto.LostNotes; opp.Notes = dto.Notes; opp.Guidance = dto.Guidance; opp.IsActive = dto.IsActive;
+                        // لو الفرصة في مرحلة رابحة والقيمة الفعلية فاضية → املأها
+            var stages = await _db.SalesStages.AsNoTracking().ToListAsync();
+            var wonIds = stages.Where(s => WonKeywords.Any(k => (s.StageNameAr ?? "").Contains(k) || (s.StageName ?? "").Contains(k))).Select(s => s.StageId).ToHashSet();
+            if (wonIds.Contains(opp.StageId) && opp.ActualValue == null)
+            {
+                if (opp.TransactionId.HasValue)
+                {
+                    var txn = await _db.Transactions.AsNoTracking()
+                        .Where(t => t.TransactionId == opp.TransactionId.Value && t.TransactionType == "Sale")
+                        .Select(t => new { t.GrandTotal })
+                        .FirstOrDefaultAsync();
+                    opp.ActualValue = txn?.GrandTotal ?? opp.ExpectedValue;
+                }
+                else
+                {
+                    opp.ActualValue = opp.ExpectedValue;
+                }
+            }
             if (dto.NextFollowUpDate.HasValue) { var party = await _db.Parties.FindAsync(dto.PartyId); if (party != null) party.LastContactDate = DateTime.Now; }
             await _db.SaveChangesAsync();
             return (true, isNew ? "تم إضافة الفرصة بنجاح" : "تم تعديل الفرصة بنجاح", opp.OpportunityId);
@@ -557,6 +599,7 @@ if (f.DateTo.HasValue)
                     InterestedProduct = dto.InterestedProduct,
                     FirstContactDate = dto.FirstContactDate ?? now,
                     NextFollowUpDate = dto.NextFollowUpDate,
+                    ExpectedValue = dto.ExpectedValue,
                     Location = dto.Location,
                     LostReasonId = dto.LostReasonId,
                     LostNotes = dto.LostNotes,
@@ -581,6 +624,7 @@ if (f.DateTo.HasValue)
 
                 if (dto.StageId.HasValue) opp.StageId = dto.StageId.Value;
                 opp.StatusId = dto.StatusId ?? opp.StatusId;
+                opp.ExpectedValue = dto.ExpectedValue ?? opp.ExpectedValue;
                 opp.LostReasonId = dto.LostReasonId;
                 opp.LostNotes = dto.LostNotes;
                 opp.CategoryId = dto.CategoryId ?? opp.CategoryId;
@@ -596,24 +640,27 @@ if (f.DateTo.HasValue)
                 opportunityId = opp.OpportunityId;
             }
 
-            // ═══ 3. إضافة سجل التواصل ═══
-            var interaction = new CustomerInteraction
-            {
-                OpportunityId = opportunityId,
-                PartyId = partyId,
-                EmployeeId = dto.EmployeeId,
-                SourceId = dto.SourceId,
-                StatusId = dto.StatusId,
-                InteractionDate = now,
-                Summary = dto.Summary,
-                StageBeforeId = stageBefore == 0 ? (int?)null : stageBefore,
-                StageAfterId = dto.StageId,
-                NextFollowUpDate = dto.NextFollowUpDate,
-                Notes = dto.Guidance,
-                CreatedBy = userName,
-                CreatedAt = now
-            };
-            _db.CustomerInteractions.Add(interaction);
+            // ═══ 3. إضافة سجل التواصل (فقط للإضافات الجديدة، أو عند تغيير المرحلة/الملخص) ═══
+if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) || !string.IsNullOrWhiteSpace(dto.Summary))
+{
+    var interaction = new CustomerInteraction
+    {
+        OpportunityId = opportunityId,
+        PartyId = partyId,
+        EmployeeId = dto.EmployeeId,
+        SourceId = dto.SourceId,
+        StatusId = dto.StatusId,
+        InteractionDate = now,
+        Summary = dto.Summary,
+        StageBeforeId = stageBefore == 0 ? (int?)null : stageBefore,
+        StageAfterId = dto.StageId,
+        NextFollowUpDate = dto.NextFollowUpDate,
+        Notes = dto.Guidance,
+        CreatedBy = userName,
+        CreatedAt = now
+    };
+    _db.CustomerInteractions.Add(interaction);
+}
 
             // ═══ 4. تحديث آخر تواصل للعميل ═══
             var party = await _db.Parties.FindAsync(partyId);

@@ -2,6 +2,7 @@
 
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components
 @using System.Net.Http.Json
 
 @inject IQuotationService QuotationService
@@ -757,6 +758,11 @@ private const string QuickFilterExpired = "expired";
 private const string QuickFilterCustom = "custom";
 
 private string _activeQuickFilter = QuickFilterAll;
+
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "status")]
+    public string? StatusQuery { get; set; }
+
     private QuotationFilterDto _filter = new();
     private PagedResult<QuotationListDto> _pagedResult = new();
     private QuotationStatsDto _stats = new();
@@ -795,6 +801,7 @@ private string _activeQuickFilter = QuickFilterAll;
         {
             _cashBoxes = await InvoiceService.GetCashBoxesAsync() ?? new();
             _employees = await EmployeeService.SearchEmployeesAsync("", 200);
+            ApplyQueryFilters();
             await LoadData();
             _stats = await QuotationService.GetStatsAsync();
         }
@@ -806,13 +813,35 @@ private string _activeQuickFilter = QuickFilterAll;
         {
             _isLoading = false;
         }
-    }
-    private string GetStatCardClass(string quickFilter)
-{
-    return _activeQuickFilter == quickFilter
-        ? "stat-card active"
-        : "stat-card";
 }
+
+    private void ApplyQueryFilters()
+    {
+        if (string.IsNullOrWhiteSpace(StatusQuery))
+            return;
+
+        var requestedStatus = StatusQuery.Trim();
+        var matchedStatus = QuotationStatuses.All.Keys
+            .FirstOrDefault(s => string.Equals(s, requestedStatus, StringComparison.OrdinalIgnoreCase));
+
+        if (string.IsNullOrWhiteSpace(matchedStatus))
+            return;
+
+        _filter.PageNumber = 1;
+        _filter.Status = matchedStatus;
+        _filter.IsConverted = null;
+        _filter.IsExpired = null;
+        _filter.PendingOnly = null;
+
+        SyncActiveQuickFilter();
+    }
+
+    private string GetStatCardClass(string quickFilter)
+    {
+        return _activeQuickFilter == quickFilter
+            ? "stat-card active"
+            : "stat-card";
+    }
 
 private async Task ApplyStatsQuickFilter(string quickFilter)
 {
@@ -897,11 +926,11 @@ private void SyncActiveQuickFilter()
     {
         _activeQuickFilter = QuickFilterPending;
     }
-    else if (_filter.IsConverted == true)
+    else if (_filter.IsConverted == true || _filter.Status == QuotationStatuses.Converted)
     {
         _activeQuickFilter = QuickFilterConverted;
     }
-    else if (_filter.IsExpired == true)
+    else if (_filter.IsExpired == true || _filter.Status == QuotationStatuses.Expired)
     {
         _activeQuickFilter = QuickFilterExpired;
     }

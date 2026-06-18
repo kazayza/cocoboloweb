@@ -25,5 +25,6 @@ public static class LeadsCrmPermissions
     public static bool CanViewDashboard(ClaimsPrincipal user) =>
     user.IsInRole("Admin")
     || user.IsInRole("SalesManager")
+    || user.IsInRole("SocialView")
     || user.IsInRole("SocialManager");
 }

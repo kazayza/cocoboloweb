@@ -24,7 +24,7 @@ public class QuotationListDto
     public decimal? GrossProfit => TotalCost.HasValue ? GrandTotal - TotalCost.Value : null;
     public decimal? ProfitMarginPercentage =>
     TotalCost.HasValue && GrandTotal > 0
-        ? Math.Round(((GrandTotal - TotalCost.Value) / GrandTotal) * 100m, 2)
+        ? Math.Round(((GrandTotal - TotalCost.Value) / TotalCost.Value) * 100m, 2)
         : null;
     public string Status { get; set; } = QuotationStatuses.Draft;
     public int? InvoiceId { get; set; }

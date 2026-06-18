@@ -14,6 +14,8 @@ public class LeadsDashboardDataDto
     public List<ChartItemDto> TopCities { get; set; } = new();
     public List<DashboardEmployeeDto> EmployeePerformance { get; set; } = new();
     public List<FunnelItemDto> FunnelData { get; set; } = new();
+    public List<SalesByPeriodDto> SalesByPeriod { get; set; } = new();
+    public List<ValueComparisonDto> ValueComparison { get; set; } = new();
     public List<CampaignPerformanceDto> TopCampaigns { get; set; } = new();
     public List<ProjectTypeSummaryDto> ProjectSummary { get; set; } = new();
     public List<RecentConvertedDto> RecentConverted { get; set; } = new();
@@ -35,6 +37,10 @@ public class LeadsDashboardKpisDto
     public decimal ConversionRate { get; set; }
     public double AvgConversionDays { get; set; }
     public int ConvertedCount { get; set; }
+    public int ClosedDealCount { get; set; }       // ← أضف ده
+    public decimal ClosedDealValue { get; set; }
+    public decimal ClosedDealExpectedValue { get; set; }
+    public decimal ValueVariance { get; set; }      // الفرق (المتوقع - الفعلي)
     public decimal DuplicateRate { get; set; }
     public decimal RejectionRate { get; set; }
 
@@ -61,6 +67,7 @@ public class DailyTrendItemDto
 {
     public DateTime Date { get; set; }
     public int Leads { get; set; }
+    public int Contacted { get; set; }
     public int Converted { get; set; }
 }
 
@@ -75,6 +82,8 @@ public class DashboardEmployeeDto
     public int QualifiedCount { get; set; }
     public int ConvertedCount { get; set; }
     public int RejectedCount { get; set; }
+    public int ClosedDealCount { get; set; }
+    public decimal ClosedDealValue { get; set; }
 }
 
 public class FunnelItemDto
@@ -113,6 +122,20 @@ public class RecentConvertedDto
     public string EmployeeName { get; set; } = "";
     public DateTime ConvertedDate { get; set; }
     public string Budget { get; set; } = "";
+}
+public class SalesByPeriodDto
+{
+    public string Period { get; set; } = "";   // "يناير 2026"
+    public decimal TotalValue { get; set; }     // إجمالي القيم
+    public decimal ExpectedTotalValue { get; set; }  // إجمالي القيمة المتوقعة
+    public int DealCount { get; set; }          // عدد الصفقات
+}
+
+public class ValueComparisonDto
+{
+    public string Period { get; set; } = "";       // "يناير 2026"
+    public decimal ExpectedValue { get; set; }      // القيمة المتوقعة
+    public decimal ActualValue { get; set; }        // القيمة الفعلية
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -159,4 +182,5 @@ public class LeadsDashboardFilterDto
             CampaignName = CampaignName
         };
     }
+    
 }

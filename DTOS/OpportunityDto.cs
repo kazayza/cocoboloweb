@@ -101,8 +101,10 @@ public class OpportunityStatsDto
     public int WonCount { get; set; }
     public int LostCount { get; set; }
     public decimal PipelineValue { get; set; }
+    public decimal ActualValue { get; set; }
     public int OverdueFollowUpCount { get; set; }
     public int TodayFollowUpCount { get; set; }
+
 }
 
 // ═══════════════════════════════════════════════════════════════
