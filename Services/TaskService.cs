@@ -19,7 +19,7 @@ public class TaskService : ITaskService
         var query = _db.VwCrmTasks.AsNoTracking().AsQueryable();
 
         // ★ أضف السطر ده هنا - استبعد Completed و Cancelled
-    query = query.Where(t => t.Status != "Completed" && t.Status != "Cancelled");
+        query = query.Where(t => t.Status != "Completed" && t.Status != "Cancelled");
 
         if (crmAccess.HasValue)
             query = query.Where(t => t.CreatedAt >= crmAccess.Value);
@@ -43,16 +43,7 @@ public class TaskService : ITaskService
                 (t.ClientName != null && t.ClientName.Contains(s)));
         }
 
-        var total = await query.CountAsync();
-
-        query = filter.SortBy switch
-        {
-            "DueDate" => filter.SortDescending ? query.OrderByDescending(t => t.DueDate) : query.OrderBy(t => t.DueDate),
-            "Priority" => filter.SortDescending ? query.OrderByDescending(t => t.Priority) : query.OrderBy(t => t.Priority),
-            _ => filter.SortDescending ? query.OrderByDescending(t => t.CreatedAt) : query.OrderBy(t => t.CreatedAt)
-        };
-
-        var items = await query.Skip((filter.PageNumber - 1) * filter.PageSize).Take(filter.PageSize)
+        var items = await query
             .Select(t => new TaskListDto
             {
                 TaskId = t.TaskId, OpportunityId = t.OpportunityId, PartyId = t.PartyId,
@@ -68,7 +59,62 @@ public class TaskService : ITaskService
                 TaskDueStatus = t.TaskDueStatus, DaysUntilDue = t.DaysUntilDue
             }).ToListAsync();
 
-        return new PagedResult<TaskListDto> { Items = items, TotalCount = total, PageNumber = filter.PageNumber, PageSize = filter.PageSize };
+        // ═══════════════════════════════════════════════════════════════
+        // ★ دمج مهام متابعة الـ Leads من جدول التفاعلات ★
+        // ═══════════════════════════════════════════════════════════════
+        var leadQuery = _db.LeadInteractions.AsNoTracking()
+            .Include(i => i.Lead)
+            .Include(i => i.Employee)
+            .Where(i => i.NextFollowUpDate.HasValue && !i.Lead.IsConverted && i.Lead.LeadStatus != "محول" && i.Lead.LeadStatus != "مرفوض");
+
+        if (crmAccess.HasValue)
+            leadQuery = leadQuery.Where(i => i.CreatedAt >= crmAccess.Value);
+        if (filter.AssignedTo.HasValue)
+            leadQuery = leadQuery.Where(i => i.Lead.AssignedEmployeeId == filter.AssignedTo.Value || i.EmployeeId == filter.AssignedTo.Value);
+        if (filter.IsOverdue == true)
+            leadQuery = leadQuery.Where(i => i.NextFollowUpDate.Value < DateTime.Today);
+        if (!string.IsNullOrWhiteSpace(filter.SearchText))
+        {
+            var s = filter.SearchText.Trim();
+            leadQuery = leadQuery.Where(i =>
+                (i.Summary != null && i.Summary.Contains(s)) ||
+                (i.Lead.FullName != null && i.Lead.FullName.Contains(s)));
+        }
+
+        var leadTasks = await leadQuery
+            .Select(i => new TaskListDto
+            {
+                TaskId = i.LeadInteractionId + 1000000, // لتجنب التعارض مع TaskId
+                LeadId = i.LeadId,
+                IsLeadTask = true,
+                ClientName = i.Lead.FullName,
+                Phone = i.Lead.Phone,
+                CampaignName = i.Lead.CampaignName,
+                Platform = i.Lead.Platform,
+                AssignedTo = i.Lead.AssignedEmployeeId ?? i.EmployeeId ?? 0,
+                AssignedToName = i.Lead.AssignedEmployeeId.HasValue ? _db.Employees.Where(e => e.EmployeeId == i.Lead.AssignedEmployeeId).Select(e => e.FullName).FirstOrDefault() : (i.Employee != null ? i.Employee.FullName : "غير محدد"),
+                TaskDescription = "متابعة Lead: " + (i.Summary ?? "تواصل مستحق"),
+                DueDate = i.NextFollowUpDate!.Value,
+                Priority = "Normal",
+                Status = "Pending",
+                IsActive = true,
+                CreatedBy = i.CreatedBy,
+                CreatedAt = i.CreatedAt
+            }).ToListAsync();
+
+        var allItems = items.Concat(leadTasks).ToList();
+
+        allItems = filter.SortBy switch
+        {
+            "DueDate" => filter.SortDescending ? allItems.OrderByDescending(t => t.DueDate).ToList() : allItems.OrderBy(t => t.DueDate).ToList(),
+            "Priority" => filter.SortDescending ? allItems.OrderByDescending(t => t.Priority).ToList() : allItems.OrderBy(t => t.Priority).ToList(),
+            _ => filter.SortDescending ? allItems.OrderByDescending(t => t.CreatedAt).ToList() : allItems.OrderBy(t => t.CreatedAt).ToList()
+        };
+
+        var total = allItems.Count;
+        var pagedItems = allItems.Skip((filter.PageNumber - 1) * filter.PageSize).Take(filter.PageSize).ToList();
+
+        return new PagedResult<TaskListDto> { Items = pagedItems, TotalCount = total, PageNumber = filter.PageNumber, PageSize = filter.PageSize };
     }
 
     public async Task<List<TaskListDto>> GetByOpportunityAsync(int opportunityId)

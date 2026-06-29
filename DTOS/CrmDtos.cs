@@ -55,8 +55,12 @@ public class TaskListDto
     public int TaskId { get; set; }
     public int? OpportunityId { get; set; }
     public int? PartyId { get; set; }
+    public int? LeadId { get; set; }
+    public bool IsLeadTask { get; set; }
     public string? ClientName { get; set; }
     public string? Phone { get; set; }
+    public string? CampaignName { get; set; }
+    public string? Platform { get; set; }
     public int AssignedTo { get; set; }
     public string? AssignedToName { get; set; }
     public int? TaskTypeId { get; set; }
