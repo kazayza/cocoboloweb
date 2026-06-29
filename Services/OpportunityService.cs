@@ -308,6 +308,15 @@ if (f.DateTo.HasValue)
     {
         try
         {
+            if (!dto.SourceId.HasValue)
+                return (false, "برجاء تحديد طريقة / مصدر التواصل أولاً", 0);
+
+            if (dto.StageId != 3 && dto.StageId != 4)
+            {
+                if (!dto.NextFollowUpDate.HasValue)
+                    return (false, "تاريخ المتابعة القادم إجباري لهذه المرحلة", 0);
+            }
+
             SalesOpportunity opp; bool isNew = dto.OpportunityId == 0;
             if (isNew) { opp = new SalesOpportunity { PartyId = dto.PartyId, CreatedBy = userName, CreatedAt = DateTime.Now, IsActive = true }; _db.SalesOpportunities.Add(opp); }
             else { opp = await _db.SalesOpportunities.FindAsync(dto.OpportunityId); if (opp == null) return (false, "الفرصة غير موجودة", 0); opp.LastUpdatedBy = userName; opp.LastUpdatedAt = DateTime.Now; }
@@ -544,6 +553,18 @@ if (f.DateTo.HasValue)
     public async Task<(bool Success, string Message, int OpportunityId)> SaveWorkflowAsync(
         OpportunityWorkflowDto dto, string userName)
     {
+        if (!dto.SourceId.HasValue)
+            return (false, "برجاء تحديد طريقة / مصدر التواصل أولاً", 0);
+
+        var targetStageId = dto.StageId ?? 1;
+        if (targetStageId != 3 && targetStageId != 4)
+        {
+            if (!dto.TaskTypeId.HasValue)
+                return (false, "برجاء اختيار نوع مهمة المتابعة القادمة (اتصال، اجتماع، إلخ)", 0);
+            if (!dto.NextFollowUpDate.HasValue)
+                return (false, "تاريخ المتابعة القادم إجباري لهذه المرحلة", 0);
+        }
+
         using var transaction = await _db.Database.BeginTransactionAsync();
         try
         {
@@ -720,7 +741,7 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
                 }
 
                 // إنشاء مهمة جديدة
-                if (dto.NextFollowUpDate.Value > DateTime.Today)
+                if (dto.NextFollowUpDate.Value >= DateTime.Today)
                 {
                     var newTask = new CrmTask
                     {
@@ -730,7 +751,7 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
                         TaskTypeId = dto.TaskTypeId,
                         TaskDescription = dto.Guidance ?? "متابعة",
                         DueDate = dto.NextFollowUpDate.Value,
-                        Priority = "Normal",
+                        Priority = (dto.Priority == "Medium" ? "Normal" : dto.Priority) ?? "Normal",
                         Status = "Pending",
                         ReminderEnabled = true,
                         IsActive = true,

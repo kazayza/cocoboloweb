@@ -96,6 +96,8 @@ public class QuickInteractionDto
     public string? LostNotes { get; set; }        // ← جديد
     public DateTime? NextFollowUpDate { get; set; }
     public string? Notes { get; set; }
+    public int? TaskTypeId { get; set; }
+    public string? Priority { get; set; } = "Medium";
 }
 
 // ═══════════════════════════════════════════════════════════════

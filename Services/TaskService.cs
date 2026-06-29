@@ -96,7 +96,7 @@ public class TaskService : ITaskService
             {
                 OpportunityId = dto.OpportunityId, PartyId = dto.PartyId,
                 AssignedTo = dto.AssignedTo, TaskDescription = dto.TaskDescription,
-                DueDate = dto.DueDate, Priority = dto.Priority,
+                DueDate = dto.DueDate, Priority = (dto.Priority == "Medium" ? "Normal" : dto.Priority) ?? "Normal",
                 Status = "Pending", IsActive = true,
                 CreatedBy = userName, CreatedAt = DateTime.Now
             };

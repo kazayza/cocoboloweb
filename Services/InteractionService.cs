@@ -106,7 +106,19 @@ public class InteractionService : IInteractionService
             var opp = await _db.SalesOpportunities.FindAsync(dto.OpportunityId);
             if (opp == null) return (false, "الفرصة غير موجودة");
 
+            if (!dto.SourceId.HasValue)
+                return (false, "برجاء تحديد طريقة / مصدر التواصل أولاً");
+
             var oldStageId = opp.StageId;
+            var newStageId = dto.StageAfterId ?? oldStageId;
+
+            if (newStageId != 3 && newStageId != 4)
+            {
+                if (!dto.TaskTypeId.HasValue)
+                    return (false, "برجاء اختيار نوع مهمة المتابعة القادمة (اتصال، اجتماع، إلخ)");
+                if (!dto.NextFollowUpDate.HasValue)
+                    return (false, "تاريخ المتابعة القادم إجباري لهذه المرحلة");
+            }
 
             var interaction = new CustomerInteraction
             {
@@ -125,6 +137,66 @@ public class InteractionService : IInteractionService
                 CreatedAt = DateTime.Now
             };
             _db.CustomerInteractions.Add(interaction);
+
+            // إغلاق مهام المتابعة القديمة وتحديثها
+            if (newStageId == 4 || newStageId == 5)
+            {
+                var label = newStageId == 4 ? "خسارة" : "غير مهتم";
+                var tasks = await _db.CrmTasks
+                    .Where(t => t.OpportunityId == dto.OpportunityId && (t.Status == "Pending" || t.Status == "In Progress"))
+                    .ToListAsync();
+                foreach (var t in tasks)
+                {
+                    t.Status = "Completed";
+                    t.CompletedDate = DateTime.Now;
+                    t.CompletedBy = userName;
+                    t.CompletionNotes = $"تم الإلغاء تلقائياً - العميل {label}";
+                }
+            }
+            else if (newStageId == 3)
+            {
+                var tasks = await _db.CrmTasks
+                    .Where(t => t.OpportunityId == dto.OpportunityId && (t.Status == "Pending" || t.Status == "In Progress"))
+                    .ToListAsync();
+                foreach (var t in tasks)
+                {
+                    t.Status = "Completed";
+                    t.CompletedDate = DateTime.Now;
+                    t.CompletedBy = userName;
+                    t.CompletionNotes = "تم الإغلاق تلقائياً - تم البيع بنجاح";
+                }
+            }
+            else if (dto.NextFollowUpDate.HasValue)
+            {
+                var oldTasks = await _db.CrmTasks
+                    .Where(t => t.OpportunityId == dto.OpportunityId && (t.Status == "Pending" || t.Status == "In Progress"))
+                    .ToListAsync();
+                foreach (var t in oldTasks)
+                {
+                    t.Status = "Completed";
+                    t.CompletedDate = DateTime.Now;
+                    t.CompletedBy = userName;
+                    t.CompletionNotes = "تمت المتابعة وجدولة موعد جديد";
+                }
+
+                // توليد مهمة المتابعة الجديدة في جدول المهام
+                var newTask = new CrmTask
+                {
+                    OpportunityId = dto.OpportunityId,
+                    PartyId = dto.PartyId,
+                    AssignedTo = dto.EmployeeId ?? opp.EmployeeId ?? 0,
+                    TaskTypeId = dto.TaskTypeId ?? 1,
+                    TaskDescription = dto.Summary ?? "متابعة تواصل جديد",
+                    DueDate = dto.NextFollowUpDate.Value,
+                    Priority = (dto.Priority == "Medium" ? "Normal" : dto.Priority) ?? "Normal",
+                    Status = "Pending",
+                    ReminderEnabled = true,
+                    IsActive = true,
+                    CreatedBy = userName,
+                    CreatedAt = DateTime.Now
+                };
+                _db.CrmTasks.Add(newTask);
+            }
 
             // Update opportunity stage + followup + lost info
             if (dto.StageAfterId.HasValue && dto.StageAfterId != oldStageId)

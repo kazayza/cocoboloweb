@@ -38,6 +38,7 @@ public class OpportunityWorkflowDto
 
     // المهمة
     public int? TaskTypeId { get; set; }
+    public string? Priority { get; set; } = "Medium";
 
     // داخلي
     public int StageBeforeId { get; set; }
