@@ -34,4 +34,23 @@ public interface IProductService
         decimal? newPremiumCost, 
         decimal? newEliteCost, 
         string currentUsername);
+    // ============================
+// ✅ دوال مدة التصنيع وملاحظات التصنيع
+// ============================
+
+Task RequestPeriodChangeAsync(
+    int productId,
+    int? newPeriod,
+    string? newManufacturingNotes,
+    string reason,
+    string currentUsername);
+
+Task ApprovePeriodChangeAsync(
+    int productId,
+    string currentUsername);
+
+Task RejectPeriodChangeAsync(
+    int productId,
+    string currentUsername,
+    string? rejectReason = null);
 }

@@ -6,6 +6,7 @@
 @using System.Security.Claims
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Web
+@using System.Web
 @using MudColor = MudBlazor.Color
 @using MudSize = MudBlazor.Size
 @using MudVariant = MudBlazor.Variant
@@ -71,6 +72,11 @@ else
                             <span>جدول</span>
                         </button>
                     </div>
+                    <button class="v2-btn-add" style="background:rgba(139,92,246,0.15);border-color:rgba(139,92,246,0.35)"
+        @onclick="@(() => Navigation.NavigateTo("/crm/leads"))">
+    <MudIcon Icon="@Icons.Material.Rounded.ContactPhone" Size="MudSize.Small" />
+    Leads
+</button>
                     @if (_canAdd)
                     {
                         <button class="v2-btn-add" @onclick="GoToNew">
@@ -1133,6 +1139,7 @@ else
     {
         try
         {
+            await RestoreFilters();   // ← استعادة الفلتر من localStorage + URL
             var auth = await AuthProvider.GetAuthenticationStateAsync();
             var user = auth.User;
             _currentUserName = user.Identity?.Name ?? "System";
@@ -1200,6 +1207,7 @@ else
             _isLoadingData = false;
             _isRefreshing = false;
             StateHasChanged();
+            _ = PushFiltersToUrl();   // ← أضف السطر ده
         }
     }
 
@@ -1311,6 +1319,9 @@ else
         _filterAdTypeId = null;
         _filterIsNew = null;
         _mergedFilter = null;
+        // ← امسح الفلتر من localStorage
+        await JS.InvokeVoidAsync("localStorage.removeItem", "crm_opp_filter");
+        await JS.InvokeVoidAsync("localStorage.removeItem", "crm_opp_filter_extra");
         await RefreshAll();
     }
 
@@ -1509,6 +1520,111 @@ else
     {
         if (date == default) return -1;
         return (int)(DateTime.Today - date.Date).TotalDays;
+    }
+    // ─── URL Filter Persistence ───
+private async Task RestoreFilters()
+{
+    // 1. Try to restore from localStorage first
+    try
+    {
+        var json = await JS.InvokeAsync<string>("localStorage.getItem", "crm_opp_filter");
+        if (!string.IsNullOrEmpty(json))
+        {
+            var saved = System.Text.Json.JsonSerializer.Deserialize<OpportunityFilterDto>(json);
+            if (saved != null)
+            {
+                _filter = saved;
+                // Restore extra fields that are not in OpportunityFilterDto
+                var extraJson = await JS.InvokeAsync<string>("localStorage.getItem", "crm_opp_filter_extra");
+                if (!string.IsNullOrEmpty(extraJson))
+                {
+                    var extra = System.Text.Json.JsonSerializer.Deserialize<FilterExtraData>(extraJson);
+                    if (extra != null)
+                    {
+                        _filterStatusId = extra.StatusId;
+                        _filterAdTypeId = extra.AdTypeId;
+                        _filterIsNew = extra.IsNew;
+                        _mergedFilter = extra.MergedFilter;
+                        _viewMode = extra.ViewMode;
+                    }
+                }
+                return; // Successfully restored from localStorage
+            }
+        }
+    }
+    catch { /* ignore localStorage errors */ }
+
+    // 2. Fallback: restore from URL query parameters
+    var uri = new Uri(Navigation.Uri);
+    var qs = System.Web.HttpUtility.ParseQueryString(uri.Query);
+
+    if (int.TryParse(qs["stage"], out var sid))   _filter.StageId = sid;
+    if (int.TryParse(qs["emp"], out var eid))      _filter.EmployeeId = eid;
+    if (int.TryParse(qs["src"], out var srcid))    _filter.SourceId = srcid;
+    if (int.TryParse(qs["status"], out var stid))  _filterStatusId = stid;
+    if (int.TryParse(qs["adtype"], out var atid))  _filterAdTypeId = atid;
+
+    if (DateTime.TryParse(qs["from"], out var from)) _filter.DateFrom = from;
+    if (DateTime.TryParse(qs["to"], out var to))     _filter.DateTo = to;
+
+    if (qs["overdue"] == "true")   _filter.IsOverdueFollowUp = true;
+    if (qs["followup"] == "true")  _filter.HasFollowUp = true;
+    if (qs["new"] == "true")       _filterIsNew = true;
+
+    if (!string.IsNullOrEmpty(qs["q"]))     _filter.SearchText = qs["q"];
+    if (!string.IsNullOrEmpty(qs["merged"])) _mergedFilter = qs["merged"];
+
+    var view = qs["view"];
+    if (view == "grid")        _viewMode = ViewMode.Grid;
+    else if (view == "table")  _viewMode = ViewMode.Table;
+    else                       _viewMode = ViewMode.Kanban;
+}
+
+private async Task PushFiltersToUrl()
+{
+    var parts = new List<string>();
+    if (_filter.StageId.HasValue)        parts.Add($"stage={_filter.StageId}");
+    if (_filter.EmployeeId.HasValue)      parts.Add($"emp={_filter.EmployeeId}");
+    if (_filter.SourceId.HasValue)        parts.Add($"src={_filter.SourceId}");
+    if (_filterStatusId.HasValue)         parts.Add($"status={_filterStatusId}");
+    if (_filterAdTypeId.HasValue)         parts.Add($"adtype={_filterAdTypeId}");
+    if (_filter.DateFrom.HasValue)        parts.Add($"from={_filter.DateFrom.Value:yyyy-MM-dd}");
+    if (_filter.DateTo.HasValue)          parts.Add($"to={_filter.DateTo.Value:yyyy-MM-dd}");
+    if (_filter.IsOverdueFollowUp == true) parts.Add("overdue=true");
+    if (_filter.HasFollowUp == true)       parts.Add("followup=true");
+    if (_filterIsNew == true)              parts.Add("new=true");
+    if (!string.IsNullOrWhiteSpace(_filter.SearchText)) parts.Add($"q={Uri.EscapeDataString(_filter.SearchText)}");
+    if (!string.IsNullOrEmpty(_mergedFilter)) parts.Add($"merged={_mergedFilter}");
+    parts.Add($"view={_viewMode.ToString().ToLower()}");
+
+    var qs = string.Join("&", parts);
+    var newUrl = $"/crm/opportunities?{qs}";
+    await JS.InvokeVoidAsync("history.replaceState", null, "", newUrl);
+
+    // ← حفظ الفلتر في localStorage
+    var filterJson = System.Text.Json.JsonSerializer.Serialize(_filter);
+    await JS.InvokeVoidAsync("localStorage.setItem", "crm_opp_filter", filterJson);
+
+    var extra = new FilterExtraData
+    {
+        StatusId = _filterStatusId,
+        AdTypeId = _filterAdTypeId,
+        IsNew = _filterIsNew,
+        MergedFilter = _mergedFilter,
+        ViewMode = _viewMode
+    };
+    var extraJson = System.Text.Json.JsonSerializer.Serialize(extra);
+    await JS.InvokeVoidAsync("localStorage.setItem", "crm_opp_filter_extra", extraJson);
+}
+
+    // ─── Helper class for extra filter fields stored in localStorage ───
+    private class FilterExtraData
+    {
+        public int? StatusId { get; set; }
+        public int? AdTypeId { get; set; }
+        public bool? IsNew { get; set; }
+        public string? MergedFilter { get; set; }
+        public ViewMode ViewMode { get; set; }
     }
 
     public void Dispose() { _searchTimer?.Dispose(); _dragCard = null; }

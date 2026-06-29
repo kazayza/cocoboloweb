@@ -1,0 +1,2647 @@
+@page "/crm/reports/pipeline"
+
+@using System.Globalization
+@using System.Text
+@using ApexCharts
+@using COCOBOLOERPNEW.Models
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>تقرير خط مراحل المبيعات</PageTitle>
+
+<div class="pipx-page" dir="rtl">
+
+    @* Background *@
+    <div class="pipx-bg">
+        <div class="pipx-orb orb-1"></div>
+        <div class="pipx-orb orb-2"></div>
+        <div class="pipx-orb orb-3"></div>
+    </div>
+
+    @* HERO *@
+    <section class="pipx-hero">
+        <div class="pipx-hero-grid"></div>
+
+        <div class="pipx-hero-content">
+            <div class="pipx-hero-top">
+                <button class="pipx-back" @onclick="GoBack" title="رجوع">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12h14" />
+                        <path d="m12 5 7 7-7 7" />
+                    </svg>
+                </button>
+
+                <div class="pipx-badge">
+                    <span class="badge-dot"></span>
+                    <span>Pipeline Intelligence</span>
+                </div>
+            </div>
+
+            <div class="pipx-hero-main">
+                <div class="pipx-hero-text">
+                    <h1>خط <span>مراحل</span> المبيعات</h1>
+                    <p>
+                        لوحة تنفيذية لقياس توزيع الفرص عبر مراحل البيع، متابعة القيمة داخل الـ Pipeline،
+                        اكتشاف الاختناقات، وتحليل المراحل والموظفين والفرص الأعلى تأثيرًا.
+                    </p>
+
+                    <div class="pipx-hero-chips">
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة الحالية</span>
+                            <span class="chip-value">@SelectedPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة السابقة</span>
+                            <span class="chip-value">@PreviousPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">الموظف</span>
+                            <span class="chip-value">@SelectedEmployeeLabel</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pipx-hero-side">
+                    <div class="summary-ring" style="@GetSummaryRingStyle()">
+                        <div class="summary-ring-inner">
+                            <div class="summary-percent">@_closeRate.ToString("F1")%</div>
+                            <div class="summary-caption">نسبة الحسم</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @* FILTERS / ACTIONS *@
+    <section class="glass-card pipx-filters">
+        <div class="filters-head">
+            <div>
+                <h3>الفلاتر والتحكم</h3>
+                <p>حدد الفترة الزمنية والموظف أو استخدم الفترات السريعة لتحليل الـ Pipeline</p>
+            </div>
+
+            <div class="filters-actions">
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Default"
+                           StartIcon="@Icons.Material.Rounded.RestartAlt"
+                           OnClick="ResetFiltersAsync"
+                           Disabled="_isLoading">
+                    إعادة ضبط
+                </MudButton>
+
+                <MudButton Variant="Variant.Filled"
+                           Color="@MudColor.Primary"
+                           StartIcon="@Icons.Material.Rounded.FilterAlt"
+                           OnClick="LoadData"
+                           Disabled="_isLoading">
+                    تطبيق التحليل
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Success"
+                           StartIcon="@Icons.Material.Rounded.FileDownload"
+                           OnClick="ExportCsvAsync"
+                           Disabled="_isLoading">
+                    تصدير CSV
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Info"
+                           StartIcon="@Icons.Material.Rounded.Print"
+                           OnClick="PrintAsync"
+                           Disabled="_isLoading">
+                    طباعة / PDF
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="quick-range-row">
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(3)">آخر 3 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(6)">آخر 6 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(12)">آخر 12 شهر</button>
+            <button class="quick-range-btn" @onclick="SetCurrentYearAsync">السنة الحالية</button>
+        </div>
+
+        <div class="filters-grid">
+            <MudDatePicker @bind-Date="_fromDate"
+                           Label="من تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudDatePicker @bind-Date="_toDate"
+                           Label="إلى تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudSelect T="int?"
+                       @bind-Value="_empId"
+                       Label="الموظف"
+                       Clearable="true"
+                       Variant="Variant.Outlined"
+                       Dense="true"
+                       Class="filter-field">
+                @foreach (var emp in _employees)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)emp.Id)">@emp.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </div>
+    </section>
+
+    @if (_isLoading)
+    {
+        <div class="glass-card pipx-loading">
+            <MudProgressCircular Indeterminate="true"
+                                 Size="@MudSize.Large"
+                                 Color="@MudColor.Primary" />
+            <div class="loading-text">
+                <h3>جاري تحليل خط الأنابيب...</h3>
+                <p>يتم تجهيز المؤشرات والرسوم البيانية وتحليل المراحل</p>
+            </div>
+        </div>
+    }
+    else
+    {
+        @* KPI *@
+        <section class="pipx-kpis">
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon indigo">#</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">إجمالي الفرص</div>
+                        <span class="trend-badge @GetTrendClass(_totalOpps, _prevTotalOpps)">
+                            @GetTrendText(_totalOpps, _prevTotalOpps)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_totalOpps.ToString("N0")</div>
+                    <div class="kpi-sub">كل الفرص داخل الفترة المحددة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon blue">₪</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">إجمالي القيمة المتوقعة</div>
+                        <span class="trend-badge @GetTrendClass(_totalExpectedValue, _prevTotalExpectedValue)">
+                            @GetTrendText(_totalExpectedValue, _prevTotalExpectedValue)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@FormatMoney(_totalExpectedValue)</div>
+                    <div class="kpi-sub">القيمة الإجمالية لجميع الفرص</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon teal">◎</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">الفرص المفتوحة</div>
+                        <span class="trend-badge @GetTrendClass(_openCount, _prevOpenCount)">
+                            @GetTrendText(_openCount, _prevOpenCount)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_openCount.ToString("N0")</div>
+                    <div class="kpi-sub">الفرص التي ما زالت داخل الـ Pipeline</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon purple">⟐</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">قيمة الـ Pipeline المفتوح</div>
+                        <span class="trend-badge @GetTrendClass(_openPipelineValue, _prevOpenPipelineValue)">
+                            @GetTrendText(_openPipelineValue, _prevOpenPipelineValue)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@FormatMoney(_openPipelineValue)</div>
+                    <div class="kpi-sub">القيمة المتبقية في المراحل غير المغلقة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon green">✓</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">الفرص المكتملة</div>
+                        <span class="trend-badge @GetTrendClass(_wonCount, _prevWonCount)">
+                            @GetTrendText(_wonCount, _prevWonCount)
+                        </span>
+                    </div>
+                    <div class="kpi-value success">@_wonCount.ToString("N0")</div>
+                    <div class="kpi-sub">عدد الصفقات الرابحة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon amber">💰</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">قيمة المبيعات</div>
+                        <span class="trend-badge @GetTrendClass(_wonValue, _prevWonValue)">
+                            @GetTrendText(_wonValue, _prevWonValue)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@FormatMoney(_wonValue)</div>
+                    <div class="kpi-sub">الإيراد المتوقع من الصفقات الرابحة</div>
+                </div>
+            </div>
+        </section>
+
+        @* INSIGHTS *@
+        <section class="pipx-insights">
+            @foreach (var insight in _insights)
+            {
+                <div class="glass-card insight-card">
+                    <div class="insight-icon @insight.ToneClass">
+                        <MudIcon Icon="@insight.Icon" Size="@MudSize.Small" />
+                    </div>
+                    <div class="insight-body">
+                        <div class="insight-title">@insight.Title</div>
+                        <div class="insight-value">@insight.Value</div>
+                        <div class="insight-desc">@insight.Description</div>
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* MAIN DASHBOARD *@
+        <section class="pipx-dashboard">
+            <div class="glass-card main-chart-card">
+                <div class="card-head">
+                    <div>
+                        <h3>توزيع الفرص والقيمة حسب المرحلة</h3>
+                        <p>عدد الفرص داخل كل مرحلة مقابل القيمة الإجمالية لها</p>
+                    </div>
+                </div>
+
+                @if (_stageOverviewPoints.Any())
+                {
+                    <ApexChart TItem="StageOverviewPoint"
+                               Options="_stageOverviewChartOptions"
+                               Height="380">
+                        <ApexPointSeries TItem="StageOverviewPoint"
+                                         Items="@_stageOverviewPoints"
+                                         Name="عدد الفرص"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Stage"
+                                         YValue="x => x.Count" />
+
+                        <ApexPointSeries TItem="StageOverviewPoint"
+                                         Items="@_stageOverviewPoints"
+                                         Name="القيمة"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.Stage"
+                                         YValue="x => x.Value" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty">لا توجد بيانات للرسم البياني</div>
+                }
+            </div>
+
+            <div class="side-stack">
+                <div class="glass-card side-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>أعلى الموظفين في الـ Pipeline المفتوح</h3>
+                            <p>ترتيب الموظفين حسب قيمة الفرص المفتوحة</p>
+                        </div>
+                    </div>
+
+                    @if (_employeeOpenPoints.Any())
+                    {
+                        <ApexChart TItem="EmployeeOpenPoint"
+                                   Options="_employeeOpenChartOptions"
+                                   Height="320">
+                            <ApexPointSeries TItem="EmployeeOpenPoint"
+                                             Items="@_employeeOpenPoints"
+                                             Name="القيمة المفتوحة"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Employee"
+                                             YValue="x => x.OpenValue" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty small">لا توجد بيانات كافية لعرض الموظفين</div>
+                    }
+                </div>
+
+                <div class="glass-card side-card compare-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>مقارنة بالفترة السابقة</h3>
+                            <p>@PreviousPeriodLabel</p>
+                        </div>
+                    </div>
+
+                    <div class="compare-list">
+                        <div class="compare-row">
+                            <div class="compare-label">إجمالي الفرص</div>
+                            <div class="compare-values">
+                                <span>@_prevTotalOpps</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_totalOpps</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">إجمالي القيمة</div>
+                            <div class="compare-values">
+                                <span>@FormatMoney(_prevTotalExpectedValue)</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@FormatMoney(_totalExpectedValue)</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">Pipeline المفتوح</div>
+                            <div class="compare-values">
+                                <span>@FormatMoney(_prevOpenPipelineValue)</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@FormatMoney(_openPipelineValue)</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">قيمة المبيعات</div>
+                            <div class="compare-values">
+                                <span>@FormatMoney(_prevWonValue)</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@FormatMoney(_wonValue)</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="compare-summary @(_openPipelineValue >= _prevOpenPipelineValue ? "compare-good" : "compare-mid")">
+                        @if (_openPipelineValue >= _prevOpenPipelineValue)
+                        {
+                            <span>الـ Pipeline الحالي أكبر أو مساوي للفترة السابقة</span>
+                        }
+                        else
+                        {
+                            <span>الـ Pipeline الحالي أقل من الفترة السابقة ويحتاج تغذية جديدة</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        @* ANALYTICS GRID *@
+        <section class="pipx-analytics-grid">
+            <div class="glass-card side-card">
+                <div class="card-head">
+                    <div>
+                        <h3>النسبة المئوية لكل مرحلة</h3>
+                        <p>حصة كل مرحلة من إجمالي الفرص</p>
+                    </div>
+                </div>
+
+                @if (_stagePercentPoints.Any())
+                {
+                    <ApexChart TItem="StagePercentPoint"
+                               Options="_stagePercentChartOptions"
+                               Height="320">
+                        <ApexPointSeries TItem="StagePercentPoint"
+                                         Items="@_stagePercentPoints"
+                                         Name="النسبة %"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Stage"
+                                         YValue="x => x.Percent" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty small">لا توجد بيانات كافية لعرض النسب</div>
+                }
+            </div>
+
+            <div class="glass-card pipx-stage-table-card">
+                <div class="card-head">
+                    <div>
+                        <h3>تفاصيل المراحل</h3>
+                        <p>ملخص كل مرحلة من حيث العدد والقيمة والمتوسط والنسبة</p>
+                    </div>
+                </div>
+
+                <MudTable Items="@_stageRows"
+                          Hover="true"
+                          Dense="true"
+                          Elevation="0"
+                          RowsPerPage="10"
+                          Breakpoint="Breakpoint.Sm"
+                          Class="premium-table">
+                    <HeaderContent>
+                        <MudTh>المرحلة</MudTh>
+                        <MudTh>العدد</MudTh>
+                        <MudTh>القيمة</MudTh>
+                        <MudTh>النسبة</MudTh>
+                        <MudTh>متوسط الفرصة</MudTh>
+                    </HeaderContent>
+
+                    <RowTemplate>
+                        <MudTd DataLabel="المرحلة">
+                            <span class="stage-pill" style="@GetStagePillStyle(context.Color)">
+                                @context.Name
+                            </span>
+                        </MudTd>
+                        <MudTd DataLabel="العدد">@context.Count.ToString("N0")</MudTd>
+                        <MudTd DataLabel="القيمة">@FormatMoney(context.Value)</MudTd>
+                        <MudTd DataLabel="النسبة">
+                            <span class="rate-pill @GetStagePercentPillClass(context.Percent)">
+                                @context.Percent.ToString("F1")%
+                            </span>
+                        </MudTd>
+                        <MudTd DataLabel="متوسط الفرصة">@FormatMoney(context.AvgValue)</MudTd>
+                    </RowTemplate>
+
+                    <NoRecordsContent>
+                        <div class="empty-data">
+                            <div class="empty-icon">📉</div>
+                            <h4>لا توجد بيانات</h4>
+                            <p>لا توجد مراحل مطابقة للفلاتر الحالية</p>
+                        </div>
+                    </NoRecordsContent>
+                </MudTable>
+            </div>
+        </section>
+
+        @* STAGE DRILL-DOWN *@
+        <section class="glass-card pipx-drill">
+            <div class="card-head drill-head">
+                <div>
+                    <h3>Drill-down حسب المرحلة</h3>
+                    <p>اختر مرحلة لعرض موظفيها وأكبر الفرص بداخلها</p>
+                </div>
+
+                @if (_selectedStageId.HasValue)
+                {
+                    <button class="clear-stage-btn" @onclick="ClearSelectedStage">
+                        إلغاء اختيار المرحلة
+                    </button>
+                }
+            </div>
+
+            <div class="stage-chip-row">
+                @foreach (var stage in _stageRows)
+                {
+                    <button class="stage-chip-btn @(IsSelectedStage(stage.StageId) ? "stage-chip-active" : "")"
+                            @onclick="() => SelectStage(stage.StageId)">
+                        <span>@stage.Name</span>
+                        <small>@stage.Count.ToString("N0") فرصة</small>
+                    </button>
+                }
+            </div>
+
+            @if (_selectedStageId.HasValue || _detailRows.Any())
+            {
+                <div class="drill-mini-kpis">
+                    <div class="mini-kpi">
+                        <span class="mini-label">المرحلة المحددة</span>
+                        <strong>@_selectedStageName</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">عدد الفرص</span>
+                        <strong>@_selectedStageCount.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">إجمالي القيمة</span>
+                        <strong>@FormatMoney(_selectedStageValue)</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">النسبة</span>
+                        <strong>@_selectedStagePercent.ToString("F1")%</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">متوسط الفرصة</span>
+                        <strong>@FormatMoney(_selectedStageAvgValue)</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">أعلى موظف</span>
+                        <strong>@_selectedStageTopEmployee</strong>
+                    </div>
+                </div>
+
+                <div class="drill-grid">
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>الموظفون داخل المرحلة</h3>
+                                <p>عدد الفرص والقيمة لكل موظف داخل المرحلة المحددة</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedStageEmployeePoints.Any())
+                        {
+                            <ApexChart TItem="StageEmployeePoint"
+                                       Options="_selectedStageEmployeeChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="StageEmployeePoint"
+                                                 Items="@_selectedStageEmployeePoints"
+                                                 Name="عدد الفرص"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Employee"
+                                                 YValue="x => x.Count" />
+
+                                <ApexPointSeries TItem="StageEmployeePoint"
+                                                 Items="@_selectedStageEmployeePoints"
+                                                 Name="القيمة"
+                                                 SeriesType="SeriesType.Line"
+                                                 XValue="x => x.Employee"
+                                                 YValue="x => x.Value" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد بيانات كافية لهذا القسم</div>
+                        }
+                    </div>
+
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>أكبر الفرص داخل المرحلة</h3>
+                                <p>الفرص الأعلى قيمة في المرحلة المحددة</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedStageDealPoints.Any())
+                        {
+                            <ApexChart TItem="StageDealPoint"
+                                       Options="_selectedStageDealsChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="StageDealPoint"
+                                                 Items="@_selectedStageDealPoints"
+                                                 Name="القيمة"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Deal"
+                                                 YValue="x => x.Value" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد فرص كافية داخل المرحلة المحددة</div>
+                        }
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* OPPORTUNITY DETAILS *@
+        <section class="glass-card pipx-table-card">
+            <div class="card-head">
+                <div>
+                    <h3>تفاصيل الفرص</h3>
+                    <p>
+                        @if (_selectedStageId.HasValue)
+                        {
+                            <span>عرض الفرص داخل مرحلة: @_selectedStageName</span>
+                        }
+                        else
+                        {
+                            <span>عرض أعلى الفرص حسب القيمة</span>
+                        }
+                    </p>
+                </div>
+            </div>
+
+            <MudTable Items="@_detailRows"
+                      Hover="true"
+                      Dense="true"
+                      Elevation="0"
+                      RowsPerPage="10"
+                      Breakpoint="Breakpoint.Sm"
+                      Class="premium-table">
+                <HeaderContent>
+                    <MudTh>العميل</MudTh>
+                    <MudTh>الموظف</MudTh>
+                    <MudTh>المرحلة</MudTh>
+                    <MudTh>تاريخ الإنشاء</MudTh>
+                    <MudTh>آخر تواصل</MudTh>
+                    <MudTh>العمر</MudTh>
+                    <MudTh>القيمة</MudTh>
+                    <MudTh>إجراء</MudTh>
+                </HeaderContent>
+
+                <RowTemplate>
+                    <MudTd DataLabel="العميل">@context.ClientName</MudTd>
+                    <MudTd DataLabel="الموظف">@context.EmployeeName</MudTd>
+                    <MudTd DataLabel="المرحلة">
+                        <span class="stage-pill" style="@GetStagePillStyle(context.StageColor)">
+                            @context.StageName
+                        </span>
+                    </MudTd>
+                    <MudTd DataLabel="تاريخ الإنشاء">@FormatDate(context.CreatedAt)</MudTd>
+                    <MudTd DataLabel="آخر تواصل">@FormatDate(context.LastContactDate)</MudTd>
+                    <MudTd DataLabel="العمر">
+                        <span class="rate-pill @GetAgePillClass(context.AgeDays)">
+                            @context.AgeDays.ToString("F0") يوم
+                        </span>
+                    </MudTd>
+                    <MudTd DataLabel="القيمة">@FormatMoney(context.ExpectedValue)</MudTd>
+                    <MudTd DataLabel="إجراء">
+                        <MudButton Variant="Variant.Text"
+                                   Color="@MudColor.Primary"
+                                   Size="@MudSize.Small"
+                                   OnClick="@(() => OpenOpportunity(context.OpportunityId))">
+                            عرض
+                        </MudButton>
+                    </MudTd>
+                </RowTemplate>
+
+                <NoRecordsContent>
+                    <div class="empty-data">
+                        <div class="empty-icon">📉</div>
+                        <h4>لا توجد بيانات</h4>
+                        <p>لا توجد فرص مطابقة للفلاتر الحالية</p>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </section>
+
+        @* NOTE *@
+        <section class="glass-card pipx-note">
+            <div class="note-icon">ℹ️</div>
+            <div class="note-body">
+                <h4>ملاحظة تحليلية مهمة</h4>
+                <p>
+                    هذا التقرير يعرض <strong>حالة الـ Pipeline الحالية</strong> للفرص التي تم إنشاؤها داخل الفترة المحددة،
+                    ويعتمد على <strong>المرحلة الحالية</strong> لكل فرصة وليس على تاريخ انتقالها بين المراحل.
+                    إذا كان لديك سجل تاريخي لحركة المراحل، يمكننا لاحقًا بناء Funnel وتحويلات أدق بكثير.
+                </p>
+            </div>
+        </section>
+    }
+</div>
+
+@code {
+    private const int WonStageId = 3;
+    private const int LostStageId1 = 4;
+    private const int LostStageId2 = 5;
+
+    private readonly CultureInfo _arCulture = new("ar-EG");
+
+    private DateTime? _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+    private DateTime? _toDate = DateTime.Today;
+    private int? _empId;
+    private bool _isLoading;
+
+    private List<EmployeeItem> _employees = new();
+    private List<OpportunitySourceRow> _currentRows = new();
+
+    private List<StageSummaryRow> _stageRows = new();
+    private List<StageOverviewPoint> _stageOverviewPoints = new();
+    private List<StagePercentPoint> _stagePercentPoints = new();
+    private List<EmployeeOpenPoint> _employeeOpenPoints = new();
+    private List<InsightItem> _insights = new();
+    private List<StageDetailRow> _detailRows = new();
+
+    private int _totalOpps;
+    private decimal _totalExpectedValue;
+    private int _openCount;
+    private decimal _openPipelineValue;
+    private int _wonCount;
+    private decimal _wonValue;
+    private double _closeRate;
+
+    private int _prevTotalOpps;
+    private decimal _prevTotalExpectedValue;
+    private int _prevOpenCount;
+    private decimal _prevOpenPipelineValue;
+    private int _prevWonCount;
+    private decimal _prevWonValue;
+
+    private string _previousPeriodLabel = "غير متاح";
+
+    private int? _selectedStageId;
+    private string _selectedStageName = "—";
+    private int _selectedStageCount;
+    private decimal _selectedStageValue;
+    private double _selectedStagePercent;
+    private decimal _selectedStageAvgValue;
+    private string _selectedStageTopEmployee = "—";
+    private List<StageEmployeePoint> _selectedStageEmployeePoints = new();
+    private List<StageDealPoint> _selectedStageDealPoints = new();
+
+    private ApexChartOptions<StageOverviewPoint> _stageOverviewChartOptions = new();
+    private ApexChartOptions<EmployeeOpenPoint> _employeeOpenChartOptions = new();
+    private ApexChartOptions<StagePercentPoint> _stagePercentChartOptions = new();
+    private ApexChartOptions<StageEmployeePoint> _selectedStageEmployeeChartOptions = new();
+    private ApexChartOptions<StageDealPoint> _selectedStageDealsChartOptions = new();
+
+    private string SelectedEmployeeLabel =>
+        _empId.HasValue
+            ? _employees.FirstOrDefault(x => x.Id == _empId.Value)?.Name ?? "موظف محدد"
+            : "كل الموظفين";
+
+    private string SelectedPeriodLabel =>
+        $"{(_fromDate.HasValue ? _fromDate.Value.ToString("dd MMM yyyy", _arCulture) : "البداية")} — {(_toDate.HasValue ? _toDate.Value.ToString("dd MMM yyyy", _arCulture) : "اليوم")}";
+
+    private string PreviousPeriodLabel => _previousPeriodLabel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        ConfigureCharts();
+        await LoadEmployeesAsync();
+        await LoadData();
+    }
+
+    private void ConfigureCharts()
+    {
+        _stageOverviewChartOptions = new ApexChartOptions<StageOverviewPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#6366f1", "#f59e0b" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 8,
+                    ColumnWidth = "45%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { DecimalsInFloat = 0 }
+            },
+            Tooltip = new Tooltip
+            {
+                Shared = true,
+                Intersect = false
+            }
+        };
+
+        _employeeOpenChartOptions = new ApexChartOptions<EmployeeOpenPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#8b5cf6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { DecimalsInFloat = 0 }
+            }
+        };
+
+        _stagePercentChartOptions = new ApexChartOptions<StagePercentPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#06b6d4" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Max = 100,
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { Min = 0, Max = 100, DecimalsInFloat = 0 }
+            }
+        };
+
+        _selectedStageEmployeeChartOptions = new ApexChartOptions<StageEmployeePoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#10b981", "#f59e0b" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "48%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { DecimalsInFloat = 0 }
+            }
+        };
+
+        _selectedStageDealsChartOptions = new ApexChartOptions<StageDealPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#14b8a6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { DecimalsInFloat = 0 }
+            }
+        };
+    }
+
+    private async Task LoadEmployeesAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var raw = await db.VwSalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.EmployeeId != null && o.EmployeeName != null)
+            .GroupBy(o => new { o.EmployeeId, o.EmployeeName })
+            .Select(g => new
+            {
+                Id = g.Key.EmployeeId!.Value,
+                Name = g.Key.EmployeeName!
+            })
+            .OrderBy(x => x.Name)
+            .ToListAsync();
+
+        _employees = raw
+            .Select(x => new EmployeeItem
+            {
+                Id = x.Id,
+                Name = x.Name
+            })
+            .ToList();
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+        _toDate = DateTime.Today;
+        _empId = null;
+        _selectedStageId = null;
+        await LoadData();
+    }
+
+    private async Task SetLastMonthsAsync(int months)
+    {
+        if (months <= 0) months = 12;
+
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-(months - 1));
+        _toDate = DateTime.Today;
+        _selectedStageId = null;
+
+        await LoadData();
+    }
+
+    private async Task SetCurrentYearAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, 1, 1);
+        _toDate = DateTime.Today;
+        _selectedStageId = null;
+
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+
+        try
+        {
+            NormalizeDateRange();
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            _currentRows = await LoadPeriodRowsAsync(db, _fromDate, _toDate);
+
+            if (TryGetPreviousRange(out var prevFrom, out var prevTo))
+            {
+                _previousPeriodLabel = $"{prevFrom.ToString("dd MMM yyyy", _arCulture)} — {prevTo.ToString("dd MMM yyyy", _arCulture)}";
+                var previousRows = await LoadPeriodRowsAsync(db, prevFrom, prevTo);
+                CalculatePreviousMetrics(previousRows);
+            }
+            else
+            {
+                _previousPeriodLabel = "غير متاح";
+                ResetPreviousMetrics();
+            }
+
+            CalculateCurrentMetrics(_currentRows);
+            BuildStageSummary(_currentRows);
+            BuildEmployeeOpenPipeline(_currentRows);
+            ResolveSelectedStage();
+            BuildSelectedStageAnalytics(_currentRows);
+            BuildInsights();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ أثناء تحميل التقرير: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task<List<OpportunitySourceRow>> LoadPeriodRowsAsync(db24804Context db, DateTime? from, DateTime? to)
+    {
+        var query = db.VwSalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.IsActive == true);
+
+        if (from.HasValue)
+        {
+            var fromDate = from.Value.Date;
+            query = query.Where(o => o.CreatedAt >= fromDate);
+        }
+
+        if (to.HasValue)
+        {
+            var toExclusive = to.Value.Date.AddDays(1);
+            query = query.Where(o => o.CreatedAt < toExclusive);
+        }
+
+        if (_empId.HasValue)
+        {
+            query = query.Where(o => o.EmployeeId == _empId.Value);
+        }
+
+        return await query
+            .Select(o => new OpportunitySourceRow
+            {
+                OpportunityId = o.OpportunityId,
+                ClientName = o.ClientName ?? "—",
+                EmployeeId = o.EmployeeId ?? 0,
+                EmployeeName = o.EmployeeName ?? "—",
+                StageId = o.StageId,
+                StageName = o.StageNameAr ?? o.StageName ?? "غير محدد",
+                StageColor = o.StageColor ?? "",
+                StageOrder = o.StageOrder ?? 0,
+                CreatedAt = o.CreatedAt,
+                LastContactDate = o.LastContactDate,
+                ExpectedValue = o.ExpectedValue ?? 0m,
+                AgeDays = o.DaysSinceFirstContact ?? 0d
+            })
+            .ToListAsync();
+    }
+
+    private void CalculateCurrentMetrics(List<OpportunitySourceRow> rows)
+    {
+        _totalOpps = rows.Count;
+        _totalExpectedValue = rows.Sum(x => x.ExpectedValue);
+        _openCount = rows.Count(x => IsOpenStage(x.StageId));
+        _openPipelineValue = rows.Where(x => IsOpenStage(x.StageId)).Sum(x => x.ExpectedValue);
+        _wonCount = rows.Count(x => IsWon(x.StageId));
+        _wonValue = rows.Where(x => IsWon(x.StageId)).Sum(x => x.ExpectedValue);
+        _closeRate = _totalOpps > 0 ? (double)_wonCount / _totalOpps * 100d : 0d;
+    }
+
+    private void CalculatePreviousMetrics(List<OpportunitySourceRow> rows)
+    {
+        _prevTotalOpps = rows.Count;
+        _prevTotalExpectedValue = rows.Sum(x => x.ExpectedValue);
+        _prevOpenCount = rows.Count(x => IsOpenStage(x.StageId));
+        _prevOpenPipelineValue = rows.Where(x => IsOpenStage(x.StageId)).Sum(x => x.ExpectedValue);
+        _prevWonCount = rows.Count(x => IsWon(x.StageId));
+        _prevWonValue = rows.Where(x => IsWon(x.StageId)).Sum(x => x.ExpectedValue);
+    }
+
+    private void ResetPreviousMetrics()
+    {
+        _prevTotalOpps = 0;
+        _prevTotalExpectedValue = 0m;
+        _prevOpenCount = 0;
+        _prevOpenPipelineValue = 0m;
+        _prevWonCount = 0;
+        _prevWonValue = 0m;
+    }
+
+    private void BuildStageSummary(List<OpportunitySourceRow> rows)
+    {
+        _stageRows = rows
+            .GroupBy(x => new { x.StageId, x.StageName, x.StageColor, x.StageOrder })
+            .Select(g =>
+            {
+                var count = g.Count();
+                var value = g.Sum(x => x.ExpectedValue);
+
+                return new StageSummaryRow
+                {
+                    StageId = g.Key.StageId,
+                    Name = g.Key.StageName,
+                    Color = g.Key.StageColor,
+                    Order = g.Key.StageOrder,
+                    Count = count,
+                    Value = value,
+                    Percent = _totalOpps > 0 ? (double)count / _totalOpps * 100d : 0d,
+                    AvgValue = count > 0 ? value / count : 0m
+                };
+            })
+            .OrderBy(x => x.Order)
+            .ThenBy(x => x.StageId)
+            .ToList();
+
+        _stageOverviewPoints = _stageRows
+            .Select(x => new StageOverviewPoint
+            {
+                Stage = x.Name,
+                Count = x.Count,
+                Value = x.Value
+            })
+            .ToList();
+
+        _stagePercentPoints = _stageRows
+            .Select(x => new StagePercentPoint
+            {
+                Stage = x.Name,
+                Percent = (decimal)x.Percent
+            })
+            .OrderByDescending(x => x.Percent)
+            .ToList();
+    }
+
+    private void BuildEmployeeOpenPipeline(List<OpportunitySourceRow> rows)
+    {
+        _employeeOpenPoints = rows
+            .Where(x => IsOpenStage(x.StageId))
+            .GroupBy(x => new { x.EmployeeId, x.EmployeeName })
+            .Select(g => new EmployeeOpenPoint
+            {
+                Employee = g.Key.EmployeeName,
+                OpenValue = g.Sum(x => x.ExpectedValue)
+            })
+            .OrderByDescending(x => x.OpenValue)
+            .Take(8)
+            .ToList();
+    }
+
+    private void ResolveSelectedStage()
+    {
+        if (!_stageRows.Any())
+        {
+            _selectedStageId = null;
+            return;
+        }
+
+        if (_selectedStageId.HasValue && _stageRows.Any(x => x.StageId == _selectedStageId.Value))
+            return;
+
+        var openPreferred = _stageRows
+            .Where(x => IsOpenStage(x.StageId))
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.Value)
+            .FirstOrDefault();
+
+        _selectedStageId = openPreferred?.StageId ?? _stageRows.First().StageId;
+    }
+
+    private void BuildSelectedStageAnalytics(List<OpportunitySourceRow> rows)
+    {
+        _selectedStageName = "—";
+        _selectedStageCount = 0;
+        _selectedStageValue = 0m;
+        _selectedStagePercent = 0d;
+        _selectedStageAvgValue = 0m;
+        _selectedStageTopEmployee = "—";
+        _selectedStageEmployeePoints = new();
+        _selectedStageDealPoints = new();
+        _detailRows = new();
+
+        if (!_selectedStageId.HasValue)
+        {
+            _detailRows = rows
+                .OrderByDescending(x => x.ExpectedValue)
+                .ThenByDescending(x => x.CreatedAt)
+                .Take(25)
+                .Select(MapDetailRow)
+                .ToList();
+
+            return;
+        }
+
+        var stageRows = rows
+            .Where(x => x.StageId == _selectedStageId.Value)
+            .ToList();
+
+        if (!stageRows.Any())
+            return;
+
+        var summary = _stageRows.FirstOrDefault(x => x.StageId == _selectedStageId.Value);
+
+        _selectedStageName = summary?.Name ?? stageRows.First().StageName;
+        _selectedStageCount = stageRows.Count;
+        _selectedStageValue = stageRows.Sum(x => x.ExpectedValue);
+        _selectedStagePercent = _totalOpps > 0 ? (double)_selectedStageCount / _totalOpps * 100d : 0d;
+        _selectedStageAvgValue = _selectedStageCount > 0 ? _selectedStageValue / _selectedStageCount : 0m;
+
+        var topEmployee = stageRows
+            .GroupBy(x => x.EmployeeName)
+            .Select(g => new
+            {
+                Employee = g.Key,
+                Count = g.Count(),
+                Value = g.Sum(x => x.ExpectedValue)
+            })
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.Value)
+            .FirstOrDefault();
+
+        _selectedStageTopEmployee = topEmployee?.Employee ?? "—";
+
+        _selectedStageEmployeePoints = stageRows
+            .GroupBy(x => x.EmployeeName)
+            .Select(g => new StageEmployeePoint
+            {
+                Employee = g.Key,
+                Count = g.Count(),
+                Value = g.Sum(x => x.ExpectedValue)
+            })
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.Value)
+            .Take(8)
+            .ToList();
+
+        _selectedStageDealPoints = stageRows
+            .OrderByDescending(x => x.ExpectedValue)
+            .ThenByDescending(x => x.CreatedAt)
+            .Take(8)
+            .Select(x => new StageDealPoint
+            {
+                Deal = x.ClientName,
+                Value = x.ExpectedValue
+            })
+            .ToList();
+
+        _detailRows = stageRows
+            .OrderByDescending(x => x.ExpectedValue)
+            .ThenByDescending(x => x.CreatedAt)
+            .Select(MapDetailRow)
+            .ToList();
+    }
+
+    private StageDetailRow MapDetailRow(OpportunitySourceRow x) => new()
+    {
+        OpportunityId = x.OpportunityId,
+        ClientName = x.ClientName,
+        EmployeeName = x.EmployeeName,
+        StageName = x.StageName,
+        StageColor = x.StageColor,
+        CreatedAt = x.CreatedAt,
+        LastContactDate = x.LastContactDate,
+        AgeDays = x.AgeDays,
+        ExpectedValue = x.ExpectedValue
+    };
+
+    private void BuildInsights()
+    {
+        _insights = new();
+
+        if (_stageRows.Any())
+        {
+            var highestCount = _stageRows
+                .OrderByDescending(x => x.Count)
+                .ThenByDescending(x => x.Value)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.AccountTree,
+                Title = "أكبر مرحلة من حيث العدد",
+                Value = highestCount.Name,
+                Description = $"{highestCount.Count} فرصة — {highestCount.Percent:F1}% من الإجمالي",
+                ToneClass = "tone-indigo"
+            });
+
+            var highestValue = _stageRows
+                .OrderByDescending(x => x.Value)
+                .ThenByDescending(x => x.Count)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.AttachMoney,
+                Title = "أعلى مرحلة من حيث القيمة",
+                Value = highestValue.Name,
+                Description = $"{FormatMoney(highestValue.Value)}",
+                ToneClass = "tone-green"
+            });
+
+            var bottleneck = _stageRows
+                .Where(x => IsOpenStage(x.StageId))
+                .OrderByDescending(x => x.Count)
+                .ThenByDescending(x => x.Value)
+                .FirstOrDefault();
+
+            if (bottleneck != null)
+            {
+                _insights.Add(new InsightItem
+                {
+                    Icon = Icons.Material.Rounded.ReportProblem,
+                    Title = "أكبر اختناق مفتوح",
+                    Value = bottleneck.Name,
+                    Description = $"{bottleneck.Count} فرصة ما زالت معلقة",
+                    ToneClass = "tone-red"
+                });
+            }
+
+            var avgBest = _stageRows
+                .Where(x => x.Count > 0)
+                .OrderByDescending(x => x.AvgValue)
+                .FirstOrDefault();
+
+            if (avgBest != null)
+            {
+                _insights.Add(new InsightItem
+                {
+                    Icon = Icons.Material.Rounded.Insights,
+                    Title = "أعلى متوسط فرصة",
+                    Value = avgBest.Name,
+                    Description = $"{FormatMoney(avgBest.AvgValue)} لكل فرصة",
+                    ToneClass = "tone-gold"
+                });
+            }
+        }
+
+        while (_insights.Count < 4)
+        {
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.Insights,
+                Title = "معلومة",
+                Value = "—",
+                Description = "لا توجد بيانات كافية لهذا المؤشر",
+                ToneClass = "tone-slate"
+            });
+        }
+    }
+
+    private void SelectStage(int stageId)
+    {
+        _selectedStageId = stageId;
+        BuildSelectedStageAnalytics(_currentRows);
+    }
+
+    private void ClearSelectedStage()
+    {
+        _selectedStageId = null;
+        BuildSelectedStageAnalytics(_currentRows);
+    }
+
+    private bool IsSelectedStage(int stageId)
+        => _selectedStageId.HasValue && _selectedStageId.Value == stageId;
+
+    private bool TryGetPreviousRange(out DateTime previousFrom, out DateTime previousTo)
+    {
+        previousFrom = default;
+        previousTo = default;
+
+        if (!_fromDate.HasValue || !_toDate.HasValue)
+            return false;
+
+        var currentFrom = _fromDate.Value.Date;
+        var currentTo = _toDate.Value.Date;
+        var days = (currentTo - currentFrom).Days;
+
+        previousTo = currentFrom.AddDays(-1);
+        previousFrom = previousTo.AddDays(-days);
+
+        return true;
+    }
+
+    private void NormalizeDateRange()
+    {
+        if (_fromDate.HasValue && _toDate.HasValue && _fromDate.Value.Date > _toDate.Value.Date)
+        {
+            var temp = _fromDate;
+            _fromDate = _toDate;
+            _toDate = temp;
+
+            Snackbar.Add("تم تبديل تاريخ البداية والنهاية تلقائيًا لأن البداية كانت أكبر من النهاية.", Severity.Info);
+        }
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("تقرير  مراحل المبيعات ");
+            sb.AppendLine($"الفترة الحالية,{SelectedPeriodLabel}");
+            sb.AppendLine($"الفترة السابقة,{PreviousPeriodLabel}");
+            sb.AppendLine($"الموظف,{SelectedEmployeeLabel}");
+            sb.AppendLine();
+
+            sb.AppendLine("المؤشرات الرئيسية");
+            sb.AppendLine("المؤشر,القيمة");
+            sb.AppendLine($"إجمالي الفرص,{_totalOpps}");
+            sb.AppendLine($"إجمالي القيمة المتوقعة,{_totalExpectedValue:N0}");
+            sb.AppendLine($"الفرص المفتوحة,{_openCount}");
+            sb.AppendLine($"قيمة الـ Pipeline المفتوح,{_openPipelineValue:N0}");
+            sb.AppendLine($"الفرص المكتملة,{_wonCount}");
+            sb.AppendLine($"قيمة المبيعات,{_wonValue:N0}");
+            sb.AppendLine();
+
+            sb.AppendLine("تفاصيل المراحل");
+            sb.AppendLine("المرحلة,العدد,القيمة,النسبة,متوسط الفرصة");
+            foreach (var row in _stageRows)
+            {
+                sb.AppendLine($"{row.Name},{row.Count},{row.Value:N0},{row.Percent:F1}%,{row.AvgValue:N0}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("تفاصيل الفرص");
+            sb.AppendLine("العميل,الموظف,المرحلة,تاريخ الإنشاء,آخر تواصل,العمر,القيمة");
+            foreach (var row in _detailRows)
+            {
+                sb.AppendLine($"{row.ClientName},{row.EmployeeName},{row.StageName},{FormatDate(row.CreatedAt)},{FormatDate(row.LastContactDate)},{row.AgeDays:F0},{row.ExpectedValue:N0}");
+            }
+
+            var csv = sb.ToString();
+            var fileName = $"pipeline-report-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+            var dataUrl = "data:text/csv;charset=utf-8,\uFEFF" + Uri.EscapeDataString(csv);
+
+            var script = $@"
+                (function() {{
+                    const link = document.createElement('a');
+                    link.href = '{dataUrl}';
+                    link.download = '{fileName}';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }})();";
+
+            await JS.InvokeVoidAsync("eval", script);
+            Snackbar.Add("تم تصدير الملف بنجاح. يمكنك فتحه مباشرة في Excel.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تصدير الملف: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval", "window.print()");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تشغيل الطباعة: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private bool IsWon(int stageId) => stageId == WonStageId;
+    private bool IsLost(int stageId) => stageId == LostStageId1 || stageId == LostStageId2;
+    private bool IsOpenStage(int stageId) => !IsWon(stageId) && !IsLost(stageId);
+
+    private string FormatMoney(decimal value) => $"{value:N0} ج.م";
+    private string FormatDate(DateTime? date) => date?.ToString("yyyy/MM/dd") ?? "—";
+
+    private string GetStagePillStyle(string? color)
+    {
+        if (string.IsNullOrWhiteSpace(color))
+            return "background:#e5e7eb;color:#111827;";
+
+        return $"background:{color};color:#fff;";
+    }
+
+    private string GetStagePercentPillClass(double percent)
+    {
+        if (percent >= 40) return "rate-bad";
+        if (percent >= 20) return "rate-mid";
+        return "rate-good";
+    }
+
+    private string GetAgePillClass(double days)
+    {
+        if (days >= 60) return "rate-bad";
+        if (days >= 30) return "rate-mid";
+        return "rate-good";
+    }
+
+    private string GetTrendClass(int current, int previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(decimal current, decimal previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendText(int current, int previous)
+    {
+        if (previous == 0)
+            return current == 0 ? "0%" : "جديد";
+
+        var change = ((double)(current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(decimal current, decimal previous)
+    {
+        if (previous == 0m)
+            return current == 0m ? "0%" : "جديد";
+
+        var change = (double)((current - previous) / previous * 100m);
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetSummaryRingStyle()
+    {
+        var safe = Math.Max(0, Math.Min(_closeRate, 100));
+        var angle = safe * 3.6;
+        return $"background: conic-gradient(#10b981 0deg, #10b981 {angle:F1}deg, rgba(255,255,255,.12) {angle:F1}deg, rgba(255,255,255,.12) 360deg);";
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/crm/reports");
+    private void OpenOpportunity(int id) => Navigation.NavigateTo($"/crm/opportunities/{id}");
+
+    private sealed class EmployeeItem
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    private sealed class OpportunitySourceRow
+    {
+        public int OpportunityId { get; set; }
+        public string ClientName { get; set; } = "";
+        public int EmployeeId { get; set; }
+        public string EmployeeName { get; set; } = "";
+        public int StageId { get; set; }
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+        public int StageOrder { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? LastContactDate { get; set; }
+        public decimal ExpectedValue { get; set; }
+        public double AgeDays { get; set; }
+    }
+
+    private sealed class StageSummaryRow
+    {
+        public int StageId { get; set; }
+        public string Name { get; set; } = "";
+        public string Color { get; set; } = "";
+        public int Order { get; set; }
+        public int Count { get; set; }
+        public decimal Value { get; set; }
+        public double Percent { get; set; }
+        public decimal AvgValue { get; set; }
+    }
+
+    private sealed class StageOverviewPoint
+    {
+        public string Stage { get; set; } = "";
+        public decimal Count { get; set; }
+        public decimal Value { get; set; }
+    }
+
+    private sealed class StagePercentPoint
+    {
+        public string Stage { get; set; } = "";
+        public decimal Percent { get; set; }
+    }
+
+    private sealed class EmployeeOpenPoint
+    {
+        public string Employee { get; set; } = "";
+        public decimal OpenValue { get; set; }
+    }
+
+    private sealed class StageEmployeePoint
+    {
+        public string Employee { get; set; } = "";
+        public decimal Count { get; set; }
+        public decimal Value { get; set; }
+    }
+
+    private sealed class StageDealPoint
+    {
+        public string Deal { get; set; } = "";
+        public decimal Value { get; set; }
+    }
+
+    private sealed class StageDetailRow
+    {
+        public int OpportunityId { get; set; }
+        public string ClientName { get; set; } = "";
+        public string EmployeeName { get; set; } = "";
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+        public DateTime CreatedAt { get; set; }
+        public DateTime? LastContactDate { get; set; }
+        public double AgeDays { get; set; }
+        public decimal ExpectedValue { get; set; }
+    }
+
+    private sealed class InsightItem
+    {
+        public string Icon { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Value { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string ToneClass { get; set; } = "";
+    }
+}
+
+<style>
+    .pipx-page {
+        --text: #0f172a;
+        --muted: #64748b;
+        --line: rgba(148, 163, 184, .16);
+        --glass: rgba(255,255,255,.72);
+        --shadow: 0 20px 50px rgba(15, 23, 42, .06);
+        max-width: 1460px;
+        margin: 0 auto;
+        padding: 1.25rem 1.25rem 3rem;
+        position: relative;
+        min-height: 100vh;
+    }
+
+    .pipx-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+    }
+
+    .pipx-orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(120px);
+        opacity: .16;
+    }
+
+    .orb-1 {
+        width: 420px;
+        height: 420px;
+        background: #6366f1;
+        top: -120px;
+        right: -120px;
+        animation: pipxFloat 12s ease-in-out infinite;
+    }
+
+    .orb-2 {
+        width: 360px;
+        height: 360px;
+        background: #10b981;
+        bottom: -80px;
+        left: -80px;
+        animation: pipxFloat 18s ease-in-out infinite reverse;
+    }
+
+    .orb-3 {
+        width: 280px;
+        height: 280px;
+        background: #f59e0b;
+        top: 30%;
+        left: 45%;
+        animation: pipxFloat 16s ease-in-out infinite;
+    }
+
+    @@keyframes pipxFloat {
+        0%,100% { transform: translate(0,0) scale(1); }
+        50% { transform: translate(20px,-20px) scale(1.08); }
+    }
+
+    .glass-card {
+        position: relative;
+        z-index: 1;
+        background: var(--glass);
+        backdrop-filter: blur(20px) saturate(1.5);
+        -webkit-backdrop-filter: blur(20px) saturate(1.5);
+        border: 1px solid rgba(255,255,255,.48);
+        box-shadow: var(--shadow);
+        border-radius: 1.35rem;
+    }
+
+    .glass-inner-card {
+        background: rgba(255,255,255,.45);
+        border: 1px solid rgba(255,255,255,.4);
+        border-radius: 1.2rem;
+        padding: 1rem;
+    }
+
+    .pipx-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1.8rem;
+        margin-bottom: 1.25rem;
+        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 45%, #1d4ed8 100%);
+        padding: 2rem;
+        color: #fff;
+        z-index: 1;
+    }
+
+    .pipx-hero-grid {
+        position: absolute;
+        inset: 0;
+        background-image:
+            linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+        background-size: 50px 50px;
+        mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
+        pointer-events: none;
+    }
+
+    .pipx-hero-content {
+        position: relative;
+        z-index: 2;
+    }
+
+    .pipx-hero-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+
+    .pipx-back {
+        width: 2.6rem;
+        height: 2.6rem;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08);
+        color: #fff;
+        border-radius: .9rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: .25s ease;
+        backdrop-filter: blur(10px);
+    }
+
+    .pipx-back:hover {
+        transform: translateX(-3px);
+        background: rgba(255,255,255,.15);
+    }
+
+    .pipx-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: .5rem;
+        padding: .45rem .9rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,.1);
+        border: 1px solid rgba(255,255,255,.16);
+        color: #dbeafe;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .badge-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #93c5fd;
+        box-shadow: 0 0 12px #93c5fd;
+        animation: badgePulse 2s infinite;
+    }
+
+    @@keyframes badgePulse {
+        0%,100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.35); opacity: .6; }
+    }
+
+    .pipx-hero-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 2rem;
+    }
+
+    .pipx-hero-text {
+        flex: 1;
+    }
+
+    .pipx-hero-text h1 {
+        margin: 0 0 .6rem;
+        font-size: 2.5rem;
+        font-weight: 900;
+        letter-spacing: -.02em;
+    }
+
+    .pipx-hero-text h1 span {
+        color: #93c5fd;
+    }
+
+    .pipx-hero-text p {
+        margin: 0 0 1rem;
+        color: rgba(255,255,255,.76);
+        max-width: 760px;
+        line-height: 1.8;
+    }
+
+    .pipx-hero-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .75rem;
+    }
+
+    .hero-chip {
+        display: flex;
+        flex-direction: column;
+        gap: .15rem;
+        padding: .85rem 1rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.08);
+        border: 1px solid rgba(255,255,255,.12);
+        min-width: 210px;
+    }
+
+    .chip-label {
+        font-size: .72rem;
+        color: rgba(255,255,255,.6);
+    }
+
+    .chip-value {
+        font-size: .85rem;
+        font-weight: 700;
+        color: #fff;
+    }
+
+    .summary-ring {
+        width: 170px;
+        height: 170px;
+        border-radius: 50%;
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: inset 0 0 30px rgba(255,255,255,.08);
+    }
+
+    .summary-ring-inner {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgba(15,23,42,.92);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .summary-percent {
+        font-size: 2rem;
+        font-weight: 900;
+        line-height: 1;
+        color: #fff;
+    }
+
+    .summary-caption {
+        margin-top: .35rem;
+        font-size: .78rem;
+        color: rgba(255,255,255,.62);
+    }
+
+    .pipx-filters {
+        padding: 1.15rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .filters-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .filters-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .filters-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .83rem;
+    }
+
+    .filters-actions {
+        display: flex;
+        gap: .65rem;
+        flex-wrap: wrap;
+    }
+
+    .quick-range-row {
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .quick-range-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .85rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .quick-range-btn:hover {
+        background: rgba(99,102,241,.08);
+        color: #4f46e5;
+        border-color: rgba(99,102,241,.22);
+    }
+
+    .filters-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(180px, 1fr));
+        gap: .9rem;
+    }
+
+    .filter-field {
+        background: rgba(255,255,255,.55);
+        border-radius: .9rem;
+    }
+
+    .pipx-loading {
+        min-height: 320px;
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        text-align: center;
+        padding: 2rem;
+    }
+
+    .loading-text h3 {
+        margin: 0 0 .35rem;
+        font-size: 1rem;
+        color: var(--text);
+    }
+
+    .loading-text p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .pipx-kpis {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .kpi-card {
+        padding: 1.1rem;
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+    }
+
+    .kpi-icon {
+        width: 3rem;
+        height: 3rem;
+        border-radius: .95rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        font-weight: 900;
+        flex-shrink: 0;
+    }
+
+    .kpi-icon.indigo { background: rgba(99,102,241,.12); color: #6366f1; }
+    .kpi-icon.blue { background: rgba(59,130,246,.12); color: #2563eb; }
+    .kpi-icon.teal { background: rgba(20,184,166,.12); color: #0f766e; }
+    .kpi-icon.purple { background: rgba(139,92,246,.12); color: #8b5cf6; }
+    .kpi-icon.green { background: rgba(16,185,129,.12); color: #10b981; }
+    .kpi-icon.amber { background: rgba(245,158,11,.12); color: #f59e0b; }
+
+    .kpi-body {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .kpi-head-row {
+        display: flex;
+        justify-content: space-between;
+        gap: .5rem;
+        align-items: center;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-label {
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .kpi-value {
+        color: var(--text);
+        font-size: 1.45rem;
+        font-weight: 900;
+        line-height: 1.2;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-value.success { color: #059669; }
+
+    .kpi-sub {
+        color: var(--muted);
+        font-size: .76rem;
+        line-height: 1.5;
+    }
+
+    .trend-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .2rem .55rem;
+        font-size: .68rem;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .trend-up {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .trend-down {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .trend-flat {
+        background: rgba(148,163,184,.14);
+        color: #475569;
+    }
+
+    .pipx-insights {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .insight-card {
+        padding: 1rem;
+        display: flex;
+        gap: .85rem;
+        align-items: flex-start;
+    }
+
+    .insight-icon {
+        width: 2.6rem;
+        height: 2.6rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .tone-gold { background: rgba(245,158,11,.12); color: #d97706; }
+    .tone-green { background: rgba(16,185,129,.12); color: #059669; }
+    .tone-red { background: rgba(239,68,68,.12); color: #dc2626; }
+    .tone-indigo { background: rgba(99,102,241,.12); color: #4f46e5; }
+    .tone-slate { background: rgba(148,163,184,.14); color: #475569; }
+
+    .insight-body {
+        min-width: 0;
+        flex: 1;
+    }
+
+    .insight-title {
+        color: var(--muted);
+        font-size: .75rem;
+        margin-bottom: .2rem;
+    }
+
+    .insight-value {
+        color: var(--text);
+        font-size: 1rem;
+        font-weight: 800;
+        margin-bottom: .25rem;
+    }
+
+    .insight-desc {
+        color: var(--muted);
+        font-size: .74rem;
+        line-height: 1.45;
+    }
+
+    .pipx-dashboard {
+        display: grid;
+        grid-template-columns: 1.6fr 1fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .pipx-analytics-grid {
+        display: grid;
+        grid-template-columns: 1fr 1.2fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .main-chart-card,
+    .side-card,
+    .pipx-stage-table-card,
+    .pipx-drill,
+    .pipx-table-card,
+    .pipx-note {
+        padding: 1rem;
+    }
+
+    .side-stack {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: .75rem;
+    }
+
+    .card-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .card-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .chart-empty {
+        min-height: 250px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: .88rem;
+    }
+
+    .chart-empty.small {
+        min-height: 180px;
+    }
+
+    .compare-list {
+        display: flex;
+        flex-direction: column;
+        gap: .75rem;
+    }
+
+    .compare-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        padding: .75rem .85rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+    }
+
+    .compare-label {
+        font-size: .8rem;
+        font-weight: 700;
+        color: var(--text);
+    }
+
+    .compare-values {
+        display: flex;
+        align-items: center;
+        gap: .55rem;
+        color: var(--muted);
+        font-size: .8rem;
+        flex-wrap: wrap;
+    }
+
+    .compare-values strong {
+        color: var(--text);
+        font-size: .85rem;
+    }
+
+    .compare-arrow {
+        color: #94a3b8;
+        font-weight: 900;
+    }
+
+    .compare-summary {
+        margin-top: .85rem;
+        border-radius: 1rem;
+        padding: .8rem .9rem;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .compare-good {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .compare-mid {
+        background: rgba(245,158,11,.12);
+        color: #d97706;
+    }
+
+    .drill-head {
+        align-items: center;
+    }
+
+    .clear-stage-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .9rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .clear-stage-btn:hover {
+        background: rgba(239,68,68,.08);
+        color: #dc2626;
+    }
+
+    .stage-chip-row {
+        display: flex;
+        gap: .55rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .stage-chip-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.55);
+        color: var(--text);
+        border-radius: 1rem;
+        padding: .55rem .8rem;
+        min-width: 120px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: .1rem;
+        cursor: pointer;
+        transition: .2s ease;
+        font-weight: 700;
+    }
+
+    .stage-chip-btn small {
+        color: var(--muted);
+        font-size: .7rem;
+        font-weight: 700;
+    }
+
+    .stage-chip-btn:hover {
+        border-color: rgba(79,70,229,.25);
+        background: rgba(99,102,241,.06);
+        color: #4f46e5;
+    }
+
+    .stage-chip-active {
+        background: linear-gradient(135deg, #6366f1, #4f46e5);
+        color: #fff;
+        border-color: transparent;
+        box-shadow: 0 10px 20px rgba(99,102,241,.22);
+    }
+
+    .stage-chip-active small {
+        color: rgba(255,255,255,.85);
+    }
+
+    .drill-mini-kpis {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+
+    .mini-kpi {
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+        border-radius: 1rem;
+        padding: .85rem;
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+    }
+
+    .mini-label {
+        font-size: .72rem;
+        color: var(--muted);
+    }
+
+    .mini-kpi strong {
+        color: var(--text);
+        font-size: .92rem;
+    }
+
+    .drill-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 1rem;
+    }
+
+    .premium-table {
+        background: transparent;
+    }
+
+    .rate-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .3rem .7rem;
+        font-size: .74rem;
+        font-weight: 700;
+    }
+
+    .rate-good {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .rate-mid {
+        background: rgba(245,158,11,.12);
+        color: #d97706;
+    }
+
+    .rate-bad {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .stage-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .32rem .7rem;
+        font-size: .72rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .empty-data {
+        text-align: center;
+        padding: 2rem 1rem;
+    }
+
+    .empty-icon {
+        font-size: 2rem;
+        margin-bottom: .5rem;
+    }
+
+    .empty-data h4 {
+        margin: 0 0 .35rem;
+        color: var(--text);
+    }
+
+    .empty-data p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .pipx-note {
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+        margin-top: 1rem;
+    }
+
+    .note-icon {
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(99,102,241,.10);
+        color: #4f46e5;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+
+    .note-body h4 {
+        margin: 0 0 .3rem;
+        color: var(--text);
+        font-size: .95rem;
+        font-weight: 800;
+    }
+
+    .note-body p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .82rem;
+        line-height: 1.7;
+    }
+
+    @@media (max-width: 1300px) {
+        .pipx-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 1200px) {
+        .pipx-insights {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .pipx-dashboard,
+        .pipx-analytics-grid,
+        .drill-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @@media (max-width: 900px) {
+        .pipx-hero-main,
+        .filters-head {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 640px) {
+        .pipx-page {
+            padding: .8rem .8rem 2rem;
+        }
+
+        .pipx-hero {
+            padding: 1.25rem;
+            border-radius: 1.2rem;
+        }
+
+        .pipx-hero-text h1 {
+            font-size: 1.7rem;
+        }
+
+        .summary-ring {
+            width: 140px;
+            height: 140px;
+        }
+
+        .hero-chip {
+            min-width: 100%;
+        }
+
+        .pipx-kpis,
+        .pipx-insights,
+        .drill-mini-kpis {
+            grid-template-columns: 1fr;
+        }
+
+        .compare-row {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-actions {
+            width: 100%;
+        }
+    }
+
+    .mud-theme-dark .glass-card,
+    .mud-theme-dark .glass-inner-card {
+        background: rgba(17,24,39,.66);
+        border-color: rgba(255,255,255,.06);
+        box-shadow: 0 20px 50px rgba(0,0,0,.22);
+    }
+
+    .mud-theme-dark .filters-head h3,
+    .mud-theme-dark .card-head h3,
+    .mud-theme-dark .loading-text h3,
+    .mud-theme-dark .empty-data h4,
+    .mud-theme-dark .note-body h4,
+    .mud-theme-dark .kpi-value,
+    .mud-theme-dark .insight-value,
+    .mud-theme-dark .compare-label,
+    .mud-theme-dark .compare-values strong,
+    .mud-theme-dark .mini-kpi strong {
+        color: #f8fafc;
+    }
+
+    .mud-theme-dark .filters-head p,
+    .mud-theme-dark .card-head p,
+    .mud-theme-dark .loading-text p,
+    .mud-theme-dark .empty-data p,
+    .mud-theme-dark .note-body p,
+    .mud-theme-dark .kpi-label,
+    .mud-theme-dark .kpi-sub,
+    .mud-theme-dark .insight-title,
+    .mud-theme-dark .insight-desc,
+    .mud-theme-dark .compare-values,
+    .mud-theme-dark .mini-label,
+    .mud-theme-dark .stage-chip-btn small {
+        color: #94a3b8;
+    }
+
+    .mud-theme-dark .compare-row,
+    .mud-theme-dark .mini-kpi,
+    .mud-theme-dark .stage-chip-btn {
+        background: rgba(255,255,255,.03);
+    }
+
+    .mud-theme-dark .quick-range-btn,
+    .mud-theme-dark .clear-stage-btn {
+        background: rgba(255,255,255,.05);
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .quick-range-btn:hover,
+    .mud-theme-dark .clear-stage-btn:hover {
+        background: rgba(99,102,241,.12);
+        color: #c7d2fe;
+    }
+
+    .mud-theme-dark .stage-chip-btn {
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .stage-chip-btn:hover {
+        background: rgba(99,102,241,.12);
+        color: #c7d2fe;
+    }
+
+    .mud-theme-dark .stage-chip-active {
+        color: #fff;
+    }
+
+    @@media print {
+        .pipx-bg,
+        .filters-actions,
+        .quick-range-row,
+        .pipx-back,
+        .clear-stage-btn,
+        .stage-chip-row button:not(.stage-chip-active) {
+            display: none !important;
+        }
+
+        .glass-card,
+        .glass-inner-card {
+            box-shadow: none !important;
+            border: 1px solid #ddd !important;
+            background: #fff !important;
+        }
+
+        .pipx-page {
+            max-width: 100% !important;
+            padding: 0 !important;
+        }
+    }
+</style>

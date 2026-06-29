@@ -10,6 +10,7 @@
 @using MudColor = MudBlazor.Color
 @using MudSize = MudBlazor.Size
 @using MudVariant = MudBlazor.Variant
+@using ClosedXML.Excel
 
 @attribute [Authorize]
 
@@ -59,6 +60,18 @@ else
             <MudIcon Icon="@Icons.Material.Rounded.Sync" Size="MudSize.Small" />
             مزامنة من الشيت
         </button>*@
+        <button class="btn-sync" style="background:rgba(16,185,129,0.15);border-color:rgba(16,185,129,0.35)"
+        @onclick="ExportToExcel" disabled="@_isExporting">
+    @if (_isExporting)
+    {
+        <MudProgressCircular Size="MudSize.Small" Indeterminate="true" Style="margin-left:4px" />
+    }
+    else
+    {
+        <MudIcon Icon="@Icons.Material.Rounded.FileDownload" Size="MudSize.Small" />
+    }
+    @(_isExporting ? "جاري التصدير..." : "تصدير Excel")
+</button>
         <button class="btn-sync" style="background:rgba(139,92,246,0.15);border-color:rgba(139,92,246,0.35)"
         @onclick="ShowAddLead">
     <MudIcon Icon="@Icons.Material.Rounded.PersonAdd" Size="MudSize.Small" />
@@ -206,6 +219,14 @@ else
                     <MudSelectItem Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
                 }
             </MudSelect>
+            <MudSelect T="string" Label="نوع المشروع" Variant="MudVariant.Outlined"
+           @bind-Value="_filter.ProjectType" Dense="true" Class="f-item"
+           Clearable="true" AnchorOrigin="Origin.BottomCenter">
+    @foreach (var proj in _projects)
+    {
+        <MudSelectItem Value="@proj">@proj</MudSelectItem>
+    }
+</MudSelect>
             <MudDatePicker Label="من" Variant="MudVariant.Outlined"
                            @bind-Date="_filter.DateFrom"
                            Dense="true" Class="f-date" />
@@ -1350,18 +1371,23 @@ else
 </style>
 
 @code {
+    // ───── Filter Persistence ─────
+    private static readonly Dictionary<string, LeadsCrmFilterDto> _savedFilters = new();
     // ───── State ─────
+
     private bool _isLoading = true;
     private bool _isLoadingData = false;
     private bool _isSaving = false;
     private bool _canViewLeadsDashboard = false;
     private bool _canViewSalesPipeline = false;
+    private bool _isExporting = false;
     private string _searchText = "";
 
     private LeadsCrmFilterDto _filter = new() { PageSize = 25 };
     private PagedResult<LeadsCrmListDto> _pagedResult = new();
     private LeadsCrmStatsDto _stats = new();
     private List<Employee> _employees = new();
+    private List<string> _projects = new();
 
     // ───── Permissions ─────
     private bool _canEdit = false;
@@ -1410,14 +1436,28 @@ else
     // ═══════════════════════════════════════
 
     protected override async Task OnInitializedAsync()
+{
+    await LoadPermissionsAsync();
+    await LoadEmployeesAsync();
+    await LoadProjectsAsync();
+
+    // ← استرجاع الفلاتر المحفوظة (لو موجودة)
+    if (_savedFilters.TryGetValue(_currentUserName, out var saved))
     {
-        await LoadPermissionsAsync();
-        await LoadEmployeesAsync();
-        await LoadDataAsync();
-        _isLoading = false;
+        _filter = saved with { PageNumber = 1 };
+        _searchText = saved.SearchText ?? "";
     }
 
+    await LoadDataAsync();
+    _isLoading = false;
+}
+
     public void Dispose() { }
+
+    private void SaveCurrentFilters()
+{
+    _savedFilters[_currentUserName] = _filter with { };
+}
 
     // ═══════════════════════════════════════
     //            PERMISSIONS
@@ -1452,6 +1492,17 @@ else
         _employees = new();
     }
 }
+    private async Task LoadProjectsAsync()
+{
+    try
+    {
+        _projects = await LeadsService.GetDistinctProjectsAsync();
+    }
+    catch
+    {
+        _projects = new();
+    }
+}
 
     private async Task LoadDataAsync()
     {
@@ -1459,7 +1510,7 @@ else
 
         try
         {
-            _stats = await LeadsService.GetStatsAsync();
+            _stats = await LeadsService.GetStatsAsync(_filter);
             _pagedResult = await LeadsService.GetLeadsAsync(_filter);
         }
         catch (Exception ex)
@@ -1490,6 +1541,7 @@ else
     {
         _filter.SearchText = _searchText;
         _filter.PageNumber = 1;
+        SaveCurrentFilters();
         await LoadDataAsync();
     }
 
@@ -1501,6 +1553,7 @@ else
     {
         _filter.SearchText = _searchText;
         _filter.PageNumber = 1;
+        SaveCurrentFilters();
         await LoadDataAsync();
     }
 
@@ -1508,6 +1561,7 @@ else
     {
         _searchText = "";
         _filter = new LeadsCrmFilterDto { PageSize = _filter.PageSize };
+        SaveCurrentFilters();
         await LoadDataAsync();
     }
 
@@ -1522,6 +1576,7 @@ else
 
     _filter.SearchText = _searchText;
     _filter.PageNumber = 1;
+    SaveCurrentFilters();
     await LoadDataAsync();
 }
 private async Task QuickLateFilter()
@@ -1533,7 +1588,7 @@ private async Task QuickLateFilter()
 
     _filter.SearchText = _searchText;
     _filter.PageNumber = 1;
-
+    SaveCurrentFilters();
     await LoadDataAsync();
 }
 
@@ -1792,6 +1847,109 @@ private async Task AssignLead()
         await LoadDataAsync();
         Snackbar.Add("تم تحديث البيانات", Severity.Success);
     }
+    private async Task ExportToExcel()
+{
+    _isExporting = true;
+    StateHasChanged();
+
+    try
+    {
+        // نعمل فلتر جديد بدون Pagination عشان نجيب كل البيانات
+        var exportFilter = _filter with { PageNumber = 1, PageSize = int.MaxValue };
+        var allLeads = await LeadsService.GetLeadsAsync(exportFilter);
+
+        if (!allLeads.Items.Any())
+        {
+            Snackbar.Add("لا توجد بيانات للتصدير", Severity.Warning);
+            return;
+        }
+
+        using var workbook = new XLWorkbook();
+        var worksheet = workbook.Worksheets.Add("Leads");
+
+        // ─── Header Row ───
+        var headers = new[]
+        {
+            "الاسم", "الهاتف", "هاتف 2", "البريد", "المدينة",
+            "الحالة", "نوع المشروع", "مرحلة المشروع", "الميزانية",
+            "الموظف المسؤول", "الحملة", "المنصة",
+            "أفضل وقت للتواصل", "مكرر", "تاريخ الوصول", "آخر تواصل"
+        };
+
+        for (int i = 0; i < headers.Length; i++)
+        {
+            var cell = worksheet.Cell(1, i + 1);
+            cell.Value = headers[i];
+            cell.Style.Font.Bold = true;
+            cell.Style.Fill.BackgroundColor = XLColor.FromArgb(99, 102, 241);
+            cell.Style.Font.FontColor = XLColor.White;
+            cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+        }
+
+        // ─── Data Rows ───
+        for (int r = 0; r < allLeads.Items.Count; r++)
+        {
+            var lead = allLeads.Items[r];
+            var row = r + 2;
+
+            worksheet.Cell(row, 1).Value = lead.FullName;
+            worksheet.Cell(row, 2).Value = lead.Phone;
+            worksheet.Cell(row, 3).Value = lead.Phone2 ?? "";
+            worksheet.Cell(row, 4).Value = lead.Email ?? "";
+            worksheet.Cell(row, 5).Value = lead.City ?? "";
+            worksheet.Cell(row, 6).Value = lead.LeadStatus ?? "";
+            worksheet.Cell(row, 7).Value = lead.ProjectType ?? "";
+            worksheet.Cell(row, 8).Value = lead.ProjectStage ?? "";
+            worksheet.Cell(row, 9).Value = lead.Budget ?? "";
+            worksheet.Cell(row, 10).Value = lead.AssignedEmployeeName ?? "";
+            worksheet.Cell(row, 11).Value = lead.CampaignName ?? "";
+            worksheet.Cell(row, 12).Value = lead.Platform == "fb" ? "Facebook" : lead.Platform == "ig" ? "Instagram" : lead.Platform ?? "";
+            worksheet.Cell(row, 13).Value = lead.BestTimeToReach ?? "";
+            worksheet.Cell(row, 14).Value = lead.IsDuplicate ? "نعم" : "لا";
+            worksheet.Cell(row, 15).Value = lead.LeadDate?.ToString("yyyy/MM/dd") ?? lead.CreatedAt.ToString("yyyy/MM/dd");
+            worksheet.Cell(row, 16).Value = lead.LastContactDate?.ToString("yyyy/MM/dd") ?? "";
+        }
+
+        // ─── Auto-fit Columns ───
+        worksheet.Columns().AdjustToContents();
+
+        // ─── RTL + Arabic font ───
+        worksheet.RightToLeft = true;
+        worksheet.Rows().Style.Font.FontName = "Segoe UI";
+
+        // ─── Save as stream and download ───
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        stream.Position = 0;
+
+        var fileName = $"Leads_CRM_{DateTime.Now:yyyy-MM-dd_HH-mm}.xlsx";
+        var contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+        // تحميل الملف في المتصفح
+        await JS.InvokeVoidAsync("eval",
+            "(function(){ " +
+            "var b=new Uint8Array([" + string.Join(",", stream.ToArray()) + "]); " +
+            "var blob=new Blob([b],{type:'" + contentType + "'}); " +
+            "var url=URL.createObjectURL(blob); " +
+            "var a=document.createElement('a'); " +
+            "a.href=url;a.download='" + fileName + "'; " +
+            "document.body.appendChild(a);a.click(); " +
+            "document.body.removeChild(a);URL.revokeObjectURL(url); " +
+            "})();"
+        );
+
+        Snackbar.Add($"تم تصدير {allLeads.Items.Count} Lead بنجاح", Severity.Success);
+    }
+    catch (Exception ex)
+    {
+        Snackbar.Add("خطأ في التصدير: " + ex.Message, Severity.Error);
+    }
+    finally
+    {
+        _isExporting = false;
+        StateHasChanged();
+    }
+}
 
     // ═══════════════════════════════════════
     //           UI HELPERS

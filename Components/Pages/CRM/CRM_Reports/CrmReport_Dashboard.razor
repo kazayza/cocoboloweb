@@ -1,0 +1,2829 @@
+@page "/crm/reports/dashboard"
+
+@using System.Globalization
+@using System.Text
+@using ApexCharts
+@using COCOBOLOERPNEW.Models
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>لوحة تحكم CRM</PageTitle>
+
+<div class="crmx-page" dir="rtl">
+
+    @* Background *@
+    <div class="crmx-bg">
+        <div class="crmx-orb orb-1"></div>
+        <div class="crmx-orb orb-2"></div>
+        <div class="crmx-orb orb-3"></div>
+    </div>
+
+    @* HERO *@
+    <section class="crmx-hero">
+        <div class="crmx-hero-grid"></div>
+
+        <div class="crmx-hero-content">
+            <div class="crmx-hero-top">
+                <button class="crmx-back" @onclick="GoBack" title="رجوع">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12h14" />
+                        <path d="m12 5 7 7-7 7" />
+                    </svg>
+                </button>
+
+                <div class="crmx-badge">
+                    <span class="badge-dot"></span>
+                    <span>CRM Executive Command Center</span>
+                </div>
+            </div>
+
+            <div class="crmx-hero-main">
+                <div class="crmx-hero-text">
+                    <h1>لوحة <span>تحكم</span> CRM الشاملة</h1>
+                    <p>
+                        مركز قيادة تنفيذي يجمع أهم مؤشرات الـ CRM في شاشة واحدة:
+                        الإيرادات، خط المبيعات، التحويل، النشاط، المتابعات، الركود، أداء الفريق، وأسباب الخسارة.
+                    </p>
+
+                    <div class="crmx-hero-chips">
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة الحالية</span>
+                            <span class="chip-value">@SelectedPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة السابقة</span>
+                            <span class="chip-value">@PreviousPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">أفضل موظف</span>
+                            <span class="chip-value">@_bestPerformerName</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">أفضل مصدر</span>
+                            <span class="chip-value">@_bestSource</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="crmx-hero-side">
+                    <div class="summary-ring" style="@GetSummaryRingStyle()">
+                        <div class="summary-ring-inner">
+                            <div class="summary-percent">@_closeRate.ToString("F1")%</div>
+                            <div class="summary-caption">معدل الإغلاق</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @* FILTERS / ACTIONS *@
+    <section class="glass-card crmx-filters">
+        <div class="filters-head">
+            <div>
+                <h3>الفلاتر والتحكم</h3>
+                <p>اختر الفترة الزمنية والموظف أو استخدم الفلاتر السريعة</p>
+            </div>
+
+            <div class="filters-actions">
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Default"
+                           StartIcon="@Icons.Material.Rounded.RestartAlt"
+                           OnClick="ResetFiltersAsync"
+                           Disabled="_isLoading">
+                    إعادة ضبط
+                </MudButton>
+
+                <MudButton Variant="Variant.Filled"
+                           Color="@MudColor.Primary"
+                           StartIcon="@Icons.Material.Rounded.FilterAlt"
+                           OnClick="LoadData"
+                           Disabled="_isLoading">
+                    تحديث اللوحة
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Success"
+                           StartIcon="@Icons.Material.Rounded.FileDownload"
+                           OnClick="ExportCsvAsync"
+                           Disabled="_isLoading">
+                    تصدير CSV
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Info"
+                           StartIcon="@Icons.Material.Rounded.Print"
+                           OnClick="PrintAsync"
+                           Disabled="_isLoading">
+                    طباعة / PDF
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="quick-range-row">
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(1)">هذا الشهر</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(3)">آخر 3 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(6)">آخر 6 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(12)">آخر 12 شهر</button>
+            <button class="quick-range-btn" @onclick="SetCurrentYearAsync">السنة الحالية</button>
+        </div>
+
+        <div class="filters-grid">
+            <MudDatePicker @bind-Date="_fromDate"
+                           Label="من تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudDatePicker @bind-Date="_toDate"
+                           Label="إلى تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudSelect T="int?"
+                       @bind-Value="_empId"
+                       Label="الموظف"
+                       Clearable="true"
+                       Variant="Variant.Outlined"
+                       Dense="true"
+                       Class="filter-field">
+                @foreach (var emp in _employees)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)emp.Id)">@emp.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </div>
+    </section>
+
+    @if (_isLoading)
+    {
+        <div class="glass-card crmx-loading">
+            <MudProgressCircular Indeterminate="true"
+                                 Size="@MudSize.Large"
+                                 Color="@MudColor.Primary" />
+            <div class="loading-text">
+                <h3>جاري تحميل لوحة التحكم...</h3>
+                <p>يتم تجميع المؤشرات التنفيذية ورسوم الـ CRM</p>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="crmx-content">
+
+            @* KPI GRID *@
+            <section class="crmx-kpis">
+                <div class="glass-card kpi-card">
+                    <div class="kpi-icon green">💰</div>
+                    <div class="kpi-body">
+                        <div class="kpi-head-row">
+                            <div class="kpi-label">إجمالي الإيرادات</div>
+                            <span class="trend-badge @GetTrendClass(_revenue, _prevRevenue)">
+                                @GetTrendText(_revenue, _prevRevenue)
+                            </span>
+                        </div>
+                        <div class="kpi-value">@FormatMoney(_revenue)</div>
+                        <div class="kpi-sub">@_revenueChange</div>
+                    </div>
+                </div>
+
+                <div class="glass-card kpi-card">
+                    <div class="kpi-icon blue">📊</div>
+                    <div class="kpi-body">
+                        <div class="kpi-head-row">
+                            <div class="kpi-label">فرص مفتوحة</div>
+                            <span class="trend-badge @GetTrendClass(_openOpps, _prevOpenOpps)">
+                                @GetTrendText(_openOpps, _prevOpenOpps)
+                            </span>
+                        </div>
+                        <div class="kpi-value">@_openOpps.ToString("N0")</div>
+                        <div class="kpi-sub">Pipeline مفتوح: @FormatMoney(_openPipelineValue)</div>
+                    </div>
+                </div>
+
+                <div class="glass-card kpi-card">
+                    <div class="kpi-icon purple">📈</div>
+                    <div class="kpi-body">
+                        <div class="kpi-head-row">
+                            <div class="kpi-label">معدل الإغلاق</div>
+                            <span class="trend-badge @GetTrendClass(_closeRate, _prevCloseRate)">
+                                @GetTrendText(_closeRate, _prevCloseRate)
+                            </span>
+                        </div>
+                        <div class="kpi-value">@_closeRate.ToString("F1")%</div>
+                        <div class="kpi-sub">تم البيع ÷ إجمالي الفرص</div>
+                    </div>
+                </div>
+
+                <div class="glass-card kpi-card">
+                    <div class="kpi-icon red">⏰</div>
+                    <div class="kpi-body">
+                        <div class="kpi-label">متابعات متأخرة</div>
+                        <div class="kpi-value">@_overdueFollowups.ToString("N0")</div>
+                        <div class="kpi-sub">تحتاج تدخلًا سريعًا</div>
+                    </div>
+                </div>
+
+                <div class="glass-card kpi-card">
+                    <div class="kpi-icon orange">📞</div>
+                    <div class="kpi-body">
+                        <div class="kpi-head-row">
+                            <div class="kpi-label">تفاعلات الفترة</div>
+                            <span class="trend-badge @GetTrendClass(_periodInteractions, _prevPeriodInteractions)">
+                                @GetTrendText(_periodInteractions, _prevPeriodInteractions)
+                            </span>
+                        </div>
+                        <div class="kpi-value">@_periodInteractions.ToString("N0")</div>
+                        <div class="kpi-sub">نشاط تشغيلي داخل الفترة المحددة</div>
+                    </div>
+                </div>
+
+                <div class="glass-card kpi-card">
+                    <div class="kpi-icon amber">⚠️</div>
+                    <div class="kpi-body">
+                        <div class="kpi-label">فرص راكدة</div>
+                        <div class="kpi-value">@_staleOpps.ToString("N0")</div>
+                        <div class="kpi-sub">قيمة مهددة: @FormatMoney(_staleValue)</div>
+                    </div>
+                </div>
+            </section>
+
+            @* INSIGHTS *@
+            <section class="crmx-insights">
+                @foreach (var insight in _insights)
+                {
+                    <div class="glass-card insight-card">
+                        <div class="insight-icon @insight.ToneClass">
+                            <MudIcon Icon="@insight.Icon" Size="@MudSize.Small" />
+                        </div>
+                        <div class="insight-body">
+                            <div class="insight-title">@insight.Title</div>
+                            <div class="insight-value">@insight.Value</div>
+                            <div class="insight-desc">@insight.Description</div>
+                        </div>
+                    </div>
+                }
+            </section>
+
+            @* MAIN CHARTS *@
+            <section class="crmx-charts-grid">
+                <div class="glass-card chart-card-large">
+                    <div class="card-head">
+                        <div>
+                            <h3>خط المبيعات حسب المرحلة</h3>
+                            <p>عدد الفرص وقيمتها داخل كل مرحلة</p>
+                        </div>
+                    </div>
+
+                    @if (_pipelinePoints.Any())
+                    {
+                        <ApexChart TItem="PipelinePoint"
+                                   Options="_pipelineOptions"
+                                   Height="360">
+                            <ApexPointSeries TItem="PipelinePoint"
+                                             Items="@_pipelinePoints"
+                                             Name="عدد الفرص"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Stage"
+                                             YValue="x => x.Count" />
+
+                            <ApexPointSeries TItem="PipelinePoint"
+                                             Items="@_pipelinePoints"
+                                             Name="القيمة"
+                                             SeriesType="SeriesType.Line"
+                                             XValue="x => x.Stage"
+                                             YValue="x => x.Value" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty">لا توجد بيانات كافية</div>
+                    }
+                </div>
+
+                <div class="glass-card chart-card-large">
+                    <div class="card-head">
+                        <div>
+                            <h3>اتجاه الإيرادات الشهرية</h3>
+                            <p>الإيرادات المحققة خلال الفترة المحددة</p>
+                        </div>
+                    </div>
+
+                    @if (_revenuePoints.Any())
+                    {
+                        <ApexChart TItem="RevenueTrendPoint"
+                                   Options="_revenueOptions"
+                                   Height="360">
+                            <ApexPointSeries TItem="RevenueTrendPoint"
+                                             Items="@_revenuePoints"
+                                             Name="الإيرادات"
+                                             SeriesType="SeriesType.Line"
+                                             XValue="x => x.Month"
+                                             YValue="x => x.Value" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty">لا توجد بيانات كافية</div>
+                    }
+                </div>
+            </section>
+
+            @* SECONDARY CHARTS *@
+            <section class="crmx-secondary-grid">
+                <div class="glass-card chart-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>تحويل العملاء المحتملين</h3>
+                            <p>Leads مقابل التحويل ثم البيع</p>
+                        </div>
+                    </div>
+
+                    @if (_leadPoints.Any())
+                    {
+                        <ApexChart TItem="LeadTrendPoint"
+                                   Options="_leadOptions"
+                                   Height="320">
+                            <ApexPointSeries TItem="LeadTrendPoint"
+                                             Items="@_leadPoints"
+                                             Name="Leads"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Month"
+                                             YValue="x => x.TotalLeads" />
+
+                            <ApexPointSeries TItem="LeadTrendPoint"
+                                             Items="@_leadPoints"
+                                             Name="تم التحويل"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Month"
+                                             YValue="x => x.ConvertedLeads" />
+
+                            <ApexPointSeries TItem="LeadTrendPoint"
+                                             Items="@_leadPoints"
+                                             Name="تم البيع"
+                                             SeriesType="SeriesType.Line"
+                                             XValue="x => x.Month"
+                                             YValue="x => x.WonLeads" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty small">لا توجد بيانات كافية</div>
+                    }
+                </div>
+
+                <div class="glass-card chart-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>النشاط اليومي</h3>
+                            <p>التفاعلات والفرص والمبيعات داخل الفترة</p>
+                        </div>
+                    </div>
+
+                    @if (_activityPoints.Any())
+                    {
+                        <ApexChart TItem="ActivityPoint"
+                                   Options="_activityOptions"
+                                   Height="320">
+                            <ApexPointSeries TItem="ActivityPoint"
+                                             Items="@_activityPoints"
+                                             Name="التفاعلات"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Label"
+                                             YValue="x => x.Interactions" />
+
+                            <ApexPointSeries TItem="ActivityPoint"
+                                             Items="@_activityPoints"
+                                             Name="الفرص"
+                                             SeriesType="SeriesType.Line"
+                                             XValue="x => x.Label"
+                                             YValue="x => x.NewOpps" />
+
+                            <ApexPointSeries TItem="ActivityPoint"
+                                             Items="@_activityPoints"
+                                             Name="المبيعات"
+                                             SeriesType="SeriesType.Line"
+                                             XValue="x => x.Label"
+                                             YValue="x => x.Won" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty small">لا توجد بيانات كافية</div>
+                    }
+                </div>
+
+                <div class="glass-card chart-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>أسباب الخسارة</h3>
+                            <p>أكثر الأسباب تكرارًا</p>
+                        </div>
+                    </div>
+
+                    @if (_lostReasonPoints.Any())
+                    {
+                        <ApexChart TItem="LostReasonPoint"
+                                   Options="_lostReasonOptions"
+                                   Height="320">
+                            <ApexPointSeries TItem="LostReasonPoint"
+                                             Items="@_lostReasonPoints"
+                                             Name="الخسائر"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Reason"
+                                             YValue="x => x.Count" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty small">لا توجد بيانات كافية</div>
+                    }
+                </div>
+
+                <div class="glass-card chart-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>مصادر العملاء</h3>
+                            <p>أفضل المصادر من حيث الإيراد</p>
+                        </div>
+                    </div>
+
+                    @if (_sourcePoints.Any())
+                    {
+                        <ApexChart TItem="SourcePoint"
+                                   Options="_sourceOptions"
+                                   Height="320">
+                            <ApexPointSeries TItem="SourcePoint"
+                                             Items="@_sourcePoints"
+                                             Name="الإيراد"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Source"
+                                             YValue="x => x.Revenue" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty small">لا توجد بيانات كافية</div>
+                    }
+                </div>
+            </section>
+
+            @* DRILL DOWN BY STAGE *@
+            <section class="glass-card crmx-drill">
+                <div class="card-head drill-head">
+                    <div>
+                        <h3>Drill-down حسب المرحلة</h3>
+                        <p>اختر مرحلة لعرض تفاصيلها. اختيار عنصر جديد يستبدل القديم مباشرة.</p>
+                    </div>
+
+                    <div class="drill-head-actions">
+                        @if (_selectedStageId.HasValue)
+                        {
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="@MudColor.Error"
+                                       Size="@MudSize.Small"
+                                       OnClick="ClearSelectedStage">
+                                إلغاء اختيار المرحلة
+                            </MudButton>
+
+                            <MudButton Variant="Variant.Filled"
+                                       Color="@MudColor.Primary"
+                                       Size="@MudSize.Small"
+                                       OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/pipeline", _selectedStageId.HasValue ? $"stageId={_selectedStageId.Value}" : null)))">
+                                فتح تقرير Pipeline
+                            </MudButton>
+                        }
+                    </div>
+                </div>
+
+                <div class="stage-chip-row">
+                    @foreach (var stage in _stageRows)
+                    {
+                        <button class="stage-chip-btn @(IsSelectedStage(stage.StageId) ? "stage-chip-active" : "")"
+                                @onclick="() => SelectStage(stage.StageId)">
+                            <span>@stage.StageName</span>
+                            <small>@stage.Count.ToString("N0") فرصة</small>
+                        </button>
+                    }
+                </div>
+
+                @if (_selectedStageId.HasValue)
+                {
+                    <div class="drill-mini-kpis">
+                        <div class="mini-kpi">
+                            <span class="mini-label">المرحلة المحددة</span>
+                            <strong>@_selectedStageName</strong>
+                        </div>
+                        <div class="mini-kpi">
+                            <span class="mini-label">عدد الفرص</span>
+                            <strong>@_selectedStageCount.ToString("N0")</strong>
+                        </div>
+                        <div class="mini-kpi">
+                            <span class="mini-label">إجمالي القيمة</span>
+                            <strong>@FormatMoney(_selectedStageValue)</strong>
+                        </div>
+                        <div class="mini-kpi">
+                            <span class="mini-label">نسبة من الإجمالي</span>
+                            <strong>@_selectedStagePercent.ToString("F1")%</strong>
+                        </div>
+                        <div class="mini-kpi">
+                            <span class="mini-label">متوسط الفرصة</span>
+                            <strong>@FormatMoney(_selectedStageAvgValue)</strong>
+                        </div>
+                        <div class="mini-kpi">
+                            <span class="mini-label">أفضل موظف</span>
+                            <strong>@_selectedStageTopEmployee</strong>
+                        </div>
+                    </div>
+
+                    <div class="drill-grid">
+                        <div class="glass-inner-card">
+                            <div class="card-head">
+                                <div>
+                                    <h3>الموظفون داخل المرحلة</h3>
+                                    <p>عدد الفرص والقيمة لكل موظف داخل المرحلة المحددة</p>
+                                </div>
+                            </div>
+
+                            @if (_selectedStageEmployeePoints.Any())
+                            {
+                                <ApexChart TItem="StageEmployeePoint"
+                                           Options="_selectedStageEmployeeOptions"
+                                           Height="320"
+                                           @key="@_selectedStageId">
+                                    <ApexPointSeries TItem="StageEmployeePoint"
+                                                     Items="@_selectedStageEmployeePoints"
+                                                     Name="عدد الفرص"
+                                                     SeriesType="SeriesType.Bar"
+                                                     XValue="x => x.Employee"
+                                                     YValue="x => x.Count" />
+
+                                    <ApexPointSeries TItem="StageEmployeePoint"
+                                                     Items="@_selectedStageEmployeePoints"
+                                                     Name="القيمة"
+                                                     SeriesType="SeriesType.Line"
+                                                     XValue="x => x.Employee"
+                                                     YValue="x => x.Value" />
+                                </ApexChart>
+                            }
+                            else
+                            {
+                                <div class="chart-empty small">لا توجد بيانات كافية</div>
+                            }
+                        </div>
+
+                        <div class="glass-inner-card">
+                            <div class="card-head">
+                                <div>
+                                    <h3>أكبر الفرص في المرحلة</h3>
+                                    <p>أعلى الفرص قيمة داخل المرحلة المحددة</p>
+                                </div>
+                            </div>
+
+                            @if (_selectedStageDealPoints.Any())
+                            {
+                                <ApexChart TItem="StageDealPoint"
+                                           Options="_selectedStageDealsOptions"
+                                           Height="320"
+                                           @key="@_selectedStageId">
+                                    <ApexPointSeries TItem="StageDealPoint"
+                                                     Items="@_selectedStageDealPoints"
+                                                     Name="القيمة"
+                                                     SeriesType="SeriesType.Bar"
+                                                     XValue="x => x.ClientName"
+                                                     YValue="x => x.Value" />
+                                </ApexChart>
+                            }
+                            else
+                            {
+                                <div class="chart-empty small">لا توجد بيانات كافية</div>
+                            }
+                        </div>
+                    </div>
+                }
+            </section>
+
+            @* OPS TABLES *@
+            <section class="crmx-ops-grid">
+                <div class="glass-card table-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>🏆 أفضل مندوبي الفترة</h3>
+                            <p>ترتيب الموظفين حسب الإيراد المحقق داخل الفترة الحالية</p>
+                        </div>
+                    </div>
+
+                    <MudTable Items="@_topPerformers"
+                              Hover="true"
+                              Elevation="0"
+                              Dense="true"
+                              RowsPerPage="5"
+                              Class="compact-table">
+                        <HeaderContent>
+                            <MudTh>الترتيب</MudTh>
+                            <MudTh>الموظف</MudTh>
+                            <MudTh>المبيعات</MudTh>
+                            <MudTh>الإيرادات</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <span class="rank-badge @(context.Rank <= 3 ? "rank-gold" : "")">
+                                    @(context.Rank == 1 ? "🥇" : (context.Rank == 2 ? "🥈" : (context.Rank == 3 ? "🥉" : context.Rank.ToString())))
+                                </span>
+                            </MudTd>
+                            <MudTd style="font-weight:500;">@context.EmployeeName</MudTd>
+                            <MudTd>@context.WonCount</MudTd>
+                            <MudTd>@FormatMoney(context.Revenue)</MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText>لا توجد بيانات</MudText>
+                        </NoRecordsContent>
+                    </MudTable>
+                </div>
+
+                <div class="glass-card table-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>✅ آخر المبيعات</h3>
+                            <p>أحدث الصفقات الرابحة</p>
+                        </div>
+                    </div>
+
+                    <MudTable Items="@_recentWins"
+                              Hover="true"
+                              Elevation="0"
+                              Dense="true"
+                              RowsPerPage="5"
+                              Class="compact-table">
+                        <HeaderContent>
+                            <MudTh>العميل</MudTh>
+                            <MudTh>الموظف</MudTh>
+                            <MudTh>القيمة</MudTh>
+                            <MudTh>التاريخ</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <div style="display:flex; align-items:center; gap:0.5rem;">
+                                    <div style="width:6px; height:6px; border-radius:50%; background:#16a34a;"></div>
+                                    @context.ClientName
+                                </div>
+                            </MudTd>
+                            <MudTd>@context.EmployeeName</MudTd>
+                            <MudTd>@FormatMoney(context.Value)</MudTd>
+                            <MudTd>@FDate(context.CreatedAt)</MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText>لا توجد بيانات</MudText>
+                        </NoRecordsContent>
+                    </MudTable>
+                </div>
+
+                <div class="glass-card table-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>⏰ متابعات متأخرة</h3>
+                            <p>أعلى الفرص احتياجًا للمتابعة السريعة</p>
+                        </div>
+                    </div>
+
+                    <MudTable Items="@_overdueRows"
+                              Hover="true"
+                              Elevation="0"
+                              Dense="true"
+                              RowsPerPage="5"
+                              Class="compact-table">
+                        <HeaderContent>
+                            <MudTh>العميل</MudTh>
+                            <MudTh>الموظف</MudTh>
+                            <MudTh>التأخير</MudTh>
+                            <MudTh>القيمة</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>@context.ClientName</MudTd>
+                            <MudTd>@context.EmployeeName</MudTd>
+                            <MudTd>@context.DaysOverdue يوم</MudTd>
+                            <MudTd>@FormatMoney(context.Value)</MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText>لا توجد بيانات</MudText>
+                        </NoRecordsContent>
+                    </MudTable>
+                </div>
+
+                <div class="glass-card table-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>⚠️ فرص راكدة</h3>
+                            <p>الفرص الأقدم بدون نشاط حديث</p>
+                        </div>
+                    </div>
+
+                    <MudTable Items="@_staleRows"
+                              Hover="true"
+                              Elevation="0"
+                              Dense="true"
+                              RowsPerPage="5"
+                              Class="compact-table">
+                        <HeaderContent>
+                            <MudTh>العميل</MudTh>
+                            <MudTh>الموظف</MudTh>
+                            <MudTh>الركود</MudTh>
+                            <MudTh>القيمة</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>@context.ClientName</MudTd>
+                            <MudTd>@context.EmployeeName</MudTd>
+                            <MudTd>@context.DaysStale يوم</MudTd>
+                            <MudTd>@FormatMoney(context.Value)</MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText>لا توجد بيانات</MudText>
+                        </NoRecordsContent>
+                    </MudTable>
+                </div>
+            </section>
+
+            @* QUICK LINKS *@
+            <section class="glass-card quick-links-card">
+                <div class="card-head">
+                    <div>
+                        <h3>تقارير سريعة</h3>
+                        <p>انتقال مباشر للتقارير مع تمرير الفلاتر الحالية Query String-ready</p>
+                    </div>
+                </div>
+
+                <div class="quick-links">
+                    <MudButton Variant="Variant.Outlined" Color="@MudColor.Primary" StartIcon="@Icons.Material.Rounded.AccountTree"
+                               OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/pipeline", _selectedStageId.HasValue ? $"stageId={_selectedStageId.Value}" : null)))">
+                        خط المبيعات
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="@MudColor.Primary" StartIcon="@Icons.Material.Rounded.AttachMoney"
+                               OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/revenue")))">
+                        الإيرادات
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="@MudColor.Primary" StartIcon="@Icons.Material.Rounded.TrendingUp"
+                               OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/win-rate")))">
+                        معدل الإغلاق
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="@MudColor.Primary" StartIcon="@Icons.Material.Rounded.People"
+                               OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/employee-performance")))">
+                        أداء الموظفين
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="@MudColor.Primary" StartIcon="@Icons.Material.Rounded.Schedule"
+                               OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/overdue-followups")))">
+                        المتابعات المتأخرة
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="@MudColor.Primary" StartIcon="@Icons.Material.Rounded.ReportProblem"
+                               OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/lost-reasons")))">
+                        أسباب الخسارة
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="@MudColor.Primary" StartIcon="@Icons.Material.Rounded.Campaign"
+                               OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/source-roi")))">
+                        مصادر العملاء
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="@MudColor.Primary" StartIcon="@Icons.Material.Rounded.Phone"
+                               OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/contact-methods")))">
+                        طرق التواصل
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="@MudColor.Primary" StartIcon="@Icons.Material.Rounded.FilterAlt"
+                               OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/lead-conversion")))">
+                        تحويل العملاء
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="@MudColor.Primary" StartIcon="@Icons.Material.Rounded.Today"
+                               OnClick="@(() => Navigation.NavigateTo(BuildReportUrl("/crm/reports/daily-activity")))">
+                        النشاط اليومي
+                    </MudButton>
+                </div>
+            </section>
+        </div>
+    }
+</div>
+
+@code {
+    private const int WonStageId = 3;
+    private const int LostStageId1 = 4;
+    private const int LostStageId2 = 5;
+
+    private readonly CultureInfo _arCulture = new("ar-EG");
+
+    private bool _isLoading;
+
+    private DateTime? _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-5);
+    private DateTime? _toDate = DateTime.Today;
+    private int? _empId;
+
+    private List<EmployeeItem> _employees = new();
+
+    private DashboardSnapshot _currentSnapshot = new();
+    private DashboardSnapshot _previousSnapshot = new();
+
+    private decimal _revenue;
+    private decimal _prevRevenue;
+    private string _revenueChange = "";
+    private int _openOpps;
+    private int _prevOpenOpps;
+    private decimal _openPipelineValue;
+    private decimal _prevOpenPipelineValue;
+    private double _closeRate;
+    private double _prevCloseRate;
+    private int _overdueFollowups;
+    private int _periodInteractions;
+    private int _prevPeriodInteractions;
+    private int _staleOpps;
+    private decimal _staleValue;
+
+    private string _bestPerformerName = "—";
+    private string _bestSource = "—";
+
+    private List<StageSummaryRow> _stageRows = new();
+    private List<PipelinePoint> _pipelinePoints = new();
+    private List<RevenueTrendPoint> _revenuePoints = new();
+    private List<LeadTrendPoint> _leadPoints = new();
+    private List<ActivityPoint> _activityPoints = new();
+    private List<LostReasonPoint> _lostReasonPoints = new();
+    private List<SourcePoint> _sourcePoints = new();
+    private List<InsightItem> _insights = new();
+
+    private List<PerformerRow> _topPerformers = new();
+    private List<RecentWinRow> _recentWins = new();
+    private List<OverdueMiniRow> _overdueRows = new();
+    private List<StaleMiniRow> _staleRows = new();
+
+    private int? _selectedStageId;
+    private string _selectedStageName = "—";
+    private int _selectedStageCount;
+    private decimal _selectedStageValue;
+    private double _selectedStagePercent;
+    private decimal _selectedStageAvgValue;
+    private string _selectedStageTopEmployee = "—";
+    private List<StageEmployeePoint> _selectedStageEmployeePoints = new();
+    private List<StageDealPoint> _selectedStageDealPoints = new();
+
+    private ApexChartOptions<PipelinePoint> _pipelineOptions = new();
+    private ApexChartOptions<RevenueTrendPoint> _revenueOptions = new();
+    private ApexChartOptions<LeadTrendPoint> _leadOptions = new();
+    private ApexChartOptions<ActivityPoint> _activityOptions = new();
+    private ApexChartOptions<LostReasonPoint> _lostReasonOptions = new();
+    private ApexChartOptions<SourcePoint> _sourceOptions = new();
+    private ApexChartOptions<StageEmployeePoint> _selectedStageEmployeeOptions = new();
+    private ApexChartOptions<StageDealPoint> _selectedStageDealsOptions = new();
+
+    private string _previousPeriodLabel = "غير متاح";
+
+    private string SelectedPeriodLabel =>
+        $"{(_fromDate.HasValue ? _fromDate.Value.ToString("dd MMM yyyy", _arCulture) : "البداية")} — {(_toDate.HasValue ? _toDate.Value.ToString("dd MMM yyyy", _arCulture) : "اليوم")}";
+
+    private string PreviousPeriodLabel => _previousPeriodLabel;
+
+    private string SelectedEmployeeLabel =>
+        _empId.HasValue
+            ? _employees.FirstOrDefault(x => x.Id == _empId.Value)?.Name ?? "موظف محدد"
+            : "كل الموظفين";
+
+    protected override async Task OnInitializedAsync()
+    {
+        ConfigureCharts();
+        await LoadEmployeesAsync();
+        await LoadData();
+    }
+
+    private void ConfigureCharts()
+    {
+        _pipelineOptions = new ApexChartOptions<PipelinePoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#3b82f6", "#10b981" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke { Curve = Curve.Smooth, Width = new List<double> { 0, 3 } },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend { Position = LegendPosition.Top, HorizontalAlign = ApexCharts.Align.Right },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar { BorderRadius = 8, ColumnWidth = "50%" }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = -20 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _revenueOptions = new ApexChartOptions<RevenueTrendPoint>
+        {
+            Chart = new Chart { Toolbar = new Toolbar { Show = false }, Background = "transparent", FontFamily = "inherit" },
+            Colors = new List<string> { "#10b981" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke { Curve = Curve.Smooth, Width = new List<double> { 3 } },
+            Markers = new Markers { Size = 4 },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+
+        _leadOptions = new ApexChartOptions<LeadTrendPoint>
+        {
+            Chart = new Chart { Toolbar = new Toolbar { Show = false }, Background = "transparent", FontFamily = "inherit" },
+            Colors = new List<string> { "#6366f1", "#8b5cf6", "#10b981" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke { Curve = Curve.Smooth, Width = new List<double> { 0, 0, 3 } },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend { Position = LegendPosition.Top, HorizontalAlign = ApexCharts.Align.Right },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar { BorderRadius = 6, ColumnWidth = "42%" }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _activityOptions = new ApexChartOptions<ActivityPoint>
+        {
+            Chart = new Chart { Toolbar = new Toolbar { Show = false }, Background = "transparent", FontFamily = "inherit" },
+            Colors = new List<string> { "#3b82f6", "#8b5cf6", "#10b981" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke { Curve = Curve.Smooth, Width = new List<double> { 0, 3, 3 } },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend { Position = LegendPosition.Top, HorizontalAlign = ApexCharts.Align.Right },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar { BorderRadius = 6, ColumnWidth = "50%" }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = -20 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _lostReasonOptions = new ApexChartOptions<LostReasonPoint>
+        {
+            Chart = new Chart { Toolbar = new Toolbar { Show = false }, Background = "transparent", FontFamily = "inherit" },
+            Colors = new List<string> { "#ef4444" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar { Horizontal = true, BorderRadius = 6 }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+
+        _sourceOptions = new ApexChartOptions<SourcePoint>
+        {
+            Chart = new Chart { Toolbar = new Toolbar { Show = false }, Background = "transparent", FontFamily = "inherit" },
+            Colors = new List<string> { "#14b8a6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar { Horizontal = true, BorderRadius = 6 }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+
+        _selectedStageEmployeeOptions = new ApexChartOptions<StageEmployeePoint>
+        {
+            Chart = new Chart { Toolbar = new Toolbar { Show = false }, Background = "transparent", FontFamily = "inherit" },
+            Colors = new List<string> { "#8b5cf6", "#f59e0b" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke { Curve = Curve.Smooth, Width = new List<double> { 0, 3 } },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend { Position = LegendPosition.Top, HorizontalAlign = ApexCharts.Align.Right },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar { BorderRadius = 6, ColumnWidth = "48%" }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = -20 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+
+        _selectedStageDealsOptions = new ApexChartOptions<StageDealPoint>
+        {
+            Chart = new Chart { Toolbar = new Toolbar { Show = false }, Background = "transparent", FontFamily = "inherit" },
+            Colors = new List<string> { "#06b6d4" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar { Horizontal = true, BorderRadius = 6 }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+    }
+
+    private async Task LoadEmployeesAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var raw = await db.VwSalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.EmployeeId != null && o.EmployeeName != null)
+            .GroupBy(o => new { o.EmployeeId, o.EmployeeName })
+            .Select(g => new
+            {
+                Id = g.Key.EmployeeId!.Value,
+                Name = g.Key.EmployeeName!
+            })
+            .OrderBy(x => x.Name)
+            .ToListAsync();
+
+        _employees = raw
+            .Select(x => new EmployeeItem
+            {
+                Id = x.Id,
+                Name = x.Name
+            })
+            .ToList();
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-5);
+        _toDate = DateTime.Today;
+        _empId = null;
+        _selectedStageId = null;
+        await LoadData();
+    }
+
+    private async Task SetLastMonthsAsync(int months)
+    {
+        if (months <= 0) months = 1;
+
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-(months - 1));
+        _toDate = DateTime.Today;
+        _selectedStageId = null;
+
+        await LoadData();
+    }
+
+    private async Task SetCurrentYearAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, 1, 1);
+        _toDate = DateTime.Today;
+        _selectedStageId = null;
+
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+
+        try
+        {
+            NormalizeDateRange();
+
+            if (!_fromDate.HasValue || !_toDate.HasValue)
+            {
+                _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-5);
+                _toDate = DateTime.Today;
+            }
+
+            var currentFrom = _fromDate.Value.Date;
+            var currentTo = _toDate.Value.Date;
+
+            if (!TryGetPreviousRange(out var prevFrom, out var prevTo))
+            {
+                prevFrom = currentFrom.AddMonths(-1);
+                prevTo = currentFrom.AddDays(-1);
+            }
+
+            _previousPeriodLabel = $"{prevFrom:dd MMM yyyy} — {prevTo:dd MMM yyyy}";
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            _currentSnapshot = await LoadSnapshotAsync(db, currentFrom, currentTo, _empId);
+            _previousSnapshot = await LoadSnapshotAsync(db, prevFrom, prevTo, _empId);
+
+            BuildMetrics();
+            BuildPipeline();
+            BuildRevenueTrend();
+            BuildLeadTrend();
+            BuildActivityTrend();
+            BuildLostReasons();
+            BuildSources();
+            BuildOperationalWidgets();
+            BuildPerformersAndRecentWins();
+            BuildInsights();
+
+            ResolveSelectedStage();
+            BuildSelectedStageAnalytics();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ أثناء تحميل لوحة التحكم: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task<DashboardSnapshot> LoadSnapshotAsync(db24804Context db, DateTime from, DateTime toInclusive, int? empId)
+    {
+        var toExclusive = toInclusive.AddDays(1);
+
+        List<int>? employeeOpportunityIds = null;
+
+        if (empId.HasValue)
+        {
+            employeeOpportunityIds = await db.VwSalesOpportunities
+                .AsNoTracking()
+                .Where(o => o.EmployeeId == empId.Value)
+                .Select(o => o.OpportunityId)
+                .Distinct()
+                .ToListAsync();
+        }
+
+        var oppQuery = db.VwSalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.IsActive == true && o.CreatedAt >= from && o.CreatedAt < toExclusive);
+
+        if (empId.HasValue)
+            oppQuery = oppQuery.Where(o => o.EmployeeId == empId.Value);
+
+        var opps = await oppQuery
+            .Select(o => new DashboardOpportunityRow
+            {
+                OpportunityId = o.OpportunityId,
+                ClientName = o.ClientName ?? "—",
+                EmployeeId = o.EmployeeId ?? 0,
+                EmployeeName = o.EmployeeName ?? "—",
+                StageId = o.StageId,
+                StageName = o.StageNameAr ?? o.StageName ?? "—",
+                StageColor = o.StageColor ?? "",
+                StageOrder = o.StageOrder ?? 0,
+                CreatedAt = o.CreatedAt,
+                LastContactDate = o.LastContactDate,
+                NextFollowUpDate = o.NextFollowUpDate,
+                ExpectedValue = o.ExpectedValue ?? 0m,
+                DaysSinceFirstContact = o.DaysSinceFirstContact ?? 0d,
+                SourceName = o.SourceName ?? "غير محدد",
+                LostReasonName = o.LostReasonName ?? "غير محدد"
+            })
+            .ToListAsync();
+
+        List<DashboardInteractionRow> interactions;
+
+        if (empId.HasValue && (employeeOpportunityIds == null || employeeOpportunityIds.Count == 0))
+        {
+            interactions = new();
+        }
+        else
+        {
+            var interactionsQuery = db.CustomerInteractions
+                .AsNoTracking()
+                .Where(i => i.InteractionDate >= from && i.InteractionDate < toExclusive);
+
+            if (empId.HasValue && employeeOpportunityIds != null)
+                interactionsQuery = interactionsQuery.Where(i => employeeOpportunityIds.Contains(i.OpportunityId));
+
+            interactions = await interactionsQuery
+                .Select(i => new DashboardInteractionRow
+                {
+                    OpportunityId = i.OpportunityId,
+                    InteractionDate = i.InteractionDate
+                })
+                .ToListAsync();
+        }
+
+        var tasksQuery = db.CrmTasks
+            .AsNoTracking()
+            .Where(t => t.DueDate >= from && t.DueDate < toExclusive && t.Status == "مكتملة");
+
+        if (empId.HasValue)
+            tasksQuery = tasksQuery.Where(t => t.AssignedTo == empId.Value);
+
+        var tasks = await tasksQuery
+            .Select(t => new DashboardTaskRow
+            {
+                DueDate = t.DueDate
+            })
+            .ToListAsync();
+
+        List<DashboardLeadRow> leads;
+
+        var leadsQuery = db.LeadsCRMs
+            .AsNoTracking()
+            .Where(l => l.CreatedAt >= from && l.CreatedAt < toExclusive);
+
+        if (empId.HasValue)
+        {
+            if (employeeOpportunityIds == null || employeeOpportunityIds.Count == 0)
+            {
+                leads = new();
+                return new DashboardSnapshot
+                {
+                    Opportunities = opps,
+                    Interactions = interactions,
+                    Tasks = tasks,
+                    Leads = leads
+                };
+            }
+
+            leadsQuery = leadsQuery.Where(l => l.ConvertedOpportunityId != null && employeeOpportunityIds.Contains(l.ConvertedOpportunityId.Value));
+        }
+
+        var rawLeads = await leadsQuery
+            .Select(l => new LeadBaseRow
+            {
+                CreatedAt = l.CreatedAt,
+                ConvertedOpportunityId = l.ConvertedOpportunityId
+            })
+            .ToListAsync();
+
+        var convertedOppIds = rawLeads
+            .Where(l => l.ConvertedOpportunityId.HasValue)
+            .Select(l => l.ConvertedOpportunityId!.Value)
+            .Distinct()
+            .ToList();
+
+        var convertedOppMap = new Dictionary<int, ConvertedLeadOpportunityRow>();
+
+        if (convertedOppIds.Any())
+        {
+            var convertedOppRows = await db.VwSalesOpportunities
+                .AsNoTracking()
+                .Where(o => convertedOppIds.Contains(o.OpportunityId))
+                .Select(o => new ConvertedLeadOpportunityRow
+                {
+                    OpportunityId = o.OpportunityId,
+                    StageId = o.StageId,
+                    ExpectedValue = o.ExpectedValue ?? 0m
+                })
+                .ToListAsync();
+
+            convertedOppMap = convertedOppRows.ToDictionary(x => x.OpportunityId, x => x);
+        }
+
+        leads = rawLeads
+            .Select(l =>
+            {
+                ConvertedLeadOpportunityRow? opp = null;
+
+                if (l.ConvertedOpportunityId.HasValue)
+                    convertedOppMap.TryGetValue(l.ConvertedOpportunityId.Value, out opp);
+
+                return new DashboardLeadRow
+                {
+                    CreatedAt = l.CreatedAt,
+                    ConvertedOpportunityId = l.ConvertedOpportunityId,
+                    ConvertedStageId = opp?.StageId,
+                    ConvertedValue = opp?.ExpectedValue ?? 0m
+                };
+            })
+            .ToList();
+
+        return new DashboardSnapshot
+        {
+            Opportunities = opps,
+            Interactions = interactions,
+            Tasks = tasks,
+            Leads = leads
+        };
+    }
+
+    private void BuildMetrics()
+    {
+        var currentOpps = _currentSnapshot.Opportunities;
+        var prevOpps = _previousSnapshot.Opportunities;
+
+        var exitStages = new[] { WonStageId, LostStageId1, LostStageId2 };
+        var staleCutoff = DateTime.Today.AddDays(-14);
+
+        _revenue = currentOpps.Where(o => o.StageId == WonStageId).Sum(o => o.ExpectedValue);
+        _prevRevenue = prevOpps.Where(o => o.StageId == WonStageId).Sum(o => o.ExpectedValue);
+
+        if (_prevRevenue > 0)
+        {
+            var change = (_revenue - _prevRevenue) / _prevRevenue * 100m;
+            _revenueChange = change >= 0
+                ? $"↑ {change:F1}% مقارنة بالفترة السابقة"
+                : $"↓ {Math.Abs(change):F1}% مقارنة بالفترة السابقة";
+        }
+        else
+        {
+            _revenueChange = _revenue > 0 ? "نشاط جديد مقارنة بالفترة السابقة" : "لا توجد إيرادات في الفترة السابقة";
+        }
+
+        _openOpps = currentOpps.Count(o => !exitStages.Contains(o.StageId));
+        _prevOpenOpps = prevOpps.Count(o => !exitStages.Contains(o.StageId));
+
+        _openPipelineValue = currentOpps.Where(o => !exitStages.Contains(o.StageId)).Sum(o => o.ExpectedValue);
+        _prevOpenPipelineValue = prevOpps.Where(o => !exitStages.Contains(o.StageId)).Sum(o => o.ExpectedValue);
+
+        _closeRate = currentOpps.Count > 0 ? (double)currentOpps.Count(o => o.StageId == WonStageId) / currentOpps.Count * 100d : 0d;
+        _prevCloseRate = prevOpps.Count > 0 ? (double)prevOpps.Count(o => o.StageId == WonStageId) / prevOpps.Count * 100d : 0d;
+
+        _overdueFollowups = currentOpps.Count(o =>
+            o.NextFollowUpDate.HasValue &&
+            o.NextFollowUpDate.Value.Date < DateTime.Today &&
+            !exitStages.Contains(o.StageId));
+
+        _periodInteractions = _currentSnapshot.Interactions.Count;
+        _prevPeriodInteractions = _previousSnapshot.Interactions.Count;
+
+        _staleOpps = currentOpps.Count(o => !exitStages.Contains(o.StageId) && (o.LastContactDate == null || o.LastContactDate < staleCutoff));
+        _staleValue = currentOpps
+            .Where(o => !exitStages.Contains(o.StageId) && (o.LastContactDate == null || o.LastContactDate < staleCutoff))
+            .Sum(o => o.ExpectedValue);
+    }
+
+    private void BuildPipeline()
+    {
+        _stageRows = _currentSnapshot.Opportunities
+            .GroupBy(o => new { o.StageId, o.StageName, o.StageColor, o.StageOrder })
+            .Select(g =>
+            {
+                var count = g.Count();
+                var value = g.Sum(x => x.ExpectedValue);
+
+                return new StageSummaryRow
+                {
+                    StageId = g.Key.StageId,
+                    StageName = g.Key.StageName,
+                    StageColor = g.Key.StageColor,
+                    StageOrder = g.Key.StageOrder,
+                    Count = count,
+                    Value = value,
+                    Percent = _currentSnapshot.Opportunities.Count > 0
+                        ? (double)count / _currentSnapshot.Opportunities.Count * 100d
+                        : 0d,
+                    AvgValue = count > 0 ? value / count : 0m
+                };
+            })
+            .OrderBy(x => x.StageOrder)
+            .ThenBy(x => x.StageId)
+            .ToList();
+
+        _pipelinePoints = _stageRows
+            .Select(s => new PipelinePoint
+            {
+                Stage = s.StageName,
+                Count = s.Count,
+                Value = s.Value
+            })
+            .ToList();
+    }
+
+    private void BuildRevenueTrend()
+    {
+        _revenuePoints = BuildMonthRange(_fromDate!.Value.Date, _toDate!.Value.Date)
+            .Select(m =>
+            {
+                var monthEnd = m.AddMonths(1);
+                var value = _currentSnapshot.Opportunities
+                    .Where(o => o.StageId == WonStageId && o.CreatedAt >= m && o.CreatedAt < monthEnd)
+                    .Sum(o => o.ExpectedValue);
+
+                return new RevenueTrendPoint
+                {
+                    Month = m.ToString("yyyy/MM"),
+                    Value = value
+                };
+            })
+            .ToList();
+    }
+
+    private void BuildLeadTrend()
+    {
+        _leadPoints = BuildMonthRange(_fromDate!.Value.Date, _toDate!.Value.Date)
+            .Select(m =>
+            {
+                var monthEnd = m.AddMonths(1);
+                var leads = _currentSnapshot.Leads
+                    .Where(l => l.CreatedAt >= m && l.CreatedAt < monthEnd)
+                    .ToList();
+
+                return new LeadTrendPoint
+                {
+                    Month = m.ToString("yyyy/MM"),
+                    TotalLeads = leads.Count,
+                    ConvertedLeads = leads.Count(l => l.ConvertedOpportunityId.HasValue),
+                    WonLeads = leads.Count(l => l.ConvertedStageId == WonStageId)
+                };
+            })
+            .ToList();
+    }
+
+    private void BuildActivityTrend()
+    {
+        _activityPoints = BuildDayRange(_fromDate!.Value.Date, _toDate!.Value.Date)
+            .Select(d =>
+            {
+                var interactions = _currentSnapshot.Interactions.Count(i => i.InteractionDate.Date == d);
+                var opps = _currentSnapshot.Opportunities.Count(o => o.CreatedAt.Date == d);
+                var wins = _currentSnapshot.Opportunities.Count(o => o.CreatedAt.Date == d && o.StageId == WonStageId);
+                var tasks = _currentSnapshot.Tasks.Count(t => t.DueDate.Date == d);
+
+                return new ActivityPoint
+                {
+                    Label = d.ToString("MM/dd"),
+                    Interactions = interactions,
+                    NewOpps = opps,
+                    Won = wins,
+                    Tasks = tasks
+                };
+            })
+            .ToList();
+    }
+
+    private void BuildLostReasons()
+    {
+        _lostReasonPoints = _currentSnapshot.Opportunities
+            .Where(o => o.StageId == LostStageId1 || o.StageId == LostStageId2)
+            .GroupBy(o => string.IsNullOrWhiteSpace(o.LostReasonName) ? "غير محدد" : o.LostReasonName)
+            .Select(g => new LostReasonPoint
+            {
+                Reason = g.Key,
+                Count = g.Count()
+            })
+            .OrderByDescending(x => x.Count)
+            .Take(6)
+            .ToList();
+    }
+
+    private void BuildSources()
+    {
+        var sourceRows = _currentSnapshot.Opportunities
+            .GroupBy(o => string.IsNullOrWhiteSpace(o.SourceName) ? "غير محدد" : o.SourceName)
+            .Select(g => new
+            {
+                Source = g.Key,
+                Revenue = g.Where(x => x.StageId == WonStageId).Sum(x => x.ExpectedValue)
+            })
+            .OrderByDescending(x => x.Revenue)
+            .ToList();
+
+        _sourcePoints = sourceRows
+            .Take(6)
+            .Select(x => new SourcePoint
+            {
+                Source = x.Source,
+                Revenue = x.Revenue
+            })
+            .ToList();
+
+        _bestSource = sourceRows.FirstOrDefault()?.Source ?? "—";
+    }
+
+    private void BuildPerformersAndRecentWins()
+    {
+        _topPerformers = _currentSnapshot.Opportunities
+            .Where(o => o.StageId == WonStageId && !string.IsNullOrWhiteSpace(o.EmployeeName))
+            .GroupBy(o => o.EmployeeName)
+            .Select(g => new PerformerRow
+            {
+                EmployeeName = g.Key,
+                WonCount = g.Count(),
+                Revenue = g.Sum(x => x.ExpectedValue)
+            })
+            .OrderByDescending(x => x.Revenue)
+            .ThenByDescending(x => x.WonCount)
+            .Take(5)
+            .ToList();
+
+        for (int i = 0; i < _topPerformers.Count; i++)
+            _topPerformers[i].Rank = i + 1;
+
+        _bestPerformerName = _topPerformers.FirstOrDefault()?.EmployeeName ?? "—";
+
+        _recentWins = _currentSnapshot.Opportunities
+            .Where(o => o.StageId == WonStageId)
+            .OrderByDescending(o => o.CreatedAt)
+            .Take(5)
+            .Select(o => new RecentWinRow
+            {
+                ClientName = o.ClientName,
+                EmployeeName = o.EmployeeName,
+                Value = o.ExpectedValue,
+                CreatedAt = o.CreatedAt
+            })
+            .ToList();
+    }
+
+    private void BuildOperationalWidgets()
+    {
+        var exitStages = new[] { WonStageId, LostStageId1, LostStageId2 };
+        var staleCutoff = DateTime.Today.AddDays(-14);
+
+        _overdueRows = _currentSnapshot.Opportunities
+            .Where(o => !exitStages.Contains(o.StageId) && o.NextFollowUpDate.HasValue && o.NextFollowUpDate.Value.Date < DateTime.Today)
+            .Select(o => new OverdueMiniRow
+            {
+                ClientName = o.ClientName,
+                EmployeeName = o.EmployeeName,
+                DaysOverdue = (DateTime.Today - o.NextFollowUpDate!.Value.Date).Days,
+                Value = o.ExpectedValue
+            })
+            .OrderByDescending(x => x.DaysOverdue)
+            .ThenByDescending(x => x.Value)
+            .Take(5)
+            .ToList();
+
+        _staleRows = _currentSnapshot.Opportunities
+            .Where(o => !exitStages.Contains(o.StageId) && (o.LastContactDate == null || o.LastContactDate < staleCutoff))
+            .Select(o => new StaleMiniRow
+            {
+                ClientName = o.ClientName,
+                EmployeeName = o.EmployeeName,
+                DaysStale = o.LastContactDate.HasValue
+                    ? (DateTime.Today - o.LastContactDate.Value.Date).Days
+                    : (DateTime.Today - o.CreatedAt.Date).Days,
+                Value = o.ExpectedValue
+            })
+            .OrderByDescending(x => x.DaysStale)
+            .ThenByDescending(x => x.Value)
+            .Take(5)
+            .ToList();
+    }
+
+    private void BuildInsights()
+    {
+        _insights = new();
+
+        var topStage = _stageRows
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.Value)
+            .FirstOrDefault();
+
+        if (topStage != null)
+        {
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.AccountTree,
+                Title = "أكبر مرحلة",
+                Value = topStage.StageName,
+                Description = $"{topStage.Count} فرصة — {topStage.Percent:F1}% من الإجمالي",
+                ToneClass = "tone-indigo"
+            });
+        }
+
+        _insights.Add(new InsightItem
+        {
+            Icon = Icons.Material.Rounded.AttachMoney,
+            Title = "إيراد الفترة",
+            Value = FormatMoney(_revenue),
+            Description = _revenueChange,
+            ToneClass = "tone-green"
+        });
+
+        var topLossReason = _lostReasonPoints.FirstOrDefault();
+        if (topLossReason != null)
+        {
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.ReportProblem,
+                Title = "أكثر سبب خسارة",
+                Value = topLossReason.Reason,
+                Description = $"{topLossReason.Count} فرصة مفقودة",
+                ToneClass = "tone-red"
+            });
+        }
+
+        _insights.Add(new InsightItem
+        {
+            Icon = Icons.Material.Rounded.Campaign,
+            Title = "أفضل مصدر",
+            Value = _bestSource,
+            Description = $"أفضل مساهمة في الإيراد المحقق",
+            ToneClass = "tone-gold"
+        });
+
+        while (_insights.Count < 4)
+        {
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.Insights,
+                Title = "معلومة",
+                Value = "—",
+                Description = "لا توجد بيانات كافية لهذا المؤشر",
+                ToneClass = "tone-slate"
+            });
+        }
+    }
+
+    private void ResolveSelectedStage()
+    {
+        var validStageIds = _stageRows.Select(x => x.StageId).Distinct().ToList();
+
+        if (!validStageIds.Any())
+        {
+            _selectedStageId = null;
+            return;
+        }
+
+        if (_selectedStageId.HasValue && validStageIds.Contains(_selectedStageId.Value))
+            return;
+
+        var preferred = _stageRows
+            .Where(x => x.StageId != WonStageId && x.StageId != LostStageId1 && x.StageId != LostStageId2)
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.Value)
+            .FirstOrDefault();
+
+        _selectedStageId = preferred?.StageId ?? validStageIds.First();
+    }
+
+    private void BuildSelectedStageAnalytics()
+    {
+        _selectedStageName = "—";
+        _selectedStageCount = 0;
+        _selectedStageValue = 0m;
+        _selectedStagePercent = 0d;
+        _selectedStageAvgValue = 0m;
+        _selectedStageTopEmployee = "—";
+        _selectedStageEmployeePoints = new();
+        _selectedStageDealPoints = new();
+
+        if (!_selectedStageId.HasValue)
+            return;
+
+        var rows = _currentSnapshot.Opportunities
+            .Where(o => o.StageId == _selectedStageId.Value)
+            .ToList();
+
+        if (!rows.Any())
+            return;
+
+        var summary = _stageRows.FirstOrDefault(x => x.StageId == _selectedStageId.Value);
+
+        _selectedStageName = summary?.StageName ?? rows.First().StageName;
+        _selectedStageCount = rows.Count;
+        _selectedStageValue = rows.Sum(x => x.ExpectedValue);
+        _selectedStagePercent = _currentSnapshot.Opportunities.Count > 0
+            ? (double)_selectedStageCount / _currentSnapshot.Opportunities.Count * 100d
+            : 0d;
+        _selectedStageAvgValue = _selectedStageCount > 0 ? _selectedStageValue / _selectedStageCount : 0m;
+
+        var topEmployee = rows
+            .GroupBy(x => x.EmployeeName)
+            .Select(g => new
+            {
+                Employee = g.Key,
+                Count = g.Count(),
+                Value = g.Sum(x => x.ExpectedValue)
+            })
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.Value)
+            .FirstOrDefault();
+
+        _selectedStageTopEmployee = topEmployee?.Employee ?? "—";
+
+        _selectedStageEmployeePoints = rows
+            .GroupBy(x => x.EmployeeName)
+            .Select(g => new StageEmployeePoint
+            {
+                Employee = g.Key,
+                Count = g.Count(),
+                Value = g.Sum(x => x.ExpectedValue)
+            })
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.Value)
+            .Take(8)
+            .ToList();
+
+        _selectedStageDealPoints = rows
+            .OrderByDescending(x => x.ExpectedValue)
+            .ThenByDescending(x => x.CreatedAt)
+            .Take(8)
+            .Select(x => new StageDealPoint
+            {
+                ClientName = x.ClientName,
+                Value = x.ExpectedValue
+            })
+            .ToList();
+    }
+
+    private void SelectStage(int stageId)
+    {
+        _selectedStageId = _selectedStageId == stageId ? null : stageId;
+        BuildSelectedStageAnalytics();
+        StateHasChanged();
+    }
+
+    private void ClearSelectedStage()
+    {
+        _selectedStageId = null;
+        BuildSelectedStageAnalytics();
+        StateHasChanged();
+    }
+
+    private bool IsSelectedStage(int stageId)
+        => _selectedStageId.HasValue && _selectedStageId.Value == stageId;
+
+    private async Task ExportCsvAsync()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("لوحة تحكم CRM");
+            sb.AppendLine($"الفترة الحالية,{SelectedPeriodLabel}");
+            sb.AppendLine($"الفترة السابقة,{PreviousPeriodLabel}");
+            sb.AppendLine($"الموظف,{SelectedEmployeeLabel}");
+            sb.AppendLine();
+
+            sb.AppendLine("المؤشرات الرئيسية");
+            sb.AppendLine("المؤشر,القيمة");
+            sb.AppendLine($"إجمالي الإيرادات,{_revenue:N0}");
+            sb.AppendLine($"فرص مفتوحة,{_openOpps}");
+            sb.AppendLine($"قيمة الـ Pipeline المفتوح,{_openPipelineValue:N0}");
+            sb.AppendLine($"معدل الإغلاق,{_closeRate:F1}%");
+            sb.AppendLine($"متابعات متأخرة,{_overdueFollowups}");
+            sb.AppendLine($"تفاعلات الفترة,{_periodInteractions}");
+            sb.AppendLine($"فرص راكدة,{_staleOpps}");
+            sb.AppendLine($"قيمة الفرص الراكدة,{_staleValue:N0}");
+            sb.AppendLine();
+
+            sb.AppendLine("خط المبيعات");
+            sb.AppendLine("المرحلة,عدد الفرص,القيمة");
+            foreach (var row in _stageRows)
+            {
+                sb.AppendLine($"{row.StageName},{row.Count},{row.Value:N0}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("أفضل مندوبي الفترة");
+            sb.AppendLine("الترتيب,الموظف,المبيعات,الإيرادات");
+            foreach (var row in _topPerformers)
+            {
+                sb.AppendLine($"{row.Rank},{row.EmployeeName},{row.WonCount},{row.Revenue:N0}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("آخر المبيعات");
+            sb.AppendLine("العميل,الموظف,القيمة,التاريخ");
+            foreach (var row in _recentWins)
+            {
+                sb.AppendLine($"{row.ClientName},{row.EmployeeName},{row.Value:N0},{FDate(row.CreatedAt)}");
+            }
+
+            var csv = sb.ToString();
+            var fileName = $"crm-dashboard-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+            var dataUrl = "data:text/csv;charset=utf-8,\uFEFF" + Uri.EscapeDataString(csv);
+
+            var script = $@"
+                (function() {{
+                    const link = document.createElement('a');
+                    link.href = '{dataUrl}';
+                    link.download = '{fileName}';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }})();";
+
+            await JS.InvokeVoidAsync("eval", script);
+            Snackbar.Add("تم تصدير الملف بنجاح. يمكنك فتحه مباشرة في Excel.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تصدير الملف: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval", "window.print()");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تشغيل الطباعة: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string BuildReportUrl(string baseUrl, string? extraQuery = null)
+    {
+        var parts = new List<string>();
+
+        if (_fromDate.HasValue)
+            parts.Add($"fromDate={Uri.EscapeDataString(_fromDate.Value.ToString("yyyy-MM-dd"))}");
+
+        if (_toDate.HasValue)
+            parts.Add($"toDate={Uri.EscapeDataString(_toDate.Value.ToString("yyyy-MM-dd"))}");
+
+        if (_empId.HasValue)
+            parts.Add($"empId={_empId.Value}");
+
+        if (!string.IsNullOrWhiteSpace(extraQuery))
+            parts.Add(extraQuery);
+
+        return parts.Count == 0
+            ? baseUrl
+            : $"{baseUrl}?{string.Join("&", parts)}";
+    }
+
+    private bool TryGetPreviousRange(out DateTime previousFrom, out DateTime previousTo)
+    {
+        previousFrom = default;
+        previousTo = default;
+
+        if (!_fromDate.HasValue || !_toDate.HasValue)
+            return false;
+
+        var currentFrom = _fromDate.Value.Date;
+        var currentTo = _toDate.Value.Date;
+        var days = (currentTo - currentFrom).Days;
+
+        previousTo = currentFrom.AddDays(-1);
+        previousFrom = previousTo.AddDays(-days);
+
+        return true;
+    }
+
+    private void NormalizeDateRange()
+    {
+        if (_fromDate.HasValue && _toDate.HasValue && _fromDate.Value.Date > _toDate.Value.Date)
+        {
+            var temp = _fromDate;
+            _fromDate = _toDate;
+            _toDate = temp;
+
+            Snackbar.Add("تم تبديل تاريخ البداية والنهاية تلقائيًا لأن البداية كانت أكبر من النهاية.", Severity.Info);
+        }
+    }
+
+    private List<DateTime> BuildMonthRange(DateTime from, DateTime to)
+    {
+        var start = new DateTime(from.Year, from.Month, 1);
+        var end = new DateTime(to.Year, to.Month, 1);
+
+        var result = new List<DateTime>();
+        for (var m = start; m <= end; m = m.AddMonths(1))
+            result.Add(m);
+
+        return result;
+    }
+
+    private List<DateTime> BuildDayRange(DateTime from, DateTime to)
+    {
+        var result = new List<DateTime>();
+        for (var d = from; d <= to; d = d.AddDays(1))
+            result.Add(d);
+        return result;
+    }
+
+    private string FormatMoney(decimal value) => $"{value:N0} ج.م";
+
+    private string GetSummaryRingStyle()
+    {
+        var safeRate = Math.Max(0, Math.Min(_closeRate, 100));
+        var angle = safeRate * 3.6;
+        return $"background: conic-gradient(#10b981 0deg, #10b981 {angle:F1}deg, rgba(255,255,255,.12) {angle:F1}deg, rgba(255,255,255,.12) 360deg);";
+    }
+
+    private string GetTrendClass(int current, int previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(double current, double previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(decimal current, decimal previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendText(int current, int previous)
+    {
+        if (previous == 0)
+            return current == 0 ? "0%" : "جديد";
+
+        var change = ((double)(current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(double current, double previous)
+    {
+        if (Math.Abs(previous) < 0.000001)
+            return Math.Abs(current) < 0.000001 ? "0%" : "جديد";
+
+        var change = ((current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(decimal current, decimal previous)
+    {
+        if (previous == 0m)
+            return current == 0m ? "0%" : "جديد";
+
+        var change = (double)((current - previous) / previous * 100m);
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string FDate(DateTime? dt)
+        => dt.HasValue ? dt.Value.ToString("dd MMM yyyy", _arCulture) : "—";
+
+    private void GoBack() => Navigation.NavigateTo("/crm/reports");
+
+    private sealed class EmployeeItem
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    private sealed class DashboardSnapshot
+    {
+        public List<DashboardOpportunityRow> Opportunities { get; set; } = new();
+        public List<DashboardInteractionRow> Interactions { get; set; } = new();
+        public List<DashboardTaskRow> Tasks { get; set; } = new();
+        public List<DashboardLeadRow> Leads { get; set; } = new();
+    }
+
+    private sealed class DashboardOpportunityRow
+    {
+        public int OpportunityId { get; set; }
+        public string ClientName { get; set; } = "";
+        public int EmployeeId { get; set; }
+        public string EmployeeName { get; set; } = "";
+        public int StageId { get; set; }
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+        public int StageOrder { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? LastContactDate { get; set; }
+        public DateTime? NextFollowUpDate { get; set; }
+        public decimal ExpectedValue { get; set; }
+        public double DaysSinceFirstContact { get; set; }
+        public string SourceName { get; set; } = "";
+        public string LostReasonName { get; set; } = "";
+    }
+
+    private sealed class DashboardInteractionRow
+    {
+        public int OpportunityId { get; set; }
+        public DateTime InteractionDate { get; set; }
+    }
+
+    private sealed class DashboardTaskRow
+    {
+        public DateTime DueDate { get; set; }
+    }
+
+    private sealed class LeadBaseRow
+    {
+        public DateTime CreatedAt { get; set; }
+        public int? ConvertedOpportunityId { get; set; }
+    }
+
+    private sealed class ConvertedLeadOpportunityRow
+    {
+        public int OpportunityId { get; set; }
+        public int StageId { get; set; }
+        public decimal ExpectedValue { get; set; }
+    }
+
+    private sealed class DashboardLeadRow
+    {
+        public DateTime CreatedAt { get; set; }
+        public int? ConvertedOpportunityId { get; set; }
+        public int? ConvertedStageId { get; set; }
+        public decimal ConvertedValue { get; set; }
+    }
+
+    private sealed class StageSummaryRow
+    {
+        public int StageId { get; set; }
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+        public int StageOrder { get; set; }
+        public int Count { get; set; }
+        public decimal Value { get; set; }
+        public double Percent { get; set; }
+        public decimal AvgValue { get; set; }
+    }
+
+    private sealed class PipelinePoint
+    {
+        public string Stage { get; set; } = "";
+        public decimal Count { get; set; }
+        public decimal Value { get; set; }
+    }
+
+    private sealed class RevenueTrendPoint
+    {
+        public string Month { get; set; } = "";
+        public decimal Value { get; set; }
+    }
+
+    private sealed class LeadTrendPoint
+    {
+        public string Month { get; set; } = "";
+        public decimal TotalLeads { get; set; }
+        public decimal ConvertedLeads { get; set; }
+        public decimal WonLeads { get; set; }
+    }
+
+    private sealed class ActivityPoint
+    {
+        public string Label { get; set; } = "";
+        public decimal Interactions { get; set; }
+        public decimal NewOpps { get; set; }
+        public decimal Won { get; set; }
+        public decimal Tasks { get; set; }
+    }
+
+    private sealed class LostReasonPoint
+    {
+        public string Reason { get; set; } = "";
+        public decimal Count { get; set; }
+    }
+
+    private sealed class SourcePoint
+    {
+        public string Source { get; set; } = "";
+        public decimal Revenue { get; set; }
+    }
+
+    private sealed class StageEmployeePoint
+    {
+        public string Employee { get; set; } = "";
+        public decimal Count { get; set; }
+        public decimal Value { get; set; }
+    }
+
+    private sealed class StageDealPoint
+    {
+        public string ClientName { get; set; } = "";
+        public decimal Value { get; set; }
+    }
+
+    private sealed class OverdueMiniRow
+    {
+        public string ClientName { get; set; } = "";
+        public string EmployeeName { get; set; } = "";
+        public int DaysOverdue { get; set; }
+        public decimal Value { get; set; }
+    }
+
+    private sealed class StaleMiniRow
+    {
+        public string ClientName { get; set; } = "";
+        public string EmployeeName { get; set; } = "";
+        public int DaysStale { get; set; }
+        public decimal Value { get; set; }
+    }
+
+    public class PerformerRow
+    {
+        public int Rank { get; set; }
+        public string EmployeeName { get; set; } = "";
+        public int WonCount { get; set; }
+        public decimal Revenue { get; set; }
+    }
+
+    public class RecentWinRow
+    {
+        public string ClientName { get; set; } = "";
+        public string EmployeeName { get; set; } = "";
+        public decimal Value { get; set; }
+        public DateTime CreatedAt { get; set; }
+    }
+
+    private sealed class InsightItem
+    {
+        public string Icon { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Value { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string ToneClass { get; set; } = "";
+    }
+}
+<style>
+    .crmx-page {
+        --text: #0f172a;
+        --muted: #64748b;
+        --line: rgba(148,163,184,.16);
+        --glass: rgba(255,255,255,.72);
+        --shadow: 0 20px 50px rgba(15,23,42,.06);
+        max-width: 1480px;
+        margin: 0 auto;
+        padding: 1.25rem 1.25rem 3rem;
+        position: relative;
+        min-height: 100vh;
+    }
+
+    .crmx-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+    }
+
+    .crmx-orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(120px);
+        opacity: .16;
+    }
+
+    .orb-1 {
+        width: 420px;
+        height: 420px;
+        background: #6366f1;
+        top: -120px;
+        right: -120px;
+        animation: crmxFloat 12s ease-in-out infinite;
+    }
+
+    .orb-2 {
+        width: 360px;
+        height: 360px;
+        background: #10b981;
+        bottom: -80px;
+        left: -80px;
+        animation: crmxFloat 18s ease-in-out infinite reverse;
+    }
+
+    .orb-3 {
+        width: 280px;
+        height: 280px;
+        background: #f59e0b;
+        top: 30%;
+        left: 45%;
+        animation: crmxFloat 16s ease-in-out infinite;
+    }
+
+    @@keyframes crmxFloat {
+        0%,100% { transform: translate(0,0) scale(1); }
+        50% { transform: translate(20px,-20px) scale(1.08); }
+    }
+
+    .glass-card {
+        position: relative;
+        z-index: 1;
+        background: var(--glass);
+        backdrop-filter: blur(20px) saturate(1.5);
+        -webkit-backdrop-filter: blur(20px) saturate(1.5);
+        border: 1px solid rgba(255,255,255,.48);
+        box-shadow: var(--shadow);
+        border-radius: 1.35rem;
+    }
+
+    .glass-inner-card {
+        background: rgba(255,255,255,.45);
+        border: 1px solid rgba(255,255,255,.4);
+        border-radius: 1.2rem;
+        padding: 1rem;
+    }
+
+    .crmx-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1.8rem;
+        margin-bottom: 1.25rem;
+        background: linear-gradient(135deg, #0f172a 0%, #312e81 45%, #4338ca 100%);
+        padding: 2rem;
+        color: #fff;
+        z-index: 1;
+    }
+
+    .crmx-hero-grid {
+        position: absolute;
+        inset: 0;
+        background-image:
+            linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+        background-size: 50px 50px;
+        -webkit-mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
+        mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
+        pointer-events: none;
+    }
+
+    .crmx-hero-content {
+        position: relative;
+        z-index: 2;
+    }
+
+    .crmx-hero-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+
+    .crmx-back {
+        width: 2.6rem;
+        height: 2.6rem;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08);
+        color: #fff;
+        border-radius: .9rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: .25s ease;
+        backdrop-filter: blur(10px);
+    }
+
+    .crmx-back:hover {
+        transform: translateX(-3px);
+        background: rgba(255,255,255,.15);
+    }
+
+    .crmx-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: .5rem;
+        padding: .45rem .9rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,.1);
+        border: 1px solid rgba(255,255,255,.16);
+        color: #dbeafe;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .badge-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #93c5fd;
+        box-shadow: 0 0 12px #93c5fd;
+        animation: badgePulse 2s infinite;
+    }
+
+    @@keyframes badgePulse {
+        0%,100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.35); opacity: .6; }
+    }
+
+    .crmx-hero-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 2rem;
+    }
+
+    .crmx-hero-text {
+        flex: 1;
+    }
+
+    .crmx-hero-text h1 {
+        margin: 0 0 .6rem;
+        font-size: 2.5rem;
+        font-weight: 800;
+        letter-spacing: normal;
+    }
+
+    .crmx-hero-text h1 span {
+        color: #c4b5fd;
+    }
+
+    .crmx-hero-text p {
+        margin: 0 0 1rem;
+        color: rgba(255,255,255,.76);
+        max-width: 760px;
+        line-height: 1.8;
+    }
+
+    .crmx-hero-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .75rem;
+    }
+
+    .hero-chip {
+        display: flex;
+        flex-direction: column;
+        gap: .15rem;
+        padding: .85rem 1rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.08);
+        border: 1px solid rgba(255,255,255,.12);
+        min-width: 220px;
+    }
+
+    .chip-label {
+        font-size: .72rem;
+        color: rgba(255,255,255,.6);
+    }
+
+    .chip-value {
+        font-size: .85rem;
+        font-weight: 700;
+        color: #fff;
+    }
+
+    .summary-ring {
+        width: 170px;
+        height: 170px;
+        border-radius: 50%;
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: inset 0 0 30px rgba(255,255,255,.08);
+    }
+
+    .summary-ring-inner {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgba(15,23,42,.92);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .summary-percent {
+        font-size: 2rem;
+        font-weight: 800;
+        line-height: 1;
+        color: #fff;
+    }
+
+    .summary-caption {
+        margin-top: .35rem;
+        font-size: .78rem;
+        color: rgba(255,255,255,.62);
+    }
+
+    .crmx-filters {
+        padding: 1.15rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .filters-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .filters-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .filters-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .83rem;
+    }
+
+    .filters-actions {
+        display: flex;
+        gap: .65rem;
+        flex-wrap: wrap;
+    }
+
+    .quick-range-row {
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .quick-range-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .85rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .quick-range-btn:hover {
+        background: rgba(99,102,241,.08);
+        color: #4f46e5;
+        border-color: rgba(99,102,241,.22);
+    }
+
+    .filters-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(180px, 1fr));
+        gap: .9rem;
+    }
+
+    .filter-field {
+        background: rgba(255,255,255,.55);
+        border-radius: .9rem;
+    }
+
+    .crmx-loading {
+        min-height: 320px;
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        text-align: center;
+        padding: 2rem;
+    }
+
+    .loading-text h3 {
+        margin: 0 0 .35rem;
+        font-size: 1rem;
+        color: var(--text);
+    }
+
+    .loading-text p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .crmx-content {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .crmx-kpis {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+    }
+
+    .kpi-card {
+        padding: 1.1rem;
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+    }
+
+    .kpi-icon {
+        width: 3rem;
+        height: 3rem;
+        border-radius: .95rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.15rem;
+        font-weight: 700;
+        flex-shrink: 0;
+    }
+
+    .kpi-icon.green { background: rgba(16,185,129,.12); color: #10b981; }
+    .kpi-icon.blue { background: rgba(59,130,246,.12); color: #2563eb; }
+    .kpi-icon.purple { background: rgba(124,58,237,.12); color: #7c3aed; }
+    .kpi-icon.red { background: rgba(239,68,68,.12); color: #ef4444; }
+    .kpi-icon.orange { background: rgba(249,115,22,.12); color: #f97316; }
+    .kpi-icon.amber { background: rgba(217,119,6,.12); color: #d97706; }
+
+    .kpi-body { flex: 1; min-width: 0; }
+    .kpi-head-row {
+        display: flex;
+        justify-content: space-between;
+        gap: .5rem;
+        align-items: center;
+        margin-bottom: .35rem;
+    }
+    .kpi-label { color: var(--muted); font-size: .8rem; margin-bottom: .2rem; }
+    .kpi-value { color: var(--text); font-size: 1.45rem; font-weight: 800; line-height: 1.2; margin-bottom: .35rem; }
+    .kpi-sub { color: var(--muted); font-size: .76rem; line-height: 1.5; }
+
+    .trend-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .2rem .55rem;
+        font-size: .68rem;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .trend-up { background: rgba(16,185,129,.12); color: #059669; }
+    .trend-down { background: rgba(239,68,68,.12); color: #dc2626; }
+    .trend-flat { background: rgba(148,163,184,.14); color: #475569; }
+
+    .crmx-insights {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+    }
+
+    .insight-card {
+        padding: 1rem;
+        display: flex;
+        gap: .85rem;
+        align-items: flex-start;
+    }
+
+    .insight-icon {
+        width: 2.6rem;
+        height: 2.6rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .tone-gold { background: rgba(245,158,11,.12); color: #d97706; }
+    .tone-green { background: rgba(16,185,129,.12); color: #059669; }
+    .tone-red { background: rgba(239,68,68,.12); color: #dc2626; }
+    .tone-indigo { background: rgba(99,102,241,.12); color: #4f46e5; }
+    .tone-slate { background: rgba(148,163,184,.14); color: #475569; }
+
+    .insight-body { min-width: 0; flex: 1; }
+    .insight-title { color: var(--muted); font-size: .75rem; margin-bottom: .2rem; }
+    .insight-value { color: var(--text); font-size: 1rem; font-weight: 800; margin-bottom: .25rem; }
+    .insight-desc { color: var(--muted); font-size: .74rem; line-height: 1.45; }
+
+    .crmx-charts-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+    }
+
+    .crmx-secondary-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+    }
+
+    .crmx-ops-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+    }
+
+    .chart-card-large,
+    .chart-card,
+    .table-card,
+    .quick-links-card,
+    .crmx-drill {
+        padding: 1rem;
+    }
+
+    .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: .75rem;
+    }
+
+    .card-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .card-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .chart-empty {
+        min-height: 260px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: .88rem;
+    }
+
+    .chart-empty.small {
+        min-height: 180px;
+    }
+
+    .compact-table .mud-table-cell {
+        padding: .5rem .75rem !important;
+    }
+
+    .rank-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        font-size: .875rem;
+        font-weight: 700;
+    }
+
+    .rank-gold { background: #fef3c7; }
+
+    .drill-head {
+        align-items: center;
+    }
+
+    .drill-head-actions {
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+    }
+
+    .stage-chip-row {
+        display: flex;
+        gap: .55rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .stage-chip-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.55);
+        color: var(--text);
+        border-radius: 1rem;
+        padding: .55rem .8rem;
+        min-width: 120px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: .1rem;
+        cursor: pointer;
+        transition: .2s ease;
+        font-weight: 700;
+    }
+
+    .stage-chip-btn small {
+        color: var(--muted);
+        font-size: .7rem;
+        font-weight: 700;
+    }
+
+    .stage-chip-btn:hover {
+        border-color: rgba(79,70,229,.25);
+        background: rgba(99,102,241,.06);
+        color: #4f46e5;
+    }
+
+    .stage-chip-active {
+        background: linear-gradient(135deg, #6366f1, #4f46e5);
+        color: #fff;
+        border-color: transparent;
+        box-shadow: 0 10px 20px rgba(99,102,241,.22);
+    }
+
+    .stage-chip-active small { color: rgba(255,255,255,.85); }
+
+    .drill-mini-kpis {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+
+    .mini-kpi {
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+        border-radius: 1rem;
+        padding: .85rem;
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+    }
+
+    .mini-label { font-size: .72rem; color: var(--muted); }
+    .mini-kpi strong { color: var(--text); font-size: .92rem; }
+
+    .drill-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 1rem;
+    }
+
+    .quick-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .75rem;
+    }
+
+    .quick-links .mud-button {
+        flex: 0 0 auto;
+    }
+
+    @@media (max-width: 1200px) {
+        .crmx-insights,
+        .crmx-kpis,
+        .crmx-secondary-grid,
+        .drill-mini-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .crmx-charts-grid,
+        .crmx-ops-grid,
+        .drill-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @@media (max-width: 768px) {
+        .crmx-page { padding: .9rem .9rem 2rem; }
+        .crmx-hero { padding: 1.25rem; border-radius: 1.2rem; }
+        .crmx-hero-main { flex-direction: column; align-items: flex-start; }
+        .crmx-hero-text h1 { font-size: 1.8rem; }
+        .summary-ring { width: 140px; height: 140px; }
+        .hero-chip { min-width: 100%; }
+        .crmx-kpis,
+        .crmx-insights,
+        .crmx-secondary-grid,
+        .drill-mini-kpis {
+            grid-template-columns: 1fr;
+        }
+        .filters-grid { grid-template-columns: 1fr; }
+    }
+
+    .mud-theme-dark .glass-card,
+    .mud-theme-dark .mini-kpi,
+    .mud-theme-dark .glass-inner-card {
+        background: rgba(17,24,39,.66);
+        border-color: rgba(255,255,255,.06);
+        box-shadow: 0 20px 50px rgba(0,0,0,.22);
+    }
+
+    .mud-theme-dark .card-head h3,
+    .mud-theme-dark .kpi-value,
+    .mud-theme-dark .insight-value,
+    .mud-theme-dark .loading-text h3,
+    .mud-theme-dark .mini-kpi strong {
+        color: #f8fafc;
+    }
+
+    .mud-theme-dark .card-head p,
+    .mud-theme-dark .kpi-label,
+    .mud-theme-dark .kpi-sub,
+    .mud-theme-dark .insight-title,
+    .mud-theme-dark .insight-desc,
+    .mud-theme-dark .loading-text p,
+    .mud-theme-dark .mini-label,
+    .mud-theme-dark .filters-head p {
+        color: #94a3b8;
+    }
+
+    @@media print {
+        .crmx-bg,
+        .crmx-back,
+        .quick-links-card,
+        .filters-actions,
+        .quick-range-row,
+        .drill-head-actions {
+            display: none !important;
+        }
+
+        .glass-card,
+        .glass-inner-card,
+        .mini-kpi {
+            box-shadow: none !important;
+            border: 1px solid #ddd !important;
+            background: #fff !important;
+        }
+
+        .crmx-page {
+            max-width: 100% !important;
+            padding: 0 !important;
+        }
+    }
+</style>

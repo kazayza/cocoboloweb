@@ -18,15 +18,15 @@ public static class ShiftTypes
 
     public static readonly Dictionary<string, TimeSpan> DefaultStartTimes = new()
     {
-        { Morning, new TimeSpan(8, 0, 0) },
-        { Evening, new TimeSpan(16, 0, 0) },
+        { Morning, new TimeSpan(10, 0, 0) },
+        { Evening, new TimeSpan(14, 0, 0) },
         { DailyWork, new TimeSpan(9, 0, 0) }
     };
 
     public static readonly Dictionary<string, TimeSpan> DefaultEndTimes = new()
     {
-        { Morning, new TimeSpan(16, 0, 0) },
-        { Evening, new TimeSpan(0, 0, 0) },
+        { Morning, new TimeSpan(18, 0, 0) },
+        { Evening, new TimeSpan(22, 0, 0) },
         { DailyWork, new TimeSpan(17, 0, 0) }
     };
 
@@ -105,8 +105,8 @@ public class EmployeeShiftFormDto
     public int? EmployeeId { get; set; }
     public int? BiometricCode { get; set; }
     public string ShiftType { get; set; } = ShiftTypes.Morning;
-    public TimeOnly StartTime { get; set; } = new(8, 0);
-    public TimeOnly EndTime { get; set; } = new(16, 0);
+    public TimeOnly StartTime { get; set; } = new(10, 0);
+    public TimeOnly EndTime { get; set; } = new(18, 0);
     public DateTime EffectiveFrom { get; set; } = DateTime.Today;
     public DateTime? EffectiveTo { get; set; }
     public byte? OffDay1 { get; set; }

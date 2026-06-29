@@ -1,0 +1,2808 @@
+@page "/crm/reports/source-roi"
+
+@using System.Globalization
+@using System.Text
+@using ApexCharts
+@using COCOBOLOERPNEW.Models
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>تقرير مصادر العملاء</PageTitle>
+
+<div class="srcx-page" dir="rtl">
+
+    @* Background *@
+    <div class="srcx-bg">
+        <div class="srcx-orb orb-1"></div>
+        <div class="srcx-orb orb-2"></div>
+        <div class="srcx-orb orb-3"></div>
+    </div>
+
+    @* HERO *@
+    <section class="srcx-hero">
+        <div class="srcx-hero-grid"></div>
+
+        <div class="srcx-hero-content">
+            <div class="srcx-hero-top">
+                <button class="srcx-back" @onclick="GoBack" title="رجوع">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12h14" />
+                        <path d="m12 5 7 7-7 7" />
+                    </svg>
+                </button>
+
+                <div class="srcx-badge">
+                    <span class="badge-dot"></span>
+                    <span>Source Performance Intelligence</span>
+                </div>
+            </div>
+
+            <div class="srcx-hero-main">
+                <div class="srcx-hero-text">
+                    <h1>مصادر <span>العملاء</span> وفعالية التحويل</h1>
+                    <p>
+                        لوحة تنفيذية لتحليل أداء مصادر العملاء من حيث حجم الفرص،
+                        نسب الإغلاق، الإيرادات، وقيمة الـ Pipeline المفتوح، مع Drill-down تفصيلي لكل مصدر.
+                    </p>
+
+                    <div class="srcx-hero-chips">
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة الحالية</span>
+                            <span class="chip-value">@SelectedPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة السابقة</span>
+                            <span class="chip-value">@PreviousPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">أفضل مصدر</span>
+                            <span class="chip-value">@_bestSource</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">أعلى مصدر تحويلاً</span>
+                            <span class="chip-value">@_topConversionSource</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="srcx-hero-side">
+                    <div class="summary-ring" style="@GetSummaryRingStyle()">
+                        <div class="summary-ring-inner">
+                            <div class="summary-percent">@_bestSourceRevenueShare.ToString("F1")%</div>
+                            <div class="summary-caption">مساهمة أفضل مصدر</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @* FILTERS / ACTIONS *@
+    <section class="glass-card srcx-filters">
+        <div class="filters-head">
+            <div>
+                <h3>الفلاتر والتحكم</h3>
+                <p>اختر الفترة الزمنية أو استخدم الفترات السريعة لتحليل أداء المصادر</p>
+            </div>
+
+            <div class="filters-actions">
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Default"
+                           StartIcon="@Icons.Material.Rounded.RestartAlt"
+                           OnClick="ResetFiltersAsync"
+                           Disabled="_isLoading">
+                    إعادة ضبط
+                </MudButton>
+
+                <MudButton Variant="Variant.Filled"
+                           Color="@MudColor.Primary"
+                           StartIcon="@Icons.Material.Rounded.FilterAlt"
+                           OnClick="LoadData"
+                           Disabled="_isLoading">
+                    تطبيق التحليل
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Success"
+                           StartIcon="@Icons.Material.Rounded.FileDownload"
+                           OnClick="ExportCsvAsync"
+                           Disabled="_isLoading">
+                    تصدير CSV
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Info"
+                           StartIcon="@Icons.Material.Rounded.Print"
+                           OnClick="PrintAsync"
+                           Disabled="_isLoading">
+                    طباعة / PDF
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="quick-range-row">
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(3)">آخر 3 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(6)">آخر 6 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(12)">آخر 12 شهر</button>
+            <button class="quick-range-btn" @onclick="SetCurrentYearAsync">السنة الحالية</button>
+        </div>
+
+        <div class="filters-grid">
+            <MudDatePicker @bind-Date="_fromDate"
+                           Label="من تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudDatePicker @bind-Date="_toDate"
+                           Label="إلى تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+        </div>
+    </section>
+
+    @if (_isLoading)
+    {
+        <div class="glass-card srcx-loading">
+            <MudProgressCircular Indeterminate="true"
+                                 Size="@MudSize.Large"
+                                 Color="@MudColor.Primary" />
+            <div class="loading-text">
+                <h3>جاري تحليل المصادر...</h3>
+                <p>يتم تجهيز المؤشرات والرسوم البيانية وتحليل فعالية المصادر</p>
+            </div>
+        </div>
+    }
+    else
+    {
+        @* KPI *@
+        <section class="srcx-kpis">
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon indigo">◎</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">عدد المصادر النشطة</div>
+                        <span class="trend-badge @GetTrendClass(_activeSourceCount, _prevActiveSourceCount)">
+                            @GetTrendText(_activeSourceCount, _prevActiveSourceCount)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_activeSourceCount.ToString("N0")</div>
+                    <div class="kpi-sub">المصادر التي لديها فرص خلال الفترة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon blue">#</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">إجمالي الفرص</div>
+                        <span class="trend-badge @GetTrendClass(_totalOpps, _prevTotalOpps)">
+                            @GetTrendText(_totalOpps, _prevTotalOpps)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_totalOpps.ToString("N0")</div>
+                    <div class="kpi-sub">كل الفرص القادمة من مختلف المصادر</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon green">₪</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">إجمالي الإيرادات المحققة</div>
+                        <span class="trend-badge @GetTrendClass(_totalRevenue, _prevTotalRevenue)">
+                            @GetTrendText(_totalRevenue, _prevTotalRevenue)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@FormatMoney(_totalRevenue)</div>
+                    <div class="kpi-sub">من الصفقات الرابحة فقط</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon teal">💼</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">Pipeline مفتوح</div>
+                        <span class="trend-badge @GetTrendClass(_openPipelineValue, _prevOpenPipelineValue)">
+                            @GetTrendText(_openPipelineValue, _prevOpenPipelineValue)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@FormatMoney(_openPipelineValue)</div>
+                    <div class="kpi-sub">قيمة الفرص المفتوحة من جميع المصادر</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon purple">★</div>
+                <div class="kpi-body">
+                    <div class="kpi-label">أفضل مصدر</div>
+                    <div class="kpi-value kpi-name">@_bestSource</div>
+                    <div class="kpi-sub">@FormatMoney(_bestSourceRevenue) — @_bestSourceRevenueShare.ToString("F1")% من الإيراد</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon amber">%</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">معدل الإغلاق الكلي</div>
+                        <span class="trend-badge @GetTrendClass(_overallCloseRate, _prevOverallCloseRate)">
+                            @GetTrendText(_overallCloseRate, _prevOverallCloseRate)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_overallCloseRate.ToString("F1")%</div>
+                    <div class="kpi-progress">
+                        <div class="kpi-progress-bar" style="@GetCloseRateProgressStyle()"></div>
+                    </div>
+                    <div class="kpi-sub">تم البيع ÷ إجمالي الفرص × 100</div>
+                </div>
+            </div>
+        </section>
+
+        @* INSIGHTS *@
+        <section class="srcx-insights">
+            @foreach (var insight in _insights)
+            {
+                <div class="glass-card insight-card">
+                    <div class="insight-icon @insight.ToneClass">
+                        <MudIcon Icon="@insight.Icon" Size="@MudSize.Small" />
+                    </div>
+                    <div class="insight-body">
+                        <div class="insight-title">@insight.Title</div>
+                        <div class="insight-value">@insight.Value</div>
+                        <div class="insight-desc">@insight.Description</div>
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* MAIN DASHBOARD *@
+        <section class="srcx-dashboard">
+            <div class="glass-card main-chart-card">
+                <div class="card-head">
+                    <div>
+                        <h3>مقارنة أداء المصادر</h3>
+                        <p>عدد الفرص مقابل الصفقات الرابحة والإيراد لكل مصدر</p>
+                    </div>
+                </div>
+
+                @if (_sourceOverviewPoints.Any())
+                {
+                    <ApexChart TItem="SourceOverviewPoint"
+                               Options="_sourceOverviewChartOptions"
+                               Height="380">
+                        <ApexPointSeries TItem="SourceOverviewPoint"
+                                         Items="@_sourceOverviewPoints"
+                                         Name="الفرص"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Source"
+                                         YValue="x => x.TotalCount" />
+
+                        <ApexPointSeries TItem="SourceOverviewPoint"
+                                         Items="@_sourceOverviewPoints"
+                                         Name="المبيعات"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Source"
+                                         YValue="x => x.WonCount" />
+
+                        <ApexPointSeries TItem="SourceOverviewPoint"
+                                         Items="@_sourceOverviewPoints"
+                                         Name="الإيراد"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.Source"
+                                         YValue="x => x.Revenue" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty">لا توجد بيانات للرسم البياني</div>
+                }
+            </div>
+
+            <div class="side-stack">
+                <div class="glass-card side-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>معدل الإغلاق حسب المصدر</h3>
+                            <p>ترتيب المصادر حسب كفاءة التحويل إلى صفقات رابحة</p>
+                        </div>
+                    </div>
+
+                    @if (_sourceRatePoints.Any())
+                    {
+                        <ApexChart TItem="SourceRatePoint"
+                                   Options="_sourceRateChartOptions"
+                                   Height="320">
+                            <ApexPointSeries TItem="SourceRatePoint"
+                                             Items="@_sourceRatePoints"
+                                             Name="معدل الإغلاق %"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Source"
+                                             YValue="x => x.CloseRate" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty small">لا توجد بيانات كافية لعرض معدلات الإغلاق</div>
+                    }
+                </div>
+
+                <div class="glass-card side-card compare-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>مقارنة بالفترة السابقة</h3>
+                            <p>@PreviousPeriodLabel</p>
+                        </div>
+                    </div>
+
+                    <div class="compare-list">
+                        <div class="compare-row">
+                            <div class="compare-label">المصادر النشطة</div>
+                            <div class="compare-values">
+                                <span>@_prevActiveSourceCount</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_activeSourceCount</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">إجمالي الفرص</div>
+                            <div class="compare-values">
+                                <span>@_prevTotalOpps</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_totalOpps</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">الإيرادات</div>
+                            <div class="compare-values">
+                                <span>@FormatMoney(_prevTotalRevenue)</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@FormatMoney(_totalRevenue)</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">معدل الإغلاق</div>
+                            <div class="compare-values">
+                                <span>@_prevOverallCloseRate.ToString("F1")%</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_overallCloseRate.ToString("F1")%</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="compare-summary @((_overallCloseRate >= _prevOverallCloseRate && _totalRevenue >= _prevTotalRevenue) ? "compare-good" : "compare-mid")">
+                        @if (_overallCloseRate >= _prevOverallCloseRate && _totalRevenue >= _prevTotalRevenue)
+                        {
+                            <span>أداء المصادر الحالي أفضل أو مساوي للفترة السابقة</span>
+                        }
+                        else
+                        {
+                            <span>بعض مؤشرات أداء المصادر تحتاج تحسين ومراجعة</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        @* ANALYTICS GRID *@
+        <section class="srcx-analytics-grid">
+            <div class="glass-card side-card">
+                <div class="card-head">
+                    <div>
+                        <h3>الاتجاه الشهري للمصادر</h3>
+                        <p>إجمالي الفرص والمبيعات والإيراد عبر الشهور</p>
+                    </div>
+                </div>
+
+                @if (_overallMonthlyPoints.Any())
+                {
+                    <ApexChart TItem="SourceMonthlyPoint"
+                               Options="_overallMonthlyChartOptions"
+                               Height="320">
+                        <ApexPointSeries TItem="SourceMonthlyPoint"
+                                         Items="@_overallMonthlyPoints"
+                                         Name="الفرص"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.TotalCount" />
+
+                        <ApexPointSeries TItem="SourceMonthlyPoint"
+                                         Items="@_overallMonthlyPoints"
+                                         Name="المبيعات"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.WonCount" />
+
+                        <ApexPointSeries TItem="SourceMonthlyPoint"
+                                         Items="@_overallMonthlyPoints"
+                                         Name="الإيراد"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.Revenue" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty small">لا توجد بيانات شهرية كافية</div>
+                }
+            </div>
+
+            <div class="glass-card srcx-source-table-card">
+                <div class="card-head">
+                    <div>
+                        <h3>تفاصيل المصادر</h3>
+                        <p>ملخص كل مصدر من حيث الفرص والمبيعات والإيراد والمتوسط والنسبة</p>
+                    </div>
+                </div>
+
+                <MudTable Items="@_sourceRows"
+                          Hover="true"
+                          Dense="true"
+                          Elevation="0"
+                          RowsPerPage="10"
+                          Breakpoint="Breakpoint.Sm"
+                          Class="premium-table">
+                    <HeaderContent>
+                        <MudTh>المصدر</MudTh>
+                        <MudTh>الفرص</MudTh>
+                        <MudTh>المبيعات</MudTh>
+                        <MudTh>الخسائر</MudTh>
+                        <MudTh>المفتوح</MudTh>
+                        <MudTh>معدل الإغلاق</MudTh>
+                        <MudTh>الإيراد</MudTh>
+                        <MudTh>متوسط الصفقة</MudTh>
+                    </HeaderContent>
+
+                    <RowTemplate>
+                        <MudTd DataLabel="المصدر">
+                            <span class="source-label @(context.IsBest ? "source-best" : "")">
+                                @context.SourceName
+                                @if (context.IsBest)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Star"
+                                             Color="@MudColor.Warning"
+                                             Size="@MudSize.Small" />
+                                }
+                            </span>
+                        </MudTd>
+                        <MudTd DataLabel="الفرص">@context.TotalCount.ToString("N0")</MudTd>
+                        <MudTd DataLabel="المبيعات">@context.WonCount.ToString("N0")</MudTd>
+                        <MudTd DataLabel="الخسائر">@context.LostCount.ToString("N0")</MudTd>
+                        <MudTd DataLabel="المفتوح">@context.OpenCount.ToString("N0")</MudTd>
+                        <MudTd DataLabel="معدل الإغلاق">
+                            <span class="rate-pill @GetCloseRatePillClass(context.CloseRate)">
+                                @context.CloseRate.ToString("F1")%
+                            </span>
+                        </MudTd>
+                        <MudTd DataLabel="الإيراد">@FormatMoney(context.TotalRevenue)</MudTd>
+                        <MudTd DataLabel="متوسط الصفقة">@FormatMoney(context.AvgDealValue)</MudTd>
+                    </RowTemplate>
+
+                    <NoRecordsContent>
+                        <div class="empty-data">
+                            <div class="empty-icon">📉</div>
+                            <h4>لا توجد بيانات</h4>
+                            <p>لا توجد مصادر مطابقة للفترة الحالية</p>
+                        </div>
+                    </NoRecordsContent>
+                </MudTable>
+            </div>
+        </section>
+
+        @* SOURCE DRILL-DOWN *@
+        <section class="glass-card srcx-drill">
+            <div class="card-head drill-head">
+                <div>
+                    <h3>Drill-down حسب المصدر</h3>
+                    <p>اختر مصدرًا لعرض تحليله الشهري ومراحله وأكبر الفرص الناتجة منه</p>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_selectedSource))
+                {
+                    <button class="clear-source-btn" @onclick="ClearSelectedSource">
+                        إلغاء اختيار المصدر
+                    </button>
+                }
+            </div>
+
+            <div class="source-chip-row">
+                @foreach (var source in _sourceRows)
+                {
+                    <button class="source-chip-btn @(IsSelectedSource(source.SourceName) ? "source-chip-active" : "")"
+                            @onclick="() => SelectSource(source.SourceName)">
+                        <span>@source.SourceName</span>
+                        <small>@source.TotalCount.ToString("N0") فرصة</small>
+                    </button>
+                }
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_selectedSource) || _detailRows.Any())
+            {
+                <div class="drill-mini-kpis">
+                    <div class="mini-kpi">
+                        <span class="mini-label">المصدر المحدد</span>
+                        <strong>@_selectedSourceName</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">الفرص</span>
+                        <strong>@_selectedSourceTotalCount.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">المبيعات</span>
+                        <strong>@_selectedSourceWonCount.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">المفتوح</span>
+                        <strong>@_selectedSourceOpenCount.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">الإيراد</span>
+                        <strong>@FormatMoney(_selectedSourceRevenue)</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">معدل الإغلاق</span>
+                        <strong>@_selectedSourceCloseRate.ToString("F1")%</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">أفضل شهر</span>
+                        <strong>@_selectedSourceTopMonth</strong>
+                    </div>
+                </div>
+
+                <div class="drill-grid">
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>الاتجاه الشهري للمصدر</h3>
+                                <p>الفرص والمبيعات والإيراد عبر الشهور للمصدر المحدد</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedSourceMonthlyPoints.Any())
+                        {
+                            <ApexChart TItem="SourceMonthlyPoint"
+                                       Options="_selectedSourceMonthlyChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="SourceMonthlyPoint"
+                                                 Items="@_selectedSourceMonthlyPoints"
+                                                 Name="الفرص"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Month"
+                                                 YValue="x => x.TotalCount" />
+
+                                <ApexPointSeries TItem="SourceMonthlyPoint"
+                                                 Items="@_selectedSourceMonthlyPoints"
+                                                 Name="المبيعات"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Month"
+                                                 YValue="x => x.WonCount" />
+
+                                <ApexPointSeries TItem="SourceMonthlyPoint"
+                                                 Items="@_selectedSourceMonthlyPoints"
+                                                 Name="الإيراد"
+                                                 SeriesType="SeriesType.Line"
+                                                 XValue="x => x.Month"
+                                                 YValue="x => x.Revenue" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد بيانات شهرية كافية لهذا المصدر</div>
+                        }
+                    </div>
+
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>المراحل داخل المصدر</h3>
+                                <p>توزيع الفرص لهذا المصدر حسب المرحلة الحالية</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedSourceStagePoints.Any())
+                        {
+                            <ApexChart TItem="SourceStagePoint"
+                                       Options="_selectedSourceStageChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="SourceStagePoint"
+                                                 Items="@_selectedSourceStagePoints"
+                                                 Name="عدد الفرص"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Stage"
+                                                 YValue="x => x.Count" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد مراحل كافية لهذا المصدر</div>
+                        }
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* OPPORTUNITY DETAILS *@
+        <section class="glass-card srcx-table-card">
+            <div class="card-head">
+                <div>
+                    <h3>تفاصيل الفرص</h3>
+                    <p>
+                        @if (!string.IsNullOrWhiteSpace(_selectedSource))
+                        {
+                            <span>عرض الفرص الخاصة بالمصدر: @_selectedSourceName</span>
+                        }
+                        else
+                        {
+                            <span>عرض أعلى الفرص حسب القيمة</span>
+                        }
+                    </p>
+                </div>
+            </div>
+
+            <MudTable Items="@_detailRows"
+                      Hover="true"
+                      Dense="true"
+                      Elevation="0"
+                      RowsPerPage="10"
+                      Breakpoint="Breakpoint.Sm"
+                      Class="premium-table">
+                <HeaderContent>
+                    <MudTh>العميل</MudTh>
+                    <MudTh>الموظف</MudTh>
+                    <MudTh>المرحلة</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh>تاريخ الإنشاء</MudTh>
+                    <MudTh>آخر تواصل</MudTh>
+                    <MudTh>العمر</MudTh>
+                    <MudTh>القيمة</MudTh>
+                    <MudTh>إجراء</MudTh>
+                </HeaderContent>
+
+                <RowTemplate>
+                    <MudTd DataLabel="العميل">@context.ClientName</MudTd>
+                    <MudTd DataLabel="الموظف">@context.EmployeeName</MudTd>
+                    <MudTd DataLabel="المرحلة">
+                        <span class="stage-pill" style="@GetStagePillStyle(context.StageColor)">
+                            @context.StageName
+                        </span>
+                    </MudTd>
+                    <MudTd DataLabel="الحالة">
+                        <span class="rate-pill @GetStatusPillClass(context.StageId)">
+                            @GetStatusLabel(context.StageId)
+                        </span>
+                    </MudTd>
+                    <MudTd DataLabel="تاريخ الإنشاء">@FormatDate(context.CreatedAt)</MudTd>
+                    <MudTd DataLabel="آخر تواصل">@FormatDate(context.LastContactDate)</MudTd>
+                    <MudTd DataLabel="العمر">
+                        <span class="rate-pill @GetAgePillClass(context.AgeDays)">
+                            @context.AgeDays.ToString("F0") يوم
+                        </span>
+                    </MudTd>
+                    <MudTd DataLabel="القيمة">@FormatMoney(context.ExpectedValue)</MudTd>
+                    <MudTd DataLabel="إجراء">
+                        <MudButton Variant="Variant.Text"
+                                   Color="@MudColor.Primary"
+                                   Size="@MudSize.Small"
+                                   OnClick="@(() => OpenOpportunity(context.OpportunityId))">
+                            عرض
+                        </MudButton>
+                    </MudTd>
+                </RowTemplate>
+
+                <NoRecordsContent>
+                    <div class="empty-data">
+                        <div class="empty-icon">📉</div>
+                        <h4>لا توجد بيانات</h4>
+                        <p>لا توجد فرص مطابقة للفلاتر الحالية</p>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </section>
+
+        @* NOTE *@
+        <section class="glass-card srcx-note">
+            <div class="note-icon">ℹ️</div>
+            <div class="note-body">
+                <h4>ملاحظة تحليلية مهمة</h4>
+                <p>
+                    هذا التقرير يعرض <strong>أداء مصادر العملاء</strong> من حيث الحجم والتحويل والإيراد،
+                    لكنه ليس <strong>ROI ماليًا كاملًا</strong> إلا إذا كانت لديك تكلفة اكتساب لكل مصدر
+                    مثل تكلفة الحملة أو الإعلان. عند توفر بيانات التكلفة يمكننا إضافة ROI حقيقي مباشرة.
+                </p>
+            </div>
+        </section>
+    }
+</div>
+
+@code {
+    private const int WonStageId = 3;
+    private const int LostStageId1 = 4;
+    private const int LostStageId2 = 5;
+
+    private DateTime? _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+    private DateTime? _toDate = DateTime.Today;
+    private bool _isLoading;
+
+    private List<OpportunitySourceRow> _currentRows = new();
+    private List<SourceSummaryRow> _sourceRows = new();
+    private List<SourceOverviewPoint> _sourceOverviewPoints = new();
+    private List<SourceRatePoint> _sourceRatePoints = new();
+    private List<SourceMonthlyPoint> _overallMonthlyPoints = new();
+    private List<InsightItem> _insights = new();
+    private List<SourceOpportunityDetailRow> _detailRows = new();
+
+    private int _activeSourceCount;
+    private int _totalOpps;
+    private int _wonCount;
+    private decimal _totalRevenue;
+    private decimal _openPipelineValue;
+    private double _overallCloseRate;
+    private decimal _avgWonDealValue;
+
+    private string _bestSource = "—";
+    private decimal _bestSourceRevenue;
+    private double _bestSourceRevenueShare;
+    private string _topConversionSource = "—";
+    private double _topConversionRate;
+
+    private int _prevActiveSourceCount;
+    private int _prevTotalOpps;
+    private int _prevWonCount;
+    private decimal _prevTotalRevenue;
+    private decimal _prevOpenPipelineValue;
+    private double _prevOverallCloseRate;
+    private decimal _prevAvgWonDealValue;
+
+    private string _previousPeriodLabel = "غير متاح";
+
+    private string? _selectedSource;
+    private string _selectedSourceName = "—";
+    private int _selectedSourceTotalCount;
+    private int _selectedSourceWonCount;
+    private int _selectedSourceOpenCount;
+    private int _selectedSourceLostCount;
+    private decimal _selectedSourceRevenue;
+    private decimal _selectedSourceOpenValue;
+    private double _selectedSourceCloseRate;
+    private decimal _selectedSourceAvgDealValue;
+    private string _selectedSourceTopMonth = "—";
+    private string _selectedSourceTopEmployee = "—";
+    private List<SourceMonthlyPoint> _selectedSourceMonthlyPoints = new();
+    private List<SourceStagePoint> _selectedSourceStagePoints = new();
+
+    private ApexChartOptions<SourceOverviewPoint> _sourceOverviewChartOptions = new();
+    private ApexChartOptions<SourceRatePoint> _sourceRateChartOptions = new();
+    private ApexChartOptions<SourceMonthlyPoint> _overallMonthlyChartOptions = new();
+    private ApexChartOptions<SourceMonthlyPoint> _selectedSourceMonthlyChartOptions = new();
+    private ApexChartOptions<SourceStagePoint> _selectedSourceStageChartOptions = new();
+
+    private string SelectedPeriodLabel =>
+        $"{(_fromDate.HasValue ? _fromDate.Value.ToString("dd MMM yyyy", _arCulture) : "البداية")} — {(_toDate.HasValue ? _toDate.Value.ToString("dd MMM yyyy", _arCulture) : "اليوم")}";
+
+    private string PreviousPeriodLabel => _previousPeriodLabel;
+
+    private readonly CultureInfo _arCulture = new("ar-EG");
+
+    protected override async Task OnInitializedAsync()
+    {
+        ConfigureCharts();
+        await LoadData();
+    }
+
+    private void ConfigureCharts()
+    {
+        _sourceOverviewChartOptions = new ApexChartOptions<SourceOverviewPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#3b82f6", "#10b981", "#8b5cf6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 8,
+                    ColumnWidth = "42%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { DecimalsInFloat = 0 }
+            },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _sourceRateChartOptions = new ApexChartOptions<SourceRatePoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#f59e0b" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Max = 100,
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { Min = 0, Max = 100, DecimalsInFloat = 0 }
+            }
+        };
+
+        _overallMonthlyChartOptions = new ApexChartOptions<SourceMonthlyPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#6366f1", "#10b981", "#06b6d4" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "44%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _selectedSourceMonthlyChartOptions = new ApexChartOptions<SourceMonthlyPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#8b5cf6", "#10b981", "#f59e0b" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "44%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _selectedSourceStageChartOptions = new ApexChartOptions<SourceStagePoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#14b8a6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+        _toDate = DateTime.Today;
+        _selectedSource = null;
+        await LoadData();
+    }
+
+    private async Task SetLastMonthsAsync(int months)
+    {
+        if (months <= 0) months = 12;
+
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-(months - 1));
+        _toDate = DateTime.Today;
+        _selectedSource = null;
+
+        await LoadData();
+    }
+
+    private async Task SetCurrentYearAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, 1, 1);
+        _toDate = DateTime.Today;
+        _selectedSource = null;
+
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+
+        try
+        {
+            NormalizeDateRange();
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            _currentRows = await LoadPeriodRowsAsync(db, _fromDate, _toDate);
+
+            if (TryGetPreviousRange(out var prevFrom, out var prevTo))
+            {
+                _previousPeriodLabel = $"{prevFrom.ToString("dd MMM yyyy", _arCulture)} — {prevTo.ToString("dd MMM yyyy", _arCulture)}";
+                var previousRows = await LoadPeriodRowsAsync(db, prevFrom, prevTo);
+                CalculatePreviousMetrics(previousRows);
+            }
+            else
+            {
+                _previousPeriodLabel = "غير متاح";
+                ResetPreviousMetrics();
+            }
+
+            CalculateCurrentMetrics(_currentRows);
+            BuildSourceSummary(_currentRows);
+            BuildOverallMonthlyTrend(_currentRows);
+            ResolveSelectedSource();
+            BuildSelectedSourceAnalytics(_currentRows);
+            BuildInsights();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ أثناء تحميل التقرير: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task<List<OpportunitySourceRow>> LoadPeriodRowsAsync(db24804Context db, DateTime? from, DateTime? to)
+    {
+        var query = db.VwSalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.IsActive == true);
+
+        if (from.HasValue)
+        {
+            var fromDate = from.Value.Date;
+            query = query.Where(o => o.CreatedAt >= fromDate);
+        }
+
+        if (to.HasValue)
+        {
+            var toExclusive = to.Value.Date.AddDays(1);
+            query = query.Where(o => o.CreatedAt < toExclusive);
+        }
+
+        return await query
+            .Select(o => new OpportunitySourceRow
+            {
+                OpportunityId = o.OpportunityId,
+                ClientName = o.ClientName ?? "—",
+                EmployeeName = o.EmployeeName ?? "—",
+                SourceName = string.IsNullOrWhiteSpace(o.SourceName) ? "غير محدد" : o.SourceName!,
+                StageId = o.StageId,
+                StageName = o.StageNameAr ?? o.StageName ?? "—",
+                StageColor = o.StageColor ?? "",
+                CreatedAt = o.CreatedAt,
+                LastContactDate = o.LastContactDate,
+                ExpectedValue = o.ExpectedValue ?? 0m,
+                AgeDays = o.DaysSinceFirstContact ?? 0d
+            })
+            .ToListAsync();
+    }
+
+    private void CalculateCurrentMetrics(List<OpportunitySourceRow> rows)
+    {
+        _activeSourceCount = rows
+            .Select(x => x.SourceName)
+            .Distinct()
+            .Count();
+
+        _totalOpps = rows.Count;
+        _wonCount = rows.Count(x => IsWon(x.StageId));
+        _totalRevenue = rows.Where(x => IsWon(x.StageId)).Sum(x => x.ExpectedValue);
+        _openPipelineValue = rows.Where(x => IsOpenStage(x.StageId)).Sum(x => x.ExpectedValue);
+        _overallCloseRate = _totalOpps > 0 ? (double)_wonCount / _totalOpps * 100d : 0d;
+        _avgWonDealValue = _wonCount > 0 ? _totalRevenue / _wonCount : 0m;
+    }
+
+    private void CalculatePreviousMetrics(List<OpportunitySourceRow> rows)
+    {
+        _prevActiveSourceCount = rows
+            .Select(x => x.SourceName)
+            .Distinct()
+            .Count();
+
+        _prevTotalOpps = rows.Count;
+        _prevWonCount = rows.Count(x => IsWon(x.StageId));
+        _prevTotalRevenue = rows.Where(x => IsWon(x.StageId)).Sum(x => x.ExpectedValue);
+        _prevOpenPipelineValue = rows.Where(x => IsOpenStage(x.StageId)).Sum(x => x.ExpectedValue);
+        _prevOverallCloseRate = _prevTotalOpps > 0 ? (double)_prevWonCount / _prevTotalOpps * 100d : 0d;
+        _prevAvgWonDealValue = _prevWonCount > 0 ? _prevTotalRevenue / _prevWonCount : 0m;
+    }
+
+    private void ResetPreviousMetrics()
+    {
+        _prevActiveSourceCount = 0;
+        _prevTotalOpps = 0;
+        _prevWonCount = 0;
+        _prevTotalRevenue = 0m;
+        _prevOpenPipelineValue = 0m;
+        _prevOverallCloseRate = 0d;
+        _prevAvgWonDealValue = 0m;
+    }
+
+    private void BuildSourceSummary(List<OpportunitySourceRow> rows)
+    {
+        _sourceRows = rows
+            .GroupBy(x => x.SourceName)
+            .Select(g =>
+            {
+                var total = g.Count();
+                var wonCount = g.Count(x => IsWon(x.StageId));
+                var lostCount = g.Count(x => IsLost(x.StageId));
+                var openCount = total - wonCount - lostCount;
+                var revenue = g.Where(x => IsWon(x.StageId)).Sum(x => x.ExpectedValue);
+                var openValue = g.Where(x => IsOpenStage(x.StageId)).Sum(x => x.ExpectedValue);
+
+                return new SourceSummaryRow
+                {
+                    SourceName = g.Key,
+                    TotalCount = total,
+                    WonCount = wonCount,
+                    LostCount = lostCount,
+                    OpenCount = openCount,
+                    CloseRate = total > 0 ? (double)wonCount / total * 100d : 0d,
+                    TotalRevenue = revenue,
+                    OpenValue = openValue,
+                    AvgDealValue = wonCount > 0 ? revenue / wonCount : 0m,
+                    RevenueShare = _totalRevenue > 0 ? (double)(revenue / _totalRevenue * 100m) : 0d
+                };
+            })
+            .OrderByDescending(x => x.TotalRevenue)
+            .ThenByDescending(x => x.TotalCount)
+            .ToList();
+
+        var bestByRevenue = _sourceRows.FirstOrDefault();
+        if (bestByRevenue != null)
+        {
+            bestByRevenue.IsBest = true;
+            _bestSource = bestByRevenue.SourceName;
+            _bestSourceRevenue = bestByRevenue.TotalRevenue;
+            _bestSourceRevenueShare = bestByRevenue.RevenueShare;
+        }
+        else
+        {
+            _bestSource = "—";
+            _bestSourceRevenue = 0m;
+            _bestSourceRevenueShare = 0d;
+        }
+
+        var rateCandidates = _sourceRows.Where(x => x.TotalCount >= 3).ToList();
+        if (!rateCandidates.Any())
+            rateCandidates = _sourceRows.Where(x => x.TotalCount > 0).ToList();
+
+        var topRate = rateCandidates
+            .OrderByDescending(x => x.CloseRate)
+            .ThenByDescending(x => x.WonCount)
+            .ThenByDescending(x => x.TotalRevenue)
+            .FirstOrDefault();
+
+        _topConversionSource = topRate?.SourceName ?? "—";
+        _topConversionRate = topRate?.CloseRate ?? 0d;
+
+        _sourceOverviewPoints = _sourceRows
+            .OrderByDescending(x => x.TotalCount)
+            .ThenByDescending(x => x.TotalRevenue)
+            .Take(8)
+            .Select(x => new SourceOverviewPoint
+            {
+                Source = x.SourceName,
+                TotalCount = x.TotalCount,
+                WonCount = x.WonCount,
+                Revenue = x.TotalRevenue
+            })
+            .ToList();
+
+        _sourceRatePoints = rateCandidates
+            .OrderByDescending(x => x.CloseRate)
+            .ThenByDescending(x => x.WonCount)
+            .ThenByDescending(x => x.TotalCount)
+            .Take(8)
+            .Select(x => new SourceRatePoint
+            {
+                Source = x.SourceName,
+                CloseRate = (decimal)x.CloseRate
+            })
+            .ToList();
+    }
+
+    private void BuildOverallMonthlyTrend(List<OpportunitySourceRow> rows)
+    {
+        var startMonth = _fromDate.HasValue
+            ? new DateTime(_fromDate.Value.Year, _fromDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+
+        var endMonth = _toDate.HasValue
+            ? new DateTime(_toDate.Value.Year, _toDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+
+        var monthMap = rows
+            .GroupBy(x => new DateTime(x.CreatedAt.Year, x.CreatedAt.Month, 1))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        _overallMonthlyPoints = new();
+
+        for (var month = startMonth; month <= endMonth; month = month.AddMonths(1))
+        {
+            monthMap.TryGetValue(month, out var monthRows);
+            monthRows ??= new List<OpportunitySourceRow>();
+
+            _overallMonthlyPoints.Add(new SourceMonthlyPoint
+            {
+                Month = month.ToString("MMM yyyy", _arCulture),
+                TotalCount = monthRows.Count,
+                WonCount = monthRows.Count(x => IsWon(x.StageId)),
+                Revenue = monthRows.Where(x => IsWon(x.StageId)).Sum(x => x.ExpectedValue)
+            });
+        }
+    }
+
+    private void ResolveSelectedSource()
+    {
+        if (!_sourceRows.Any())
+        {
+            _selectedSource = null;
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_selectedSource) && _sourceRows.Any(x => x.SourceName == _selectedSource))
+            return;
+
+        _selectedSource = _sourceRows.First().SourceName;
+    }
+
+    private void BuildSelectedSourceAnalytics(List<OpportunitySourceRow> rows)
+    {
+        _selectedSourceName = "—";
+        _selectedSourceTotalCount = 0;
+        _selectedSourceWonCount = 0;
+        _selectedSourceOpenCount = 0;
+        _selectedSourceLostCount = 0;
+        _selectedSourceRevenue = 0m;
+        _selectedSourceOpenValue = 0m;
+        _selectedSourceCloseRate = 0d;
+        _selectedSourceAvgDealValue = 0m;
+        _selectedSourceTopMonth = "—";
+        _selectedSourceTopEmployee = "—";
+        _selectedSourceMonthlyPoints = new();
+        _selectedSourceStagePoints = new();
+        _detailRows = new();
+
+        if (string.IsNullOrWhiteSpace(_selectedSource))
+        {
+            _detailRows = rows
+                .OrderByDescending(x => x.ExpectedValue)
+                .ThenByDescending(x => x.CreatedAt)
+                .Take(25)
+                .Select(MapDetailRow)
+                .ToList();
+
+            return;
+        }
+
+        var filtered = rows
+            .Where(x => x.SourceName == _selectedSource)
+            .ToList();
+
+        if (!filtered.Any())
+            return;
+
+        _selectedSourceName = _selectedSource;
+        _selectedSourceTotalCount = filtered.Count;
+        _selectedSourceWonCount = filtered.Count(x => IsWon(x.StageId));
+        _selectedSourceLostCount = filtered.Count(x => IsLost(x.StageId));
+        _selectedSourceOpenCount = _selectedSourceTotalCount - _selectedSourceWonCount - _selectedSourceLostCount;
+        _selectedSourceRevenue = filtered.Where(x => IsWon(x.StageId)).Sum(x => x.ExpectedValue);
+        _selectedSourceOpenValue = filtered.Where(x => IsOpenStage(x.StageId)).Sum(x => x.ExpectedValue);
+        _selectedSourceCloseRate = _selectedSourceTotalCount > 0 ? (double)_selectedSourceWonCount / _selectedSourceTotalCount * 100d : 0d;
+        _selectedSourceAvgDealValue = _selectedSourceWonCount > 0 ? _selectedSourceRevenue / _selectedSourceWonCount : 0m;
+
+        var startMonth = _fromDate.HasValue
+            ? new DateTime(_fromDate.Value.Year, _fromDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+
+        var endMonth = _toDate.HasValue
+            ? new DateTime(_toDate.Value.Year, _toDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+
+        var monthMap = filtered
+            .GroupBy(x => new DateTime(x.CreatedAt.Year, x.CreatedAt.Month, 1))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        for (var month = startMonth; month <= endMonth; month = month.AddMonths(1))
+        {
+            monthMap.TryGetValue(month, out var monthRows);
+            monthRows ??= new List<OpportunitySourceRow>();
+
+            _selectedSourceMonthlyPoints.Add(new SourceMonthlyPoint
+            {
+                Month = month.ToString("MMM yyyy", _arCulture),
+                TotalCount = monthRows.Count,
+                WonCount = monthRows.Count(x => IsWon(x.StageId)),
+                Revenue = monthRows.Where(x => IsWon(x.StageId)).Sum(x => x.ExpectedValue)
+            });
+        }
+
+        var topMonth = _selectedSourceMonthlyPoints
+            .OrderByDescending(x => x.Revenue)
+            .ThenByDescending(x => x.WonCount)
+            .ThenByDescending(x => x.TotalCount)
+            .FirstOrDefault();
+
+        _selectedSourceTopMonth = topMonth?.Month ?? "—";
+
+        var topEmployee = filtered
+            .GroupBy(x => x.EmployeeName)
+            .Select(g => new
+            {
+                Employee = g.Key,
+                Total = g.Count(),
+                Revenue = g.Where(x => IsWon(x.StageId)).Sum(x => x.ExpectedValue)
+            })
+            .OrderByDescending(x => x.Revenue)
+            .ThenByDescending(x => x.Total)
+            .FirstOrDefault();
+
+        _selectedSourceTopEmployee = topEmployee?.Employee ?? "—";
+
+        _selectedSourceStagePoints = filtered
+            .GroupBy(x => x.StageName)
+            .Select(g => new SourceStagePoint
+            {
+                Stage = g.Key,
+                Count = g.Count()
+            })
+            .OrderByDescending(x => x.Count)
+            .ToList();
+
+        _detailRows = filtered
+            .OrderByDescending(x => x.ExpectedValue)
+            .ThenByDescending(x => x.CreatedAt)
+            .Select(MapDetailRow)
+            .ToList();
+    }
+
+    private SourceOpportunityDetailRow MapDetailRow(OpportunitySourceRow x) => new()
+    {
+        OpportunityId = x.OpportunityId,
+        ClientName = x.ClientName,
+        EmployeeName = x.EmployeeName,
+        StageId = x.StageId,
+        StageName = x.StageName,
+        StageColor = x.StageColor,
+        CreatedAt = x.CreatedAt,
+        LastContactDate = x.LastContactDate,
+        AgeDays = x.AgeDays,
+        ExpectedValue = x.ExpectedValue
+    };
+
+    private void BuildInsights()
+    {
+        _insights = new();
+
+        if (_sourceRows.Any())
+        {
+            var topRevenue = _sourceRows
+                .OrderByDescending(x => x.TotalRevenue)
+                .ThenByDescending(x => x.TotalCount)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.AttachMoney,
+                Title = "أعلى مصدر إيرادًا",
+                Value = topRevenue.SourceName,
+                Description = $"{FormatMoney(topRevenue.TotalRevenue)}",
+                ToneClass = "tone-green"
+            });
+
+            var rateCandidates = _sourceRows.Where(x => x.TotalCount >= 3).ToList();
+            if (!rateCandidates.Any())
+                rateCandidates = _sourceRows.Where(x => x.TotalCount > 0).ToList();
+
+            if (rateCandidates.Any())
+            {
+                var topRate = rateCandidates
+                    .OrderByDescending(x => x.CloseRate)
+                    .ThenByDescending(x => x.WonCount)
+                    .First();
+
+                _insights.Add(new InsightItem
+                {
+                    Icon = Icons.Material.Rounded.TrendingUp,
+                    Title = "أفضل معدل إغلاق",
+                    Value = topRate.SourceName,
+                    Description = $"{topRate.CloseRate:F1}% من {topRate.TotalCount} فرصة",
+                    ToneClass = "tone-indigo"
+                });
+
+                var lowestRate = rateCandidates
+                    .OrderBy(x => x.CloseRate)
+                    .ThenByDescending(x => x.TotalCount)
+                    .First();
+
+                _insights.Add(new InsightItem
+                {
+                    Icon = Icons.Material.Rounded.ReportProblem,
+                    Title = "أضعف معدل إغلاق",
+                    Value = lowestRate.SourceName,
+                    Description = $"{lowestRate.CloseRate:F1}% من {lowestRate.TotalCount} فرصة",
+                    ToneClass = "tone-red"
+                });
+            }
+
+            var topOpen = _sourceRows
+                .OrderByDescending(x => x.OpenValue)
+                .ThenByDescending(x => x.OpenCount)
+                .FirstOrDefault();
+
+            if (topOpen != null)
+            {
+                _insights.Add(new InsightItem
+                {
+                    Icon = Icons.Material.Rounded.HourglassTop,
+                    Title = "أكبر Pipeline مفتوح",
+                    Value = topOpen.SourceName,
+                    Description = $"{FormatMoney(topOpen.OpenValue)}",
+                    ToneClass = "tone-gold"
+                });
+            }
+        }
+
+        while (_insights.Count < 4)
+        {
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.Insights,
+                Title = "معلومة",
+                Value = "—",
+                Description = "لا توجد بيانات كافية لهذا المؤشر",
+                ToneClass = "tone-slate"
+            });
+        }
+    }
+
+    private void SelectSource(string sourceName)
+    {
+        _selectedSource = sourceName;
+        BuildSelectedSourceAnalytics(_currentRows);
+    }
+
+    private void ClearSelectedSource()
+    {
+        _selectedSource = null;
+        BuildSelectedSourceAnalytics(_currentRows);
+    }
+
+    private bool IsSelectedSource(string sourceName)
+        => !string.IsNullOrWhiteSpace(_selectedSource) && _selectedSource == sourceName;
+
+    private bool TryGetPreviousRange(out DateTime previousFrom, out DateTime previousTo)
+    {
+        previousFrom = default;
+        previousTo = default;
+
+        if (!_fromDate.HasValue || !_toDate.HasValue)
+            return false;
+
+        var currentFrom = _fromDate.Value.Date;
+        var currentTo = _toDate.Value.Date;
+        var days = (currentTo - currentFrom).Days;
+
+        previousTo = currentFrom.AddDays(-1);
+        previousFrom = previousTo.AddDays(-days);
+
+        return true;
+    }
+
+    private void NormalizeDateRange()
+    {
+        if (_fromDate.HasValue && _toDate.HasValue && _fromDate.Value.Date > _toDate.Value.Date)
+        {
+            var temp = _fromDate;
+            _fromDate = _toDate;
+            _toDate = temp;
+
+            Snackbar.Add("تم تبديل تاريخ البداية والنهاية تلقائيًا لأن البداية كانت أكبر من النهاية.", Severity.Info);
+        }
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("تقرير مصادر العملاء");
+            sb.AppendLine($"الفترة الحالية,{SelectedPeriodLabel}");
+            sb.AppendLine($"الفترة السابقة,{PreviousPeriodLabel}");
+            sb.AppendLine();
+
+            sb.AppendLine("المؤشرات الرئيسية");
+            sb.AppendLine("المؤشر,القيمة");
+            sb.AppendLine($"عدد المصادر النشطة,{_activeSourceCount}");
+            sb.AppendLine($"إجمالي الفرص,{_totalOpps}");
+            sb.AppendLine($"المبيعات الرابحة,{_wonCount}");
+            sb.AppendLine($"الإيرادات المحققة,{_totalRevenue:N0}");
+            sb.AppendLine($"Pipeline المفتوح,{_openPipelineValue:N0}");
+            sb.AppendLine($"معدل الإغلاق,{_overallCloseRate:F1}%");
+            sb.AppendLine($"أفضل مصدر,{_bestSource}");
+            sb.AppendLine($"أعلى مصدر تحويلاً,{_topConversionSource}");
+            sb.AppendLine();
+
+            sb.AppendLine("تفاصيل المصادر");
+            sb.AppendLine("المصدر,الفرص,المبيعات,الخسائر,المفتوح,معدل الإغلاق,الإيراد,متوسط الصفقة");
+            foreach (var row in _sourceRows)
+            {
+                sb.AppendLine($"{row.SourceName},{row.TotalCount},{row.WonCount},{row.LostCount},{row.OpenCount},{row.CloseRate:F1}%,{row.TotalRevenue:N0},{row.AvgDealValue:N0}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("الاتجاه الشهري");
+            sb.AppendLine("الشهر,الفرص,المبيعات,الإيراد");
+            foreach (var row in _overallMonthlyPoints)
+            {
+                sb.AppendLine($"{row.Month},{row.TotalCount},{row.WonCount},{row.Revenue:N0}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("تفاصيل الفرص");
+            sb.AppendLine("العميل,الموظف,المرحلة,الحالة,تاريخ الإنشاء,آخر تواصل,العمر,القيمة");
+            foreach (var row in _detailRows)
+            {
+                sb.AppendLine($"{row.ClientName},{row.EmployeeName},{row.StageName},{GetStatusLabel(row.StageId)},{FormatDate(row.CreatedAt)},{FormatDate(row.LastContactDate)},{row.AgeDays:F0},{row.ExpectedValue:N0}");
+            }
+
+            var csv = sb.ToString();
+            var fileName = $"source-performance-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+            var dataUrl = "data:text/csv;charset=utf-8,\uFEFF" + Uri.EscapeDataString(csv);
+
+            var script = $@"
+                (function() {{
+                    const link = document.createElement('a');
+                    link.href = '{dataUrl}';
+                    link.download = '{fileName}';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }})();";
+
+            await JS.InvokeVoidAsync("eval", script);
+            Snackbar.Add("تم تصدير الملف بنجاح. يمكنك فتحه مباشرة في Excel.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تصدير الملف: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval", "window.print()");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تشغيل الطباعة: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private bool IsWon(int stageId) => stageId == WonStageId;
+    private bool IsLost(int stageId) => stageId == LostStageId1 || stageId == LostStageId2;
+    private bool IsOpenStage(int stageId) => !IsWon(stageId) && !IsLost(stageId);
+
+    private string FormatMoney(decimal value) => $"{value:N0} ج.م";
+    private string FormatDate(DateTime? value) => value?.ToString("yyyy/MM/dd") ?? "—";
+
+    private string GetStagePillStyle(string? color)
+    {
+        if (string.IsNullOrWhiteSpace(color))
+            return "background:#e5e7eb;color:#111827;";
+
+        return $"background:{color};color:#fff;";
+    }
+
+    private string GetStatusLabel(int stageId)
+    {
+        if (IsWon(stageId)) return "تم البيع";
+        if (IsLost(stageId)) return "خسارة";
+        return "مفتوح";
+    }
+
+    private string GetStatusPillClass(int stageId)
+    {
+        if (IsWon(stageId)) return "rate-good";
+        if (IsLost(stageId)) return "rate-bad";
+        return "rate-mid";
+    }
+
+    private string GetCloseRatePillClass(double rate)
+    {
+        if (rate >= 50) return "rate-good";
+        if (rate >= 25) return "rate-mid";
+        return "rate-bad";
+    }
+
+    private string GetAgePillClass(double days)
+    {
+        if (days >= 60) return "rate-bad";
+        if (days >= 30) return "rate-mid";
+        return "rate-good";
+    }
+
+    private string GetSummaryRingStyle()
+    {
+        var safe = Math.Max(0, Math.Min(_bestSourceRevenueShare, 100));
+        var angle = safe * 3.6;
+        return $"background: conic-gradient(#10b981 0deg, #10b981 {angle:F1}deg, rgba(255,255,255,.12) {angle:F1}deg, rgba(255,255,255,.12) 360deg);";
+    }
+
+    private string GetCloseRateProgressStyle()
+    {
+        var safe = Math.Max(0, Math.Min(_overallCloseRate, 100));
+        return $"width:{safe:F0}%";
+    }
+
+    private string GetTrendClass(int current, int previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(double current, double previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(decimal current, decimal previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendText(int current, int previous)
+    {
+        if (previous == 0)
+            return current == 0 ? "0%" : "جديد";
+
+        var change = ((double)(current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(double current, double previous)
+    {
+        if (Math.Abs(previous) < 0.000001)
+            return Math.Abs(current) < 0.000001 ? "0%" : "جديد";
+
+        var change = ((current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(decimal current, decimal previous)
+    {
+        if (previous == 0m)
+            return current == 0m ? "0%" : "جديد";
+
+        var change = (double)((current - previous) / previous * 100m);
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/crm/reports");
+    private void OpenOpportunity(int id) => Navigation.NavigateTo($"/crm/opportunities/{id}");
+
+    private sealed class OpportunitySourceRow
+    {
+        public int OpportunityId { get; set; }
+        public string ClientName { get; set; } = "";
+        public string EmployeeName { get; set; } = "";
+        public string SourceName { get; set; } = "";
+        public int StageId { get; set; }
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+        public DateTime CreatedAt { get; set; }
+        public DateTime? LastContactDate { get; set; }
+        public decimal ExpectedValue { get; set; }
+        public double AgeDays { get; set; }
+    }
+
+    private sealed class SourceSummaryRow
+    {
+        public string SourceName { get; set; } = "";
+        public int TotalCount { get; set; }
+        public int WonCount { get; set; }
+        public int LostCount { get; set; }
+        public int OpenCount { get; set; }
+        public double CloseRate { get; set; }
+        public decimal TotalRevenue { get; set; }
+        public decimal OpenValue { get; set; }
+        public decimal AvgDealValue { get; set; }
+        public double RevenueShare { get; set; }
+        public bool IsBest { get; set; }
+    }
+
+    private sealed class SourceOverviewPoint
+    {
+        public string Source { get; set; } = "";
+        public decimal TotalCount { get; set; }
+        public decimal WonCount { get; set; }
+        public decimal Revenue { get; set; }
+    }
+
+    private sealed class SourceRatePoint
+    {
+        public string Source { get; set; } = "";
+        public decimal CloseRate { get; set; }
+    }
+
+    private sealed class SourceMonthlyPoint
+    {
+        public string Month { get; set; } = "";
+        public decimal TotalCount { get; set; }
+        public decimal WonCount { get; set; }
+        public decimal Revenue { get; set; }
+    }
+
+    private sealed class SourceStagePoint
+    {
+        public string Stage { get; set; } = "";
+        public decimal Count { get; set; }
+    }
+
+    private sealed class SourceOpportunityDetailRow
+    {
+        public int OpportunityId { get; set; }
+        public string ClientName { get; set; } = "";
+        public string EmployeeName { get; set; } = "";
+        public int StageId { get; set; }
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+        public DateTime CreatedAt { get; set; }
+        public DateTime? LastContactDate { get; set; }
+        public double AgeDays { get; set; }
+        public decimal ExpectedValue { get; set; }
+    }
+
+    private sealed class InsightItem
+    {
+        public string Icon { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Value { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string ToneClass { get; set; } = "";
+    }
+}
+
+<style>
+    .srcx-page {
+        --text: #0f172a;
+        --muted: #64748b;
+        --line: rgba(148, 163, 184, .16);
+        --glass: rgba(255,255,255,.72);
+        --shadow: 0 20px 50px rgba(15, 23, 42, .06);
+        max-width: 1460px;
+        margin: 0 auto;
+        padding: 1.25rem 1.25rem 3rem;
+        position: relative;
+        min-height: 100vh;
+    }
+
+    .srcx-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+    }
+
+    .srcx-orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(120px);
+        opacity: .16;
+    }
+
+    .orb-1 {
+        width: 420px;
+        height: 420px;
+        background: #10b981;
+        top: -120px;
+        right: -120px;
+        animation: srcxFloat 12s ease-in-out infinite;
+    }
+
+    .orb-2 {
+        width: 360px;
+        height: 360px;
+        background: #3b82f6;
+        bottom: -80px;
+        left: -80px;
+        animation: srcxFloat 18s ease-in-out infinite reverse;
+    }
+
+    .orb-3 {
+        width: 280px;
+        height: 280px;
+        background: #8b5cf6;
+        top: 30%;
+        left: 45%;
+        animation: srcxFloat 16s ease-in-out infinite;
+    }
+
+    @@keyframes srcxFloat {
+        0%,100% { transform: translate(0,0) scale(1); }
+        50% { transform: translate(20px,-20px) scale(1.08); }
+    }
+
+    .glass-card {
+        position: relative;
+        z-index: 1;
+        background: var(--glass);
+        backdrop-filter: blur(20px) saturate(1.5);
+        -webkit-backdrop-filter: blur(20px) saturate(1.5);
+        border: 1px solid rgba(255,255,255,.48);
+        box-shadow: var(--shadow);
+        border-radius: 1.35rem;
+    }
+
+    .glass-inner-card {
+        background: rgba(255,255,255,.45);
+        border: 1px solid rgba(255,255,255,.4);
+        border-radius: 1.2rem;
+        padding: 1rem;
+    }
+
+    .srcx-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1.8rem;
+        margin-bottom: 1.25rem;
+        background: linear-gradient(135deg, #0f172a 0%, #064e3b 45%, #0f766e 100%);
+        padding: 2rem;
+        color: #fff;
+        z-index: 1;
+    }
+
+    .srcx-hero-grid {
+        position: absolute;
+        inset: 0;
+        background-image:
+            linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+        background-size: 50px 50px;
+        mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
+        pointer-events: none;
+    }
+
+    .srcx-hero-content {
+        position: relative;
+        z-index: 2;
+    }
+
+    .srcx-hero-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+
+    .srcx-back {
+        width: 2.6rem;
+        height: 2.6rem;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08);
+        color: #fff;
+        border-radius: .9rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: .25s ease;
+        backdrop-filter: blur(10px);
+    }
+
+    .srcx-back:hover {
+        transform: translateX(-3px);
+        background: rgba(255,255,255,.15);
+    }
+
+    .srcx-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: .5rem;
+        padding: .45rem .9rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,.1);
+        border: 1px solid rgba(255,255,255,.16);
+        color: #d1fae5;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .badge-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #6ee7b7;
+        box-shadow: 0 0 12px #6ee7b7;
+        animation: badgePulse 2s infinite;
+    }
+
+    @@keyframes badgePulse {
+        0%,100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.35); opacity: .6; }
+    }
+
+    .srcx-hero-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 2rem;
+    }
+
+    .srcx-hero-text {
+        flex: 1;
+    }
+
+    .srcx-hero-text h1 {
+        margin: 0 0 .6rem;
+        font-size: 2.5rem;
+        font-weight: 900;
+        letter-spacing: -.02em;
+    }
+
+    .srcx-hero-text h1 span {
+        color: #6ee7b7;
+    }
+
+    .srcx-hero-text p {
+        margin: 0 0 1rem;
+        color: rgba(255,255,255,.76);
+        max-width: 760px;
+        line-height: 1.8;
+    }
+
+    .srcx-hero-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .75rem;
+    }
+
+    .hero-chip {
+        display: flex;
+        flex-direction: column;
+        gap: .15rem;
+        padding: .85rem 1rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.08);
+        border: 1px solid rgba(255,255,255,.12);
+        min-width: 210px;
+    }
+
+    .chip-label {
+        font-size: .72rem;
+        color: rgba(255,255,255,.6);
+    }
+
+    .chip-value {
+        font-size: .85rem;
+        font-weight: 700;
+        color: #fff;
+    }
+
+    .summary-ring {
+        width: 170px;
+        height: 170px;
+        border-radius: 50%;
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: inset 0 0 30px rgba(255,255,255,.08);
+    }
+
+    .summary-ring-inner {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgba(15,23,42,.92);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .summary-percent {
+        font-size: 2rem;
+        font-weight: 900;
+        line-height: 1;
+        color: #fff;
+    }
+
+    .summary-caption {
+        margin-top: .35rem;
+        font-size: .78rem;
+        color: rgba(255,255,255,.62);
+    }
+
+    .srcx-filters {
+        padding: 1.15rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .filters-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .filters-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .filters-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .83rem;
+    }
+
+    .filters-actions {
+        display: flex;
+        gap: .65rem;
+        flex-wrap: wrap;
+    }
+
+    .quick-range-row {
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .quick-range-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .85rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .quick-range-btn:hover {
+        background: rgba(16,185,129,.08);
+        color: #047857;
+        border-color: rgba(16,185,129,.22);
+    }
+
+    .filters-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(180px, 1fr));
+        gap: .9rem;
+    }
+
+    .filter-field {
+        background: rgba(255,255,255,.55);
+        border-radius: .9rem;
+    }
+
+    .srcx-loading {
+        min-height: 320px;
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        text-align: center;
+        padding: 2rem;
+    }
+
+    .loading-text h3 {
+        margin: 0 0 .35rem;
+        font-size: 1rem;
+        color: var(--text);
+    }
+
+    .loading-text p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .srcx-kpis {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .kpi-card {
+        padding: 1.1rem;
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+    }
+
+    .kpi-icon {
+        width: 3rem;
+        height: 3rem;
+        border-radius: .95rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        font-weight: 900;
+        flex-shrink: 0;
+    }
+
+    .kpi-icon.indigo { background: rgba(99,102,241,.12); color: #6366f1; }
+    .kpi-icon.blue { background: rgba(59,130,246,.12); color: #2563eb; }
+    .kpi-icon.green { background: rgba(16,185,129,.12); color: #10b981; }
+    .kpi-icon.teal { background: rgba(20,184,166,.12); color: #0f766e; }
+    .kpi-icon.purple { background: rgba(139,92,246,.12); color: #8b5cf6; }
+    .kpi-icon.amber { background: rgba(245,158,11,.12); color: #f59e0b; }
+
+    .kpi-body {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .kpi-head-row {
+        display: flex;
+        justify-content: space-between;
+        gap: .5rem;
+        align-items: center;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-label {
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .kpi-value {
+        color: var(--text);
+        font-size: 1.45rem;
+        font-weight: 900;
+        line-height: 1.2;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-name {
+        font-size: 1.05rem;
+    }
+
+    .kpi-sub {
+        color: var(--muted);
+        font-size: .76rem;
+        line-height: 1.5;
+    }
+
+    .trend-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .2rem .55rem;
+        font-size: .68rem;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .trend-up {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .trend-down {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .trend-flat {
+        background: rgba(148,163,184,.14);
+        color: #475569;
+    }
+
+    .kpi-progress {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(148,163,184,.15);
+        overflow: hidden;
+        margin: .35rem 0 .45rem;
+    }
+
+    .kpi-progress-bar {
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #10b981, #34d399);
+    }
+
+    .srcx-insights {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .insight-card {
+        padding: 1rem;
+        display: flex;
+        gap: .85rem;
+        align-items: flex-start;
+    }
+
+    .insight-icon {
+        width: 2.6rem;
+        height: 2.6rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .tone-gold { background: rgba(245,158,11,.12); color: #d97706; }
+    .tone-green { background: rgba(16,185,129,.12); color: #059669; }
+    .tone-red { background: rgba(239,68,68,.12); color: #dc2626; }
+    .tone-indigo { background: rgba(99,102,241,.12); color: #4f46e5; }
+    .tone-slate { background: rgba(148,163,184,.14); color: #475569; }
+
+    .insight-body {
+        min-width: 0;
+        flex: 1;
+    }
+
+    .insight-title {
+        color: var(--muted);
+        font-size: .75rem;
+        margin-bottom: .2rem;
+    }
+
+    .insight-value {
+        color: var(--text);
+        font-size: 1rem;
+        font-weight: 800;
+        margin-bottom: .25rem;
+    }
+
+    .insight-desc {
+        color: var(--muted);
+        font-size: .74rem;
+        line-height: 1.45;
+    }
+
+    .srcx-dashboard {
+        display: grid;
+        grid-template-columns: 1.6fr 1fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .srcx-analytics-grid {
+        display: grid;
+        grid-template-columns: 1fr 1.2fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .main-chart-card,
+    .side-card,
+    .srcx-source-table-card,
+    .srcx-drill,
+    .srcx-table-card,
+    .srcx-note {
+        padding: 1rem;
+    }
+
+    .side-stack {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: .75rem;
+    }
+
+    .card-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .card-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .chart-empty {
+        min-height: 250px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: .88rem;
+    }
+
+    .chart-empty.small {
+        min-height: 180px;
+    }
+
+    .compare-list {
+        display: flex;
+        flex-direction: column;
+        gap: .75rem;
+    }
+
+    .compare-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        padding: .75rem .85rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+    }
+
+    .compare-label {
+        font-size: .8rem;
+        font-weight: 700;
+        color: var(--text);
+    }
+
+    .compare-values {
+        display: flex;
+        align-items: center;
+        gap: .55rem;
+        color: var(--muted);
+        font-size: .8rem;
+        flex-wrap: wrap;
+    }
+
+    .compare-values strong {
+        color: var(--text);
+        font-size: .85rem;
+    }
+
+    .compare-arrow {
+        color: #94a3b8;
+        font-weight: 900;
+    }
+
+    .compare-summary {
+        margin-top: .85rem;
+        border-radius: 1rem;
+        padding: .8rem .9rem;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .compare-good {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .compare-mid {
+        background: rgba(245,158,11,.12);
+        color: #d97706;
+    }
+
+    .drill-head {
+        align-items: center;
+    }
+
+    .clear-source-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .9rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .clear-source-btn:hover {
+        background: rgba(239,68,68,.08);
+        color: #dc2626;
+    }
+
+    .source-chip-row {
+        display: flex;
+        gap: .55rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .source-chip-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.55);
+        color: var(--text);
+        border-radius: 1rem;
+        padding: .55rem .8rem;
+        min-width: 120px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: .1rem;
+        cursor: pointer;
+        transition: .2s ease;
+        font-weight: 700;
+    }
+
+    .source-chip-btn small {
+        color: var(--muted);
+        font-size: .7rem;
+        font-weight: 700;
+    }
+
+    .source-chip-btn:hover {
+        border-color: rgba(79,70,229,.25);
+        background: rgba(99,102,241,.06);
+        color: #4f46e5;
+    }
+
+    .source-chip-active {
+        background: linear-gradient(135deg, #6366f1, #4f46e5);
+        color: #fff;
+        border-color: transparent;
+        box-shadow: 0 10px 20px rgba(99,102,241,.22);
+    }
+
+    .source-chip-active small {
+        color: rgba(255,255,255,.85);
+    }
+
+    .drill-mini-kpis {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+
+    .mini-kpi {
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+        border-radius: 1rem;
+        padding: .85rem;
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+    }
+
+    .mini-label {
+        font-size: .72rem;
+        color: var(--muted);
+    }
+
+    .mini-kpi strong {
+        color: var(--text);
+        font-size: .92rem;
+    }
+
+    .drill-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 1rem;
+    }
+
+    .premium-table {
+        background: transparent;
+    }
+
+    .source-label {
+        display: inline-flex;
+        align-items: center;
+        gap: .35rem;
+    }
+
+    .source-best {
+        font-weight: 800;
+        color: #047857;
+    }
+
+    .rate-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .3rem .7rem;
+        font-size: .74rem;
+        font-weight: 700;
+    }
+
+    .rate-good {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .rate-mid {
+        background: rgba(245,158,11,.12);
+        color: #d97706;
+    }
+
+    .rate-bad {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .stage-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .32rem .7rem;
+        font-size: .72rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .empty-data {
+        text-align: center;
+        padding: 2rem 1rem;
+    }
+
+    .empty-icon {
+        font-size: 2rem;
+        margin-bottom: .5rem;
+    }
+
+    .empty-data h4 {
+        margin: 0 0 .35rem;
+        color: var(--text);
+    }
+
+    .empty-data p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .srcx-note {
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+        margin-top: 1rem;
+    }
+
+    .note-icon {
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(99,102,241,.10);
+        color: #4f46e5;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+
+    .note-body h4 {
+        margin: 0 0 .3rem;
+        color: var(--text);
+        font-size: .95rem;
+        font-weight: 800;
+    }
+
+    .note-body p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .82rem;
+        line-height: 1.7;
+    }
+
+    @@media (max-width: 1300px) {
+        .srcx-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 1200px) {
+        .srcx-insights {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .srcx-dashboard,
+        .srcx-analytics-grid,
+        .drill-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @@media (max-width: 900px) {
+        .srcx-hero-main,
+        .filters-head {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 640px) {
+        .srcx-page {
+            padding: .8rem .8rem 2rem;
+        }
+
+        .srcx-hero {
+            padding: 1.25rem;
+            border-radius: 1.2rem;
+        }
+
+        .srcx-hero-text h1 {
+            font-size: 1.7rem;
+        }
+
+        .summary-ring {
+            width: 140px;
+            height: 140px;
+        }
+
+        .hero-chip {
+            min-width: 100%;
+        }
+
+        .srcx-kpis,
+        .srcx-insights,
+        .drill-mini-kpis {
+            grid-template-columns: 1fr;
+        }
+
+        .compare-row {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-actions {
+            width: 100%;
+        }
+    }
+
+    .mud-theme-dark .glass-card,
+    .mud-theme-dark .glass-inner-card {
+        background: rgba(17,24,39,.66);
+        border-color: rgba(255,255,255,.06);
+        box-shadow: 0 20px 50px rgba(0,0,0,.22);
+    }
+
+    .mud-theme-dark .filters-head h3,
+    .mud-theme-dark .card-head h3,
+    .mud-theme-dark .loading-text h3,
+    .mud-theme-dark .empty-data h4,
+    .mud-theme-dark .note-body h4,
+    .mud-theme-dark .kpi-value,
+    .mud-theme-dark .insight-value,
+    .mud-theme-dark .compare-label,
+    .mud-theme-dark .compare-values strong,
+    .mud-theme-dark .mini-kpi strong {
+        color: #f8fafc;
+    }
+
+    .mud-theme-dark .filters-head p,
+    .mud-theme-dark .card-head p,
+    .mud-theme-dark .loading-text p,
+    .mud-theme-dark .empty-data p,
+    .mud-theme-dark .note-body p,
+    .mud-theme-dark .kpi-label,
+    .mud-theme-dark .kpi-sub,
+    .mud-theme-dark .insight-title,
+    .mud-theme-dark .insight-desc,
+    .mud-theme-dark .compare-values,
+    .mud-theme-dark .mini-label,
+    .mud-theme-dark .source-chip-btn small {
+        color: #94a3b8;
+    }
+
+    .mud-theme-dark .compare-row,
+    .mud-theme-dark .mini-kpi,
+    .mud-theme-dark .source-chip-btn {
+        background: rgba(255,255,255,.03);
+    }
+
+    .mud-theme-dark .quick-range-btn,
+    .mud-theme-dark .clear-source-btn {
+        background: rgba(255,255,255,.05);
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .quick-range-btn:hover,
+    .mud-theme-dark .clear-source-btn:hover {
+        background: rgba(16,185,129,.12);
+        color: #bbf7d0;
+    }
+
+    .mud-theme-dark .source-chip-btn {
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .source-chip-btn:hover {
+        background: rgba(99,102,241,.12);
+        color: #c7d2fe;
+    }
+
+    .mud-theme-dark .source-chip-active {
+        color: #fff;
+    }
+
+    @@media print {
+        .srcx-bg,
+        .filters-actions,
+        .quick-range-row,
+        .srcx-back,
+        .clear-source-btn,
+        .source-chip-row button:not(.source-chip-active) {
+            display: none !important;
+        }
+
+        .glass-card,
+        .glass-inner-card {
+            box-shadow: none !important;
+            border: 1px solid #ddd !important;
+            background: #fff !important;
+        }
+
+        .srcx-page {
+            max-width: 100% !important;
+            padding: 0 !important;
+        }
+    }
+</style>

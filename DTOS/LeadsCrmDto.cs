@@ -7,7 +7,7 @@ namespace COCOBOLOERPNEW.DTOs;
 /// <summary>
 /// فلتر البحث في Leads
 /// </summary>
-public class LeadsCrmFilterDto
+public record LeadsCrmFilterDto
 {
     public string? SearchText { get; set; }
     public string? SearchTerm { get; set; }
@@ -15,6 +15,7 @@ public class LeadsCrmFilterDto
     public string? CampaignName { get; set; }
     public string? Platform { get; set; }
     public string? FormLanguage { get; set; }
+    public string? ProjectType { get; set; }
     public int? AssignedEmployeeId { get; set; }
     public bool? IsConverted { get; set; }
     public DateTime? DateFrom { get; set; }

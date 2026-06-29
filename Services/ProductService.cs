@@ -7,10 +7,12 @@ namespace COCOBOLOERPNEW.Services;
 public class ProductService : IProductService
 {
     private readonly db24804Context _context;
+    private readonly IAuditService _auditService;
 
-    public ProductService(db24804Context context)
+    public ProductService(db24804Context context, IAuditService auditService)
     {
         _context = context;
+        _auditService = auditService;
     }
 
         public async Task<List<ProductListDto>> GetProductsAsync(string? search)
@@ -475,5 +477,192 @@ public async Task ApproveCostChangeAsync(
 
     await _context.SaveChangesAsync();
     await transaction.CommitAsync();
+}
+// ============================
+// ✅ دوال مدة التصنيع وملاحظات التصنيع
+// ============================
+public async Task RequestPeriodChangeAsync(
+    int productId,
+    int? newPeriod,
+    string? newManufacturingNotes,
+    string reason,
+    string currentUsername)
+{
+    var product = await _context.Products
+        .FirstOrDefaultAsync(p => p.ProductId == productId);
+
+    if (product == null)
+        throw new Exception("المنتج غير موجود");
+
+    try
+    {
+        _context.PriceChangeRequests.Add(new PriceChangeRequest
+        {
+            ProductId = product.ProductId,
+            PriceType = "Manufacturing_Period",
+            CurrentPrice = product.Period.HasValue ? (decimal)product.Period.Value : 0,
+            RequestedPrice = newPeriod.HasValue ? (decimal)newPeriod.Value : 0,
+            Reason = reason,
+            Status = "Pending",
+            RequestedBy = currentUsername,
+            RequestedAt = DateTime.Now,
+            ReviewNotes = newManufacturingNotes
+        });
+
+        _context.Notifications.Add(new Notification
+        {
+            Title = "طلب تعديل مدة التصنيع",
+            Message = $"يوجد طلب لتعديل مدة التصنيع من {currentUsername}. السبب: {reason}",
+            RelatedTable = "Products",
+            RelatedId = product.ProductId,
+            RecipientUser = "Admin",
+            CreatedBy = currentUsername,
+            CreatedAt = DateTime.Now,
+            FormName = "products/form"
+        });
+
+    // ✅ تسجيل المراجعة
+    try
+    {
+        await _auditService.LogAsync(
+            "Products",
+            "إرسال طلب تعديل مدة التصنيع",
+            productId.ToString(),
+            oldData: (object?)null,
+            newData: (object)new { Period = newPeriod, ManufacturingDescription = newManufacturingNotes, Reason = reason },
+            currentUsername
+        );
+    }
+    catch (Exception auditEx)
+    {
+        Console.WriteLine($"[ProductService] Audit Warning: {auditEx.Message}");
+    }
+
+    await _context.SaveChangesAsync();
+}
+    catch (Exception ex)
+    {
+        Console.WriteLine("==================== ERROR ====================");
+        Console.WriteLine("Message: " + ex.Message);
+        Console.WriteLine("InnerException: " + ex.InnerException?.Message);
+        throw new Exception("خطأ أثناء حفظ الطلب: " + (ex.InnerException?.Message ?? ex.Message));
+    }
+}
+
+public async Task ApprovePeriodChangeAsync(int productId, string currentUsername)
+{
+    var product = await _context.Products
+        .FirstOrDefaultAsync(p => p.ProductId == productId);
+
+    if (product == null)
+        throw new Exception("المنتج غير موجود");
+
+    var pendingRequest = await _context.PriceChangeRequests
+        .FirstOrDefaultAsync(r => r.ProductId == productId 
+                               && r.Status == "Pending" 
+                               && r.PriceType == "Manufacturing_Period");
+
+    if (pendingRequest == null)
+        throw new Exception("لا يوجد طلب تعديل معلق");
+
+    // تطبيق التعديل
+    product.Period = (int)pendingRequest.RequestedPrice;
+    product.ManufacturingDescription = pendingRequest.ReviewNotes;
+
+    _context.PriceHistories.Add(new PriceHistory
+    {
+        ProductId = product.ProductId,
+        PriceType = "Manufacturing_Period",
+        OldPrice = pendingRequest.CurrentPrice,
+        NewPrice = pendingRequest.RequestedPrice,
+        ChangedBy = currentUsername,
+        ChangedAt = DateTime.Now,
+        ChangeReason = "موافقة الأدمن على تعديل مدة التصنيع"
+    });
+
+    pendingRequest.Status = "Approved";
+    pendingRequest.ReviewedBy = currentUsername;
+    pendingRequest.ReviewedAt = DateTime.Now;
+
+    _context.Notifications.Add(new Notification
+    {
+        Title = "تمت الموافقة على طلب تعديل مدة التصنيع",
+        Message = "تم اعتماد تعديل مدة التصنيع وملاحظات التصنيع.",
+        RelatedTable = "Products",
+        RelatedId = product.ProductId,
+        RecipientUser = pendingRequest.RequestedBy,
+        CreatedBy = currentUsername,
+        CreatedAt = DateTime.Now,
+        FormName = "products/form"
+    });
+
+    // ✅ تسجيل المراجعة
+    try
+    {
+        await _auditService.LogAsync(
+            "Products",
+            "موافقة على تعديل مدة التصنيع",
+            productId.ToString(),
+            oldData: (object)new { Period = (int)pendingRequest.CurrentPrice },
+            newData: (object)new { Period = (int)pendingRequest.RequestedPrice, ManufacturingDescription = pendingRequest.ReviewNotes },
+            currentUsername
+        );
+    }
+    catch (Exception auditEx)
+    {
+        Console.WriteLine($"[ProductService] Audit Warning: {auditEx.Message}");
+    }
+
+    await _context.SaveChangesAsync();
+}
+
+public async Task RejectPeriodChangeAsync(
+    int productId,
+    string currentUsername,
+    string? rejectReason = null)
+{
+    var pendingRequest = await _context.PriceChangeRequests
+        .FirstOrDefaultAsync(r => r.ProductId == productId 
+                               && r.Status == "Pending" 
+                               && r.PriceType == "Manufacturing_Period");
+
+    if (pendingRequest == null)
+        throw new Exception("لا يوجد طلب تعديل معلق");
+
+    pendingRequest.Status = "Rejected";
+    pendingRequest.ReviewedBy = currentUsername;
+    pendingRequest.ReviewedAt = DateTime.Now;
+    pendingRequest.ReviewNotes = rejectReason;
+
+    _context.Notifications.Add(new Notification
+    {
+        Title = "تم رفض طلب تعديل مدة التصنيع",
+        Message = $"تم رفض طلب تعديل مدة التصنيع. {(string.IsNullOrWhiteSpace(rejectReason) ? "" : $"السبب: {rejectReason}")}",
+        RelatedTable = "Products",
+        RelatedId = productId,
+        RecipientUser = pendingRequest.RequestedBy,
+        CreatedBy = currentUsername,
+        CreatedAt = DateTime.Now,
+        FormName = "products/form"
+    });
+
+    // ✅ تسجيل المراجعة
+    try
+    {
+        await _auditService.LogAsync(
+            "Products",
+            "رفض تعديل مدة التصنيع",
+            productId.ToString(),
+            oldData: (object)new { Period = (int?)pendingRequest.RequestedPrice, ManufacturingNotes = pendingRequest.ReviewNotes },
+            newData: (object?)null,
+            currentUsername
+        );
+    }
+    catch (Exception auditEx)
+    {
+        Console.WriteLine($"[ProductService] Audit Warning: {auditEx.Message}");
+    }
+
+    await _context.SaveChangesAsync();
 }
 }

@@ -13,10 +13,11 @@ public interface ILeadsCrmService
     LeadInteractionCreateDto dto, string userName);
     Task<(bool Success, string Message)> UpdateLeadAsync(LeadsCrmUpdateDto dto, string userName);
     Task<(bool Success, string Message, int PartyId, int OpportunityId)> ConvertLeadToClientAsync(LeadConvertDto dto, string userName);
-    Task<LeadsCrmStatsDto> GetStatsAsync();
+    Task<LeadsCrmStatsDto> GetStatsAsync(LeadsCrmFilterDto? filter = null);
     Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFilterDto filter);
     Task<(bool Success, string Message, int LeadId)> CreateLeadAsync(LeadsCrmCreateDto dto, string userName);
     Task<(bool Success, string Message)> DeleteLeadAsync(int leadId, string userName);
     Task<List<Employee>> GetEmployeesAsync();
     Task<List<Employee>> GetAssignableEmployeesAsync();
+    Task<List<string>> GetDistinctProjectsAsync();
 }

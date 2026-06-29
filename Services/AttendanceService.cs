@@ -828,7 +828,8 @@ public class AttendanceService : IAttendanceService
             .Select(s => new
             {
                 s.BiometricCode,
-                s.StartTime    // ✅ لحساب التأخير الصح
+                s.StartTime,   // ✅ لحساب التأخير
+                s.EndTime      // ✅ لحساب الانصراف المبكر
             })
             .ToListAsync();
 
@@ -878,6 +879,12 @@ public class AttendanceService : IAttendanceService
                 ? (int)(timeIn - expectedIn).TotalMinutes
                 : 0;
 
+            // ✅ الانصراف المبكر من وقت الشيفت الفعلي
+            var expectedOut = shift?.EndTime ?? new TimeOnly(17, 0);
+            int earlyLeaveMinutes = timeOut.HasValue && timeOut.Value < expectedOut
+                ? (int)(expectedOut - timeOut.Value).TotalMinutes
+                : 0;
+
             var status = lateMinutes > 0
                 ? AttendanceStatus.Late
                 : AttendanceStatus.Present;
@@ -888,23 +895,25 @@ public class AttendanceService : IAttendanceService
 
             if (existing != null)
             {
-                existing.TimeIn      = timeIn;
-                existing.TimeOut     = timeOut;
-                existing.TotalHours  = totalHours;
-                existing.LateMinutes = lateMinutes;
-                existing.Status      = status;
+                existing.TimeIn           = timeIn;
+                existing.TimeOut          = timeOut;
+                existing.TotalHours       = totalHours;
+                existing.LateMinutes      = lateMinutes;
+                existing.EarlyLeaveMinutes = earlyLeaveMinutes;
+                existing.Status           = status;
             }
             else
             {
                 toAdd.Add(new Attendance
                 {
-                    BiometricCode = bioCode,
-                    LogDate       = date.Date,
-                    TimeIn        = timeIn,
-                    TimeOut       = timeOut,
-                    TotalHours    = totalHours,
-                    LateMinutes   = lateMinutes,
-                    Status        = status
+                    BiometricCode        = bioCode,
+                    LogDate              = date.Date,
+                    TimeIn               = timeIn,
+                    TimeOut              = timeOut,
+                    TotalHours           = totalHours,
+                    LateMinutes          = lateMinutes,
+                    EarlyLeaveMinutes    = earlyLeaveMinutes,
+                    Status               = status
                 });
             }
 

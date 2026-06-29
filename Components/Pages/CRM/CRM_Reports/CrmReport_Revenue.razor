@@ -1,0 +1,2490 @@
+@page "/crm/reports/revenue"
+
+@using System.Globalization
+@using System.Text
+@using ApexCharts
+@using COCOBOLOERPNEW.Models
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>تقرير الإيرادات المتوقعة vs الفعلية</PageTitle>
+
+<div class="rev3-page" dir="rtl">
+
+    @* Background *@
+    <div class="rev3-bg">
+        <div class="rev3-orb orb-1"></div>
+        <div class="rev3-orb orb-2"></div>
+        <div class="rev3-orb orb-3"></div>
+    </div>
+
+    @* HERO *@
+    <section class="rev3-hero">
+        <div class="rev3-hero-grid"></div>
+
+        <div class="rev3-hero-content">
+            <div class="rev3-hero-top">
+                <button class="rev3-back" @onclick="GoBack" title="رجوع">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12h14" />
+                        <path d="m12 5 7 7-7 7" />
+                    </svg>
+                </button>
+
+                <div class="rev3-badge">
+                    <span class="badge-dot"></span>
+                    <span>Revenue Intelligence V3</span>
+                </div>
+            </div>
+
+            <div class="rev3-hero-main">
+                <div class="rev3-hero-text">
+                    <h1>الإيرادات المتوقعة <span>vs</span> الفعلية</h1>
+                    <p>
+                        لوحة تنفيذية احترافية لتحليل الإيرادات، الفجوة بين المتوقع والمحقق،
+                        مقارنة الفترات، وتحليل شهري تفصيلي مع Drill-down ذكي.
+                    </p>
+
+                    <div class="rev3-hero-chips">
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة الحالية</span>
+                            <span class="chip-value">@SelectedPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة السابقة</span>
+                            <span class="chip-value">@PreviousPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">الموظف</span>
+                            <span class="chip-value">@SelectedEmployeeLabel</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rev3-hero-side">
+                    <div class="summary-ring" style="@GetSummaryRingStyle()">
+                        <div class="summary-ring-inner">
+                            <div class="summary-percent">@_achievementRate.ToString("F1")%</div>
+                            <div class="summary-caption">نسبة تحقيق الإيراد</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @* FILTERS / ACTIONS *@
+    <section class="glass-card rev3-filters">
+        <div class="filters-head">
+            <div>
+                <h3>الفلاتر والتحكم</h3>
+                <p>اختر الفترة الزمنية والموظف أو استخدم اختصارات الفترات السريعة</p>
+            </div>
+
+            <div class="filters-actions">
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Default"
+                           StartIcon="@Icons.Material.Rounded.RestartAlt"
+                           OnClick="ResetFiltersAsync"
+                           Disabled="_isLoading">
+                    إعادة ضبط
+                </MudButton>
+
+                <MudButton Variant="Variant.Filled"
+                           Color="@MudColor.Primary"
+                           StartIcon="@Icons.Material.Rounded.FilterAlt"
+                           OnClick="LoadData"
+                           Disabled="_isLoading">
+                    تطبيق التحليل
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Success"
+                           StartIcon="@Icons.Material.Rounded.FileDownload"
+                           OnClick="ExportCsvAsync"
+                           Disabled="_isLoading">
+                    تصدير CSV
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Info"
+                           StartIcon="@Icons.Material.Rounded.Print"
+                           OnClick="PrintAsync"
+                           Disabled="_isLoading">
+                    طباعة / PDF
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="quick-range-row">
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(3)">آخر 3 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(6)">آخر 6 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(12)">آخر 12 شهر</button>
+            <button class="quick-range-btn" @onclick="SetCurrentYearAsync">السنة الحالية</button>
+        </div>
+
+        <div class="filters-grid">
+            <MudDatePicker @bind-Date="_fromDate"
+                           Label="من تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudDatePicker @bind-Date="_toDate"
+                           Label="إلى تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudSelect T="int?"
+                       @bind-Value="_empId"
+                       Label="الموظف"
+                       Clearable="true"
+                       Variant="Variant.Outlined"
+                       Dense="true"
+                       Class="filter-field">
+                @foreach (var emp in _employees)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)emp.Id)">@emp.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </div>
+    </section>
+
+    @if (_isLoading)
+    {
+        <div class="glass-card rev3-loading">
+            <MudProgressCircular Indeterminate="true"
+                                 Size="@MudSize.Large"
+                                 Color="@MudColor.Primary" />
+            <div class="loading-text">
+                <h3>جاري تحليل التقرير...</h3>
+                <p>يتم تجهيز المؤشرات، الرسوم البيانية، والمقارنات الذكية</p>
+            </div>
+        </div>
+    }
+    else
+    {
+        @* KPI *@
+        <section class="rev3-kpis">
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon indigo">₪</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">الإيرادات المتوقعة</div>
+                        <span class="trend-badge @GetTrendClass(_totalExpected, _prevExpected)">
+                            @GetTrendText(_totalExpected, _prevExpected)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@FormatMoney(_totalExpected)</div>
+                    <div class="kpi-sub">إجمالي المتوقع خلال الفترة الحالية</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon green">✓</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">الإيرادات الفعلية</div>
+                        <span class="trend-badge @GetTrendClass(_totalActual, _prevActual)">
+                            @GetTrendText(_totalActual, _prevActual)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@FormatMoney(_totalActual)</div>
+                    <div class="kpi-sub">القيمة المحققة من الصفقات الرابحة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon amber">%</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">نسبة تحقيق الإيراد</div>
+                        <span class="trend-badge @GetTrendClass(_achievementRate, _prevAchievementRate)">
+                            @GetTrendText(_achievementRate, _prevAchievementRate)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_achievementRate.ToString("F1")%</div>
+                    <div class="kpi-progress">
+                        <div class="kpi-progress-bar" style="@GetProgressBarStyle()"></div>
+                    </div>
+                    <div class="kpi-sub">الفعلي ÷ المتوقع × 100</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon @(_gapValue >= 0 ? "emerald" : "red")">
+                    @(_gapValue >= 0 ? "+" : "−")
+                </div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">الفجوة الحالية</div>
+                        <span class="trend-badge @GetTrendClass(_wonCount, _prevWonCount)">
+                            @GetTrendText(_wonCount, _prevWonCount)
+                        </span>
+                    </div>
+                    <div class="kpi-value @(_gapValue >= 0 ? "pos" : "neg")">@FormatSignedMoney(_gapValue)</div>
+                    <div class="kpi-sub">صفقات رابحة: @_wonCount — متوسط الصفقة: @FormatMoney(_avgDealValue)</div>
+                </div>
+            </div>
+        </section>
+
+        @* INSIGHTS *@
+        <section class="rev3-insights">
+            @foreach (var insight in _insights)
+            {
+                <div class="glass-card insight-card">
+                    <div class="insight-icon @insight.ToneClass">
+                        <MudIcon Icon="@insight.Icon" Size="@MudSize.Small" />
+                    </div>
+                    <div class="insight-body">
+                        <div class="insight-title">@insight.Title</div>
+                        <div class="insight-value">@insight.Value</div>
+                        <div class="insight-desc">@insight.Description</div>
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* MAIN DASHBOARD *@
+        <section class="rev3-dashboard">
+            <div class="glass-card main-chart-card">
+                <div class="card-head">
+                    <div>
+                        <h3>المتوقع / الفعلي / الفجوة الشهرية</h3>
+                        <p>تحليل شهري يوضح قيمة المتوقع والفعلي والفارق بينهما</p>
+                    </div>
+                </div>
+
+                @if (_trendPoints.Any())
+                {
+                    <ApexChart TItem="RevenueTrendPoint"
+                               Options="_trendChartOptions"
+                               Height="370">
+                        <ApexPointSeries TItem="RevenueTrendPoint"
+                                         Items="@_trendPoints"
+                                         Name="المتوقع"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.Expected" />
+
+                        <ApexPointSeries TItem="RevenueTrendPoint"
+                                         Items="@_trendPoints"
+                                         Name="الفعلي"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.Actual" />
+
+                        <ApexPointSeries TItem="RevenueTrendPoint"
+                                         Items="@_trendPoints"
+                                         Name="الفجوة"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.Variance" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty">لا توجد بيانات للرسم البياني</div>
+                }
+            </div>
+
+            <div class="side-stack">
+                <div class="glass-card side-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>أفضل الموظفين</h3>
+                            <p>أعلى الموظفين من حيث المتوقع والفعلي</p>
+                        </div>
+                    </div>
+
+                    @if (_employeeChartPoints.Any())
+                    {
+                        <ApexChart TItem="EmployeeChartPoint"
+                                   Options="_employeeChartOptions"
+                                   Height="300">
+                            <ApexPointSeries TItem="EmployeeChartPoint"
+                                             Items="@_employeeChartPoints"
+                                             Name="المتوقع"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Employee"
+                                             YValue="x => x.Expected" />
+
+                            <ApexPointSeries TItem="EmployeeChartPoint"
+                                             Items="@_employeeChartPoints"
+                                             Name="الفعلي"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Employee"
+                                             YValue="x => x.Actual" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty small">لا توجد بيانات كافية لعرض أداء الموظفين</div>
+                    }
+                </div>
+
+                <div class="glass-card side-card compare-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>مقارنة بالفترة السابقة</h3>
+                            <p>@PreviousPeriodLabel</p>
+                        </div>
+                    </div>
+
+                    <div class="compare-list">
+                        <div class="compare-row">
+                            <div class="compare-label">المتوقع</div>
+                            <div class="compare-values">
+                                <span>@FormatMoney(_prevExpected)</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@FormatMoney(_totalExpected)</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">الفعلي</div>
+                            <div class="compare-values">
+                                <span>@FormatMoney(_prevActual)</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@FormatMoney(_totalActual)</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">نسبة التحقيق</div>
+                            <div class="compare-values">
+                                <span>@_prevAchievementRate.ToString("F1")%</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_achievementRate.ToString("F1")%</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">الصفقات الرابحة</div>
+                            <div class="compare-values">
+                                <span>@_prevWonCount</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_wonCount</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="compare-summary @(_achievementRate >= _prevAchievementRate ? "compare-good" : "compare-bad")">
+                        @if (_achievementRate >= _prevAchievementRate)
+                        {
+                            <span>الأداء الحالي أفضل أو مساوي للفترة السابقة</span>
+                        }
+                        else
+                        {
+                            <span>الأداء الحالي أقل من الفترة السابقة ويحتاج مراجعة</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        @* MONTH DRILL-DOWN *@
+        <section class="glass-card rev3-drill">
+            <div class="card-head drill-head">
+                <div>
+                    <h3>Drill-down شهري</h3>
+                    <p>اختر شهرًا لعرض التحليل التفصيلي اليومي وأداء الموظفين خلاله</p>
+                </div>
+
+                @if (_selectedMonthKey.HasValue)
+                {
+                    <button class="clear-month-btn" @onclick="ClearSelectedMonth">
+                        إلغاء اختيار الشهر
+                    </button>
+                }
+            </div>
+
+            <div class="month-chip-row">
+                @foreach (var month in _monthlyRows.OrderBy(x => x.Year).ThenBy(x => x.MonthNum))
+                {
+                    <button class="month-chip-btn @(IsSelectedMonth(month.Year, month.MonthNum) ? "month-chip-active" : "")"
+                            @onclick="() => SelectMonth(month.Year, month.MonthNum)">
+                        <span>@month.Month</span>
+                        <small>@month.AchievementRate.ToString("F0")%</small>
+                    </button>
+                }
+            </div>
+
+            @if (_selectedMonthKey.HasValue)
+            {
+                <div class="drill-mini-kpis">
+                    <div class="mini-kpi">
+                        <span class="mini-label">الشهر المحدد</span>
+                        <strong>@_selectedMonthLabel</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">المتوقع</span>
+                        <strong>@FormatMoney(_selectedMonthExpected)</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">الفعلي</span>
+                        <strong>@FormatMoney(_selectedMonthActual)</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">نسبة التحقيق</span>
+                        <strong>@_selectedMonthRate.ToString("F1")%</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">الصفقات الرابحة</span>
+                        <strong>@_selectedMonthWonCount</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">أفضل موظف</span>
+                        <strong>@_selectedMonthTopEmployee</strong>
+                    </div>
+                </div>
+
+                <div class="drill-grid">
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>التحليل اليومي — @_selectedMonthLabel</h3>
+                                <p>المتوقع والفعلي على مستوى الأيام داخل الشهر</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedMonthDailyPoints.Any())
+                        {
+                            <ApexChart TItem="DailyTrendPoint"
+                                       Options="_dailyChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="DailyTrendPoint"
+                                                 Items="@_selectedMonthDailyPoints"
+                                                 Name="المتوقع"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Day"
+                                                 YValue="x => x.Expected" />
+
+                                <ApexPointSeries TItem="DailyTrendPoint"
+                                                 Items="@_selectedMonthDailyPoints"
+                                                 Name="الفعلي"
+                                                 SeriesType="SeriesType.Line"
+                                                 XValue="x => x.Day"
+                                                 YValue="x => x.Actual" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد بيانات يومية للشهر المحدد</div>
+                        }
+                    </div>
+
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>أفضل الموظفين في الشهر</h3>
+                                <p>مقارنة المتوقع والفعلي للموظفين داخل الشهر المحدد</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedMonthEmployeePoints.Any())
+                        {
+                            <ApexChart TItem="EmployeeChartPoint"
+                                       Options="_selectedMonthEmployeeChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="EmployeeChartPoint"
+                                                 Items="@_selectedMonthEmployeePoints"
+                                                 Name="المتوقع"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Employee"
+                                                 YValue="x => x.Expected" />
+
+                                <ApexPointSeries TItem="EmployeeChartPoint"
+                                                 Items="@_selectedMonthEmployeePoints"
+                                                 Name="الفعلي"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Employee"
+                                                 YValue="x => x.Actual" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد بيانات كافية لعرض الموظفين في هذا الشهر</div>
+                        }
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* TABLE *@
+        <section class="glass-card rev3-table-card">
+            <div class="card-head">
+                <div>
+                    <h3>التفاصيل الشهرية</h3>
+                    <p>تفصيل شهري يوضح المتوقع والفعلي والفجوة ونسبة التحقيق</p>
+                </div>
+            </div>
+
+            <MudTable Items="@_monthlyRows"
+                      Hover="true"
+                      Dense="true"
+                      Elevation="0"
+                      RowsPerPage="12"
+                      Breakpoint="Breakpoint.Sm"
+                      Class="premium-table">
+                <HeaderContent>
+                    <MudTh>الشهر</MudTh>
+                    <MudTh>المتوقع</MudTh>
+                    <MudTh>الفعلي</MudTh>
+                    <MudTh>الفجوة</MudTh>
+                    <MudTh>نسبة التحقيق</MudTh>
+                </HeaderContent>
+
+                <RowTemplate>
+                    <MudTd DataLabel="الشهر">@context.Month</MudTd>
+                    <MudTd DataLabel="المتوقع">@FormatMoney(context.Expected)</MudTd>
+                    <MudTd DataLabel="الفعلي">@FormatMoney(context.Actual)</MudTd>
+                    <MudTd DataLabel="الفجوة">
+                        <span class="variance-pill @(context.Variance >= 0 ? "variance-pos" : "variance-neg")">
+                            @FormatSignedMoney(context.Variance)
+                        </span>
+                    </MudTd>
+                    <MudTd DataLabel="نسبة التحقيق">
+                        <span class="rate-pill">@context.AchievementRate.ToString("F1")%</span>
+                    </MudTd>
+                </RowTemplate>
+
+                <NoRecordsContent>
+                    <div class="empty-data">
+                        <div class="empty-icon">📉</div>
+                        <h4>لا توجد بيانات</h4>
+                        <p>لا توجد نتائج مطابقة للفلاتر الحالية</p>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </section>
+
+        @* NOTE *@
+        <section class="glass-card rev3-note">
+            <div class="note-icon">ℹ️</div>
+            <div class="note-body">
+                <h4>ملاحظة تحليلية مهمة</h4>
+                <p>
+                    هذه النسخة تحسب الإيراد الفعلي من الصفقات ذات
+                    <strong>StageId = @WonStageId</strong>
+                    وتربطه بـ <strong>CreatedAt</strong>.
+                    إذا كان لديك لاحقًا <strong>WonAt</strong> أو <strong>InvoiceDate</strong> أو <strong>PaymentDate</strong>،
+                    فالأفضل استخدامه لرفع الدقة المالية للتقرير.
+                </p>
+            </div>
+        </section>
+    }
+</div>
+
+@code {
+    private const int WonStageId = 3;
+
+    private readonly CultureInfo _arCulture = new("ar-EG");
+
+    private DateTime? _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+    private DateTime? _toDate = DateTime.Today;
+    private int? _empId;
+    private bool _isLoading;
+
+    private List<EmployeeItem> _employees = new();
+    private List<RevenueSourceRow> _currentRows = new();
+
+    private List<MonthlyRow> _monthlyRows = new();
+    private List<RevenueTrendPoint> _trendPoints = new();
+    private List<EmployeeChartPoint> _employeeChartPoints = new();
+    private List<InsightItem> _insights = new();
+
+    private decimal _totalExpected;
+    private decimal _totalActual;
+    private decimal _gapValue;
+    private double _achievementRate;
+    private decimal _avgDealValue;
+    private int _wonCount;
+
+    private decimal _prevExpected;
+    private decimal _prevActual;
+    private double _prevAchievementRate;
+    private int _prevWonCount;
+
+    private string _previousPeriodLabel = "غير متاح";
+
+    private DateTime? _selectedMonthKey;
+    private string _selectedMonthLabel = "—";
+    private decimal _selectedMonthExpected;
+    private decimal _selectedMonthActual;
+    private double _selectedMonthRate;
+    private int _selectedMonthWonCount;
+    private string _selectedMonthTopEmployee = "—";
+    private List<DailyTrendPoint> _selectedMonthDailyPoints = new();
+    private List<EmployeeChartPoint> _selectedMonthEmployeePoints = new();
+
+    private ApexChartOptions<RevenueTrendPoint> _trendChartOptions = new();
+    private ApexChartOptions<EmployeeChartPoint> _employeeChartOptions = new();
+    private ApexChartOptions<DailyTrendPoint> _dailyChartOptions = new();
+    private ApexChartOptions<EmployeeChartPoint> _selectedMonthEmployeeChartOptions = new();
+
+    private string SelectedEmployeeLabel =>
+        _empId.HasValue
+            ? _employees.FirstOrDefault(x => x.Id == _empId.Value)?.Name ?? "موظف محدد"
+            : "كل الموظفين";
+
+    private string SelectedPeriodLabel =>
+        $"{(_fromDate.HasValue ? _fromDate.Value.ToString("dd MMM yyyy", _arCulture) : "البداية")} — {(_toDate.HasValue ? _toDate.Value.ToString("dd MMM yyyy", _arCulture) : "اليوم")}";
+
+    private string PreviousPeriodLabel => _previousPeriodLabel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        ConfigureCharts();
+        await LoadEmployeesAsync();
+        await LoadData();
+    }
+
+    private void ConfigureCharts()
+    {
+        _trendChartOptions = new ApexChartOptions<RevenueTrendPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#6366f1", "#10b981", "#f59e0b" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 8,
+                    ColumnWidth = "42%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { DecimalsInFloat = 0 }
+            },
+            Tooltip = new Tooltip
+            {
+                Shared = true,
+                Intersect = false
+            }
+        };
+
+        _employeeChartOptions = new ApexChartOptions<EmployeeChartPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#94a3b8", "#10b981" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { DecimalsInFloat = 0 }
+            },
+            Tooltip = new Tooltip
+            {
+                Shared = true,
+                Intersect = false
+            }
+        };
+
+        _dailyChartOptions = new ApexChartOptions<DailyTrendPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#6366f1", "#f59e0b" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "50%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { DecimalsInFloat = 0 }
+            },
+            Tooltip = new Tooltip
+            {
+                Shared = true,
+                Intersect = false
+            }
+        };
+
+        _selectedMonthEmployeeChartOptions = new ApexChartOptions<EmployeeChartPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#cbd5e1", "#4f46e5" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { DecimalsInFloat = 0 }
+            },
+            Tooltip = new Tooltip
+            {
+                Shared = true,
+                Intersect = false
+            }
+        };
+    }
+
+    private async Task LoadEmployeesAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var raw = await db.VwSalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.EmployeeId != null && o.EmployeeName != null)
+            .GroupBy(o => new { o.EmployeeId, o.EmployeeName })
+            .Select(g => new
+            {
+                Id = g.Key.EmployeeId!.Value,
+                Name = g.Key.EmployeeName!
+            })
+            .OrderBy(x => x.Name)
+            .ToListAsync();
+
+        _employees = raw
+            .Select(x => new EmployeeItem
+            {
+                Id = x.Id,
+                Name = x.Name
+            })
+            .ToList();
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+        _toDate = DateTime.Today;
+        _empId = null;
+        _selectedMonthKey = null;
+        await LoadData();
+    }
+
+    private async Task SetLastMonthsAsync(int months)
+    {
+        if (months <= 0) months = 12;
+
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-(months - 1));
+        _toDate = DateTime.Today;
+        _selectedMonthKey = null;
+
+        await LoadData();
+    }
+
+    private async Task SetCurrentYearAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, 1, 1);
+        _toDate = DateTime.Today;
+        _selectedMonthKey = null;
+
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+
+        try
+        {
+            NormalizeDateRange();
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            _currentRows = await LoadPeriodRowsAsync(db, _fromDate, _toDate);
+
+            if (TryGetPreviousRange(out var prevFrom, out var prevTo))
+            {
+                _previousPeriodLabel = $"{prevFrom.ToString("dd MMM yyyy", _arCulture)} — {prevTo.ToString("dd MMM yyyy", _arCulture)}";
+                var previousRows = await LoadPeriodRowsAsync(db, prevFrom, prevTo);
+                CalculatePreviousMetrics(previousRows);
+            }
+            else
+            {
+                _previousPeriodLabel = "غير متاح";
+                ResetPreviousMetrics();
+            }
+
+            CalculateCurrentMetrics(_currentRows);
+            BuildMonthlyData(_currentRows);
+            BuildEmployeePerformance(_currentRows);
+            ResolveSelectedMonth();
+            BuildSelectedMonthAnalytics(_currentRows);
+            BuildInsights();
+
+            Snackbar.Add("تم تحديث التقرير بنجاح", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ أثناء تحميل التقرير: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task<List<RevenueSourceRow>> LoadPeriodRowsAsync(db24804Context db, DateTime? from, DateTime? to)
+    {
+        var query = db.VwSalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.IsActive == true);
+
+        if (from.HasValue)
+        {
+            var fromDate = from.Value.Date;
+            query = query.Where(o => o.CreatedAt >= fromDate);
+        }
+
+        if (to.HasValue)
+        {
+            var toExclusive = to.Value.Date.AddDays(1);
+            query = query.Where(o => o.CreatedAt < toExclusive);
+        }
+
+        if (_empId.HasValue)
+        {
+            query = query.Where(o => o.EmployeeId == _empId.Value);
+        }
+
+        return await query
+            .Select(o => new RevenueSourceRow
+            {
+                CreatedAt = o.CreatedAt,
+                ExpectedValue = o.ExpectedValue ?? 0m,
+                StageId = o.StageId,
+                EmployeeName = o.EmployeeName
+            })
+            .ToListAsync();
+    }
+
+    private void CalculateCurrentMetrics(List<RevenueSourceRow> rows)
+    {
+        _totalExpected = rows.Sum(x => x.ExpectedValue);
+        _totalActual = rows.Where(x => x.StageId == WonStageId).Sum(x => x.ExpectedValue);
+        _gapValue = _totalActual - _totalExpected;
+        _achievementRate = _totalExpected > 0 ? (double)(_totalActual / _totalExpected * 100m) : 0d;
+        _wonCount = rows.Count(x => x.StageId == WonStageId);
+        _avgDealValue = _wonCount > 0 ? _totalActual / _wonCount : 0m;
+    }
+
+    private void CalculatePreviousMetrics(List<RevenueSourceRow> rows)
+    {
+        _prevExpected = rows.Sum(x => x.ExpectedValue);
+        _prevActual = rows.Where(x => x.StageId == WonStageId).Sum(x => x.ExpectedValue);
+        _prevAchievementRate = _prevExpected > 0 ? (double)(_prevActual / _prevExpected * 100m) : 0d;
+        _prevWonCount = rows.Count(x => x.StageId == WonStageId);
+    }
+
+    private void ResetPreviousMetrics()
+    {
+        _prevExpected = 0m;
+        _prevActual = 0m;
+        _prevAchievementRate = 0d;
+        _prevWonCount = 0;
+    }
+
+    private void BuildMonthlyData(List<RevenueSourceRow> rows)
+    {
+        var monthBuckets = new Dictionary<DateTime, MonthlyAggregate>();
+
+        var startMonth = _fromDate.HasValue
+            ? new DateTime(_fromDate.Value.Year, _fromDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+
+        var endMonth = _toDate.HasValue
+            ? new DateTime(_toDate.Value.Year, _toDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+
+        foreach (var row in rows)
+        {
+            var key = new DateTime(row.CreatedAt.Year, row.CreatedAt.Month, 1);
+
+            if (!monthBuckets.TryGetValue(key, out var aggregate))
+            {
+                aggregate = new MonthlyAggregate();
+                monthBuckets[key] = aggregate;
+            }
+
+            aggregate.Expected += row.ExpectedValue;
+
+            if (row.StageId == WonStageId)
+                aggregate.Actual += row.ExpectedValue;
+        }
+
+        var list = new List<MonthlyRow>();
+
+        for (var month = startMonth; month <= endMonth; month = month.AddMonths(1))
+        {
+            monthBuckets.TryGetValue(month, out var aggregate);
+            aggregate ??= new MonthlyAggregate();
+
+            var variance = aggregate.Actual - aggregate.Expected;
+            var rate = aggregate.Expected > 0 ? (double)(aggregate.Actual / aggregate.Expected * 100m) : 0d;
+
+            list.Add(new MonthlyRow
+            {
+                Year = month.Year,
+                MonthNum = month.Month,
+                Month = month.ToString("MMM yyyy", _arCulture),
+                Expected = aggregate.Expected,
+                Actual = aggregate.Actual,
+                Variance = variance,
+                AchievementRate = rate
+            });
+        }
+
+        _monthlyRows = list
+            .OrderByDescending(x => x.Year)
+            .ThenByDescending(x => x.MonthNum)
+            .ToList();
+
+        _trendPoints = list
+            .OrderBy(x => x.Year)
+            .ThenBy(x => x.MonthNum)
+            .Select(x => new RevenueTrendPoint
+            {
+                Month = x.Month,
+                Expected = x.Expected,
+                Actual = x.Actual,
+                Variance = x.Variance
+            })
+            .ToList();
+    }
+
+    private void BuildEmployeePerformance(List<RevenueSourceRow> rows)
+    {
+        _employeeChartPoints = rows
+            .GroupBy(x => string.IsNullOrWhiteSpace(x.EmployeeName) ? "غير محدد" : x.EmployeeName!)
+            .Select(g => new EmployeeChartPoint
+            {
+                Employee = g.Key,
+                Expected = g.Sum(x => x.ExpectedValue),
+                Actual = g.Where(x => x.StageId == WonStageId).Sum(x => x.ExpectedValue)
+            })
+            .OrderByDescending(x => x.Actual)
+            .ThenByDescending(x => x.Expected)
+            .Take(6)
+            .ToList();
+    }
+
+    private void ResolveSelectedMonth()
+    {
+        if (_monthlyRows.Count == 0)
+        {
+            _selectedMonthKey = null;
+            return;
+        }
+
+        if (_selectedMonthKey.HasValue)
+        {
+            var selected = new DateTime(_selectedMonthKey.Value.Year, _selectedMonthKey.Value.Month, 1);
+            var exists = _monthlyRows.Any(x => x.Year == selected.Year && x.MonthNum == selected.Month);
+
+            if (exists)
+            {
+                _selectedMonthKey = selected;
+                return;
+            }
+        }
+
+        var latestWithData = _monthlyRows
+            .Where(x => x.Expected > 0 || x.Actual > 0)
+            .OrderByDescending(x => x.Year)
+            .ThenByDescending(x => x.MonthNum)
+            .FirstOrDefault();
+
+        if (latestWithData != null)
+        {
+            _selectedMonthKey = new DateTime(latestWithData.Year, latestWithData.MonthNum, 1);
+        }
+        else
+        {
+            var latestAny = _monthlyRows
+                .OrderByDescending(x => x.Year)
+                .ThenByDescending(x => x.MonthNum)
+                .First();
+
+            _selectedMonthKey = new DateTime(latestAny.Year, latestAny.MonthNum, 1);
+        }
+    }
+
+    private void BuildSelectedMonthAnalytics(List<RevenueSourceRow> rows)
+    {
+        _selectedMonthDailyPoints = new();
+        _selectedMonthEmployeePoints = new();
+        _selectedMonthExpected = 0m;
+        _selectedMonthActual = 0m;
+        _selectedMonthRate = 0d;
+        _selectedMonthWonCount = 0;
+        _selectedMonthTopEmployee = "—";
+        _selectedMonthLabel = "—";
+
+        if (!_selectedMonthKey.HasValue)
+            return;
+
+        var month = _selectedMonthKey.Value;
+        _selectedMonthLabel = month.ToString("MMMM yyyy", _arCulture);
+
+        var monthRows = rows
+            .Where(x => x.CreatedAt.Year == month.Year && x.CreatedAt.Month == month.Month)
+            .ToList();
+
+        _selectedMonthExpected = monthRows.Sum(x => x.ExpectedValue);
+        _selectedMonthActual = monthRows.Where(x => x.StageId == WonStageId).Sum(x => x.ExpectedValue);
+        _selectedMonthRate = _selectedMonthExpected > 0 ? (double)(_selectedMonthActual / _selectedMonthExpected * 100m) : 0d;
+        _selectedMonthWonCount = monthRows.Count(x => x.StageId == WonStageId);
+
+        _selectedMonthEmployeePoints = monthRows
+            .GroupBy(x => string.IsNullOrWhiteSpace(x.EmployeeName) ? "غير محدد" : x.EmployeeName!)
+            .Select(g => new EmployeeChartPoint
+            {
+                Employee = g.Key,
+                Expected = g.Sum(x => x.ExpectedValue),
+                Actual = g.Where(x => x.StageId == WonStageId).Sum(x => x.ExpectedValue)
+            })
+            .OrderByDescending(x => x.Actual)
+            .ThenByDescending(x => x.Expected)
+            .Take(6)
+            .ToList();
+
+        _selectedMonthTopEmployee = _selectedMonthEmployeePoints.FirstOrDefault()?.Employee ?? "—";
+
+        var days = DateTime.DaysInMonth(month.Year, month.Month);
+        var dailyMap = monthRows
+            .GroupBy(x => x.CreatedAt.Day)
+            .ToDictionary(
+                g => g.Key,
+                g => new DailyAggregate
+                {
+                    Expected = g.Sum(x => x.ExpectedValue),
+                    Actual = g.Where(x => x.StageId == WonStageId).Sum(x => x.ExpectedValue)
+                });
+
+        for (var day = 1; day <= days; day++)
+        {
+            dailyMap.TryGetValue(day, out var aggregate);
+            aggregate ??= new DailyAggregate();
+
+            _selectedMonthDailyPoints.Add(new DailyTrendPoint
+            {
+                Day = day.ToString(),
+                Expected = aggregate.Expected,
+                Actual = aggregate.Actual
+            });
+        }
+    }
+
+    private void BuildInsights()
+    {
+        _insights = new List<InsightItem>();
+
+        if (_monthlyRows.Any())
+        {
+            var bestActualMonth = _monthlyRows.OrderByDescending(x => x.Actual).First();
+            var bestRateMonth = _monthlyRows.OrderByDescending(x => x.AchievementRate).First();
+            var worstGapMonth = _monthlyRows.OrderBy(x => x.Variance).First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.EmojiEvents,
+                Title = "أفضل شهر فعليًا",
+                Value = bestActualMonth.Month,
+                Description = $"حقق {FormatMoney(bestActualMonth.Actual)}",
+                ToneClass = "tone-gold"
+            });
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.TrendingUp,
+                Title = "أعلى نسبة تحقيق",
+                Value = bestRateMonth.Month,
+                Description = $"{bestRateMonth.AchievementRate:F1}% من المتوقع",
+                ToneClass = "tone-green"
+            });
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.WarningAmber,
+                Title = "أكبر فجوة",
+                Value = worstGapMonth.Month,
+                Description = $"الفارق {FormatSignedMoney(worstGapMonth.Variance)}",
+                ToneClass = "tone-red"
+            });
+        }
+
+        if (_employeeChartPoints.Any())
+        {
+            var topEmployee = _employeeChartPoints.OrderByDescending(x => x.Actual).First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.Person,
+                Title = "أفضل موظف",
+                Value = topEmployee.Employee,
+                Description = $"إيراد فعلي {FormatMoney(topEmployee.Actual)}",
+                ToneClass = "tone-indigo"
+            });
+        }
+
+        while (_insights.Count < 4)
+        {
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.Insights,
+                Title = "معلومة",
+                Value = "—",
+                Description = "لا توجد بيانات كافية لهذا المؤشر",
+                ToneClass = "tone-slate"
+            });
+        }
+    }
+
+    private void SelectMonth(int year, int month)
+    {
+        _selectedMonthKey = new DateTime(year, month, 1);
+        BuildSelectedMonthAnalytics(_currentRows);
+    }
+
+    private void ClearSelectedMonth()
+    {
+        _selectedMonthKey = null;
+        BuildSelectedMonthAnalytics(_currentRows);
+    }
+
+    private bool IsSelectedMonth(int year, int month)
+        => _selectedMonthKey.HasValue
+           && _selectedMonthKey.Value.Year == year
+           && _selectedMonthKey.Value.Month == month;
+
+    private void NormalizeDateRange()
+    {
+        if (_fromDate.HasValue && _toDate.HasValue && _fromDate.Value.Date > _toDate.Value.Date)
+        {
+            var temp = _fromDate;
+            _fromDate = _toDate;
+            _toDate = temp;
+
+            Snackbar.Add("تم تبديل تاريخ البداية والنهاية تلقائيًا لأن البداية كانت أكبر من النهاية.", Severity.Info);
+        }
+    }
+
+    private bool TryGetPreviousRange(out DateTime previousFrom, out DateTime previousTo)
+    {
+        previousFrom = default;
+        previousTo = default;
+
+        if (!_fromDate.HasValue || !_toDate.HasValue)
+            return false;
+
+        var currentFrom = _fromDate.Value.Date;
+        var currentTo = _toDate.Value.Date;
+
+        var days = (currentTo - currentFrom).Days;
+        previousTo = currentFrom.AddDays(-1);
+        previousFrom = previousTo.AddDays(-days);
+
+        return true;
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("تقرير الإيرادات المتوقعة vs الفعلية");
+            sb.AppendLine($"الفترة الحالية,{SelectedPeriodLabel}");
+            sb.AppendLine($"الفترة السابقة,{PreviousPeriodLabel}");
+            sb.AppendLine($"الموظف,{SelectedEmployeeLabel}");
+            sb.AppendLine();
+
+            sb.AppendLine("المؤشرات الرئيسية");
+            sb.AppendLine("المؤشر,القيمة");
+            sb.AppendLine($"الإيرادات المتوقعة,{_totalExpected:N0}");
+            sb.AppendLine($"الإيرادات الفعلية,{_totalActual:N0}");
+            sb.AppendLine($"الفجوة,{_gapValue:N0}");
+            sb.AppendLine($"نسبة تحقيق الإيراد,{_achievementRate:F1}%");
+            sb.AppendLine($"الصفقات الرابحة,{_wonCount}");
+            sb.AppendLine($"متوسط الصفقة الرابحة,{_avgDealValue:N0}");
+            sb.AppendLine();
+
+            sb.AppendLine("التفاصيل الشهرية");
+            sb.AppendLine("الشهر,المتوقع,الفعلي,الفجوة,نسبة التحقيق");
+            foreach (var row in _monthlyRows.OrderBy(x => x.Year).ThenBy(x => x.MonthNum))
+            {
+                sb.AppendLine($"{row.Month},{row.Expected:N0},{row.Actual:N0},{row.Variance:N0},{row.AchievementRate:F1}%");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("أفضل الموظفين");
+            sb.AppendLine("الموظف,المتوقع,الفعلي");
+            foreach (var row in _employeeChartPoints)
+            {
+                sb.AppendLine($"{row.Employee},{row.Expected:N0},{row.Actual:N0}");
+            }
+
+            var csv = sb.ToString();
+            var fileName = $"revenue-report-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+            var dataUrl = "data:text/csv;charset=utf-8,\uFEFF" + Uri.EscapeDataString(csv);
+
+            var script = $@"
+                (function() {{
+                    const link = document.createElement('a');
+                    link.href = '{dataUrl}';
+                    link.download = '{fileName}';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }})();";
+
+            await JS.InvokeVoidAsync("eval", script);
+            Snackbar.Add("تم تصدير الملف بنجاح. يمكنك فتحه مباشرة في Excel.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تصدير الملف: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval", "window.print()");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تشغيل الطباعة: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string FormatMoney(decimal value) => $"{value:N0} ج.م";
+
+    private string FormatSignedMoney(decimal value) => $"{(value > 0 ? "+" : "")}{value:N0} ج.م";
+
+    private string GetTrendClass(decimal current, decimal previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(double current, double previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(int current, int previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendText(decimal current, decimal previous)
+    {
+        if (previous == 0m)
+            return current == 0m ? "0%" : "جديد";
+
+        var change = (double)((current - previous) / previous * 100m);
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(double current, double previous)
+    {
+        if (Math.Abs(previous) < 0.000001)
+            return Math.Abs(current) < 0.000001 ? "0%" : "جديد";
+
+        var change = ((current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(int current, int previous)
+    {
+        if (previous == 0)
+            return current == 0 ? "0%" : "جديد";
+
+        var change = ((double)(current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetSummaryRingStyle()
+    {
+        var safeRate = Math.Max(0, Math.Min(_achievementRate, 100));
+        var angle = safeRate * 3.6;
+        return $"background: conic-gradient(#10b981 0deg, #10b981 {angle:F1}deg, rgba(255,255,255,.12) {angle:F1}deg, rgba(255,255,255,.12) 360deg);";
+    }
+
+    private string GetProgressBarStyle()
+    {
+        var safeRate = Math.Max(0, Math.Min(_achievementRate, 100));
+        return $"width:{safeRate:F0}%";
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/crm/reports");
+
+    private sealed class EmployeeItem
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    private sealed class RevenueSourceRow
+    {
+        public DateTime CreatedAt { get; set; }
+        public decimal ExpectedValue { get; set; }
+        public int? StageId { get; set; }
+        public string? EmployeeName { get; set; }
+    }
+
+    private sealed class MonthlyAggregate
+    {
+        public decimal Expected { get; set; }
+        public decimal Actual { get; set; }
+    }
+
+    private sealed class DailyAggregate
+    {
+        public decimal Expected { get; set; }
+        public decimal Actual { get; set; }
+    }
+
+    private sealed class MonthlyRow
+    {
+        public int Year { get; set; }
+        public int MonthNum { get; set; }
+        public string Month { get; set; } = "";
+        public decimal Expected { get; set; }
+        public decimal Actual { get; set; }
+        public decimal Variance { get; set; }
+        public double AchievementRate { get; set; }
+    }
+
+    private sealed class RevenueTrendPoint
+    {
+        public string Month { get; set; } = "";
+        public decimal Expected { get; set; }
+        public decimal Actual { get; set; }
+        public decimal Variance { get; set; }
+    }
+
+    private sealed class DailyTrendPoint
+    {
+        public string Day { get; set; } = "";
+        public decimal Expected { get; set; }
+        public decimal Actual { get; set; }
+    }
+
+    private sealed class EmployeeChartPoint
+    {
+        public string Employee { get; set; } = "";
+        public decimal Expected { get; set; }
+        public decimal Actual { get; set; }
+    }
+
+    private sealed class InsightItem
+    {
+        public string Icon { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Value { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string ToneClass { get; set; } = "";
+    }
+}
+
+<style>
+    .rev3-page {
+        --text: #0f172a;
+        --muted: #64748b;
+        --line: rgba(148, 163, 184, .16);
+        --glass: rgba(255,255,255,.72);
+        --shadow: 0 20px 50px rgba(15, 23, 42, .06);
+
+        max-width: 1460px;
+        margin: 0 auto;
+        padding: 1.25rem 1.25rem 3rem;
+        position: relative;
+        min-height: 100vh;
+    }
+
+    .rev3-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+    }
+
+    .rev3-orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(120px);
+        opacity: .16;
+    }
+
+    .orb-1 {
+        width: 420px;
+        height: 420px;
+        background: #6366f1;
+        top: -120px;
+        right: -120px;
+        animation: rev3Float 12s ease-in-out infinite;
+    }
+
+    .orb-2 {
+        width: 360px;
+        height: 360px;
+        background: #10b981;
+        bottom: -80px;
+        left: -80px;
+        animation: rev3Float 18s ease-in-out infinite reverse;
+    }
+
+    .orb-3 {
+        width: 280px;
+        height: 280px;
+        background: #f59e0b;
+        top: 30%;
+        left: 45%;
+        animation: rev3Float 16s ease-in-out infinite;
+    }
+
+    @@keyframes rev3Float {
+        0%,100% { transform: translate(0,0) scale(1); }
+        50% { transform: translate(20px,-20px) scale(1.08); }
+    }
+
+    .glass-card {
+        position: relative;
+        z-index: 1;
+        background: var(--glass);
+        backdrop-filter: blur(20px) saturate(1.5);
+        -webkit-backdrop-filter: blur(20px) saturate(1.5);
+        border: 1px solid rgba(255,255,255,.48);
+        box-shadow: var(--shadow);
+        border-radius: 1.35rem;
+    }
+
+    .glass-inner-card {
+        background: rgba(255,255,255,.45);
+        border: 1px solid rgba(255,255,255,.4);
+        border-radius: 1.2rem;
+        padding: 1rem;
+    }
+
+    /* HERO */
+    .rev3-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1.8rem;
+        margin-bottom: 1.25rem;
+        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 45%, #4338ca 100%);
+        padding: 2rem;
+        color: #fff;
+        z-index: 1;
+    }
+
+    .rev3-hero-grid {
+        position: absolute;
+        inset: 0;
+        background-image:
+            linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+        background-size: 50px 50px;
+        mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
+        pointer-events: none;
+    }
+
+    .rev3-hero-content {
+        position: relative;
+        z-index: 2;
+    }
+
+    .rev3-hero-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+
+    .rev3-back {
+        width: 2.6rem;
+        height: 2.6rem;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08);
+        color: #fff;
+        border-radius: .9rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: .25s ease;
+        backdrop-filter: blur(10px);
+    }
+
+    .rev3-back:hover {
+        transform: translateX(-3px);
+        background: rgba(255,255,255,.15);
+    }
+
+    .rev3-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: .5rem;
+        padding: .45rem .9rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,.1);
+        border: 1px solid rgba(255,255,255,.16);
+        color: #dbeafe;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .badge-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #93c5fd;
+        box-shadow: 0 0 12px #93c5fd;
+        animation: badgePulse 2s infinite;
+    }
+
+    @@keyframes badgePulse {
+        0%,100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.35); opacity: .6; }
+    }
+
+    .rev3-hero-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 2rem;
+    }
+
+    .rev3-hero-text {
+        flex: 1;
+    }
+
+    .rev3-hero-text h1 {
+        margin: 0 0 .6rem;
+        font-size: 2.5rem;
+        font-weight: 900;
+        letter-spacing: -.02em;
+    }
+
+    .rev3-hero-text h1 span {
+        color: #c4b5fd;
+    }
+
+    .rev3-hero-text p {
+        margin: 0 0 1rem;
+        color: rgba(255,255,255,.72);
+        max-width: 760px;
+        line-height: 1.8;
+    }
+
+    .rev3-hero-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .75rem;
+    }
+
+    .hero-chip {
+        display: flex;
+        flex-direction: column;
+        gap: .15rem;
+        padding: .85rem 1rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.08);
+        border: 1px solid rgba(255,255,255,.12);
+        min-width: 210px;
+    }
+
+    .chip-label {
+        font-size: .72rem;
+        color: rgba(255,255,255,.6);
+    }
+
+    .chip-value {
+        font-size: .85rem;
+        font-weight: 700;
+        color: #fff;
+    }
+
+    .summary-ring {
+        width: 170px;
+        height: 170px;
+        border-radius: 50%;
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: inset 0 0 30px rgba(255,255,255,.08);
+    }
+
+    .summary-ring-inner {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgba(15,23,42,.92);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .summary-percent {
+        font-size: 2rem;
+        font-weight: 900;
+        line-height: 1;
+        color: #fff;
+    }
+
+    .summary-caption {
+        margin-top: .35rem;
+        font-size: .78rem;
+        color: rgba(255,255,255,.62);
+    }
+
+    /* FILTERS */
+    .rev3-filters {
+        padding: 1.15rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .filters-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .filters-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .filters-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .83rem;
+    }
+
+    .filters-actions {
+        display: flex;
+        gap: .65rem;
+        flex-wrap: wrap;
+    }
+
+    .quick-range-row {
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .quick-range-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .85rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .quick-range-btn:hover {
+        background: rgba(99,102,241,.08);
+        color: #4f46e5;
+        border-color: rgba(99,102,241,.22);
+    }
+
+    .filters-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(180px, 1fr));
+        gap: .9rem;
+    }
+
+    .filter-field {
+        background: rgba(255,255,255,.55);
+        border-radius: .9rem;
+    }
+
+    /* LOADING */
+    .rev3-loading {
+        min-height: 320px;
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        text-align: center;
+        padding: 2rem;
+    }
+
+    .loading-text h3 {
+        margin: 0 0 .35rem;
+        font-size: 1rem;
+        color: var(--text);
+    }
+
+    .loading-text p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    /* KPI */
+    .rev3-kpis {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .kpi-card {
+        padding: 1.1rem;
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+    }
+
+    .kpi-icon {
+        width: 3rem;
+        height: 3rem;
+        border-radius: .95rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        font-weight: 900;
+        flex-shrink: 0;
+    }
+
+    .kpi-icon.indigo { background: rgba(99,102,241,.12); color: #6366f1; }
+    .kpi-icon.green { background: rgba(16,185,129,.12); color: #10b981; }
+    .kpi-icon.amber { background: rgba(245,158,11,.12); color: #f59e0b; }
+    .kpi-icon.emerald { background: rgba(5,150,105,.12); color: #059669; }
+    .kpi-icon.red { background: rgba(239,68,68,.12); color: #ef4444; }
+
+    .kpi-body {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .kpi-head-row {
+        display: flex;
+        justify-content: space-between;
+        gap: .5rem;
+        align-items: center;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-label {
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .kpi-value {
+        color: var(--text);
+        font-size: 1.45rem;
+        font-weight: 900;
+        line-height: 1.2;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-value.pos { color: #059669; }
+    .kpi-value.neg { color: #dc2626; }
+
+    .kpi-sub {
+        color: var(--muted);
+        font-size: .76rem;
+        line-height: 1.5;
+    }
+
+    .trend-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .2rem .55rem;
+        font-size: .68rem;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .trend-up {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .trend-down {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .trend-flat {
+        background: rgba(148,163,184,.14);
+        color: #475569;
+    }
+
+    .kpi-progress {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(148,163,184,.15);
+        overflow: hidden;
+        margin: .35rem 0 .45rem;
+    }
+
+    .kpi-progress-bar {
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #f59e0b, #fbbf24);
+    }
+
+    /* INSIGHTS */
+    .rev3-insights {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .insight-card {
+        padding: 1rem;
+        display: flex;
+        gap: .85rem;
+        align-items: flex-start;
+    }
+
+    .insight-icon {
+        width: 2.6rem;
+        height: 2.6rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .tone-gold { background: rgba(245,158,11,.12); color: #d97706; }
+    .tone-green { background: rgba(16,185,129,.12); color: #059669; }
+    .tone-red { background: rgba(239,68,68,.12); color: #dc2626; }
+    .tone-indigo { background: rgba(99,102,241,.12); color: #4f46e5; }
+    .tone-slate { background: rgba(148,163,184,.14); color: #475569; }
+
+    .insight-body {
+        min-width: 0;
+        flex: 1;
+    }
+
+    .insight-title {
+        color: var(--muted);
+        font-size: .75rem;
+        margin-bottom: .2rem;
+    }
+
+    .insight-value {
+        color: var(--text);
+        font-size: 1rem;
+        font-weight: 800;
+        margin-bottom: .25rem;
+    }
+
+    .insight-desc {
+        color: var(--muted);
+        font-size: .74rem;
+        line-height: 1.45;
+    }
+
+    /* DASHBOARD */
+    .rev3-dashboard {
+        display: grid;
+        grid-template-columns: 1.6fr 1fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .main-chart-card,
+    .side-card,
+    .rev3-table-card,
+    .rev3-note,
+    .rev3-drill {
+        padding: 1rem;
+    }
+
+    .side-stack {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: .75rem;
+    }
+
+    .card-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .card-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .chart-empty {
+        min-height: 250px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: .88rem;
+    }
+
+    .chart-empty.small {
+        min-height: 180px;
+    }
+
+    /* COMPARE */
+    .compare-list {
+        display: flex;
+        flex-direction: column;
+        gap: .75rem;
+    }
+
+    .compare-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        padding: .75rem .85rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+    }
+
+    .compare-label {
+        font-size: .8rem;
+        font-weight: 700;
+        color: var(--text);
+    }
+
+    .compare-values {
+        display: flex;
+        align-items: center;
+        gap: .55rem;
+        color: var(--muted);
+        font-size: .8rem;
+        flex-wrap: wrap;
+    }
+
+    .compare-values strong {
+        color: var(--text);
+        font-size: .85rem;
+    }
+
+    .compare-arrow {
+        color: #94a3b8;
+        font-weight: 900;
+    }
+
+    .compare-summary {
+        margin-top: .85rem;
+        border-radius: 1rem;
+        padding: .8rem .9rem;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .compare-good {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .compare-bad {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    /* DRILL */
+    .drill-head {
+        align-items: center;
+    }
+
+    .clear-month-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .9rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .clear-month-btn:hover {
+        background: rgba(239,68,68,.08);
+        color: #dc2626;
+    }
+
+    .month-chip-row {
+        display: flex;
+        gap: .55rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .month-chip-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.55);
+        color: var(--text);
+        border-radius: 1rem;
+        padding: .55rem .8rem;
+        min-width: 110px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: .1rem;
+        cursor: pointer;
+        transition: .2s ease;
+        font-weight: 700;
+    }
+
+    .month-chip-btn small {
+        color: var(--muted);
+        font-size: .7rem;
+        font-weight: 700;
+    }
+
+    .month-chip-btn:hover {
+        border-color: rgba(79,70,229,.25);
+        background: rgba(99,102,241,.06);
+        color: #4f46e5;
+    }
+
+    .month-chip-active {
+        background: linear-gradient(135deg, #6366f1, #4f46e5);
+        color: #fff;
+        border-color: transparent;
+        box-shadow: 0 10px 20px rgba(99,102,241,.22);
+    }
+
+    .month-chip-active small {
+        color: rgba(255,255,255,.85);
+    }
+
+    .drill-mini-kpis {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+
+    .mini-kpi {
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+        border-radius: 1rem;
+        padding: .85rem;
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+    }
+
+    .mini-label {
+        font-size: .72rem;
+        color: var(--muted);
+    }
+
+    .mini-kpi strong {
+        color: var(--text);
+        font-size: .92rem;
+    }
+
+    .drill-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 1rem;
+    }
+
+    /* TABLE */
+    .premium-table {
+        background: transparent;
+    }
+
+    .variance-pill,
+    .rate-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .3rem .7rem;
+        font-size: .74rem;
+        font-weight: 700;
+    }
+
+    .variance-pos {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .variance-neg {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .rate-pill {
+        background: rgba(99,102,241,.10);
+        color: #4f46e5;
+    }
+
+    .empty-data {
+        text-align: center;
+        padding: 2rem 1rem;
+    }
+
+    .empty-icon {
+        font-size: 2rem;
+        margin-bottom: .5rem;
+    }
+
+    .empty-data h4 {
+        margin: 0 0 .35rem;
+        color: var(--text);
+    }
+
+    .empty-data p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    /* NOTE */
+    .rev3-note {
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+        margin-top: 1rem;
+    }
+
+    .note-icon {
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(99,102,241,.10);
+        color: #4f46e5;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+
+    .note-body h4 {
+        margin: 0 0 .3rem;
+        color: var(--text);
+        font-size: .95rem;
+        font-weight: 800;
+    }
+
+    .note-body p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .82rem;
+        line-height: 1.7;
+    }
+
+    /* RESPONSIVE */
+    @@media (max-width: 1200px) {
+        .rev3-kpis,
+        .rev3-insights {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .rev3-dashboard,
+        .drill-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 900px) {
+        .rev3-hero-main,
+        .filters-head {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 640px) {
+        .rev3-page {
+            padding: .8rem .8rem 2rem;
+        }
+
+        .rev3-hero {
+            padding: 1.25rem;
+            border-radius: 1.2rem;
+        }
+
+        .rev3-hero-text h1 {
+            font-size: 1.7rem;
+        }
+
+        .summary-ring {
+            width: 140px;
+            height: 140px;
+        }
+
+        .hero-chip {
+            min-width: 100%;
+        }
+
+        .rev3-kpis,
+        .rev3-insights,
+        .drill-mini-kpis {
+            grid-template-columns: 1fr;
+        }
+
+        .compare-row {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-actions {
+            width: 100%;
+        }
+    }
+
+    /* DARK MODE */
+    .mud-theme-dark .glass-card,
+    .mud-theme-dark .glass-inner-card {
+        background: rgba(17,24,39,.66);
+        border-color: rgba(255,255,255,.06);
+        box-shadow: 0 20px 50px rgba(0,0,0,.22);
+    }
+
+    .mud-theme-dark .filters-head h3,
+    .mud-theme-dark .card-head h3,
+    .mud-theme-dark .loading-text h3,
+    .mud-theme-dark .empty-data h4,
+    .mud-theme-dark .note-body h4,
+    .mud-theme-dark .kpi-value,
+    .mud-theme-dark .insight-value,
+    .mud-theme-dark .compare-label,
+    .mud-theme-dark .compare-values strong,
+    .mud-theme-dark .mini-kpi strong {
+        color: #f8fafc;
+    }
+
+    .mud-theme-dark .filters-head p,
+    .mud-theme-dark .card-head p,
+    .mud-theme-dark .loading-text p,
+    .mud-theme-dark .empty-data p,
+    .mud-theme-dark .note-body p,
+    .mud-theme-dark .kpi-label,
+    .mud-theme-dark .kpi-sub,
+    .mud-theme-dark .insight-title,
+    .mud-theme-dark .insight-desc,
+    .mud-theme-dark .compare-values,
+    .mud-theme-dark .mini-label,
+    .mud-theme-dark .month-chip-btn small {
+        color: #94a3b8;
+    }
+
+    .mud-theme-dark .compare-row,
+    .mud-theme-dark .mini-kpi,
+    .mud-theme-dark .month-chip-btn {
+        background: rgba(255,255,255,.03);
+    }
+
+    .mud-theme-dark .quick-range-btn,
+    .mud-theme-dark .clear-month-btn {
+        background: rgba(255,255,255,.05);
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .quick-range-btn:hover,
+    .mud-theme-dark .clear-month-btn:hover {
+        background: rgba(99,102,241,.12);
+        color: #c7d2fe;
+    }
+
+    .mud-theme-dark .month-chip-btn {
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .month-chip-btn:hover {
+        background: rgba(99,102,241,.12);
+        color: #c7d2fe;
+    }
+
+    .mud-theme-dark .month-chip-active {
+        color: #fff;
+    }
+
+    @@media print {
+        .rev3-bg,
+        .filters-actions,
+        .quick-range-row,
+        .rev3-back,
+        .clear-month-btn,
+        .month-chip-row button:not(.month-chip-active) {
+            display: none !important;
+        }
+
+        .glass-card,
+        .glass-inner-card {
+            box-shadow: none !important;
+            border: 1px solid #ddd !important;
+            background: #fff !important;
+        }
+
+        .rev3-page {
+            max-width: 100% !important;
+            padding: 0 !important;
+        }
+    }
+</style>

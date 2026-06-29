@@ -1,0 +1,2782 @@
+@page "/crm/reports/lead-conversion"
+
+@using System.Globalization
+@using System.Text
+@using ApexCharts
+@using COCOBOLOERPNEW.Models
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>تقرير تحويل العملاء المحتملين</PageTitle>
+
+<div class="ldcv-page" dir="rtl">
+
+    @* Background *@
+    <div class="ldcv-bg">
+        <div class="ldcv-orb orb-1"></div>
+        <div class="ldcv-orb orb-2"></div>
+        <div class="ldcv-orb orb-3"></div>
+    </div>
+
+    @* HERO *@
+    <section class="ldcv-hero">
+        <div class="ldcv-hero-grid"></div>
+
+        <div class="ldcv-hero-content">
+            <div class="ldcv-hero-top">
+                <button class="ldcv-back" @onclick="GoBack" title="رجوع">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12h14" />
+                        <path d="m12 5 7 7-7 7" />
+                    </svg>
+                </button>
+
+                <div class="ldcv-badge">
+                    <span class="badge-dot"></span>
+                    <span>Lead Conversion Intelligence</span>
+                </div>
+            </div>
+
+            <div class="ldcv-hero-main">
+                <div class="ldcv-hero-text">
+                    <h1>تحويل <span>العملاء المحتملين</span></h1>
+                    <p>
+                        لوحة تنفيذية متقدمة لتحليل رحلة الـ Leads من الإنشاء وحتى التحويل إلى فرص،
+                        ثم الوصول للبيع أو التعثر، مع قياس نسب التحويل والقيم الناتجة عبر الزمن.
+                    </p>
+
+                    <div class="ldcv-hero-chips">
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة الحالية</span>
+                            <span class="chip-value">@SelectedPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة السابقة</span>
+                            <span class="chip-value">@PreviousPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">قيمة البيع من الـ Leads</span>
+                            <span class="chip-value">@FormatMoney(_wonValue)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ldcv-hero-side">
+                    <div class="summary-ring" style="@GetSummaryRingStyle()">
+                        <div class="summary-ring-inner">
+                            <div class="summary-percent">@_conversionRate.ToString("F1")%</div>
+                            <div class="summary-caption">نسبة التحويل</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @* FILTERS / ACTIONS *@
+    <section class="glass-card ldcv-filters">
+        <div class="filters-head">
+            <div>
+                <h3>الفلاتر والتحكم</h3>
+                <p>اختر الفترة الزمنية أو استخدم الفترات السريعة لتحليل الـ Funnel</p>
+            </div>
+
+            <div class="filters-actions">
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Default"
+                           StartIcon="@Icons.Material.Rounded.RestartAlt"
+                           OnClick="ResetFiltersAsync"
+                           Disabled="_isLoading">
+                    إعادة ضبط
+                </MudButton>
+
+                <MudButton Variant="Variant.Filled"
+                           Color="@MudColor.Primary"
+                           StartIcon="@Icons.Material.Rounded.FilterAlt"
+                           OnClick="LoadData"
+                           Disabled="_isLoading">
+                    تطبيق التحليل
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Success"
+                           StartIcon="@Icons.Material.Rounded.FileDownload"
+                           OnClick="ExportCsvAsync"
+                           Disabled="_isLoading">
+                    تصدير CSV
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Info"
+                           StartIcon="@Icons.Material.Rounded.Print"
+                           OnClick="PrintAsync"
+                           Disabled="_isLoading">
+                    طباعة / PDF
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="quick-range-row">
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(3)">آخر 3 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(6)">آخر 6 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(12)">آخر 12 شهر</button>
+            <button class="quick-range-btn" @onclick="SetCurrentYearAsync">السنة الحالية</button>
+        </div>
+
+        <div class="filters-grid">
+            <MudDatePicker @bind-Date="_fromDate"
+                           Label="من تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudDatePicker @bind-Date="_toDate"
+                           Label="إلى تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+        </div>
+    </section>
+
+    @if (_isLoading)
+    {
+        <div class="glass-card ldcv-loading">
+            <MudProgressCircular Indeterminate="true"
+                                 Size="@MudSize.Large"
+                                 Color="@MudColor.Primary" />
+            <div class="loading-text">
+                <h3>جاري تحليل التحويل...</h3>
+                <p>يتم تجهيز المؤشرات، الرسوم البيانية، ومسار الـ Funnel</p>
+            </div>
+        </div>
+    }
+    else
+    {
+        @* KPI *@
+        <section class="ldcv-kpis">
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon blue">#</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">إجمالي العملاء المحتملين</div>
+                        <span class="trend-badge @GetTrendClass(_totalLeads, _prevTotalLeads)">
+                            @GetTrendText(_totalLeads, _prevTotalLeads)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_totalLeads.ToString("N0")</div>
+                    <div class="kpi-sub">كل الـ Leads التي تم إنشاؤها خلال الفترة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon purple">⇢</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">تم التحويل إلى فرص</div>
+                        <span class="trend-badge @GetTrendClass(_convertedLeads, _prevConvertedLeads)">
+                            @GetTrendText(_convertedLeads, _prevConvertedLeads)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_convertedLeads.ToString("N0")</div>
+                    <div class="kpi-sub">Leads مرتبطة بفرص بيع فعلية</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon orange">◎</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">فرص مفتوحة من الـ Leads</div>
+                        <span class="trend-badge @GetTrendClass(_openLeads, _prevOpenLeads)">
+                            @GetTrendText(_openLeads, _prevOpenLeads)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_openLeads.ToString("N0")</div>
+                    <div class="kpi-sub">Leads تحولت وما زالت قيد التنفيذ</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon green">✓</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">تم البيع</div>
+                        <span class="trend-badge @GetTrendClass(_wonLeads, _prevWonLeads)">
+                            @GetTrendText(_wonLeads, _prevWonLeads)
+                        </span>
+                    </div>
+                    <div class="kpi-value success">@_wonLeads.ToString("N0")</div>
+                    <div class="kpi-sub">Leads انتهت إلى صفقات رابحة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon amber">%</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">نسبة التحويل إلى فرص</div>
+                        <span class="trend-badge @GetTrendClass(_conversionRate, _prevConversionRate)">
+                            @GetTrendText(_conversionRate, _prevConversionRate)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_conversionRate.ToString("F1")%</div>
+                    <div class="kpi-progress">
+                        <div class="kpi-progress-bar" style="@GetConversionProgressStyle()"></div>
+                    </div>
+                    <div class="kpi-sub">تم التحويل ÷ إجمالي Leads × 100</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon teal">₪</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">Pipeline مفتوح من الـ Leads</div>
+                        <span class="trend-badge @GetTrendClass(_openValue, _prevOpenValue)">
+                            @GetTrendText(_openValue, _prevOpenValue)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@FormatMoney(_openValue)</div>
+                    <div class="kpi-sub">قيمة الفرص المفتوحة الناتجة من الـ Leads</div>
+                </div>
+            </div>
+        </section>
+
+        @* INSIGHTS *@
+        <section class="ldcv-insights">
+            @foreach (var insight in _insights)
+            {
+                <div class="glass-card insight-card">
+                    <div class="insight-icon @insight.ToneClass">
+                        <MudIcon Icon="@insight.Icon" Size="@MudSize.Small" />
+                    </div>
+                    <div class="insight-body">
+                        <div class="insight-title">@insight.Title</div>
+                        <div class="insight-value">@insight.Value</div>
+                        <div class="insight-desc">@insight.Description</div>
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* MAIN DASHBOARD *@
+        <section class="ldcv-dashboard">
+            <div class="glass-card main-chart-card">
+                <div class="card-head">
+                    <div>
+                        <h3>الاتجاه الشهري للتحويل</h3>
+                        <p>إجمالي Leads مقابل المحول منها والمكتمل بيعها حسب شهر إنشاء الـ Lead</p>
+                    </div>
+                </div>
+
+                @if (_monthlyTrendPoints.Any())
+                {
+                    <ApexChart TItem="MonthlyTrendPoint"
+                               Options="_monthlyTrendChartOptions"
+                               Height="380">
+                        <ApexPointSeries TItem="MonthlyTrendPoint"
+                                         Items="@_monthlyTrendPoints"
+                                         Name="Leads"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.TotalLeads" />
+
+                        <ApexPointSeries TItem="MonthlyTrendPoint"
+                                         Items="@_monthlyTrendPoints"
+                                         Name="تم التحويل"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.ConvertedLeads" />
+
+                        <ApexPointSeries TItem="MonthlyTrendPoint"
+                                         Items="@_monthlyTrendPoints"
+                                         Name="تم البيع"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.WonLeads" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty">لا توجد بيانات للرسم البياني</div>
+                }
+            </div>
+
+            <div class="side-stack">
+                <div class="glass-card side-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>توزيع مراحل الـ Funnel</h3>
+                            <p>عدد الحالات داخل كل مرحلة من رحلة التحويل</p>
+                        </div>
+                    </div>
+
+                    @if (_funnelStagePoints.Any())
+                    {
+                        <ApexChart TItem="FunnelStagePoint"
+                                   Options="_funnelStageChartOptions"
+                                   Height="320">
+                            <ApexPointSeries TItem="FunnelStagePoint"
+                                             Items="@_funnelStagePoints"
+                                             Name="العدد"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Stage"
+                                             YValue="x => x.Count" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty small">لا توجد بيانات كافية لعرض المراحل</div>
+                    }
+                </div>
+
+                <div class="glass-card side-card compare-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>مقارنة بالفترة السابقة</h3>
+                            <p>@PreviousPeriodLabel</p>
+                        </div>
+                    </div>
+
+                    <div class="compare-list">
+                        <div class="compare-row">
+                            <div class="compare-label">إجمالي Leads</div>
+                            <div class="compare-values">
+                                <span>@_prevTotalLeads</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_totalLeads</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">تم التحويل</div>
+                            <div class="compare-values">
+                                <span>@_prevConvertedLeads</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_convertedLeads</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">تم البيع</div>
+                            <div class="compare-values">
+                                <span>@_prevWonLeads</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_wonLeads</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">نسبة التحويل</div>
+                            <div class="compare-values">
+                                <span>@_prevConversionRate.ToString("F1")%</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_conversionRate.ToString("F1")%</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="compare-summary @(_conversionRate >= _prevConversionRate ? "compare-good" : "compare-mid")">
+                        @if (_conversionRate >= _prevConversionRate)
+                        {
+                            <span>معدل التحويل الحالي أفضل أو مساوي للفترة السابقة</span>
+                        }
+                        else
+                        {
+                            <span>معدل التحويل الحالي أقل من الفترة السابقة ويحتاج تحسين</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        @* ANALYTICS GRID *@
+        <section class="ldcv-analytics-grid">
+            <div class="glass-card side-card">
+                <div class="card-head">
+                    <div>
+                        <h3>اتجاه نسب التحويل</h3>
+                        <p>نسبة التحويل إلى فرص ونسبة البيع من الـ Leads عبر الشهور</p>
+                    </div>
+                </div>
+
+                @if (_monthlyRatePoints.Any())
+                {
+                    <ApexChart TItem="MonthlyRatePoint"
+                               Options="_monthlyRateChartOptions"
+                               Height="320">
+                        <ApexPointSeries TItem="MonthlyRatePoint"
+                                         Items="@_monthlyRatePoints"
+                                         Name="تحويل إلى فرص %"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.ConversionRate" />
+
+                        <ApexPointSeries TItem="MonthlyRatePoint"
+                                         Items="@_monthlyRatePoints"
+                                         Name="تحويل إلى بيع %"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.Month"
+                                         YValue="x => x.SaleRate" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty small">لا توجد بيانات كافية لعرض النسب</div>
+                }
+            </div>
+
+            <div class="glass-card ldcv-stage-table-card">
+                <div class="card-head">
+                    <div>
+                        <h3>تفاصيل مراحل الـ Funnel</h3>
+                        <p>عدد الحالات والنسب والقيم في كل خطوة من رحلة التحويل</p>
+                    </div>
+                </div>
+
+                <MudTable Items="@_funnelRows"
+                          Hover="true"
+                          Dense="true"
+                          Elevation="0"
+                          RowsPerPage="10"
+                          Breakpoint="Breakpoint.Sm"
+                          Class="premium-table">
+                    <HeaderContent>
+                        <MudTh>المرحلة</MudTh>
+                        <MudTh>العدد</MudTh>
+                        <MudTh>النسبة</MudTh>
+                        <MudTh>القيمة</MudTh>
+                    </HeaderContent>
+
+                    <RowTemplate>
+                        <MudTd DataLabel="المرحلة">
+                            <span class="stage-pill" style="@($"background:{context.Color};color:#fff;")">
+                                @context.Stage
+                            </span>
+                        </MudTd>
+                        <MudTd DataLabel="العدد">@context.Count.ToString("N0")</MudTd>
+                        <MudTd DataLabel="النسبة">
+                            <span class="rate-pill @GetRatePillClass(context.Percent)">
+                                @context.Percent.ToString("F1")%
+                            </span>
+                        </MudTd>
+                        <MudTd DataLabel="القيمة">@FormatMoney(context.Value)</MudTd>
+                    </RowTemplate>
+
+                    <NoRecordsContent>
+                        <div class="empty-data">
+                            <div class="empty-icon">📉</div>
+                            <h4>لا توجد بيانات</h4>
+                            <p>لا توجد مراحل مطابقة للفلاتر الحالية</p>
+                        </div>
+                    </NoRecordsContent>
+                </MudTable>
+            </div>
+        </section>
+
+        @* MONTH DRILL-DOWN *@
+        <section class="glass-card ldcv-drill">
+            <div class="card-head drill-head">
+                <div>
+                    <h3>Drill-down حسب الشهر</h3>
+                    <p>اختر شهرًا لتحليل مسار التحويل الخاص بالـ Leads التي أُنشئت خلاله</p>
+                </div>
+
+                @if (_selectedMonthKey.HasValue)
+                {
+                    <button class="clear-month-btn" @onclick="ClearSelectedMonth">
+                        إلغاء اختيار الشهر
+                    </button>
+                }
+            </div>
+
+            <div class="month-chip-row">
+                @foreach (var month in _monthlyRows.OrderBy(x => x.Year).ThenBy(x => x.MonthNum))
+                {
+                    <button class="month-chip-btn @(IsSelectedMonth(month.Year, month.MonthNum) ? "month-chip-active" : "")"
+                            @onclick="() => SelectMonth(month.Year, month.MonthNum)">
+                        <span>@month.Month</span>
+                        <small>@month.ConversionRate.ToString("F0")%</small>
+                    </button>
+                }
+            </div>
+
+            @if (_selectedMonthKey.HasValue || _detailRows.Any())
+            {
+                <div class="drill-mini-kpis">
+                    <div class="mini-kpi">
+                        <span class="mini-label">الشهر المحدد</span>
+                        <strong>@_selectedMonthLabel</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">Leads</span>
+                        <strong>@_selectedMonthTotalLeads.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">تم التحويل</span>
+                        <strong>@_selectedMonthConverted.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">قيد التنفيذ</span>
+                        <strong>@_selectedMonthOpen.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">تم البيع</span>
+                        <strong>@_selectedMonthWon.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">مفقودة</span>
+                        <strong>@_selectedMonthLost.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">نسبة التحويل</span>
+                        <strong>@_selectedMonthConversionRate.ToString("F1")%</strong>
+                    </div>
+                </div>
+
+                <div class="drill-grid">
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>Funnel الشهر المحدد</h3>
+                                <p>التوزيع المرحلي للـ Leads في الشهر المحدد</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedMonthFunnelPoints.Any())
+                        {
+                            <ApexChart TItem="SelectedMonthFunnelPoint"
+                                       Options="_selectedMonthFunnelChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="SelectedMonthFunnelPoint"
+                                                 Items="@_selectedMonthFunnelPoints"
+                                                 Name="العدد"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Stage"
+                                                 YValue="x => x.Count" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد بيانات كافية لهذا الشهر</div>
+                        }
+                    </div>
+
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>أكبر الفرص المحولة في الشهر</h3>
+                                <p>أعلى الفرص الناتجة من Leads الشهر المحدد حسب القيمة</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedMonthDealPoints.Any())
+                        {
+                            <ApexChart TItem="SelectedMonthDealPoint"
+                                       Options="_selectedMonthDealsChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="SelectedMonthDealPoint"
+                                                 Items="@_selectedMonthDealPoints"
+                                                 Name="القيمة"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Deal"
+                                                 YValue="x => x.Value" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد فرص محولة كافية داخل الشهر المحدد</div>
+                        }
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* MONTHLY DETAILS TABLE *@
+        <section class="glass-card ldcv-table-card">
+            <div class="card-head">
+                <div>
+                    <h3>التفاصيل الشهرية</h3>
+                    <p>ملخص شهري لرحلة التحويل من Lead إلى Opportunity ثم إلى Sale</p>
+                </div>
+            </div>
+
+            <MudTable Items="@_monthlyRows"
+                      Hover="true"
+                      Dense="true"
+                      Elevation="0"
+                      RowsPerPage="12"
+                      Breakpoint="Breakpoint.Sm"
+                      Class="premium-table">
+                <HeaderContent>
+                    <MudTh>الشهر</MudTh>
+                    <MudTh>Leads</MudTh>
+                    <MudTh>تم التحويل</MudTh>
+                    <MudTh>قيد التنفيذ</MudTh>
+                    <MudTh>تم البيع</MudTh>
+                    <MudTh>مفقودة</MudTh>
+                    <MudTh>نسبة التحويل</MudTh>
+                    <MudTh>نسبة البيع</MudTh>
+                </HeaderContent>
+
+                <RowTemplate>
+                    <MudTd DataLabel="الشهر">@context.Month</MudTd>
+                    <MudTd DataLabel="Leads">@context.TotalLeads.ToString("N0")</MudTd>
+                    <MudTd DataLabel="تم التحويل">@context.ConvertedLeads.ToString("N0")</MudTd>
+                    <MudTd DataLabel="قيد التنفيذ">@context.OpenLeads.ToString("N0")</MudTd>
+                    <MudTd DataLabel="تم البيع">@context.WonLeads.ToString("N0")</MudTd>
+                    <MudTd DataLabel="مفقودة">@context.LostLeads.ToString("N0")</MudTd>
+                    <MudTd DataLabel="نسبة التحويل">
+                        <span class="rate-pill @GetRatePillClass(context.ConversionRate)">
+                            @context.ConversionRate.ToString("F1")%
+                        </span>
+                    </MudTd>
+                    <MudTd DataLabel="نسبة البيع">
+                        <span class="rate-pill @GetSalePillClass(context.SaleRate)">
+                            @context.SaleRate.ToString("F1")%
+                        </span>
+                    </MudTd>
+                </RowTemplate>
+
+                <NoRecordsContent>
+                    <div class="empty-data">
+                        <div class="empty-icon">📉</div>
+                        <h4>لا توجد بيانات</h4>
+                        <p>لا توجد بيانات شهرية مطابقة للفلاتر الحالية</p>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </section>
+
+        @* NOTE *@
+        <section class="glass-card ldcv-note">
+            <div class="note-icon">ℹ️</div>
+            <div class="note-body">
+                <h4>ملاحظة تحليلية مهمة</h4>
+                <p>
+                    هذا التقرير يعتمد على <strong>تاريخ إنشاء الـ Lead</strong> كأساس للتحليل،
+                    ثم يربط الـ Lead بالفرصة الناتجة من خلال <strong>ConvertedOpportunityId</strong>.
+                    لذلك فإن نتائج "تم البيع" هنا تعني أن الـ Lead نفسه انتهى إلى فرصة حالتها الحالية رابحة.
+                </p>
+            </div>
+        </section>
+    }
+</div>
+
+@code {
+    private const int WonStageId = 3;
+    private const int LostStageId1 = 4;
+    private const int LostStageId2 = 5;
+
+    private readonly CultureInfo _arCulture = new("ar-EG");
+
+    private DateTime? _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+    private DateTime? _toDate = DateTime.Today;
+    private bool _isLoading;
+
+    private int _totalLeads;
+    private int _convertedLeads;
+    private int _openLeads;
+    private int _wonLeads;
+    private int _lostLeads;
+
+    private double _conversionRate;
+    private double _saleRate;
+
+    private decimal _convertedValue;
+    private decimal _openValue;
+    private decimal _wonValue;
+    private decimal _lostValue;
+
+    private int _prevTotalLeads;
+    private int _prevConvertedLeads;
+    private int _prevOpenLeads;
+    private int _prevWonLeads;
+    private int _prevLostLeads;
+
+    private double _prevConversionRate;
+    private double _prevSaleRate;
+
+    private decimal _prevConvertedValue;
+    private decimal _prevOpenValue;
+    private decimal _prevWonValue;
+    private decimal _prevLostValue;
+
+    private string _previousPeriodLabel = "غير متاح";
+
+    private List<LeadAnalysisRow> _currentRows = new();
+
+    private List<FunnelStageRow> _funnelRows = new();
+    private List<MonthlySummaryRow> _monthlyRows = new();
+    private List<MonthlyTrendPoint> _monthlyTrendPoints = new();
+    private List<MonthlyRatePoint> _monthlyRatePoints = new();
+    private List<FunnelStagePoint> _funnelStagePoints = new();
+    private List<InsightItem> _insights = new();
+
+    private DateTime? _selectedMonthKey;
+    private string _selectedMonthLabel = "—";
+    private int _selectedMonthTotalLeads;
+    private int _selectedMonthConverted;
+    private int _selectedMonthOpen;
+    private int _selectedMonthWon;
+    private int _selectedMonthLost;
+    private double _selectedMonthConversionRate;
+    private double _selectedMonthSaleRate;
+    private List<SelectedMonthFunnelPoint> _selectedMonthFunnelPoints = new();
+    private List<SelectedMonthDealPoint> _selectedMonthDealPoints = new();
+    private List<LeadDealDetailRow> _detailRows = new();
+
+    private ApexChartOptions<MonthlyTrendPoint> _monthlyTrendChartOptions = new();
+    private ApexChartOptions<FunnelStagePoint> _funnelStageChartOptions = new();
+    private ApexChartOptions<MonthlyRatePoint> _monthlyRateChartOptions = new();
+    private ApexChartOptions<SelectedMonthFunnelPoint> _selectedMonthFunnelChartOptions = new();
+    private ApexChartOptions<SelectedMonthDealPoint> _selectedMonthDealsChartOptions = new();
+
+    private string SelectedPeriodLabel =>
+        $"{(_fromDate.HasValue ? _fromDate.Value.ToString("dd MMM yyyy", _arCulture) : "البداية")} — {(_toDate.HasValue ? _toDate.Value.ToString("dd MMM yyyy", _arCulture) : "اليوم")}";
+
+    private string PreviousPeriodLabel => _previousPeriodLabel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        ConfigureCharts();
+        await LoadData();
+    }
+
+    private void ConfigureCharts()
+    {
+        _monthlyTrendChartOptions = new ApexChartOptions<MonthlyTrendPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#3b82f6", "#8b5cf6", "#10b981" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 8,
+                    ColumnWidth = "42%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { DecimalsInFloat = 0 }
+            },
+            Tooltip = new Tooltip
+            {
+                Shared = true,
+                Intersect = false
+            }
+        };
+
+        _funnelStageChartOptions = new ApexChartOptions<FunnelStagePoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#3b82f6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+
+        _monthlyRateChartOptions = new ApexChartOptions<MonthlyRatePoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#8b5cf6", "#10b981" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 3, 3 }
+            },
+            Markers = new Markers { Size = 4 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { Min = 0, Max = 100, DecimalsInFloat = 0 }
+            }
+        };
+
+        _selectedMonthFunnelChartOptions = new ApexChartOptions<SelectedMonthFunnelPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#7c3aed" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "50%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+
+        _selectedMonthDealsChartOptions = new ApexChartOptions<SelectedMonthDealPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#14b8a6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+        _toDate = DateTime.Today;
+        _selectedMonthKey = null;
+        await LoadData();
+    }
+
+    private async Task SetLastMonthsAsync(int months)
+    {
+        if (months <= 0) months = 12;
+
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-(months - 1));
+        _toDate = DateTime.Today;
+        _selectedMonthKey = null;
+
+        await LoadData();
+    }
+
+    private async Task SetCurrentYearAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, 1, 1);
+        _toDate = DateTime.Today;
+        _selectedMonthKey = null;
+
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+
+        try
+        {
+            NormalizeDateRange();
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            _currentRows = await LoadLeadSnapshotAsync(db, _fromDate, _toDate);
+
+            if (TryGetPreviousRange(out var prevFrom, out var prevTo))
+            {
+                _previousPeriodLabel = $"{prevFrom.ToString("dd MMM yyyy", _arCulture)} — {prevTo.ToString("dd MMM yyyy", _arCulture)}";
+                var previousRows = await LoadLeadSnapshotAsync(db, prevFrom, prevTo);
+                CalculatePreviousMetrics(previousRows);
+            }
+            else
+            {
+                _previousPeriodLabel = "غير متاح";
+                ResetPreviousMetrics();
+            }
+
+            CalculateCurrentMetrics(_currentRows);
+            BuildFunnelRows(_currentRows);
+            BuildMonthlyRows(_currentRows);
+            ResolveSelectedMonth();
+            BuildSelectedMonthAnalytics(_currentRows);
+            BuildInsights();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ أثناء تحميل التقرير: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task<List<LeadAnalysisRow>> LoadLeadSnapshotAsync(db24804Context db, DateTime? from, DateTime? to)
+    {
+        var query = db.LeadsCRMs.AsNoTracking().AsQueryable();
+
+        if (from.HasValue)
+        {
+            var fromDate = from.Value.Date;
+            query = query.Where(l => l.CreatedAt >= fromDate);
+        }
+
+        if (to.HasValue)
+        {
+            var toExclusive = to.Value.Date.AddDays(1);
+            query = query.Where(l => l.CreatedAt < toExclusive);
+        }
+
+        var leads = await query
+            .Select(l => new LeadSourceRow
+            {
+                CreatedAt = l.CreatedAt,
+                ConvertedOpportunityId = l.ConvertedOpportunityId
+            })
+            .ToListAsync();
+
+        var oppIds = leads
+            .Where(x => x.ConvertedOpportunityId.HasValue)
+            .Select(x => x.ConvertedOpportunityId!.Value)
+            .Distinct()
+            .ToList();
+
+        var oppMap = new Dictionary<int, OpportunityRefRow>();
+
+        if (oppIds.Any())
+        {
+            var opportunities = await db.VwSalesOpportunities
+                .AsNoTracking()
+                .Where(o => oppIds.Contains(o.OpportunityId))
+                .Select(o => new OpportunityRefRow
+                {
+                    OpportunityId = o.OpportunityId,
+                    StageId = o.StageId,
+                    ExpectedValue = o.ExpectedValue ?? 0m,
+                    ClientName = o.ClientName ?? "—",
+                    StageName = o.StageNameAr ?? o.StageName ?? "—",
+                    StageColor = o.StageColor ?? ""
+                })
+                .ToListAsync();
+
+            oppMap = opportunities.ToDictionary(x => x.OpportunityId, x => x);
+        }
+
+        var result = new List<LeadAnalysisRow>(leads.Count);
+
+        foreach (var lead in leads)
+        {
+            OpportunityRefRow? opp = null;
+
+            if (lead.ConvertedOpportunityId.HasValue)
+                oppMap.TryGetValue(lead.ConvertedOpportunityId.Value, out opp);
+
+            var isConverted = lead.ConvertedOpportunityId.HasValue;
+            var isWon = opp is not null && opp.StageId == WonStageId;
+            var isLost = opp is not null && (opp.StageId == LostStageId1 || opp.StageId == LostStageId2);
+            var isOpen = opp is not null && !isWon && !isLost;
+
+            result.Add(new LeadAnalysisRow
+            {
+                CreatedAt = lead.CreatedAt,
+                ConvertedOpportunityId = lead.ConvertedOpportunityId,
+                IsConverted = isConverted,
+                IsWon = isWon,
+                IsLost = isLost,
+                IsOpen = isOpen,
+                ExpectedValue = opp?.ExpectedValue ?? 0m,
+                ClientName = opp?.ClientName ?? "—",
+                StageName = opp?.StageName ?? "—",
+                StageColor = opp?.StageColor ?? ""
+            });
+        }
+
+        return result;
+    }
+
+    private void CalculateCurrentMetrics(List<LeadAnalysisRow> rows)
+    {
+        _totalLeads = rows.Count;
+        _convertedLeads = rows.Count(x => x.IsConverted);
+        _openLeads = rows.Count(x => x.IsOpen);
+        _wonLeads = rows.Count(x => x.IsWon);
+        _lostLeads = rows.Count(x => x.IsLost);
+
+        _conversionRate = _totalLeads > 0 ? (double)_convertedLeads / _totalLeads * 100d : 0d;
+        _saleRate = _totalLeads > 0 ? (double)_wonLeads / _totalLeads * 100d : 0d;
+
+        _convertedValue = rows.Where(x => x.IsConverted).Sum(x => x.ExpectedValue);
+        _openValue = rows.Where(x => x.IsOpen).Sum(x => x.ExpectedValue);
+        _wonValue = rows.Where(x => x.IsWon).Sum(x => x.ExpectedValue);
+        _lostValue = rows.Where(x => x.IsLost).Sum(x => x.ExpectedValue);
+    }
+
+    private void CalculatePreviousMetrics(List<LeadAnalysisRow> rows)
+    {
+        _prevTotalLeads = rows.Count;
+        _prevConvertedLeads = rows.Count(x => x.IsConverted);
+        _prevOpenLeads = rows.Count(x => x.IsOpen);
+        _prevWonLeads = rows.Count(x => x.IsWon);
+        _prevLostLeads = rows.Count(x => x.IsLost);
+
+        _prevConversionRate = _prevTotalLeads > 0 ? (double)_prevConvertedLeads / _prevTotalLeads * 100d : 0d;
+        _prevSaleRate = _prevTotalLeads > 0 ? (double)_prevWonLeads / _prevTotalLeads * 100d : 0d;
+
+        _prevConvertedValue = rows.Where(x => x.IsConverted).Sum(x => x.ExpectedValue);
+        _prevOpenValue = rows.Where(x => x.IsOpen).Sum(x => x.ExpectedValue);
+        _prevWonValue = rows.Where(x => x.IsWon).Sum(x => x.ExpectedValue);
+        _prevLostValue = rows.Where(x => x.IsLost).Sum(x => x.ExpectedValue);
+    }
+
+    private void ResetPreviousMetrics()
+    {
+        _prevTotalLeads = 0;
+        _prevConvertedLeads = 0;
+        _prevOpenLeads = 0;
+        _prevWonLeads = 0;
+        _prevLostLeads = 0;
+
+        _prevConversionRate = 0d;
+        _prevSaleRate = 0d;
+
+        _prevConvertedValue = 0m;
+        _prevOpenValue = 0m;
+        _prevWonValue = 0m;
+        _prevLostValue = 0m;
+    }
+
+    private void BuildFunnelRows(List<LeadAnalysisRow> rows)
+    {
+        _funnelRows = new List<FunnelStageRow>
+        {
+            new()
+            {
+                Stage = "إجمالي Leads",
+                Count = _totalLeads,
+                Percent = _totalLeads > 0 ? 100d : 0d,
+                Value = 0m,
+                Color = "#3b82f6",
+                Sort = 1
+            },
+            new()
+            {
+                Stage = "تم التحويل إلى فرص",
+                Count = _convertedLeads,
+                Percent = _conversionRate,
+                Value = _convertedValue,
+                Color = "#8b5cf6",
+                Sort = 2
+            },
+            new()
+            {
+                Stage = "قيد التنفيذ",
+                Count = _openLeads,
+                Percent = _totalLeads > 0 ? (double)_openLeads / _totalLeads * 100d : 0d,
+                Value = _openValue,
+                Color = "#f97316",
+                Sort = 3
+            },
+            new()
+            {
+                Stage = "تم البيع",
+                Count = _wonLeads,
+                Percent = _saleRate,
+                Value = _wonValue,
+                Color = "#16a34a",
+                Sort = 4
+            },
+            new()
+            {
+                Stage = "مفقودة",
+                Count = _lostLeads,
+                Percent = _totalLeads > 0 ? (double)_lostLeads / _totalLeads * 100d : 0d,
+                Value = _lostValue,
+                Color = "#ef4444",
+                Sort = 5
+            }
+        };
+
+        _funnelStagePoints = _funnelRows
+            .OrderBy(x => x.Sort)
+            .Select(x => new FunnelStagePoint
+            {
+                Stage = x.Stage,
+                Count = x.Count
+            })
+            .ToList();
+    }
+
+    private void BuildMonthlyRows(List<LeadAnalysisRow> rows)
+    {
+        var startMonth = _fromDate.HasValue
+            ? new DateTime(_fromDate.Value.Year, _fromDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+
+        var endMonth = _toDate.HasValue
+            ? new DateTime(_toDate.Value.Year, _toDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+
+        var monthMap = rows
+            .GroupBy(x => new DateTime(x.CreatedAt.Year, x.CreatedAt.Month, 1))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var list = new List<MonthlySummaryRow>();
+
+        for (var month = startMonth; month <= endMonth; month = month.AddMonths(1))
+        {
+            monthMap.TryGetValue(month, out var monthRows);
+            monthRows ??= new List<LeadAnalysisRow>();
+
+            var total = monthRows.Count;
+            var converted = monthRows.Count(x => x.IsConverted);
+            var open = monthRows.Count(x => x.IsOpen);
+            var won = monthRows.Count(x => x.IsWon);
+            var lost = monthRows.Count(x => x.IsLost);
+
+            list.Add(new MonthlySummaryRow
+            {
+                Year = month.Year,
+                MonthNum = month.Month,
+                Month = month.ToString("MMM yyyy", _arCulture),
+                TotalLeads = total,
+                ConvertedLeads = converted,
+                OpenLeads = open,
+                WonLeads = won,
+                LostLeads = lost,
+                ConversionRate = total > 0 ? (double)converted / total * 100d : 0d,
+                SaleRate = total > 0 ? (double)won / total * 100d : 0d,
+                OpenValue = monthRows.Where(x => x.IsOpen).Sum(x => x.ExpectedValue),
+                WonValue = monthRows.Where(x => x.IsWon).Sum(x => x.ExpectedValue)
+            });
+        }
+
+        _monthlyRows = list
+            .OrderByDescending(x => x.Year)
+            .ThenByDescending(x => x.MonthNum)
+            .ToList();
+
+        _monthlyTrendPoints = list
+            .OrderBy(x => x.Year)
+            .ThenBy(x => x.MonthNum)
+            .Select(x => new MonthlyTrendPoint
+            {
+                Month = x.Month,
+                TotalLeads = x.TotalLeads,
+                ConvertedLeads = x.ConvertedLeads,
+                WonLeads = x.WonLeads
+            })
+            .ToList();
+
+        _monthlyRatePoints = list
+            .OrderBy(x => x.Year)
+            .ThenBy(x => x.MonthNum)
+            .Select(x => new MonthlyRatePoint
+            {
+                Month = x.Month,
+                ConversionRate = (decimal)x.ConversionRate,
+                SaleRate = (decimal)x.SaleRate
+            })
+            .ToList();
+    }
+
+    private void ResolveSelectedMonth()
+    {
+        if (!_monthlyRows.Any())
+        {
+            _selectedMonthKey = null;
+            return;
+        }
+
+        if (_selectedMonthKey.HasValue)
+        {
+            var selected = new DateTime(_selectedMonthKey.Value.Year, _selectedMonthKey.Value.Month, 1);
+            var exists = _monthlyRows.Any(x => x.Year == selected.Year && x.MonthNum == selected.Month);
+
+            if (exists)
+            {
+                _selectedMonthKey = selected;
+                return;
+            }
+        }
+
+        var latestWithData = _monthlyRows
+            .Where(x => x.TotalLeads > 0)
+            .OrderByDescending(x => x.Year)
+            .ThenByDescending(x => x.MonthNum)
+            .FirstOrDefault();
+
+        if (latestWithData != null)
+            _selectedMonthKey = new DateTime(latestWithData.Year, latestWithData.MonthNum, 1);
+        else
+            _selectedMonthKey = new DateTime(_monthlyRows.First().Year, _monthlyRows.First().MonthNum, 1);
+    }
+
+    private void BuildSelectedMonthAnalytics(List<LeadAnalysisRow> rows)
+    {
+        _selectedMonthLabel = "—";
+        _selectedMonthTotalLeads = 0;
+        _selectedMonthConverted = 0;
+        _selectedMonthOpen = 0;
+        _selectedMonthWon = 0;
+        _selectedMonthLost = 0;
+        _selectedMonthConversionRate = 0d;
+        _selectedMonthSaleRate = 0d;
+        _selectedMonthFunnelPoints = new();
+        _selectedMonthDealPoints = new();
+        _detailRows = new();
+
+        if (!_selectedMonthKey.HasValue)
+        {
+            _detailRows = rows
+                .Where(x => x.IsConverted)
+                .OrderByDescending(x => x.ExpectedValue)
+                .ThenByDescending(x => x.CreatedAt)
+                .Take(25)
+                .Select(MapDetailRow)
+                .ToList();
+
+            return;
+        }
+
+        var month = _selectedMonthKey.Value;
+        _selectedMonthLabel = month.ToString("MMMM yyyy", _arCulture);
+
+        var monthRows = rows
+            .Where(x => x.CreatedAt.Year == month.Year && x.CreatedAt.Month == month.Month)
+            .ToList();
+
+        _selectedMonthTotalLeads = monthRows.Count;
+        _selectedMonthConverted = monthRows.Count(x => x.IsConverted);
+        _selectedMonthOpen = monthRows.Count(x => x.IsOpen);
+        _selectedMonthWon = monthRows.Count(x => x.IsWon);
+        _selectedMonthLost = monthRows.Count(x => x.IsLost);
+
+        _selectedMonthConversionRate = _selectedMonthTotalLeads > 0
+            ? (double)_selectedMonthConverted / _selectedMonthTotalLeads * 100d
+            : 0d;
+
+        _selectedMonthSaleRate = _selectedMonthTotalLeads > 0
+            ? (double)_selectedMonthWon / _selectedMonthTotalLeads * 100d
+            : 0d;
+
+        _selectedMonthFunnelPoints = new List<SelectedMonthFunnelPoint>
+        {
+            new() { Stage = "Leads", Count = _selectedMonthTotalLeads },
+            new() { Stage = "تم التحويل", Count = _selectedMonthConverted },
+            new() { Stage = "قيد التنفيذ", Count = _selectedMonthOpen },
+            new() { Stage = "تم البيع", Count = _selectedMonthWon },
+            new() { Stage = "مفقودة", Count = _selectedMonthLost }
+        };
+
+        _selectedMonthDealPoints = monthRows
+            .Where(x => x.IsConverted)
+            .OrderByDescending(x => x.ExpectedValue)
+            .ThenByDescending(x => x.CreatedAt)
+            .Take(8)
+            .Select(x => new SelectedMonthDealPoint
+            {
+                Deal = x.ClientName,
+                Value = x.ExpectedValue
+            })
+            .ToList();
+
+        _detailRows = monthRows
+            .Where(x => x.IsConverted)
+            .OrderByDescending(x => x.ExpectedValue)
+            .ThenByDescending(x => x.CreatedAt)
+            .Select(MapDetailRow)
+            .ToList();
+    }
+
+    private LeadDealDetailRow MapDetailRow(LeadAnalysisRow x) => new()
+    {
+        ClientName = x.ClientName,
+        StageName = x.StageName,
+        StageColor = x.StageColor,
+        CreatedAt = x.CreatedAt,
+        ExpectedValue = x.ExpectedValue,
+        Status = x.IsWon ? "تم البيع" : x.IsLost ? "مفقودة" : x.IsOpen ? "قيد التنفيذ" : "تم التحويل"
+    };
+
+    private void BuildInsights()
+    {
+        _insights = new();
+
+        var validMonths = _monthlyRows.Where(x => x.TotalLeads > 0).ToList();
+
+        if (validMonths.Any())
+        {
+            var bestConversion = validMonths
+                .OrderByDescending(x => x.ConversionRate)
+                .ThenByDescending(x => x.ConvertedLeads)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.TrendingUp,
+                Title = "أفضل شهر تحويل",
+                Value = bestConversion.Month,
+                Description = $"{bestConversion.ConversionRate:F1}% — {bestConversion.ConvertedLeads} Lead",
+                ToneClass = "tone-indigo"
+            });
+
+            var bestSales = validMonths
+                .OrderByDescending(x => x.WonLeads)
+                .ThenByDescending(x => x.WonValue)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.EmojiEvents,
+                Title = "أفضل شهر بيع",
+                Value = bestSales.Month,
+                Description = $"{bestSales.WonLeads} فوز — {FormatMoney(bestSales.WonValue)}",
+                ToneClass = "tone-green"
+            });
+
+            var highestOpen = validMonths
+                .OrderByDescending(x => x.OpenValue)
+                .ThenByDescending(x => x.OpenLeads)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.HourglassTop,
+                Title = "أكبر Pipeline مفتوح",
+                Value = highestOpen.Month,
+                Description = $"{FormatMoney(highestOpen.OpenValue)} من Leads الشهر",
+                ToneClass = "tone-gold"
+            });
+
+            var highestLoss = validMonths
+                .OrderByDescending(x => x.LostLeads)
+                .ThenByDescending(x => x.TotalLeads)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.ReportProblem,
+                Title = "أعلى تسرب",
+                Value = highestLoss.Month,
+                Description = $"{highestLoss.LostLeads} Lead مفقودة بعد التحويل",
+                ToneClass = "tone-red"
+            });
+        }
+
+        while (_insights.Count < 4)
+        {
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.Insights,
+                Title = "معلومة",
+                Value = "—",
+                Description = "لا توجد بيانات كافية لهذا المؤشر",
+                ToneClass = "tone-slate"
+            });
+        }
+    }
+
+    private void SelectMonth(int year, int month)
+    {
+        _selectedMonthKey = new DateTime(year, month, 1);
+        BuildSelectedMonthAnalytics(_currentRows);
+    }
+
+    private void ClearSelectedMonth()
+    {
+        _selectedMonthKey = null;
+        BuildSelectedMonthAnalytics(_currentRows);
+    }
+
+    private bool IsSelectedMonth(int year, int month)
+        => _selectedMonthKey.HasValue
+           && _selectedMonthKey.Value.Year == year
+           && _selectedMonthKey.Value.Month == month;
+
+    private bool TryGetPreviousRange(out DateTime previousFrom, out DateTime previousTo)
+    {
+        previousFrom = default;
+        previousTo = default;
+
+        if (!_fromDate.HasValue || !_toDate.HasValue)
+            return false;
+
+        var currentFrom = _fromDate.Value.Date;
+        var currentTo = _toDate.Value.Date;
+        var days = (currentTo - currentFrom).Days;
+
+        previousTo = currentFrom.AddDays(-1);
+        previousFrom = previousTo.AddDays(-days);
+
+        return true;
+    }
+
+    private void NormalizeDateRange()
+    {
+        if (_fromDate.HasValue && _toDate.HasValue && _fromDate.Value.Date > _toDate.Value.Date)
+        {
+            var temp = _fromDate;
+            _fromDate = _toDate;
+            _toDate = temp;
+
+            Snackbar.Add("تم تبديل تاريخ البداية والنهاية تلقائيًا لأن البداية كانت أكبر من النهاية.", Severity.Info);
+        }
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("تقرير تحويل العملاء المحتملين");
+            sb.AppendLine($"الفترة الحالية,{SelectedPeriodLabel}");
+            sb.AppendLine($"الفترة السابقة,{PreviousPeriodLabel}");
+            sb.AppendLine();
+
+            sb.AppendLine("المؤشرات الرئيسية");
+            sb.AppendLine("المؤشر,القيمة");
+            sb.AppendLine($"إجمالي العملاء المحتملين,{_totalLeads}");
+            sb.AppendLine($"تم التحويل,{_convertedLeads}");
+            sb.AppendLine($"قيد التنفيذ,{_openLeads}");
+            sb.AppendLine($"تم البيع,{_wonLeads}");
+            sb.AppendLine($"مفقودة,{_lostLeads}");
+            sb.AppendLine($"نسبة التحويل,{_conversionRate:F1}%");
+            sb.AppendLine($"نسبة البيع,{_saleRate:F1}%");
+            sb.AppendLine($"قيمة الفرص المفتوحة,{_openValue:N0}");
+            sb.AppendLine($"قيمة البيع,{_wonValue:N0}");
+            sb.AppendLine();
+
+            sb.AppendLine("مراحل الـ Funnel");
+            sb.AppendLine("المرحلة,العدد,النسبة,القيمة");
+            foreach (var row in _funnelRows.OrderBy(x => x.Sort))
+            {
+                sb.AppendLine($"{row.Stage},{row.Count},{row.Percent:F1}%,{row.Value:N0}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("التفاصيل الشهرية");
+            sb.AppendLine("الشهر,Leads,تم التحويل,قيد التنفيذ,تم البيع,مفقودة,نسبة التحويل,نسبة البيع");
+            foreach (var row in _monthlyRows.OrderBy(x => x.Year).ThenBy(x => x.MonthNum))
+            {
+                sb.AppendLine($"{row.Month},{row.TotalLeads},{row.ConvertedLeads},{row.OpenLeads},{row.WonLeads},{row.LostLeads},{row.ConversionRate:F1}%,{row.SaleRate:F1}%");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("تفاصيل الفرص المحولة");
+            sb.AppendLine("العميل,الحالة,المرحلة,تاريخ إنشاء الـ Lead,القيمة");
+            foreach (var row in _detailRows)
+            {
+                sb.AppendLine($"{row.ClientName},{row.Status},{row.StageName},{FormatDate(row.CreatedAt)},{row.ExpectedValue:N0}");
+            }
+
+            var csv = sb.ToString();
+            var fileName = $"lead-conversion-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+            var dataUrl = "data:text/csv;charset=utf-8,\uFEFF" + Uri.EscapeDataString(csv);
+
+            var script = $@"
+                (function() {{
+                    const link = document.createElement('a');
+                    link.href = '{dataUrl}';
+                    link.download = '{fileName}';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }})();";
+
+            await JS.InvokeVoidAsync("eval", script);
+            Snackbar.Add("تم تصدير الملف بنجاح. يمكنك فتحه مباشرة في Excel.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تصدير الملف: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval", "window.print()");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تشغيل الطباعة: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string FormatMoney(decimal value) => $"{value:N0} ج.م";
+    private string FormatDate(DateTime? value) => value?.ToString("yyyy/MM/dd") ?? "—";
+
+    private string GetSummaryRingStyle()
+    {
+        var safe = Math.Max(0, Math.Min(_conversionRate, 100));
+        var angle = safe * 3.6;
+        return $"background: conic-gradient(#8b5cf6 0deg, #8b5cf6 {angle:F1}deg, rgba(255,255,255,.12) {angle:F1}deg, rgba(255,255,255,.12) 360deg);";
+    }
+
+    private string GetConversionProgressStyle()
+    {
+        var safe = Math.Max(0, Math.Min(_conversionRate, 100));
+        return $"width:{safe:F0}%";
+    }
+
+    private string GetTrendClass(int current, int previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(double current, double previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(decimal current, decimal previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendText(int current, int previous)
+    {
+        if (previous == 0)
+            return current == 0 ? "0%" : "جديد";
+
+        var change = ((double)(current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(double current, double previous)
+    {
+        if (Math.Abs(previous) < 0.000001)
+            return Math.Abs(current) < 0.000001 ? "0%" : "جديد";
+
+        var change = ((current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(decimal current, decimal previous)
+    {
+        if (previous == 0m)
+            return current == 0m ? "0%" : "جديد";
+
+        var change = (double)((current - previous) / previous * 100m);
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetRatePillClass(double rate)
+    {
+        if (rate >= 50) return "rate-good";
+        if (rate >= 25) return "rate-mid";
+        return "rate-bad";
+    }
+
+    private string GetSalePillClass(double rate)
+    {
+        if (rate >= 20) return "rate-good";
+        if (rate >= 10) return "rate-mid";
+        return "rate-bad";
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/crm/reports");
+
+    private sealed class LeadSourceRow
+    {
+        public DateTime CreatedAt { get; set; }
+        public int? ConvertedOpportunityId { get; set; }
+    }
+
+    private sealed class OpportunityRefRow
+    {
+        public int OpportunityId { get; set; }
+        public int StageId { get; set; }
+        public decimal ExpectedValue { get; set; }
+        public string ClientName { get; set; } = "";
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+    }
+
+    private sealed class LeadAnalysisRow
+    {
+        public DateTime CreatedAt { get; set; }
+        public int? ConvertedOpportunityId { get; set; }
+        public bool IsConverted { get; set; }
+        public bool IsOpen { get; set; }
+        public bool IsWon { get; set; }
+        public bool IsLost { get; set; }
+        public decimal ExpectedValue { get; set; }
+        public string ClientName { get; set; } = "";
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+    }
+
+    private sealed class FunnelStageRow
+    {
+        public string Stage { get; set; } = "";
+        public int Count { get; set; }
+        public double Percent { get; set; }
+        public decimal Value { get; set; }
+        public string Color { get; set; } = "";
+        public int Sort { get; set; }
+    }
+
+    private sealed class MonthlySummaryRow
+    {
+        public int Year { get; set; }
+        public int MonthNum { get; set; }
+        public string Month { get; set; } = "";
+        public int TotalLeads { get; set; }
+        public int ConvertedLeads { get; set; }
+        public int OpenLeads { get; set; }
+        public int WonLeads { get; set; }
+        public int LostLeads { get; set; }
+        public double ConversionRate { get; set; }
+        public double SaleRate { get; set; }
+        public decimal OpenValue { get; set; }
+        public decimal WonValue { get; set; }
+    }
+
+    private sealed class MonthlyTrendPoint
+    {
+        public string Month { get; set; } = "";
+        public decimal TotalLeads { get; set; }
+        public decimal ConvertedLeads { get; set; }
+        public decimal WonLeads { get; set; }
+    }
+
+    private sealed class MonthlyRatePoint
+    {
+        public string Month { get; set; } = "";
+        public decimal ConversionRate { get; set; }
+        public decimal SaleRate { get; set; }
+    }
+
+    private sealed class FunnelStagePoint
+    {
+        public string Stage { get; set; } = "";
+        public decimal Count { get; set; }
+    }
+
+    private sealed class SelectedMonthFunnelPoint
+    {
+        public string Stage { get; set; } = "";
+        public decimal Count { get; set; }
+    }
+
+    private sealed class SelectedMonthDealPoint
+    {
+        public string Deal { get; set; } = "";
+        public decimal Value { get; set; }
+    }
+
+    private sealed class LeadDealDetailRow
+    {
+        public string ClientName { get; set; } = "";
+        public string Status { get; set; } = "";
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+        public DateTime CreatedAt { get; set; }
+        public decimal ExpectedValue { get; set; }
+    }
+
+    private sealed class InsightItem
+    {
+        public string Icon { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Value { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string ToneClass { get; set; } = "";
+    }
+}
+
+<style>
+    .ldcv-page {
+        --text: #0f172a;
+        --muted: #64748b;
+        --line: rgba(148, 163, 184, .16);
+        --glass: rgba(255,255,255,.72);
+        --shadow: 0 20px 50px rgba(15, 23, 42, .06);
+        max-width: 1460px;
+        margin: 0 auto;
+        padding: 1.25rem 1.25rem 3rem;
+        position: relative;
+        min-height: 100vh;
+    }
+
+    .ldcv-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+    }
+
+    .ldcv-orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(120px);
+        opacity: .16;
+    }
+
+    .orb-1 {
+        width: 420px;
+        height: 420px;
+        background: #3b82f6;
+        top: -120px;
+        right: -120px;
+        animation: ldcvFloat 12s ease-in-out infinite;
+    }
+
+    .orb-2 {
+        width: 360px;
+        height: 360px;
+        background: #8b5cf6;
+        bottom: -80px;
+        left: -80px;
+        animation: ldcvFloat 18s ease-in-out infinite reverse;
+    }
+
+    .orb-3 {
+        width: 280px;
+        height: 280px;
+        background: #10b981;
+        top: 30%;
+        left: 45%;
+        animation: ldcvFloat 16s ease-in-out infinite;
+    }
+
+    @@keyframes ldcvFloat {
+        0%,100% { transform: translate(0,0) scale(1); }
+        50% { transform: translate(20px,-20px) scale(1.08); }
+    }
+
+    .glass-card {
+        position: relative;
+        z-index: 1;
+        background: var(--glass);
+        backdrop-filter: blur(20px) saturate(1.5);
+        -webkit-backdrop-filter: blur(20px) saturate(1.5);
+        border: 1px solid rgba(255,255,255,.48);
+        box-shadow: var(--shadow);
+        border-radius: 1.35rem;
+    }
+
+    .glass-inner-card {
+        background: rgba(255,255,255,.45);
+        border: 1px solid rgba(255,255,255,.4);
+        border-radius: 1.2rem;
+        padding: 1rem;
+    }
+
+    .ldcv-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1.8rem;
+        margin-bottom: 1.25rem;
+        background: linear-gradient(135deg, #0f172a 0%, #312e81 45%, #7c3aed 100%);
+        padding: 2rem;
+        color: #fff;
+        z-index: 1;
+    }
+
+    .ldcv-hero-grid {
+        position: absolute;
+        inset: 0;
+        background-image:
+            linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+        background-size: 50px 50px;
+        mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
+        pointer-events: none;
+    }
+
+    .ldcv-hero-content {
+        position: relative;
+        z-index: 2;
+    }
+
+    .ldcv-hero-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+
+    .ldcv-back {
+        width: 2.6rem;
+        height: 2.6rem;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08);
+        color: #fff;
+        border-radius: .9rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: .25s ease;
+        backdrop-filter: blur(10px);
+    }
+
+    .ldcv-back:hover {
+        transform: translateX(-3px);
+        background: rgba(255,255,255,.15);
+    }
+
+    .ldcv-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: .5rem;
+        padding: .45rem .9rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,.1);
+        border: 1px solid rgba(255,255,255,.16);
+        color: #e9d5ff;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .badge-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #c4b5fd;
+        box-shadow: 0 0 12px #c4b5fd;
+        animation: badgePulse 2s infinite;
+    }
+
+    @@keyframes badgePulse {
+        0%,100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.35); opacity: .6; }
+    }
+
+    .ldcv-hero-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 2rem;
+    }
+
+    .ldcv-hero-text {
+        flex: 1;
+    }
+
+    .ldcv-hero-text h1 {
+        margin: 0 0 .6rem;
+        font-size: 2.5rem;
+        font-weight: 900;
+        letter-spacing: -.02em;
+    }
+
+    .ldcv-hero-text h1 span {
+        color: #c4b5fd;
+    }
+
+    .ldcv-hero-text p {
+        margin: 0 0 1rem;
+        color: rgba(255,255,255,.76);
+        max-width: 760px;
+        line-height: 1.8;
+    }
+
+    .ldcv-hero-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .75rem;
+    }
+
+    .hero-chip {
+        display: flex;
+        flex-direction: column;
+        gap: .15rem;
+        padding: .85rem 1rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.08);
+        border: 1px solid rgba(255,255,255,.12);
+        min-width: 210px;
+    }
+
+    .chip-label {
+        font-size: .72rem;
+        color: rgba(255,255,255,.6);
+    }
+
+    .chip-value {
+        font-size: .85rem;
+        font-weight: 700;
+        color: #fff;
+    }
+
+    .summary-ring {
+        width: 170px;
+        height: 170px;
+        border-radius: 50%;
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: inset 0 0 30px rgba(255,255,255,.08);
+    }
+
+    .summary-ring-inner {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgba(15,23,42,.92);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .summary-percent {
+        font-size: 2rem;
+        font-weight: 900;
+        line-height: 1;
+        color: #fff;
+    }
+
+    .summary-caption {
+        margin-top: .35rem;
+        font-size: .78rem;
+        color: rgba(255,255,255,.62);
+    }
+
+    .ldcv-filters {
+        padding: 1.15rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .filters-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .filters-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .filters-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .83rem;
+    }
+
+    .filters-actions {
+        display: flex;
+        gap: .65rem;
+        flex-wrap: wrap;
+    }
+
+    .quick-range-row {
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .quick-range-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .85rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .quick-range-btn:hover {
+        background: rgba(124,58,237,.08);
+        color: #6d28d9;
+        border-color: rgba(124,58,237,.22);
+    }
+
+    .filters-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(180px, 1fr));
+        gap: .9rem;
+    }
+
+    .filter-field {
+        background: rgba(255,255,255,.55);
+        border-radius: .9rem;
+    }
+
+    .ldcv-loading {
+        min-height: 320px;
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        text-align: center;
+        padding: 2rem;
+    }
+
+    .loading-text h3 {
+        margin: 0 0 .35rem;
+        font-size: 1rem;
+        color: var(--text);
+    }
+
+    .loading-text p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .ldcv-kpis {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .kpi-card {
+        padding: 1.1rem;
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+    }
+
+    .kpi-icon {
+        width: 3rem;
+        height: 3rem;
+        border-radius: .95rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        font-weight: 900;
+        flex-shrink: 0;
+    }
+
+    .kpi-icon.blue { background: rgba(59,130,246,.12); color: #2563eb; }
+    .kpi-icon.purple { background: rgba(139,92,246,.12); color: #8b5cf6; }
+    .kpi-icon.orange { background: rgba(249,115,22,.12); color: #f97316; }
+    .kpi-icon.green { background: rgba(16,185,129,.12); color: #10b981; }
+    .kpi-icon.amber { background: rgba(245,158,11,.12); color: #f59e0b; }
+    .kpi-icon.teal { background: rgba(20,184,166,.12); color: #0f766e; }
+
+    .kpi-body {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .kpi-head-row {
+        display: flex;
+        justify-content: space-between;
+        gap: .5rem;
+        align-items: center;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-label {
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .kpi-value {
+        color: var(--text);
+        font-size: 1.45rem;
+        font-weight: 900;
+        line-height: 1.2;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-value.success { color: #059669; }
+
+    .kpi-sub {
+        color: var(--muted);
+        font-size: .76rem;
+        line-height: 1.5;
+    }
+
+    .trend-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .2rem .55rem;
+        font-size: .68rem;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .trend-up {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .trend-down {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .trend-flat {
+        background: rgba(148,163,184,.14);
+        color: #475569;
+    }
+
+    .kpi-progress {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(148,163,184,.15);
+        overflow: hidden;
+        margin: .35rem 0 .45rem;
+    }
+
+    .kpi-progress-bar {
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #8b5cf6, #a78bfa);
+    }
+
+    .ldcv-insights {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .insight-card {
+        padding: 1rem;
+        display: flex;
+        gap: .85rem;
+        align-items: flex-start;
+    }
+
+    .insight-icon {
+        width: 2.6rem;
+        height: 2.6rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .tone-gold { background: rgba(245,158,11,.12); color: #d97706; }
+    .tone-green { background: rgba(16,185,129,.12); color: #059669; }
+    .tone-red { background: rgba(239,68,68,.12); color: #dc2626; }
+    .tone-indigo { background: rgba(99,102,241,.12); color: #4f46e5; }
+    .tone-slate { background: rgba(148,163,184,.14); color: #475569; }
+
+    .insight-body {
+        min-width: 0;
+        flex: 1;
+    }
+
+    .insight-title {
+        color: var(--muted);
+        font-size: .75rem;
+        margin-bottom: .2rem;
+    }
+
+    .insight-value {
+        color: var(--text);
+        font-size: 1rem;
+        font-weight: 800;
+        margin-bottom: .25rem;
+    }
+
+    .insight-desc {
+        color: var(--muted);
+        font-size: .74rem;
+        line-height: 1.45;
+    }
+
+    .ldcv-dashboard {
+        display: grid;
+        grid-template-columns: 1.6fr 1fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .ldcv-analytics-grid {
+        display: grid;
+        grid-template-columns: 1fr 1.2fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .main-chart-card,
+    .side-card,
+    .ldcv-stage-table-card,
+    .ldcv-drill,
+    .ldcv-table-card,
+    .ldcv-note {
+        padding: 1rem;
+    }
+
+    .side-stack {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: .75rem;
+    }
+
+    .card-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .card-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .chart-empty {
+        min-height: 250px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: .88rem;
+    }
+
+    .chart-empty.small {
+        min-height: 180px;
+    }
+
+    .compare-list {
+        display: flex;
+        flex-direction: column;
+        gap: .75rem;
+    }
+
+    .compare-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        padding: .75rem .85rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+    }
+
+    .compare-label {
+        font-size: .8rem;
+        font-weight: 700;
+        color: var(--text);
+    }
+
+    .compare-values {
+        display: flex;
+        align-items: center;
+        gap: .55rem;
+        color: var(--muted);
+        font-size: .8rem;
+        flex-wrap: wrap;
+    }
+
+    .compare-values strong {
+        color: var(--text);
+        font-size: .85rem;
+    }
+
+    .compare-arrow {
+        color: #94a3b8;
+        font-weight: 900;
+    }
+
+    .compare-summary {
+        margin-top: .85rem;
+        border-radius: 1rem;
+        padding: .8rem .9rem;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .compare-good {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .compare-mid {
+        background: rgba(245,158,11,.12);
+        color: #d97706;
+    }
+
+    .drill-head {
+        align-items: center;
+    }
+
+    .clear-month-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .9rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .clear-month-btn:hover {
+        background: rgba(239,68,68,.08);
+        color: #dc2626;
+    }
+
+    .month-chip-row {
+        display: flex;
+        gap: .55rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .month-chip-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.55);
+        color: var(--text);
+        border-radius: 1rem;
+        padding: .55rem .8rem;
+        min-width: 120px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: .1rem;
+        cursor: pointer;
+        transition: .2s ease;
+        font-weight: 700;
+    }
+
+    .month-chip-btn small {
+        color: var(--muted);
+        font-size: .7rem;
+        font-weight: 700;
+    }
+
+    .month-chip-btn:hover {
+        border-color: rgba(79,70,229,.25);
+        background: rgba(99,102,241,.06);
+        color: #4f46e5;
+    }
+
+    .month-chip-active {
+        background: linear-gradient(135deg, #6366f1, #4f46e5);
+        color: #fff;
+        border-color: transparent;
+        box-shadow: 0 10px 20px rgba(99,102,241,.22);
+    }
+
+    .month-chip-active small {
+        color: rgba(255,255,255,.85);
+    }
+
+    .drill-mini-kpis {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+
+    .mini-kpi {
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+        border-radius: 1rem;
+        padding: .85rem;
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+    }
+
+    .mini-label {
+        font-size: .72rem;
+        color: var(--muted);
+    }
+
+    .mini-kpi strong {
+        color: var(--text);
+        font-size: .92rem;
+    }
+
+    .drill-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 1rem;
+    }
+
+    .premium-table {
+        background: transparent;
+    }
+
+    .rate-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .3rem .7rem;
+        font-size: .74rem;
+        font-weight: 700;
+    }
+
+    .rate-good {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .rate-mid {
+        background: rgba(245,158,11,.12);
+        color: #d97706;
+    }
+
+    .rate-bad {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .stage-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .32rem .7rem;
+        font-size: .72rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .empty-data {
+        text-align: center;
+        padding: 2rem 1rem;
+    }
+
+    .empty-icon {
+        font-size: 2rem;
+        margin-bottom: .5rem;
+    }
+
+    .empty-data h4 {
+        margin: 0 0 .35rem;
+        color: var(--text);
+    }
+
+    .empty-data p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .ldcv-note {
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+        margin-top: 1rem;
+    }
+
+    .note-icon {
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(99,102,241,.10);
+        color: #4f46e5;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+
+    .note-body h4 {
+        margin: 0 0 .3rem;
+        color: var(--text);
+        font-size: .95rem;
+        font-weight: 800;
+    }
+
+    .note-body p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .82rem;
+        line-height: 1.7;
+    }
+
+    @@media (max-width: 1300px) {
+        .ldcv-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 1200px) {
+        .ldcv-insights {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .ldcv-dashboard,
+        .ldcv-analytics-grid,
+        .drill-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @@media (max-width: 900px) {
+        .ldcv-hero-main,
+        .filters-head {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 640px) {
+        .ldcv-page {
+            padding: .8rem .8rem 2rem;
+        }
+
+        .ldcv-hero {
+            padding: 1.25rem;
+            border-radius: 1.2rem;
+        }
+
+        .ldcv-hero-text h1 {
+            font-size: 1.7rem;
+        }
+
+        .summary-ring {
+            width: 140px;
+            height: 140px;
+        }
+
+        .hero-chip {
+            min-width: 100%;
+        }
+
+        .ldcv-kpis,
+        .ldcv-insights,
+        .drill-mini-kpis {
+            grid-template-columns: 1fr;
+        }
+
+        .compare-row {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-actions {
+            width: 100%;
+        }
+    }
+
+    .mud-theme-dark .glass-card,
+    .mud-theme-dark .glass-inner-card {
+        background: rgba(17,24,39,.66);
+        border-color: rgba(255,255,255,.06);
+        box-shadow: 0 20px 50px rgba(0,0,0,.22);
+    }
+
+    .mud-theme-dark .filters-head h3,
+    .mud-theme-dark .card-head h3,
+    .mud-theme-dark .loading-text h3,
+    .mud-theme-dark .empty-data h4,
+    .mud-theme-dark .note-body h4,
+    .mud-theme-dark .kpi-value,
+    .mud-theme-dark .insight-value,
+    .mud-theme-dark .compare-label,
+    .mud-theme-dark .compare-values strong,
+    .mud-theme-dark .mini-kpi strong {
+        color: #f8fafc;
+    }
+
+    .mud-theme-dark .filters-head p,
+    .mud-theme-dark .card-head p,
+    .mud-theme-dark .loading-text p,
+    .mud-theme-dark .empty-data p,
+    .mud-theme-dark .note-body p,
+    .mud-theme-dark .kpi-label,
+    .mud-theme-dark .kpi-sub,
+    .mud-theme-dark .insight-title,
+    .mud-theme-dark .insight-desc,
+    .mud-theme-dark .compare-values,
+    .mud-theme-dark .mini-label,
+    .mud-theme-dark .month-chip-btn small {
+        color: #94a3b8;
+    }
+
+    .mud-theme-dark .compare-row,
+    .mud-theme-dark .mini-kpi,
+    .mud-theme-dark .month-chip-btn {
+        background: rgba(255,255,255,.03);
+    }
+
+    .mud-theme-dark .quick-range-btn,
+    .mud-theme-dark .clear-month-btn {
+        background: rgba(255,255,255,.05);
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .quick-range-btn:hover,
+    .mud-theme-dark .clear-month-btn:hover {
+        background: rgba(124,58,237,.12);
+        color: #ddd6fe;
+    }
+
+    .mud-theme-dark .month-chip-btn {
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .month-chip-btn:hover {
+        background: rgba(99,102,241,.12);
+        color: #c7d2fe;
+    }
+
+    .mud-theme-dark .month-chip-active {
+        color: #fff;
+    }
+
+    @@media print {
+        .ldcv-bg,
+        .filters-actions,
+        .quick-range-row,
+        .ldcv-back,
+        .clear-month-btn,
+        .month-chip-row button:not(.month-chip-active) {
+            display: none !important;
+        }
+
+        .glass-card,
+        .glass-inner-card {
+            box-shadow: none !important;
+            border: 1px solid #ddd !important;
+            background: #fff !important;
+        }
+
+        .ldcv-page {
+            max-width: 100% !important;
+            padding: 0 !important;
+        }
+    }
+</style>

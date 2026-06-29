@@ -26,6 +26,7 @@ public class LeadsCrmService : ILeadsCrmService
     _httpContext = httpContext;
 }
 
+
     // ═══════════════════════════════════════════════════════════
     //  عرض كل الـ Leads مع فلترة وصفحات (مُحسّن — بدون N+1)
     // ═══════════════════════════════════════════════════════════
@@ -65,6 +66,8 @@ public class LeadsCrmService : ILeadsCrmService
 
         if (!string.IsNullOrWhiteSpace(filter.Platform))
             query = query.Where(l => l.Platform == filter.Platform);
+        if (!string.IsNullOrWhiteSpace(filter.ProjectType))
+            query = query.Where(l => l.ProjectType == filter.ProjectType);
 
         if (!string.IsNullOrWhiteSpace(filter.FormLanguage))
             query = query.Where(l => l.FormLanguage == filter.FormLanguage);
@@ -158,6 +161,7 @@ public class LeadsCrmService : ILeadsCrmService
             PageSize = filter.PageSize
         };
     }
+    
 
     // ═══════════════════════════════════════════════════════════
     //  تفاصيل Lead واحد (مُحسّن — بدون N+1)
@@ -231,6 +235,16 @@ public class LeadsCrmService : ILeadsCrmService
             CreatedBy = lead.CreatedBy
         };
     }
+    public async Task<List<string>> GetDistinctProjectsAsync()
+{
+    return await _db.LeadsCRMs
+        .Where(l => !string.IsNullOrEmpty(l.ProjectType))
+        .Select(l => l.ProjectType!)
+        .Distinct()
+        .OrderBy(p => p)
+        .ToListAsync();
+}
+    
 
     // ═══════════════════════════════════════════════════════════
 //  تواصلات / حركات الـ Lead
@@ -722,73 +736,94 @@ if (initialStageId == 0)
     // ═══════════════════════════════════════════════════════════
     //  إحصائيات — مُحسّن (1 استعلام بدل 12!)
     // ═══════════════════════════════════════════════════════════
-    public async Task<LeadsCrmStatsDto> GetStatsAsync()
+    public async Task<LeadsCrmStatsDto> GetStatsAsync(LeadsCrmFilterDto? filter = null)
+{
+    var today = DateTime.Today;
+    var weekStart = today.AddDays(-(int)today.DayOfWeek);
+    var monthStart = new DateTime(today.Year, today.Month, 1);
+    var lateCutoff = DateTime.Now.AddHours(-1);
+
+    // بناء الاستعلام مع الفلتر
+    var query = _db.LeadsCRMs.AsNoTracking().AsQueryable();
+
+    if (filter != null)
     {
-        var today = DateTime.Today;
-        var weekStart = today.AddDays(-(int)today.DayOfWeek);
-        var monthStart = new DateTime(today.Year, today.Month, 1);
-        var lateCutoff = DateTime.Now.AddHours(-1);
+        if (!string.IsNullOrWhiteSpace(filter.ProjectType))
+            query = query.Where(l => l.ProjectType == filter.ProjectType);
 
-        // ⭐ استعلام واحد: نحمل كل اللي محتاجينه في الذاكرة
-        var leadsData = await _db.LeadsCRMs.AsNoTracking()
-    .Select(l => new
-    {
-        l.LeadStatus,
-        l.IsDuplicate,
-        l.IsConverted,
-        l.LastContactDate,
-        l.CreatedAt
-    })
-    .ToListAsync();
+        if (!string.IsNullOrWhiteSpace(filter.LeadStatus))
+            query = query.Where(l => l.LeadStatus == filter.LeadStatus);
 
-        // كمان استعلام واحد للحملات والمنصات
-        var campaignData = await _db.LeadsCRMs.AsNoTracking()
-            .Where(l => l.CampaignName != null)
-            .GroupBy(l => l.CampaignName)
-            .Select(g => new LeadsByCampaignDto
-            {
-                CampaignName = g.Key!,
-                Count = g.Count()
-            })
-            .OrderByDescending(x => x.Count)
-            .Take(10)
-            .ToListAsync();
+        if (!string.IsNullOrWhiteSpace(filter.Platform))
+            query = query.Where(l => l.Platform == filter.Platform);
 
-        var platformData = await _db.LeadsCRMs.AsNoTracking()
-            .Where(l => l.Platform != null)
-            .GroupBy(l => l.Platform)
-            .Select(g => new LeadsByPlatformDto
-            {
-                Platform = g.Key!,
-                Count = g.Count()
-            })
-            .OrderByDescending(x => x.Count)
-            .ToListAsync();
+        if (filter.AssignedEmployeeId.HasValue)
+            query = query.Where(l => l.AssignedEmployeeId == filter.AssignedEmployeeId.Value);
 
-        // كل الحسابات في الذاكرة — صفر استعلامات
-        return new LeadsCrmStatsDto
-        {
-            TotalLeads = leadsData.Count,
-            NewLeads = leadsData.Count(l => l.LeadStatus == "جديد"),
-            AssignedLeads = leadsData.Count(l => l.LeadStatus == "تم الإسناد"),
-            ContactedLeads = leadsData.Count(l => l.LeadStatus == "تم التواصل"),
-            QualifiedLeads = leadsData.Count(l => l.LeadStatus == "مؤهل"),
-            ConvertedLeads = leadsData.Count(l => l.LeadStatus == "محول"),
-            RejectedLeads = leadsData.Count(l => l.LeadStatus == "مرفوض"),
-            LateFollowUpLeads = leadsData.Count(l =>
-    !l.IsConverted &&
-    l.LeadStatus != "محول" &&
-    l.LeadStatus != "مرفوض" &&
-    !l.LastContactDate.HasValue &&
-    l.CreatedAt <= lateCutoff),
-            DuplicateLeads = leadsData.Count(l => l.IsDuplicate),
-            TodayLeads = leadsData.Count(l => l.CreatedAt >= today),
-            ThisWeekLeads = leadsData.Count(l => l.CreatedAt >= weekStart),
-            ThisMonthLeads = leadsData.Count(l => l.CreatedAt >= monthStart),
-            ByCampaign = campaignData,
-            ByPlatform = platformData
-        };
+        if (filter.DateFrom.HasValue)
+            query = query.Where(l => l.CreatedAt >= filter.DateFrom.Value);
+
+        if (filter.DateTo.HasValue)
+            query = query.Where(l => l.CreatedAt <= filter.DateTo.Value);
     }
+
+    var leadsData = await query
+        .Select(l => new
+        {
+            l.LeadStatus,
+            l.IsDuplicate,
+            l.IsConverted,
+            l.LastContactDate,
+            l.CreatedAt
+        })
+        .ToListAsync();
+
+    var campaignData = await query
+        .Where(l => l.CampaignName != null)
+        .GroupBy(l => l.CampaignName)
+        .Select(g => new LeadsByCampaignDto
+        {
+            CampaignName = g.Key!,
+            Count = g.Count()
+        })
+        .OrderByDescending(x => x.Count)
+        .Take(10)
+        .ToListAsync();
+
+    var platformData = await query
+        .Where(l => l.Platform != null)
+        .GroupBy(l => l.Platform)
+        .Select(g => new LeadsByPlatformDto
+        {
+            Platform = g.Key!,
+            Count = g.Count()
+        })
+        .OrderByDescending(x => x.Count)
+        .ToListAsync();
+
+    return new LeadsCrmStatsDto
+    {
+        TotalLeads = leadsData.Count,
+        NewLeads = leadsData.Count(l => l.LeadStatus == "جديد"),
+        AssignedLeads = leadsData.Count(l => l.LeadStatus == "تم الإسناد"),
+        ContactedLeads = leadsData.Count(l => l.LeadStatus == "تم التواصل"),
+        QualifiedLeads = leadsData.Count(l => l.LeadStatus == "مؤهل"),
+        ConvertedLeads = leadsData.Count(l => l.LeadStatus == "محول"),
+        RejectedLeads = leadsData.Count(l => l.LeadStatus == "مرفوض"),
+        LateFollowUpLeads = leadsData.Count(l =>
+            !l.IsConverted &&
+            l.LeadStatus != "محول" &&
+            l.LeadStatus != "مرفوض" &&
+            !l.LastContactDate.HasValue &&
+            l.CreatedAt <= lateCutoff),
+        DuplicateLeads = leadsData.Count(l => l.IsDuplicate),
+        TodayLeads = leadsData.Count(l => l.CreatedAt >= today),
+        ThisWeekLeads = leadsData.Count(l => l.CreatedAt >= weekStart),
+        ThisMonthLeads = leadsData.Count(l => l.CreatedAt >= monthStart),
+        ByCampaign = campaignData,
+        ByPlatform = platformData
+    };
+}
 
     // ═══════════════════════════════════════════════════════════
     //  لوحة تحليلات الـ Leads — 3 استعلامات بس!
@@ -1279,6 +1314,7 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
 
         return (true, "تم إنشاء الـ Lead بنجاح", lead.LeadId);
     }
+    
 
     // ═══════════════════════════════════════════════════════════
     //  حذف Lead

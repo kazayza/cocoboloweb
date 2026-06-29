@@ -1,0 +1,2689 @@
+@page "/crm/reports/lost-reasons"
+
+@using System.Globalization
+@using System.Text
+@using ApexCharts
+@using COCOBOLOERPNEW.Models
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>تقرير أسباب الخسارة</PageTitle>
+
+<div class="lstr-page" dir="rtl">
+
+    @* Background *@
+    <div class="lstr-bg">
+        <div class="lstr-orb orb-1"></div>
+        <div class="lstr-orb orb-2"></div>
+        <div class="lstr-orb orb-3"></div>
+    </div>
+
+    @* HERO *@
+    <section class="lstr-hero">
+        <div class="lstr-hero-grid"></div>
+
+        <div class="lstr-hero-content">
+            <div class="lstr-hero-top">
+                <button class="lstr-back" @onclick="GoBack" title="رجوع">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12h14" />
+                        <path d="m12 5 7 7-7 7" />
+                    </svg>
+                </button>
+
+                <div class="lstr-badge">
+                    <span class="badge-dot"></span>
+                    <span>Lost Reasons Intelligence</span>
+                </div>
+            </div>
+
+            <div class="lstr-hero-main">
+                <div class="lstr-hero-text">
+                    <h1>تحليل <span>أسباب</span> الخسارة</h1>
+                    <p>
+                        لوحة تنفيذية متقدمة لتحليل أسباب خسارة الفرص، قياس القيمة المفقودة،
+                        اكتشاف أكثر الأسباب تكرارًا وتأثيرًا، وتحديد الشهور والعملاء الأكثر خسارة.
+                    </p>
+
+                    <div class="lstr-hero-chips">
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة الحالية</span>
+                            <span class="chip-value">@SelectedPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة السابقة</span>
+                            <span class="chip-value">@PreviousPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">أكثر سبب شيوعًا</span>
+                            <span class="chip-value">@_topReason</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="lstr-hero-side">
+                    <div class="summary-ring" style="@GetSummaryRingStyle()">
+                        <div class="summary-ring-inner">
+                            <div class="summary-percent">@_lossRate.ToString("F1")%</div>
+                            <div class="summary-caption">معدل الخسارة</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @* FILTERS / ACTIONS *@
+    <section class="glass-card lstr-filters">
+        <div class="filters-head">
+            <div>
+                <h3>الفلاتر والتحكم</h3>
+                <p>اختر الفترة الزمنية أو استخدم الفترات السريعة لتحليل أسباب الخسارة</p>
+            </div>
+
+            <div class="filters-actions">
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Default"
+                           StartIcon="@Icons.Material.Rounded.RestartAlt"
+                           OnClick="ResetFiltersAsync"
+                           Disabled="_isLoading">
+                    إعادة ضبط
+                </MudButton>
+
+                <MudButton Variant="Variant.Filled"
+                           Color="@MudColor.Primary"
+                           StartIcon="@Icons.Material.Rounded.FilterAlt"
+                           OnClick="LoadData"
+                           Disabled="_isLoading">
+                    تطبيق التحليل
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Success"
+                           StartIcon="@Icons.Material.Rounded.FileDownload"
+                           OnClick="ExportCsvAsync"
+                           Disabled="_isLoading">
+                    تصدير CSV
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Info"
+                           StartIcon="@Icons.Material.Rounded.Print"
+                           OnClick="PrintAsync"
+                           Disabled="_isLoading">
+                    طباعة / PDF
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="quick-range-row">
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(3)">آخر 3 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(6)">آخر 6 شهور</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastMonthsAsync(12)">آخر 12 شهر</button>
+            <button class="quick-range-btn" @onclick="SetCurrentYearAsync">السنة الحالية</button>
+        </div>
+
+        <div class="filters-grid">
+            <MudDatePicker @bind-Date="_fromDate"
+                           Label="من تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudDatePicker @bind-Date="_toDate"
+                           Label="إلى تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+        </div>
+    </section>
+
+    @if (_isLoading)
+    {
+        <div class="glass-card lstr-loading">
+            <MudProgressCircular Indeterminate="true"
+                                 Size="@MudSize.Large"
+                                 Color="@MudColor.Primary" />
+            <div class="loading-text">
+                <h3>جاري تحليل أسباب الخسارة...</h3>
+                <p>يتم تجهيز المؤشرات والرسوم البيانية وتحليل الأسباب</p>
+            </div>
+        </div>
+    }
+    else
+    {
+        @* KPI *@
+        <section class="lstr-kpis">
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon red">✕</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">إجمالي الخسائر</div>
+                        <span class="trend-badge @GetTrendClass(_totalLostCount, _prevTotalLostCount)">
+                            @GetTrendText(_totalLostCount, _prevTotalLostCount)
+                        </span>
+                    </div>
+                    <div class="kpi-value danger">@_totalLostCount.ToString("N0")</div>
+                    <div class="kpi-sub">عدد الفرص التي انتهت بخسارة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon orange">₪</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">إجمالي القيمة المفقودة</div>
+                        <span class="trend-badge @GetTrendClass(_totalLostValue, _prevTotalLostValue)">
+                            @GetTrendText(_totalLostValue, _prevTotalLostValue)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@FormatMoney(_totalLostValue)</div>
+                    <div class="kpi-sub">إجمالي قيمة الصفقات المفقودة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon amber">%</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">معدل الخسارة</div>
+                        <span class="trend-badge @GetTrendClass(_lossRate, _prevLossRate)">
+                            @GetTrendText(_lossRate, _prevLossRate)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_lossRate.ToString("F1")%</div>
+                    <div class="kpi-progress">
+                        <div class="kpi-progress-bar" style="@GetLossProgressStyle()"></div>
+                    </div>
+                    <div class="kpi-sub">الخسائر ÷ إجمالي الفرص × 100</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon purple">📌</div>
+                <div class="kpi-body">
+                    <div class="kpi-label">أكثر سبب شيوعًا</div>
+                    <div class="kpi-value kpi-name">@_topReason</div>
+                    <div class="kpi-sub">@_topReasonCount.ToString("N0") خسارة — @FormatMoney(_topReasonValue)</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon teal">◎</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">متوسط قيمة الخسارة</div>
+                        <span class="trend-badge @GetTrendClass(_avgLostValue, _prevAvgLostValue)">
+                            @GetTrendText(_avgLostValue, _prevAvgLostValue)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@FormatMoney(_avgLostValue)</div>
+                    <div class="kpi-sub">متوسط قيمة الفرصة المفقودة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon indigo">#</div>
+                <div class="kpi-body">
+                    <div class="kpi-label">إجمالي الفرص</div>
+                    <div class="kpi-value">@_totalOpps.ToString("N0")</div>
+                    <div class="kpi-sub">كل الفرص داخل الفترة المحددة</div>
+                </div>
+            </div>
+        </section>
+
+        @* INSIGHTS *@
+        <section class="lstr-insights">
+            @foreach (var insight in _insights)
+            {
+                <div class="glass-card insight-card">
+                    <div class="insight-icon @insight.ToneClass">
+                        <MudIcon Icon="@insight.Icon" Size="@MudSize.Small" />
+                    </div>
+                    <div class="insight-body">
+                        <div class="insight-title">@insight.Title</div>
+                        <div class="insight-value">@insight.Value</div>
+                        <div class="insight-desc">@insight.Description</div>
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* DASHBOARD *@
+        <section class="lstr-dashboard">
+            <div class="glass-card main-chart-card">
+                <div class="card-head">
+                    <div>
+                        <h3>توزيع أسباب الخسارة</h3>
+                        <p>عدد الخسائر مقابل القيمة المفقودة لكل سبب</p>
+                    </div>
+                </div>
+
+                @if (_reasonOverviewPoints.Any())
+                {
+                    <ApexChart TItem="ReasonOverviewPoint"
+                               Options="_reasonOverviewChartOptions"
+                               Height="380">
+                        <ApexPointSeries TItem="ReasonOverviewPoint"
+                                         Items="@_reasonOverviewPoints"
+                                         Name="عدد الخسائر"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Reason"
+                                         YValue="x => x.Count" />
+
+                        <ApexPointSeries TItem="ReasonOverviewPoint"
+                                         Items="@_reasonOverviewPoints"
+                                         Name="القيمة المفقودة"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.Reason"
+                                         YValue="x => x.Value" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty">لا توجد بيانات للرسم البياني</div>
+                }
+            </div>
+
+            <div class="side-stack">
+                <div class="glass-card side-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>الاتجاه الشهري للخسائر</h3>
+                            <p>عدد الخسائر وقيمتها على مستوى الشهور</p>
+                        </div>
+                    </div>
+
+                    @if (_monthlyLossPoints.Any())
+                    {
+                        <ApexChart TItem="MonthlyLossPoint"
+                                   Options="_monthlyLossChartOptions"
+                                   Height="320">
+                            <ApexPointSeries TItem="MonthlyLossPoint"
+                                             Items="@_monthlyLossPoints"
+                                             Name="عدد الخسائر"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.Month"
+                                             YValue="x => x.Count" />
+
+                            <ApexPointSeries TItem="MonthlyLossPoint"
+                                             Items="@_monthlyLossPoints"
+                                             Name="القيمة المفقودة"
+                                             SeriesType="SeriesType.Line"
+                                             XValue="x => x.Month"
+                                             YValue="x => x.Value" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty small">لا توجد بيانات كافية لعرض الاتجاه الشهري</div>
+                    }
+                </div>
+
+                <div class="glass-card side-card compare-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>مقارنة بالفترة السابقة</h3>
+                            <p>@PreviousPeriodLabel</p>
+                        </div>
+                    </div>
+
+                    <div class="compare-list">
+                        <div class="compare-row">
+                            <div class="compare-label">إجمالي الخسائر</div>
+                            <div class="compare-values">
+                                <span>@_prevTotalLostCount</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_totalLostCount</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">القيمة المفقودة</div>
+                            <div class="compare-values">
+                                <span>@FormatMoney(_prevTotalLostValue)</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@FormatMoney(_totalLostValue)</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">معدل الخسارة</div>
+                            <div class="compare-values">
+                                <span>@_prevLossRate.ToString("F1")%</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_lossRate.ToString("F1")%</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">متوسط الخسارة</div>
+                            <div class="compare-values">
+                                <span>@FormatMoney(_prevAvgLostValue)</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@FormatMoney(_avgLostValue)</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="compare-summary @(_lossRate <= _prevLossRate ? "compare-good" : "compare-bad")">
+                        @if (_lossRate <= _prevLossRate)
+                        {
+                            <span>معدل الخسارة الحالي أفضل أو مساوي للفترة السابقة</span>
+                        }
+                        else
+                        {
+                            <span>معدل الخسارة الحالي أعلى من الفترة السابقة ويحتاج معالجة</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        @* ANALYTICS GRID *@
+        <section class="lstr-analytics-grid">
+            <div class="glass-card side-card">
+                <div class="card-head">
+                    <div>
+                        <h3>حصة كل سبب من إجمالي الخسائر</h3>
+                        <p>النسبة المئوية لكل سبب من العدد الكلي</p>
+                    </div>
+                </div>
+
+                @if (_reasonPercentPoints.Any())
+                {
+                    <ApexChart TItem="ReasonPercentPoint"
+                               Options="_reasonPercentChartOptions"
+                               Height="320">
+                        <ApexPointSeries TItem="ReasonPercentPoint"
+                                         Items="@_reasonPercentPoints"
+                                         Name="النسبة %"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Reason"
+                                         YValue="x => x.Percent" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty small">لا توجد بيانات كافية لعرض النسب</div>
+                }
+            </div>
+
+            <div class="glass-card lstr-reason-table-card">
+                <div class="card-head">
+                    <div>
+                        <h3>تفاصيل الأسباب</h3>
+                        <p>ملخص لكل سبب من حيث العدد والنسبة والقيمة ومتوسط الخسارة</p>
+                    </div>
+                </div>
+
+                <MudTable Items="@_reasonRows"
+                          Hover="true"
+                          Dense="true"
+                          Elevation="0"
+                          RowsPerPage="10"
+                          Breakpoint="Breakpoint.Sm"
+                          Class="premium-table">
+                    <HeaderContent>
+                        <MudTh>السبب</MudTh>
+                        <MudTh>العدد</MudTh>
+                        <MudTh>النسبة</MudTh>
+                        <MudTh>القيمة المفقودة</MudTh>
+                        <MudTh>متوسط القيمة</MudTh>
+                    </HeaderContent>
+
+                    <RowTemplate>
+                        <MudTd DataLabel="السبب">@context.ReasonName</MudTd>
+                        <MudTd DataLabel="العدد">@context.Count.ToString("N0")</MudTd>
+                        <MudTd DataLabel="النسبة">
+                            <span class="rate-pill @GetReasonPillClass(context.Percentage)">
+                                @context.Percentage.ToString("F1")%
+                            </span>
+                        </MudTd>
+                        <MudTd DataLabel="القيمة المفقودة">@FormatMoney(context.TotalValue)</MudTd>
+                        <MudTd DataLabel="متوسط القيمة">@FormatMoney(context.AvgValue)</MudTd>
+                    </RowTemplate>
+
+                    <FooterContent>
+                        <MudTd style="font-weight:700;">الإجمالي</MudTd>
+                        <MudTd style="font-weight:700;">@_totalLostCount.ToString("N0")</MudTd>
+                        <MudTd style="font-weight:700;">100.0%</MudTd>
+                        <MudTd style="font-weight:700;">@FormatMoney(_totalLostValue)</MudTd>
+                        <MudTd style="font-weight:700;">@FormatMoney(_avgLostValue)</MudTd>
+                    </FooterContent>
+
+                    <NoRecordsContent>
+                        <div class="empty-data">
+                            <div class="empty-icon">📉</div>
+                            <h4>لا توجد بيانات</h4>
+                            <p>لا توجد أسباب خسارة مطابقة للفترة الحالية</p>
+                        </div>
+                    </NoRecordsContent>
+                </MudTable>
+            </div>
+        </section>
+
+        @* REASON DRILL-DOWN *@
+        <section class="glass-card lstr-drill">
+            <div class="card-head drill-head">
+                <div>
+                    <h3>Drill-down حسب السبب</h3>
+                    <p>اختر سببًا لعرض تحليله الشهري وأكبر الفرص المرتبطة به</p>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_selectedReason))
+                {
+                    <button class="clear-reason-btn" @onclick="ClearSelectedReason">
+                        إلغاء اختيار السبب
+                    </button>
+                }
+            </div>
+
+            <div class="reason-chip-row">
+                @foreach (var reason in _reasonRows)
+                {
+                    <button class="reason-chip-btn @(IsSelectedReason(reason.ReasonName) ? "reason-chip-active" : "")"
+                            @onclick="() => SelectReason(reason.ReasonName)">
+                        <span>@reason.ReasonName</span>
+                        <small>@reason.Count.ToString("N0") خسارة</small>
+                    </button>
+                }
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_selectedReason) || _detailRows.Any())
+            {
+                <div class="drill-mini-kpis">
+                    <div class="mini-kpi">
+                        <span class="mini-label">السبب المحدد</span>
+                        <strong>@_selectedReasonName</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">عدد الخسائر</span>
+                        <strong>@_selectedReasonCount.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">القيمة المفقودة</span>
+                        <strong>@FormatMoney(_selectedReasonValue)</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">متوسط الخسارة</span>
+                        <strong>@FormatMoney(_selectedReasonAvgValue)</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">النسبة</span>
+                        <strong>@_selectedReasonPercent.ToString("F1")%</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">أعلى شهر</span>
+                        <strong>@_selectedReasonTopMonth</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">أكثر موظف</span>
+                        <strong>@_selectedReasonTopEmployee</strong>
+                    </div>
+                </div>
+
+                <div class="drill-grid">
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>الاتجاه الشهري للسبب المحدد</h3>
+                                <p>عدد الخسائر والقيمة المفقودة لنفس السبب عبر الشهور</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedReasonMonthlyPoints.Any())
+                        {
+                            <ApexChart TItem="SelectedReasonMonthPoint"
+                                       Options="_selectedReasonMonthlyChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="SelectedReasonMonthPoint"
+                                                 Items="@_selectedReasonMonthlyPoints"
+                                                 Name="عدد الخسائر"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Month"
+                                                 YValue="x => x.Count" />
+
+                                <ApexPointSeries TItem="SelectedReasonMonthPoint"
+                                                 Items="@_selectedReasonMonthlyPoints"
+                                                 Name="القيمة"
+                                                 SeriesType="SeriesType.Line"
+                                                 XValue="x => x.Month"
+                                                 YValue="x => x.Value" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد بيانات كافية لهذا السبب</div>
+                        }
+                    </div>
+
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>الموظفون المتأثرون بهذا السبب</h3>
+                                <p>الترتيب حسب عدد الخسائر لنفس السبب</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedReasonEmployeePoints.Any())
+                        {
+                            <ApexChart TItem="SelectedReasonEmployeePoint"
+                                       Options="_selectedReasonEmployeeChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="SelectedReasonEmployeePoint"
+                                                 Items="@_selectedReasonEmployeePoints"
+                                                 Name="عدد الخسائر"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Employee"
+                                                 YValue="x => x.Count" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد بيانات موظفين لهذا السبب</div>
+                        }
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* DETAILS TABLE *@
+        <section class="glass-card lstr-table-card">
+            <div class="card-head">
+                <div>
+                    <h3>تفاصيل الفرص المفقودة</h3>
+                    <p>
+                        @if (!string.IsNullOrWhiteSpace(_selectedReason))
+                        {
+                            <span>عرض الفرص المفقودة للسبب: @_selectedReasonName</span>
+                        }
+                        else
+                        {
+                            <span>عرض أعلى الفرص المفقودة حسب القيمة</span>
+                        }
+                    </p>
+                </div>
+            </div>
+
+            <MudTable Items="@_detailRows"
+                      Hover="true"
+                      Dense="true"
+                      Elevation="0"
+                      RowsPerPage="10"
+                      Breakpoint="Breakpoint.Sm"
+                      Class="premium-table">
+                <HeaderContent>
+                    <MudTh>العميل</MudTh>
+                    <MudTh>الموظف</MudTh>
+                    <MudTh>المرحلة</MudTh>
+                    <MudTh>تاريخ الإنشاء</MudTh>
+                    <MudTh>السبب</MudTh>
+                    <MudTh>القيمة</MudTh>
+                    <MudTh>إجراء</MudTh>
+                </HeaderContent>
+
+                <RowTemplate>
+                    <MudTd DataLabel="العميل">@context.ClientName</MudTd>
+                    <MudTd DataLabel="الموظف">@context.EmployeeName</MudTd>
+                    <MudTd DataLabel="المرحلة">
+                        <span class="stage-pill" style="@GetStagePillStyle(context.StageColor)">
+                            @context.StageName
+                        </span>
+                    </MudTd>
+                    <MudTd DataLabel="تاريخ الإنشاء">@FormatDate(context.CreatedAt)</MudTd>
+                    <MudTd DataLabel="السبب">@context.ReasonName</MudTd>
+                    <MudTd DataLabel="القيمة">@FormatMoney(context.ExpectedValue)</MudTd>
+                    <MudTd DataLabel="إجراء">
+                        <MudButton Variant="Variant.Text"
+                                   Color="@MudColor.Primary"
+                                   Size="@MudSize.Small"
+                                   OnClick="@(() => OpenOpportunity(context.OpportunityId))">
+                            عرض
+                        </MudButton>
+                    </MudTd>
+                </RowTemplate>
+
+                <NoRecordsContent>
+                    <div class="empty-data">
+                        <div class="empty-icon">📉</div>
+                        <h4>لا توجد بيانات</h4>
+                        <p>لا توجد فرص مفقودة مطابقة للفلاتر الحالية</p>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </section>
+
+        @* NOTE *@
+        <section class="glass-card lstr-note">
+            <div class="note-icon">ℹ️</div>
+            <div class="note-body">
+                <h4>ملاحظة تحليلية مهمة</h4>
+               @* <p>
+                    هذا التقرير يحلل الفرص التي حالتها الحالية <strong>خسارة</strong>
+                    (المراحل @LostStageId1 و @LostStageId2)，
+                    ويعتمد على <strong>LostReasonName</strong> إن وجد，
+                    مع استخدام <strong>CreatedAt</strong> كأساس زمني للتحليل.
+                </p>*@
+            </div>
+        </section>
+    }
+</div>
+
+@code {
+    private const int LostStageId1 = 4;
+    private const int LostStageId2 = 5;
+
+    private readonly CultureInfo _arCulture = new("ar-EG");
+
+    private bool _isLoading = true;
+    private DateTime? _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+    private DateTime? _toDate = DateTime.Today;
+
+    private int _totalOpps;
+    private int _totalLostCount;
+    private decimal _totalLostValue;
+    private double _lossRate;
+    private decimal _avgLostValue;
+
+    private string _topReason = "—";
+    private int _topReasonCount;
+    private decimal _topReasonValue;
+
+    private int _prevTotalOpps;
+    private int _prevTotalLostCount;
+    private decimal _prevTotalLostValue;
+    private double _prevLossRate;
+    private decimal _prevAvgLostValue;
+
+    private string _previousPeriodLabel = "غير متاح";
+
+    private List<OpportunitySnapshot> _currentRows = new();
+    private List<LostDealRow> _lostRows = new();
+
+    private List<ReasonSummaryRow> _reasonRows = new();
+    private List<MonthlyLostRow> _monthlyRows = new();
+    private List<ReasonOverviewPoint> _reasonOverviewPoints = new();
+    private List<MonthlyLossPoint> _monthlyLossPoints = new();
+    private List<ReasonPercentPoint> _reasonPercentPoints = new();
+    private List<InsightItem> _insights = new();
+    private List<LostDealDetailRow> _detailRows = new();
+
+    private string? _selectedReason;
+    private string _selectedReasonName = "—";
+    private int _selectedReasonCount;
+    private decimal _selectedReasonValue;
+    private decimal _selectedReasonAvgValue;
+    private double _selectedReasonPercent;
+    private string _selectedReasonTopMonth = "—";
+    private string _selectedReasonTopEmployee = "—";
+    private List<SelectedReasonMonthPoint> _selectedReasonMonthlyPoints = new();
+    private List<SelectedReasonEmployeePoint> _selectedReasonEmployeePoints = new();
+
+    private ApexChartOptions<ReasonOverviewPoint> _reasonOverviewChartOptions = new();
+    private ApexChartOptions<MonthlyLossPoint> _monthlyLossChartOptions = new();
+    private ApexChartOptions<ReasonPercentPoint> _reasonPercentChartOptions = new();
+    private ApexChartOptions<SelectedReasonMonthPoint> _selectedReasonMonthlyChartOptions = new();
+    private ApexChartOptions<SelectedReasonEmployeePoint> _selectedReasonEmployeeChartOptions = new();
+
+    private string SelectedPeriodLabel =>
+        $"{(_fromDate.HasValue ? _fromDate.Value.ToString("dd MMM yyyy", _arCulture) : "البداية")} — {(_toDate.HasValue ? _toDate.Value.ToString("dd MMM yyyy", _arCulture) : "اليوم")}";
+
+    private string PreviousPeriodLabel => _previousPeriodLabel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        ConfigureCharts();
+        await LoadData();
+    }
+
+    private void ConfigureCharts()
+    {
+        _reasonOverviewChartOptions = new ApexChartOptions<ReasonOverviewPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#ef4444", "#f97316" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 8,
+                    ColumnWidth = "45%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _monthlyLossChartOptions = new ApexChartOptions<MonthlyLossPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#b91c1c", "#f59e0b" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 8,
+                    ColumnWidth = "45%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _reasonPercentChartOptions = new ApexChartOptions<ReasonPercentPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#8b5cf6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis
+            {
+                Max = 100,
+                Labels = new XAxisLabels { Rotate = 0 }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis { Min = 0, Max = 100, DecimalsInFloat = 0 }
+            }
+        };
+
+        _selectedReasonMonthlyChartOptions = new ApexChartOptions<SelectedReasonMonthPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#7c3aed", "#ef4444" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "45%"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _selectedReasonEmployeeChartOptions = new ApexChartOptions<SelectedReasonEmployeePoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#14b8a6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "rgba(148,163,184,.18)"
+            },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+        _toDate = DateTime.Today;
+        _selectedReason = null;
+        await LoadData();
+    }
+
+    private async Task SetLastMonthsAsync(int months)
+    {
+        if (months <= 0) months = 12;
+
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-(months - 1));
+        _toDate = DateTime.Today;
+        _selectedReason = null;
+
+        await LoadData();
+    }
+
+    private async Task SetCurrentYearAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, 1, 1);
+        _toDate = DateTime.Today;
+        _selectedReason = null;
+
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+
+        try
+        {
+            NormalizeDateRange();
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            _currentRows = await LoadPeriodRowsAsync(db, _fromDate, _toDate);
+
+            if (TryGetPreviousRange(out var prevFrom, out var prevTo))
+            {
+                _previousPeriodLabel = $"{prevFrom.ToString("dd MMM yyyy", _arCulture)} — {prevTo.ToString("dd MMM yyyy", _arCulture)}";
+                var previousRows = await LoadPeriodRowsAsync(db, prevFrom, prevTo);
+                CalculatePreviousMetrics(previousRows);
+            }
+            else
+            {
+                _previousPeriodLabel = "غير متاح";
+                ResetPreviousMetrics();
+            }
+
+            CalculateCurrentMetrics(_currentRows);
+            BuildReasonSummary(_currentRows);
+            BuildMonthlySummary(_currentRows);
+            ResolveSelectedReason();
+            BuildSelectedReasonAnalytics(_currentRows);
+            BuildInsights();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ أثناء تحميل التقرير: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task<List<OpportunitySnapshot>> LoadPeriodRowsAsync(db24804Context db, DateTime? from, DateTime? to)
+    {
+        var query = db.VwSalesOpportunities.AsNoTracking().AsQueryable();
+
+        if (from.HasValue)
+        {
+            var fromDate = from.Value.Date;
+            query = query.Where(o => o.CreatedAt >= fromDate);
+        }
+
+        if (to.HasValue)
+        {
+            var toExclusive = to.Value.Date.AddDays(1);
+            query = query.Where(o => o.CreatedAt < toExclusive);
+        }
+
+        return await query
+            .Select(o => new OpportunitySnapshot
+            {
+                OpportunityId = o.OpportunityId,
+                CreatedAt = o.CreatedAt,
+                StageId = o.StageId,
+                ExpectedValue = o.ExpectedValue ?? 0m,
+                LostReasonName = o.LostReasonNameAr ?? "غير محدد",
+                ClientName = o.ClientName ?? "—",
+                EmployeeName = o.EmployeeName ?? "—",
+                StageName = o.StageNameAr ?? o.StageName ?? "—",
+                StageColor = o.StageColor ?? ""
+            })
+            .ToListAsync();
+    }
+
+    private void CalculateCurrentMetrics(List<OpportunitySnapshot> rows)
+    {
+        _totalOpps = rows.Count;
+
+        _lostRows = rows
+            .Where(x => IsLost(x.StageId))
+            .Select(x => new LostDealRow
+            {
+                OpportunityId = x.OpportunityId,
+                ClientName = x.ClientName,
+                EmployeeName = x.EmployeeName,
+                StageName = x.StageName,
+                StageColor = x.StageColor,
+                ReasonName = string.IsNullOrWhiteSpace(x.LostReasonName) ? "غير محدد" : x.LostReasonName,
+                CreatedAt = x.CreatedAt,
+                ExpectedValue = x.ExpectedValue
+            })
+            .ToList();
+
+        _totalLostCount = _lostRows.Count;
+        _totalLostValue = _lostRows.Sum(x => x.ExpectedValue);
+        _lossRate = _totalOpps > 0 ? (double)_totalLostCount / _totalOpps * 100d : 0d;
+        _avgLostValue = _totalLostCount > 0 ? _totalLostValue / _totalLostCount : 0m;
+    }
+
+    private void CalculatePreviousMetrics(List<OpportunitySnapshot> rows)
+    {
+        _prevTotalOpps = rows.Count;
+
+        var lostRows = rows.Where(x => IsLost(x.StageId)).ToList();
+
+        _prevTotalLostCount = lostRows.Count;
+        _prevTotalLostValue = lostRows.Sum(x => x.ExpectedValue);
+        _prevLossRate = _prevTotalOpps > 0 ? (double)_prevTotalLostCount / _prevTotalOpps * 100d : 0d;
+        _prevAvgLostValue = _prevTotalLostCount > 0 ? _prevTotalLostValue / _prevTotalLostCount : 0m;
+    }
+
+    private void ResetPreviousMetrics()
+    {
+        _prevTotalOpps = 0;
+        _prevTotalLostCount = 0;
+        _prevTotalLostValue = 0m;
+        _prevLossRate = 0d;
+        _prevAvgLostValue = 0m;
+    }
+
+    private void BuildReasonSummary(List<OpportunitySnapshot> rows)
+    {
+        _reasonRows = _lostRows
+            .GroupBy(x => string.IsNullOrWhiteSpace(x.ReasonName) ? "غير محدد" : x.ReasonName)
+            .Select(g =>
+            {
+                var count = g.Count();
+                var totalValue = g.Sum(x => x.ExpectedValue);
+
+                return new ReasonSummaryRow
+                {
+                    ReasonName = g.Key,
+                    Count = count,
+                    TotalValue = totalValue,
+                    AvgValue = count > 0 ? totalValue / count : 0m,
+                    Percentage = _totalLostCount > 0 ? (double)count / _totalLostCount * 100d : 0d
+                };
+            })
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.TotalValue)
+            .ToList();
+
+        var top = _reasonRows.FirstOrDefault();
+        _topReason = top?.ReasonName ?? "—";
+        _topReasonCount = top?.Count ?? 0;
+        _topReasonValue = top?.TotalValue ?? 0m;
+
+        _reasonOverviewPoints = _reasonRows
+            .Select(x => new ReasonOverviewPoint
+            {
+                Reason = x.ReasonName,
+                Count = x.Count,
+                Value = x.TotalValue
+            })
+            .ToList();
+
+        _reasonPercentPoints = _reasonRows
+            .Select(x => new ReasonPercentPoint
+            {
+                Reason = x.ReasonName,
+                Percent = (decimal)x.Percentage
+            })
+            .OrderByDescending(x => x.Percent)
+            .ToList();
+    }
+
+    private void BuildMonthlySummary(List<OpportunitySnapshot> rows)
+    {
+        var startMonth = _fromDate.HasValue
+            ? new DateTime(_fromDate.Value.Year, _fromDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+
+        var endMonth = _toDate.HasValue
+            ? new DateTime(_toDate.Value.Year, _toDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+
+        var allMap = rows
+            .GroupBy(x => new DateTime(x.CreatedAt.Year, x.CreatedAt.Month, 1))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var lostMap = _lostRows
+            .GroupBy(x => new DateTime(x.CreatedAt.Year, x.CreatedAt.Month, 1))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var list = new List<MonthlyLostRow>();
+
+        for (var month = startMonth; month <= endMonth; month = month.AddMonths(1))
+        {
+            allMap.TryGetValue(month, out var allRows);
+            lostMap.TryGetValue(month, out var lostRows);
+
+            allRows ??= new List<OpportunitySnapshot>();
+            lostRows ??= new List<LostDealRow>();
+
+            var totalOpps = allRows.Count;
+            var lostCount = lostRows.Count;
+            var lostValue = lostRows.Sum(x => x.ExpectedValue);
+
+            list.Add(new MonthlyLostRow
+            {
+                Year = month.Year,
+                MonthNum = month.Month,
+                Month = month.ToString("MMM yyyy", _arCulture),
+                TotalOpps = totalOpps,
+                LostCount = lostCount,
+                LostValue = lostValue,
+                LossRate = totalOpps > 0 ? (double)lostCount / totalOpps * 100d : 0d
+            });
+        }
+
+        _monthlyRows = list
+            .OrderByDescending(x => x.Year)
+            .ThenByDescending(x => x.MonthNum)
+            .ToList();
+
+        _monthlyLossPoints = list
+            .OrderBy(x => x.Year)
+            .ThenBy(x => x.MonthNum)
+            .Select(x => new MonthlyLossPoint
+            {
+                Month = x.Month,
+                Count = x.LostCount,
+                Value = x.LostValue
+            })
+            .ToList();
+    }
+
+    private void ResolveSelectedReason()
+    {
+        if (!_reasonRows.Any())
+        {
+            _selectedReason = null;
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_selectedReason) && _reasonRows.Any(x => x.ReasonName == _selectedReason))
+            return;
+
+        _selectedReason = _reasonRows.First().ReasonName;
+    }
+
+    private void BuildSelectedReasonAnalytics(List<OpportunitySnapshot> rows)
+    {
+        _selectedReasonName = "—";
+        _selectedReasonCount = 0;
+        _selectedReasonValue = 0m;
+        _selectedReasonAvgValue = 0m;
+        _selectedReasonPercent = 0d;
+        _selectedReasonTopMonth = "—";
+        _selectedReasonTopEmployee = "—";
+        _selectedReasonMonthlyPoints = new();
+        _selectedReasonEmployeePoints = new();
+        _detailRows = new();
+
+        if (string.IsNullOrWhiteSpace(_selectedReason))
+        {
+            _detailRows = _lostRows
+                .OrderByDescending(x => x.ExpectedValue)
+                .ThenByDescending(x => x.CreatedAt)
+                .Take(25)
+                .Select(MapDetailRow)
+                .ToList();
+
+            return;
+        }
+
+        var filtered = _lostRows
+            .Where(x => x.ReasonName == _selectedReason)
+            .ToList();
+
+        if (!filtered.Any())
+            return;
+
+        _selectedReasonName = _selectedReason;
+        _selectedReasonCount = filtered.Count;
+        _selectedReasonValue = filtered.Sum(x => x.ExpectedValue);
+        _selectedReasonAvgValue = _selectedReasonCount > 0 ? _selectedReasonValue / _selectedReasonCount : 0m;
+        _selectedReasonPercent = _totalLostCount > 0 ? (double)_selectedReasonCount / _totalLostCount * 100d : 0d;
+
+        var startMonth = _fromDate.HasValue
+            ? new DateTime(_fromDate.Value.Year, _fromDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-11);
+
+        var endMonth = _toDate.HasValue
+            ? new DateTime(_toDate.Value.Year, _toDate.Value.Month, 1)
+            : new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+
+        var monthMap = filtered
+            .GroupBy(x => new DateTime(x.CreatedAt.Year, x.CreatedAt.Month, 1))
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        for (var month = startMonth; month <= endMonth; month = month.AddMonths(1))
+        {
+            monthMap.TryGetValue(month, out var monthRows);
+            monthRows ??= new List<LostDealRow>();
+
+            _selectedReasonMonthlyPoints.Add(new SelectedReasonMonthPoint
+            {
+                Month = month.ToString("MMM yyyy", _arCulture),
+                Count = monthRows.Count,
+                Value = monthRows.Sum(x => x.ExpectedValue)
+            });
+        }
+
+        var topMonth = _selectedReasonMonthlyPoints
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.Value)
+            .FirstOrDefault();
+
+        _selectedReasonTopMonth = topMonth?.Month ?? "—";
+
+        _selectedReasonEmployeePoints = filtered
+            .GroupBy(x => x.EmployeeName)
+            .Select(g => new SelectedReasonEmployeePoint
+            {
+                Employee = g.Key,
+                Count = g.Count()
+            })
+            .OrderByDescending(x => x.Count)
+            .Take(8)
+            .ToList();
+
+        _selectedReasonTopEmployee = _selectedReasonEmployeePoints.FirstOrDefault()?.Employee ?? "—";
+
+        _detailRows = filtered
+            .OrderByDescending(x => x.ExpectedValue)
+            .ThenByDescending(x => x.CreatedAt)
+            .Select(MapDetailRow)
+            .ToList();
+    }
+
+    private LostDealDetailRow MapDetailRow(LostDealRow x) => new()
+    {
+        OpportunityId = x.OpportunityId,
+        ClientName = x.ClientName,
+        EmployeeName = x.EmployeeName,
+        StageName = x.StageName,
+        StageColor = x.StageColor,
+        ReasonName = x.ReasonName,
+        CreatedAt = x.CreatedAt,
+        ExpectedValue = x.ExpectedValue
+    };
+
+    private void BuildInsights()
+    {
+        _insights = new();
+
+        if (_reasonRows.Any())
+        {
+            var highestCount = _reasonRows
+                .OrderByDescending(x => x.Count)
+                .ThenByDescending(x => x.TotalValue)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.ReportProblem,
+                Title = "أكثر سبب تكرارًا",
+                Value = highestCount.ReasonName,
+                Description = $"{highestCount.Count} خسارة — {highestCount.Percentage:F1}%",
+                ToneClass = "tone-red"
+            });
+
+            var highestValue = _reasonRows
+                .OrderByDescending(x => x.TotalValue)
+                .ThenByDescending(x => x.Count)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.AttachMoney,
+                Title = "أعلى سبب من حيث القيمة",
+                Value = highestValue.ReasonName,
+                Description = $"{FormatMoney(highestValue.TotalValue)}",
+                ToneClass = "tone-gold"
+            });
+        }
+
+        var validMonths = _monthlyRows.Where(x => x.LostCount > 0).ToList();
+        if (validMonths.Any())
+        {
+            var worstMonth = validMonths
+                .OrderByDescending(x => x.LostCount)
+                .ThenByDescending(x => x.LostValue)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.CalendarMonth,
+                Title = "أسوأ شهر",
+                Value = worstMonth.Month,
+                Description = $"{worstMonth.LostCount} خسارة — {FormatMoney(worstMonth.LostValue)}",
+                ToneClass = "tone-indigo"
+            });
+        }
+
+        if (_lostRows.Any())
+        {
+            var biggestDeal = _lostRows
+                .OrderByDescending(x => x.ExpectedValue)
+                .ThenByDescending(x => x.CreatedAt)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.WarningAmber,
+                Title = "أكبر صفقة مفقودة",
+                Value = biggestDeal.ClientName,
+                Description = $"{FormatMoney(biggestDeal.ExpectedValue)} — {biggestDeal.ReasonName}",
+                ToneClass = "tone-slate"
+            });
+        }
+
+        while (_insights.Count < 4)
+        {
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.Insights,
+                Title = "معلومة",
+                Value = "—",
+                Description = "لا توجد بيانات كافية لهذا المؤشر",
+                ToneClass = "tone-slate"
+            });
+        }
+    }
+
+    private void SelectReason(string reason)
+    {
+        _selectedReason = reason;
+        BuildSelectedReasonAnalytics(_currentRows);
+    }
+
+    private void ClearSelectedReason()
+    {
+        _selectedReason = null;
+        BuildSelectedReasonAnalytics(_currentRows);
+    }
+
+    private bool IsSelectedReason(string reason)
+        => !string.IsNullOrWhiteSpace(_selectedReason) && _selectedReason == reason;
+
+    private bool TryGetPreviousRange(out DateTime previousFrom, out DateTime previousTo)
+    {
+        previousFrom = default;
+        previousTo = default;
+
+        if (!_fromDate.HasValue || !_toDate.HasValue)
+            return false;
+
+        var currentFrom = _fromDate.Value.Date;
+        var currentTo = _toDate.Value.Date;
+        var days = (currentTo - currentFrom).Days;
+
+        previousTo = currentFrom.AddDays(-1);
+        previousFrom = previousTo.AddDays(-days);
+
+        return true;
+    }
+
+    private void NormalizeDateRange()
+    {
+        if (_fromDate.HasValue && _toDate.HasValue && _fromDate.Value.Date > _toDate.Value.Date)
+        {
+            var temp = _fromDate;
+            _fromDate = _toDate;
+            _toDate = temp;
+
+            Snackbar.Add("تم تبديل تاريخ البداية والنهاية تلقائيًا لأن البداية كانت أكبر من النهاية.", Severity.Info);
+        }
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("تقرير أسباب الخسارة");
+            sb.AppendLine($"الفترة الحالية,{SelectedPeriodLabel}");
+            sb.AppendLine($"الفترة السابقة,{PreviousPeriodLabel}");
+            sb.AppendLine();
+
+            sb.AppendLine("المؤشرات الرئيسية");
+            sb.AppendLine("المؤشر,القيمة");
+            sb.AppendLine($"إجمالي الفرص,{_totalOpps}");
+            sb.AppendLine($"إجمالي الخسائر,{_totalLostCount}");
+            sb.AppendLine($"إجمالي القيمة المفقودة,{_totalLostValue:N0}");
+            sb.AppendLine($"معدل الخسارة,{_lossRate:F1}%");
+            sb.AppendLine($"متوسط الخسارة,{_avgLostValue:N0}");
+            sb.AppendLine($"أكثر سبب شيوعاً,{_topReason}");
+            sb.AppendLine();
+
+            sb.AppendLine("تفاصيل الأسباب");
+            sb.AppendLine("السبب,العدد,النسبة,إجمالي القيمة,متوسط القيمة");
+            foreach (var row in _reasonRows)
+            {
+                sb.AppendLine($"{row.ReasonName},{row.Count},{row.Percentage:F1}%,{row.TotalValue:N0},{row.AvgValue:N0}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("التفاصيل الشهرية");
+            sb.AppendLine("الشهر,إجمالي الفرص,إجمالي الخسائر,معدل الخسارة,القيمة المفقودة");
+            foreach (var row in _monthlyRows.OrderBy(x => x.Year).ThenBy(x => x.MonthNum))
+            {
+                sb.AppendLine($"{row.Month},{row.TotalOpps},{row.LostCount},{row.LossRate:F1}%,{row.LostValue:N0}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("تفاصيل الفرص المفقودة");
+            sb.AppendLine("العميل,الموظف,المرحلة,تاريخ الإنشاء,السبب,القيمة");
+            foreach (var row in _detailRows)
+            {
+                sb.AppendLine($"{row.ClientName},{row.EmployeeName},{row.StageName},{FormatDate(row.CreatedAt)},{row.ReasonName},{row.ExpectedValue:N0}");
+            }
+
+            var csv = sb.ToString();
+            var fileName = $"lost-reasons-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+            var dataUrl = "data:text/csv;charset=utf-8,\uFEFF" + Uri.EscapeDataString(csv);
+
+            var script = $@"
+                (function() {{
+                    const link = document.createElement('a');
+                    link.href = '{dataUrl}';
+                    link.download = '{fileName}';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }})();";
+
+            await JS.InvokeVoidAsync("eval", script);
+            Snackbar.Add("تم تصدير الملف بنجاح. يمكنك فتحه مباشرة في Excel.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تصدير الملف: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval", "window.print()");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تشغيل الطباعة: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private bool IsLost(int stageId) => stageId == LostStageId1 || stageId == LostStageId2;
+
+    private string FormatMoney(decimal value) => $"{value:N0} ج.م";
+    private string FormatDate(DateTime value) => value.ToString("yyyy/MM/dd");
+
+    private string GetStagePillStyle(string? color)
+    {
+        if (string.IsNullOrWhiteSpace(color))
+            return "background:#e5e7eb;color:#111827;";
+
+        return $"background:{color};color:#fff;";
+    }
+
+    private string GetSummaryRingStyle()
+    {
+        var safe = Math.Max(0, Math.Min(_lossRate, 100));
+        var angle = safe * 3.6;
+        return $"background: conic-gradient(#ef4444 0deg, #ef4444 {angle:F1}deg, rgba(255,255,255,.12) {angle:F1}deg, rgba(255,255,255,.12) 360deg);";
+    }
+
+    private string GetLossProgressStyle()
+    {
+        var safe = Math.Max(0, Math.Min(_lossRate, 100));
+        return $"width:{safe:F0}%";
+    }
+
+    private string GetTrendClass(int current, int previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(double current, double previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendClass(decimal current, decimal previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendText(int current, int previous)
+    {
+        if (previous == 0)
+            return current == 0 ? "0%" : "جديد";
+
+        var change = ((double)(current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(double current, double previous)
+    {
+        if (Math.Abs(previous) < 0.000001)
+            return Math.Abs(current) < 0.000001 ? "0%" : "جديد";
+
+        var change = ((current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetTrendText(decimal current, decimal previous)
+    {
+        if (previous == 0m)
+            return current == 0m ? "0%" : "جديد";
+
+        var change = (double)((current - previous) / previous * 100m);
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string GetReasonPillClass(double percent)
+    {
+        if (percent >= 40) return "rate-bad";
+        if (percent >= 20) return "rate-mid";
+        return "rate-good";
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/crm/reports");
+
+    private void OpenOpportunity(int id) => Navigation.NavigateTo($"/crm/opportunities/{id}");
+
+    private sealed class OpportunitySnapshot
+    {
+        public int OpportunityId { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public int StageId { get; set; }
+        public decimal ExpectedValue { get; set; }
+        public string LostReasonName { get; set; } = "";
+        public string ClientName { get; set; } = "";
+        public string EmployeeName { get; set; } = "";
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+    }
+
+    private sealed class LostDealRow
+    {
+        public int OpportunityId { get; set; }
+        public string ClientName { get; set; } = "";
+        public string EmployeeName { get; set; } = "";
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+        public string ReasonName { get; set; } = "";
+        public DateTime CreatedAt { get; set; }
+        public decimal ExpectedValue { get; set; }
+    }
+
+    private sealed class ReasonSummaryRow
+    {
+        public string ReasonName { get; set; } = "";
+        public int Count { get; set; }
+        public double Percentage { get; set; }
+        public decimal TotalValue { get; set; }
+        public decimal AvgValue { get; set; }
+    }
+
+    private sealed class MonthlyLostRow
+    {
+        public int Year { get; set; }
+        public int MonthNum { get; set; }
+        public string Month { get; set; } = "";
+        public int TotalOpps { get; set; }
+        public int LostCount { get; set; }
+        public decimal LostValue { get; set; }
+        public double LossRate { get; set; }
+    }
+
+    private sealed class ReasonOverviewPoint
+    {
+        public string Reason { get; set; } = "";
+        public decimal Count { get; set; }
+        public decimal Value { get; set; }
+    }
+
+    private sealed class MonthlyLossPoint
+    {
+        public string Month { get; set; } = "";
+        public decimal Count { get; set; }
+        public decimal Value { get; set; }
+    }
+
+    private sealed class ReasonPercentPoint
+    {
+        public string Reason { get; set; } = "";
+        public decimal Percent { get; set; }
+    }
+
+    private sealed class SelectedReasonMonthPoint
+    {
+        public string Month { get; set; } = "";
+        public decimal Count { get; set; }
+        public decimal Value { get; set; }
+    }
+
+    private sealed class SelectedReasonEmployeePoint
+    {
+        public string Employee { get; set; } = "";
+        public decimal Count { get; set; }
+    }
+
+    private sealed class LostDealDetailRow
+    {
+        public int OpportunityId { get; set; }
+        public string ClientName { get; set; } = "";
+        public string EmployeeName { get; set; } = "";
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+        public string ReasonName { get; set; } = "";
+        public DateTime CreatedAt { get; set; }
+        public decimal ExpectedValue { get; set; }
+    }
+
+    private sealed class InsightItem
+    {
+        public string Icon { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Value { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string ToneClass { get; set; } = "";
+    }
+}
+
+<style>
+    .lstr-page {
+        --text: #0f172a;
+        --muted: #64748b;
+        --line: rgba(148, 163, 184, .16);
+        --glass: rgba(255,255,255,.72);
+        --shadow: 0 20px 50px rgba(15, 23, 42, .06);
+        max-width: 1460px;
+        margin: 0 auto;
+        padding: 1.25rem 1.25rem 3rem;
+        position: relative;
+        min-height: 100vh;
+    }
+
+    .lstr-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+    }
+
+    .lstr-orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(120px);
+        opacity: .16;
+    }
+
+    .orb-1 {
+        width: 420px;
+        height: 420px;
+        background: #ef4444;
+        top: -120px;
+        right: -120px;
+        animation: lstrFloat 12s ease-in-out infinite;
+    }
+
+    .orb-2 {
+        width: 360px;
+        height: 360px;
+        background: #f97316;
+        bottom: -80px;
+        left: -80px;
+        animation: lstrFloat 18s ease-in-out infinite reverse;
+    }
+
+    .orb-3 {
+        width: 280px;
+        height: 280px;
+        background: #8b5cf6;
+        top: 30%;
+        left: 45%;
+        animation: lstrFloat 16s ease-in-out infinite;
+    }
+
+    @@keyframes lstrFloat {
+        0%,100% { transform: translate(0,0) scale(1); }
+        50% { transform: translate(20px,-20px) scale(1.08); }
+    }
+
+    .glass-card {
+        position: relative;
+        z-index: 1;
+        background: var(--glass);
+        backdrop-filter: blur(20px) saturate(1.5);
+        -webkit-backdrop-filter: blur(20px) saturate(1.5);
+        border: 1px solid rgba(255,255,255,.48);
+        box-shadow: var(--shadow);
+        border-radius: 1.35rem;
+    }
+
+    .glass-inner-card {
+        background: rgba(255,255,255,.45);
+        border: 1px solid rgba(255,255,255,.4);
+        border-radius: 1.2rem;
+        padding: 1rem;
+    }
+
+    .lstr-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1.8rem;
+        margin-bottom: 1.25rem;
+        background: linear-gradient(135deg, #111827 0%, #7f1d1d 45%, #b91c1c 100%);
+        padding: 2rem;
+        color: #fff;
+        z-index: 1;
+    }
+
+    .lstr-hero-grid {
+        position: absolute;
+        inset: 0;
+        background-image:
+            linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+        background-size: 50px 50px;
+        mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
+        pointer-events: none;
+    }
+
+    .lstr-hero-content {
+        position: relative;
+        z-index: 2;
+    }
+
+    .lstr-hero-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+
+    .lstr-back {
+        width: 2.6rem;
+        height: 2.6rem;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08);
+        color: #fff;
+        border-radius: .9rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: .25s ease;
+        backdrop-filter: blur(10px);
+    }
+
+    .lstr-back:hover {
+        transform: translateX(-3px);
+        background: rgba(255,255,255,.15);
+    }
+
+    .lstr-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: .5rem;
+        padding: .45rem .9rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,.1);
+        border: 1px solid rgba(255,255,255,.16);
+        color: #fee2e2;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .badge-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #fdba74;
+        box-shadow: 0 0 12px #fdba74;
+        animation: badgePulse 2s infinite;
+    }
+
+    @@keyframes badgePulse {
+        0%,100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.35); opacity: .6; }
+    }
+
+    .lstr-hero-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 2rem;
+    }
+
+    .lstr-hero-text {
+        flex: 1;
+    }
+
+    .lstr-hero-text h1 {
+        margin: 0 0 .6rem;
+        font-size: 2.5rem;
+        font-weight: 900;
+        letter-spacing: -.02em;
+    }
+
+    .lstr-hero-text h1 span {
+        color: #fdba74;
+    }
+
+    .lstr-hero-text p {
+        margin: 0 0 1rem;
+        color: rgba(255,255,255,.76);
+        max-width: 760px;
+        line-height: 1.8;
+    }
+
+    .lstr-hero-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .75rem;
+    }
+
+    .hero-chip {
+        display: flex;
+        flex-direction: column;
+        gap: .15rem;
+        padding: .85rem 1rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.08);
+        border: 1px solid rgba(255,255,255,.12);
+        min-width: 210px;
+    }
+
+    .chip-label {
+        font-size: .72rem;
+        color: rgba(255,255,255,.6);
+    }
+
+    .chip-value {
+        font-size: .85rem;
+        font-weight: 700;
+        color: #fff;
+    }
+
+    .summary-ring {
+        width: 170px;
+        height: 170px;
+        border-radius: 50%;
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: inset 0 0 30px rgba(255,255,255,.08);
+    }
+
+    .summary-ring-inner {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgba(15,23,42,.92);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .summary-percent {
+        font-size: 2rem;
+        font-weight: 900;
+        line-height: 1;
+        color: #fff;
+    }
+
+    .summary-caption {
+        margin-top: .35rem;
+        font-size: .78rem;
+        color: rgba(255,255,255,.62);
+    }
+
+    .lstr-filters {
+        padding: 1.15rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .filters-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .filters-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .filters-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .83rem;
+    }
+
+    .filters-actions {
+        display: flex;
+        gap: .65rem;
+        flex-wrap: wrap;
+    }
+
+    .quick-range-row {
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .quick-range-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .85rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .quick-range-btn:hover {
+        background: rgba(239,68,68,.08);
+        color: #b91c1c;
+        border-color: rgba(239,68,68,.22);
+    }
+
+    .filters-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(180px, 1fr));
+        gap: .9rem;
+    }
+
+    .filter-field {
+        background: rgba(255,255,255,.55);
+        border-radius: .9rem;
+    }
+
+    .lstr-loading {
+        min-height: 320px;
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        text-align: center;
+        padding: 2rem;
+    }
+
+    .loading-text h3 {
+        margin: 0 0 .35rem;
+        font-size: 1rem;
+        color: var(--text);
+    }
+
+    .loading-text p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .lstr-kpis {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .kpi-card {
+        padding: 1.1rem;
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+    }
+
+    .kpi-icon {
+        width: 3rem;
+        height: 3rem;
+        border-radius: .95rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        font-weight: 900;
+        flex-shrink: 0;
+    }
+
+    .kpi-icon.red { background: rgba(239,68,68,.12); color: #ef4444; }
+    .kpi-icon.orange { background: rgba(249,115,22,.12); color: #f97316; }
+    .kpi-icon.amber { background: rgba(245,158,11,.12); color: #f59e0b; }
+    .kpi-icon.purple { background: rgba(139,92,246,.12); color: #8b5cf6; }
+    .kpi-icon.teal { background: rgba(20,184,166,.12); color: #0f766e; }
+    .kpi-icon.indigo { background: rgba(99,102,241,.12); color: #6366f1; }
+
+    .kpi-body {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .kpi-head-row {
+        display: flex;
+        justify-content: space-between;
+        gap: .5rem;
+        align-items: center;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-label {
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .kpi-value {
+        color: var(--text);
+        font-size: 1.45rem;
+        font-weight: 900;
+        line-height: 1.2;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-value.danger { color: #dc2626; }
+    .kpi-name { font-size: 1.05rem; }
+
+    .kpi-sub {
+        color: var(--muted);
+        font-size: .76rem;
+        line-height: 1.5;
+    }
+
+    .trend-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .2rem .55rem;
+        font-size: .68rem;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .trend-up {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .trend-down {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .trend-flat {
+        background: rgba(148,163,184,.14);
+        color: #475569;
+    }
+
+    .kpi-progress {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(148,163,184,.15);
+        overflow: hidden;
+        margin: .35rem 0 .45rem;
+    }
+
+    .kpi-progress-bar {
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #ef4444, #f97316);
+    }
+
+    .lstr-insights {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .insight-card {
+        padding: 1rem;
+        display: flex;
+        gap: .85rem;
+        align-items: flex-start;
+    }
+
+    .insight-icon {
+        width: 2.6rem;
+        height: 2.6rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .tone-gold { background: rgba(245,158,11,.12); color: #d97706; }
+    .tone-green { background: rgba(16,185,129,.12); color: #059669; }
+    .tone-red { background: rgba(239,68,68,.12); color: #dc2626; }
+    .tone-indigo { background: rgba(99,102,241,.12); color: #4f46e5; }
+    .tone-slate { background: rgba(148,163,184,.14); color: #475569; }
+
+    .insight-body {
+        min-width: 0;
+        flex: 1;
+    }
+
+    .insight-title {
+        color: var(--muted);
+        font-size: .75rem;
+        margin-bottom: .2rem;
+    }
+
+    .insight-value {
+        color: var(--text);
+        font-size: 1rem;
+        font-weight: 800;
+        margin-bottom: .25rem;
+    }
+
+    .insight-desc {
+        color: var(--muted);
+        font-size: .74rem;
+        line-height: 1.45;
+    }
+
+    .lstr-dashboard {
+        display: grid;
+        grid-template-columns: 1.6fr 1fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .lstr-analytics-grid {
+        display: grid;
+        grid-template-columns: 1fr 1.2fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .main-chart-card,
+    .side-card,
+    .lstr-reason-table-card,
+    .lstr-drill,
+    .lstr-table-card,
+    .lstr-note {
+        padding: 1rem;
+    }
+
+    .side-stack {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: .75rem;
+    }
+
+    .card-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .card-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .chart-empty {
+        min-height: 250px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: .88rem;
+    }
+
+    .chart-empty.small {
+        min-height: 180px;
+    }
+
+    .compare-list {
+        display: flex;
+        flex-direction: column;
+        gap: .75rem;
+    }
+
+    .compare-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        padding: .75rem .85rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+    }
+
+    .compare-label {
+        font-size: .8rem;
+        font-weight: 700;
+        color: var(--text);
+    }
+
+    .compare-values {
+        display: flex;
+        align-items: center;
+        gap: .55rem;
+        color: var(--muted);
+        font-size: .8rem;
+        flex-wrap: wrap;
+    }
+
+    .compare-values strong {
+        color: var(--text);
+        font-size: .85rem;
+    }
+
+    .compare-arrow {
+        color: #94a3b8;
+        font-weight: 900;
+    }
+
+    .compare-summary {
+        margin-top: .85rem;
+        border-radius: 1rem;
+        padding: .8rem .9rem;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .compare-good {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .compare-bad {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .drill-head {
+        align-items: center;
+    }
+
+    .clear-reason-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .9rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .clear-reason-btn:hover {
+        background: rgba(239,68,68,.08);
+        color: #dc2626;
+    }
+
+    .reason-chip-row {
+        display: flex;
+        gap: .55rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .reason-chip-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.55);
+        color: var(--text);
+        border-radius: 1rem;
+        padding: .55rem .8rem;
+        min-width: 120px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: .1rem;
+        cursor: pointer;
+        transition: .2s ease;
+        font-weight: 700;
+    }
+
+    .reason-chip-btn small {
+        color: var(--muted);
+        font-size: .7rem;
+        font-weight: 700;
+    }
+
+    .reason-chip-btn:hover {
+        border-color: rgba(79,70,229,.25);
+        background: rgba(99,102,241,.06);
+        color: #4f46e5;
+    }
+
+    .reason-chip-active {
+        background: linear-gradient(135deg, #6366f1, #4f46e5);
+        color: #fff;
+        border-color: transparent;
+        box-shadow: 0 10px 20px rgba(99,102,241,.22);
+    }
+
+    .reason-chip-active small {
+        color: rgba(255,255,255,.85);
+    }
+
+    .drill-mini-kpis {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+
+    .mini-kpi {
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+        border-radius: 1rem;
+        padding: .85rem;
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+    }
+
+    .mini-label {
+        font-size: .72rem;
+        color: var(--muted);
+    }
+
+    .mini-kpi strong {
+        color: var(--text);
+        font-size: .92rem;
+    }
+
+    .drill-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 1rem;
+    }
+
+    .premium-table {
+        background: transparent;
+    }
+
+    .rate-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .3rem .7rem;
+        font-size: .74rem;
+        font-weight: 700;
+    }
+
+    .rate-good {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .rate-mid {
+        background: rgba(245,158,11,.12);
+        color: #d97706;
+    }
+
+    .rate-bad {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .stage-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .32rem .7rem;
+        font-size: .72rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .empty-data {
+        text-align: center;
+        padding: 2rem 1rem;
+    }
+
+    .empty-icon {
+        font-size: 2rem;
+        margin-bottom: .5rem;
+    }
+
+    .empty-data h4 {
+        margin: 0 0 .35rem;
+        color: var(--text);
+    }
+
+    .empty-data p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .lstr-note {
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+        margin-top: 1rem;
+    }
+
+    .note-icon {
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(99,102,241,.10);
+        color: #4f46e5;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+
+    .note-body h4 {
+        margin: 0 0 .3rem;
+        color: var(--text);
+        font-size: .95rem;
+        font-weight: 800;
+    }
+
+    .note-body p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .82rem;
+        line-height: 1.7;
+    }
+
+    @@media (max-width: 1300px) {
+        .lstr-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 1200px) {
+        .lstr-insights {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .lstr-dashboard,
+        .lstr-analytics-grid,
+        .drill-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @@media (max-width: 900px) {
+        .lstr-hero-main,
+        .filters-head {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 640px) {
+        .lstr-page {
+            padding: .8rem .8rem 2rem;
+        }
+
+        .lstr-hero {
+            padding: 1.25rem;
+            border-radius: 1.2rem;
+        }
+
+        .lstr-hero-text h1 {
+            font-size: 1.7rem;
+        }
+
+        .summary-ring {
+            width: 140px;
+            height: 140px;
+        }
+
+        .hero-chip {
+            min-width: 100%;
+        }
+
+        .lstr-kpis,
+        .lstr-insights,
+        .drill-mini-kpis {
+            grid-template-columns: 1fr;
+        }
+
+        .compare-row {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-actions {
+            width: 100%;
+        }
+    }
+
+    .mud-theme-dark .glass-card,
+    .mud-theme-dark .glass-inner-card {
+        background: rgba(17,24,39,.66);
+        border-color: rgba(255,255,255,.06);
+        box-shadow: 0 20px 50px rgba(0,0,0,.22);
+    }
+
+    .mud-theme-dark .filters-head h3,
+    .mud-theme-dark .card-head h3,
+    .mud-theme-dark .loading-text h3,
+    .mud-theme-dark .empty-data h4,
+    .mud-theme-dark .note-body h4,
+    .mud-theme-dark .kpi-value,
+    .mud-theme-dark .insight-value,
+    .mud-theme-dark .compare-label,
+    .mud-theme-dark .compare-values strong,
+    .mud-theme-dark .mini-kpi strong {
+        color: #f8fafc;
+    }
+
+    .mud-theme-dark .filters-head p,
+    .mud-theme-dark .card-head p,
+    .mud-theme-dark .loading-text p,
+    .mud-theme-dark .empty-data p,
+    .mud-theme-dark .note-body p,
+    .mud-theme-dark .kpi-label,
+    .mud-theme-dark .kpi-sub,
+    .mud-theme-dark .insight-title,
+    .mud-theme-dark .insight-desc,
+    .mud-theme-dark .compare-values,
+    .mud-theme-dark .mini-label,
+    .mud-theme-dark .reason-chip-btn small {
+        color: #94a3b8;
+    }
+
+    .mud-theme-dark .compare-row,
+    .mud-theme-dark .mini-kpi,
+    .mud-theme-dark .reason-chip-btn {
+        background: rgba(255,255,255,.03);
+    }
+
+    .mud-theme-dark .quick-range-btn,
+    .mud-theme-dark .clear-reason-btn {
+        background: rgba(255,255,255,.05);
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .quick-range-btn:hover,
+    .mud-theme-dark .clear-reason-btn:hover {
+        background: rgba(239,68,68,.12);
+        color: #fecaca;
+    }
+
+    .mud-theme-dark .reason-chip-btn {
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .reason-chip-btn:hover {
+        background: rgba(99,102,241,.12);
+        color: #c7d2fe;
+    }
+
+    .mud-theme-dark .reason-chip-active {
+        color: #fff;
+    }
+
+    @@media print {
+        .lstr-bg,
+        .filters-actions,
+        .quick-range-row,
+        .lstr-back,
+        .clear-reason-btn,
+        .reason-chip-row button:not(.reason-chip-active) {
+            display: none !important;
+        }
+
+        .glass-card,
+        .glass-inner-card {
+            box-shadow: none !important;
+            border: 1px solid #ddd !important;
+            background: #fff !important;
+        }
+
+        .lstr-page {
+            max-width: 100% !important;
+            padding: 0 !important;
+        }
+    }
+</style>

@@ -1,0 +1,2545 @@
+@page "/crm/reports/daily-activity"
+
+@using System.Globalization
+@using System.Text
+@using ApexCharts
+@using COCOBOLOERPNEW.Models
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>تقرير النشاط اليومي والأسبوعي</PageTitle>
+
+<div class="dactx-page" dir="rtl">
+
+    @* Background *@
+    <div class="dactx-bg">
+        <div class="dactx-orb orb-1"></div>
+        <div class="dactx-orb orb-2"></div>
+        <div class="dactx-orb orb-3"></div>
+    </div>
+
+    @* HERO *@
+    <section class="dactx-hero">
+        <div class="dactx-hero-grid"></div>
+
+        <div class="dactx-hero-content">
+            <div class="dactx-hero-top">
+                <button class="dactx-back" @onclick="GoBack" title="رجوع">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12h14" />
+                        <path d="m12 5 7 7-7 7" />
+                    </svg>
+                </button>
+
+                <div class="dactx-badge">
+                    <span class="badge-dot"></span>
+                    <span>Daily & Weekly Activity Intelligence</span>
+                </div>
+            </div>
+
+            <div class="dactx-hero-main">
+                <div class="dactx-hero-text">
+                    <h1>النشاط <span>اليومي والأسبوعي</span></h1>
+                    <p>
+                        لوحة تنفيذية لمتابعة إيقاع العمل اليومي والأسبوعي من حيث التفاعلات،
+                        الفرص الجديدة، الصفقات المكتملة، والمهام المنجزة، مع Drill-down تفصيلي لكل يوم.
+                    </p>
+
+                    <div class="dactx-hero-chips">
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة الحالية</span>
+                            <span class="chip-value">@SelectedPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">الفترة السابقة</span>
+                            <span class="chip-value">@PreviousPeriodLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">الموظف</span>
+                            <span class="chip-value">@SelectedEmployeeLabel</span>
+                        </div>
+
+                        <div class="hero-chip">
+                            <span class="chip-label">أكثر يوم نشاطًا</span>
+                            <span class="chip-value">@_busiestDayLabel</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dactx-hero-side">
+                    <div class="summary-ring" style="@GetSummaryRingStyle()">
+                        <div class="summary-ring-inner">
+                            <div class="summary-percent">@_periodWinRate.ToString("F1")%</div>
+                            <div class="summary-caption">حسم الفرص</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @* FILTERS / ACTIONS *@
+    <section class="glass-card dactx-filters">
+        <div class="filters-head">
+            <div>
+                <h3>الفلاتر والتحكم</h3>
+                <p>اختر الفترة الزمنية والموظف أو استخدم الفلاتر السريعة لتحليل النشاط</p>
+            </div>
+
+            <div class="filters-actions">
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Default"
+                           StartIcon="@Icons.Material.Rounded.RestartAlt"
+                           OnClick="ResetFiltersAsync"
+                           Disabled="_isLoading">
+                    إعادة ضبط
+                </MudButton>
+
+                <MudButton Variant="Variant.Filled"
+                           Color="@MudColor.Primary"
+                           StartIcon="@Icons.Material.Rounded.FilterAlt"
+                           OnClick="LoadData"
+                           Disabled="_isLoading">
+                    تطبيق التحليل
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Success"
+                           StartIcon="@Icons.Material.Rounded.FileDownload"
+                           OnClick="ExportCsvAsync"
+                           Disabled="_isLoading">
+                    تصدير CSV
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="@MudColor.Info"
+                           StartIcon="@Icons.Material.Rounded.Print"
+                           OnClick="PrintAsync"
+                           Disabled="_isLoading">
+                    طباعة / PDF
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="quick-range-row">
+            <button class="quick-range-btn" @onclick="async () => await SetLastDaysAsync(7)">آخر 7 أيام</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastDaysAsync(14)">آخر 14 يوم</button>
+            <button class="quick-range-btn" @onclick="async () => await SetLastDaysAsync(30)">آخر 30 يوم</button>
+            <button class="quick-range-btn" @onclick="SetCurrentMonthAsync">الشهر الحالي</button>
+        </div>
+
+        <div class="filters-grid">
+            <MudDatePicker @bind-Date="_fromDate"
+                           Label="من تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudDatePicker @bind-Date="_toDate"
+                           Label="إلى تاريخ"
+                           Variant="Variant.Outlined"
+                           Dense="true"
+                           Editable="true"
+                           Class="filter-field" />
+
+            <MudSelect T="int?"
+                       @bind-Value="_empId"
+                       Label="الموظف"
+                       Clearable="true"
+                       Variant="Variant.Outlined"
+                       Dense="true"
+                       Class="filter-field">
+                @foreach (var emp in _employees)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)emp.Id)">@emp.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </div>
+    </section>
+
+    @if (_isLoading)
+    {
+        <div class="glass-card dactx-loading">
+            <MudProgressCircular Indeterminate="true"
+                                 Size="@MudSize.Large"
+                                 Color="@MudColor.Primary" />
+            <div class="loading-text">
+                <h3>جاري تحليل النشاط...</h3>
+                <p>يتم تجهيز المؤشرات، الرسوم البيانية، والتحليلات اليومية والأسبوعية</p>
+            </div>
+        </div>
+    }
+    else
+    {
+        @* KPI *@
+        <section class="dactx-kpis">
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon indigo">💬</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">إجمالي التفاعلات</div>
+                        <span class="trend-badge @GetTrendClass(_totalInteractions, _prevTotalInteractions)">
+                            @GetTrendText(_totalInteractions, _prevTotalInteractions)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_totalInteractions.ToString("N0")</div>
+                    <div class="kpi-sub">متوسط يومي: @_avgInteractionsPerDay.ToString("F1")</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon blue">➕</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">فرص جديدة</div>
+                        <span class="trend-badge @GetTrendClass(_newOpps, _prevNewOpps)">
+                            @GetTrendText(_newOpps, _prevNewOpps)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_newOpps.ToString("N0")</div>
+                    <div class="kpi-sub">المتوسط اليومي: @_avgNewOppsPerDay.ToString("F1")</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon green">✓</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">مبيعات مكتملة</div>
+                        <span class="trend-badge @GetTrendClass(_wonOpps, _prevWonOpps)">
+                            @GetTrendText(_wonOpps, _prevWonOpps)
+                        </span>
+                    </div>
+                    <div class="kpi-value success">@_wonOpps.ToString("N0")</div>
+                    <div class="kpi-sub">نسبة الحسم من الفرص الجديدة: @_periodWinRate.ToString("F1")%</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon amber">✔</div>
+                <div class="kpi-body">
+                    <div class="kpi-head-row">
+                        <div class="kpi-label">مهام مكتملة</div>
+                        <span class="trend-badge @GetTrendClass(_completedTasks, _prevCompletedTasks)">
+                            @GetTrendText(_completedTasks, _prevCompletedTasks)
+                        </span>
+                    </div>
+                    <div class="kpi-value">@_completedTasks.ToString("N0")</div>
+                    <div class="kpi-sub">المتوسط اليومي: @_avgTasksPerDay.ToString("F1")</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon purple">📅</div>
+                <div class="kpi-body">
+                    <div class="kpi-label">أيام النشاط</div>
+                    <div class="kpi-value">@_activeDays.ToString("N0")</div>
+                    <div class="kpi-sub">أيام ظهر بها نشاط فعلي خلال الفترة</div>
+                </div>
+            </div>
+
+            <div class="glass-card kpi-card">
+                <div class="kpi-icon teal">🔥</div>
+                <div class="kpi-body">
+                    <div class="kpi-label">أكثر يوم نشاطًا</div>
+                    <div class="kpi-value kpi-name">@_busiestDayLabel</div>
+                    <div class="kpi-sub">@_busiestDayInteractions.ToString("N0") تفاعل</div>
+                </div>
+            </div>
+        </section>
+
+        @* INSIGHTS *@
+        <section class="dactx-insights">
+            @foreach (var insight in _insights)
+            {
+                <div class="glass-card insight-card">
+                    <div class="insight-icon @insight.ToneClass">
+                        <MudIcon Icon="@insight.Icon" Size="@MudSize.Small" />
+                    </div>
+                    <div class="insight-body">
+                        <div class="insight-title">@insight.Title</div>
+                        <div class="insight-value">@insight.Value</div>
+                        <div class="insight-desc">@insight.Description</div>
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* MAIN DASHBOARD *@
+        <section class="dactx-dashboard">
+            <div class="glass-card main-chart-card">
+                <div class="card-head">
+                    <div>
+                        <h3>النشاط اليومي</h3>
+                        <p>التفاعلات والفرص الجديدة والمبيعات والمهام المكتملة يومًا بيوم</p>
+                    </div>
+                </div>
+
+                @if (_dailyChartPoints.Any())
+                {
+                    <ApexChart TItem="DailyChartPoint"
+                               Options="_dailyChartOptions"
+                               Height="380">
+                        <ApexPointSeries TItem="DailyChartPoint"
+                                         Items="@_dailyChartPoints"
+                                         Name="التفاعلات"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Label"
+                                         YValue="x => x.Interactions" />
+
+                        <ApexPointSeries TItem="DailyChartPoint"
+                                         Items="@_dailyChartPoints"
+                                         Name="الفرص الجديدة"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.Label"
+                                         YValue="x => x.NewOpps" />
+
+                        <ApexPointSeries TItem="DailyChartPoint"
+                                         Items="@_dailyChartPoints"
+                                         Name="المبيعات"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.Label"
+                                         YValue="x => x.Won" />
+
+                        <ApexPointSeries TItem="DailyChartPoint"
+                                         Items="@_dailyChartPoints"
+                                         Name="المهام المكتملة"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.Label"
+                                         YValue="x => x.Tasks" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty">لا توجد بيانات للرسم البياني</div>
+                }
+            </div>
+
+            <div class="side-stack">
+                <div class="glass-card side-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>الملخص الأسبوعي</h3>
+                            <p>تجميع أسبوعي للنشاط خلال الفترة</p>
+                        </div>
+                    </div>
+
+                    @if (_weeklyChartPoints.Any())
+                    {
+                        <ApexChart TItem="WeeklyChartPoint"
+                                   Options="_weeklyChartOptions"
+                                   Height="320">
+                            <ApexPointSeries TItem="WeeklyChartPoint"
+                                             Items="@_weeklyChartPoints"
+                                             Name="التفاعلات"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.WeekLabel"
+                                             YValue="x => x.Interactions" />
+
+                            <ApexPointSeries TItem="WeeklyChartPoint"
+                                             Items="@_weeklyChartPoints"
+                                             Name="الفرص الجديدة"
+                                             SeriesType="SeriesType.Bar"
+                                             XValue="x => x.WeekLabel"
+                                             YValue="x => x.NewOpps" />
+
+                            <ApexPointSeries TItem="WeeklyChartPoint"
+                                             Items="@_weeklyChartPoints"
+                                             Name="المبيعات"
+                                             SeriesType="SeriesType.Line"
+                                             XValue="x => x.WeekLabel"
+                                             YValue="x => x.Won" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <div class="chart-empty small">لا توجد بيانات كافية للملخص الأسبوعي</div>
+                    }
+                </div>
+
+                <div class="glass-card side-card compare-card">
+                    <div class="card-head">
+                        <div>
+                            <h3>مقارنة بالفترة السابقة</h3>
+                            <p>@PreviousPeriodLabel</p>
+                        </div>
+                    </div>
+
+                    <div class="compare-list">
+                        <div class="compare-row">
+                            <div class="compare-label">التفاعلات</div>
+                            <div class="compare-values">
+                                <span>@_prevTotalInteractions</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_totalInteractions</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">الفرص الجديدة</div>
+                            <div class="compare-values">
+                                <span>@_prevNewOpps</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_newOpps</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">المبيعات</div>
+                            <div class="compare-values">
+                                <span>@_prevWonOpps</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_wonOpps</strong>
+                            </div>
+                        </div>
+
+                        <div class="compare-row">
+                            <div class="compare-label">المهام المكتملة</div>
+                            <div class="compare-values">
+                                <span>@_prevCompletedTasks</span>
+                                <span class="compare-arrow">←</span>
+                                <strong>@_completedTasks</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="compare-summary @((_totalInteractions >= _prevTotalInteractions && _wonOpps >= _prevWonOpps) ? "compare-good" : "compare-mid")">
+                        @if (_totalInteractions >= _prevTotalInteractions && _wonOpps >= _prevWonOpps)
+                        {
+                            <span>النشاط الحالي أفضل أو مساوي للفترة السابقة</span>
+                        }
+                        else
+                        {
+                            <span>يوجد تراجع في بعض مؤشرات النشاط ويحتاج متابعة</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        @* ANALYTICS GRID *@
+        <section class="dactx-analytics-grid">
+            <div class="glass-card side-card">
+                <div class="card-head">
+                    <div>
+                        <h3>التوزيع حسب أيام الأسبوع</h3>
+                        <p>أي أيام الأسبوع تشهد أعلى نشاط</p>
+                    </div>
+                </div>
+
+                @if (_weekdayChartPoints.Any())
+                {
+                    <ApexChart TItem="WeekdayChartPoint"
+                               Options="_weekdayChartOptions"
+                               Height="320">
+                        <ApexPointSeries TItem="WeekdayChartPoint"
+                                         Items="@_weekdayChartPoints"
+                                         Name="التفاعلات"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="x => x.DayName"
+                                         YValue="x => x.Interactions" />
+
+                        <ApexPointSeries TItem="WeekdayChartPoint"
+                                         Items="@_weekdayChartPoints"
+                                         Name="المهام"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="x => x.DayName"
+                                         YValue="x => x.Tasks" />
+                    </ApexChart>
+                }
+                else
+                {
+                    <div class="chart-empty small">لا توجد بيانات كافية لأيام الأسبوع</div>
+                }
+            </div>
+
+            <div class="glass-card dactx-table-wrapper">
+                <div class="card-head">
+                    <div>
+                        <h3>تفاصيل النشاط اليومي</h3>
+                        <p>تفصيل يومي للتفاعلات والفرص والمبيعات والمهام</p>
+                    </div>
+                </div>
+
+                <MudTable Items="@_dailyRows"
+                          Hover="true"
+                          Dense="true"
+                          Elevation="0"
+                          RowsPerPage="10"
+                          Breakpoint="Breakpoint.Sm"
+                          Class="premium-table">
+                    <HeaderContent>
+                        <MudTh>التاريخ</MudTh>
+                        <MudTh>اليوم</MudTh>
+                        <MudTh>التفاعلات</MudTh>
+                        <MudTh>فرص جديدة</MudTh>
+                        <MudTh>مبيعات</MudTh>
+                        <MudTh>مهام مكتملة</MudTh>
+                    </HeaderContent>
+
+                    <RowTemplate>
+                        <MudTd DataLabel="التاريخ">
+                            <span style="font-weight:@(context.IsToday ? "700" : "400"); color:@(context.IsToday ? "#4f46e5" : "inherit");">
+                                @context.DateStr
+                            </span>
+                        </MudTd>
+                        <MudTd DataLabel="اليوم">@context.DayName</MudTd>
+                        <MudTd DataLabel="التفاعلات">@context.Interactions.ToString("N0")</MudTd>
+                        <MudTd DataLabel="فرص جديدة">@context.NewOpps.ToString("N0")</MudTd>
+                        <MudTd DataLabel="مبيعات">@context.Won.ToString("N0")</MudTd>
+                        <MudTd DataLabel="مهام مكتملة">@context.Tasks.ToString("N0")</MudTd>
+                    </RowTemplate>
+
+                    <NoRecordsContent>
+                        <div class="empty-data">
+                            <div class="empty-icon">📉</div>
+                            <h4>لا توجد بيانات</h4>
+                            <p>لا توجد نتائج يومية مطابقة للفلاتر الحالية</p>
+                        </div>
+                    </NoRecordsContent>
+                </MudTable>
+            </div>
+        </section>
+
+        @* DAY DRILL-DOWN *@
+        <section class="glass-card dactx-drill">
+            <div class="card-head drill-head">
+                <div>
+                    <h3>Drill-down حسب اليوم</h3>
+                    <p>اختر يومًا لتحليل التوزيع الساعي وأعلى الفرص التي شهدت تفاعلاً</p>
+                </div>
+
+                <div class="drill-actions">
+                    <MudSelect T="DateTime?"
+                               Value="_selectedDay"
+                               ValueChanged="OnSelectedDayChanged"
+                               Label="اختر يومًا"
+                               Dense="true"
+                               Variant="Variant.Outlined"
+                               Class="day-select"
+                               Clearable="false">
+                        @foreach (var day in _dailyRows.OrderByDescending(x => x.Date))
+                        {
+                            <MudSelectItem T="DateTime?" Value="@((DateTime?)day.Date)">
+                                @($"{day.DayName} - {day.DateStr}")
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+                </div>
+            </div>
+
+            @if (_selectedDay.HasValue)
+            {
+                <div class="drill-mini-kpis">
+                    <div class="mini-kpi">
+                        <span class="mini-label">اليوم المحدد</span>
+                        <strong>@_selectedDayLabel</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">التفاعلات</span>
+                        <strong>@_selectedDayInteractions.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">فرص جديدة</span>
+                        <strong>@_selectedDayNewOpps.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">مبيعات</span>
+                        <strong>@_selectedDayWon.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">مهام مكتملة</span>
+                        <strong>@_selectedDayTasks.ToString("N0")</strong>
+                    </div>
+                    <div class="mini-kpi">
+                        <span class="mini-label">أعلى ساعة نشاط</span>
+                        <strong>@_selectedDayPeakHour</strong>
+                    </div>
+                </div>
+
+                <div class="drill-grid">
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>التوزيع الساعي للتفاعلات</h3>
+                                <p>عدد التفاعلات داخل اليوم المحدد حسب الساعة</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedDayHourlyPoints.Any())
+                        {
+                            <ApexChart TItem="HourlyChartPoint"
+                                       Options="_hourlyChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="HourlyChartPoint"
+                                                 Items="@_selectedDayHourlyPoints"
+                                                 Name="التفاعلات"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.HourLabel"
+                                                 YValue="x => x.Count" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد بيانات ساعية لهذا اليوم</div>
+                        }
+                    </div>
+
+                    <div class="glass-inner-card">
+                        <div class="card-head">
+                            <div>
+                                <h3>أكثر الفرص تفاعلاً في اليوم</h3>
+                                <p>أعلى الفرص من حيث عدد التفاعلات داخل اليوم المحدد</p>
+                            </div>
+                        </div>
+
+                        @if (_selectedDayOpportunityPoints.Any())
+                        {
+                            <ApexChart TItem="OpportunityTouchPoint"
+                                       Options="_topOpportunitiesChartOptions"
+                                       Height="320">
+                                <ApexPointSeries TItem="OpportunityTouchPoint"
+                                                 Items="@_selectedDayOpportunityPoints"
+                                                 Name="التفاعلات"
+                                                 SeriesType="SeriesType.Bar"
+                                                 XValue="x => x.Opportunity"
+                                                 YValue="x => x.Count" />
+                            </ApexChart>
+                        }
+                        else
+                        {
+                            <div class="chart-empty small">لا توجد فرص متفاعلة كفاية في هذا اليوم</div>
+                        }
+                    </div>
+                </div>
+            }
+        </section>
+
+        @* NOTE *@
+        <section class="glass-card dactx-note">
+            <div class="note-icon">ℹ️</div>
+            <div class="note-body">
+                <h4>ملاحظة تحليلية مهمة</h4>
+                <p>
+                    هذا التقرير يعرض النشاط اليومي والأسبوعي بناءً على:
+                    <strong>CustomerInteractions</strong> للتفاعلات،
+                    و<strong>VwSalesOpportunities.CreatedAt</strong> للفرص الجديدة،
+                    واعتبار <strong>StageId = @WonStageId</strong> كمبيعات مكتملة،
+                    و<strong>CrmTasks.Status = "مكتملة"</strong> للمهام المنجزة.
+                </p>
+            </div>
+        </section>
+    }
+</div>
+
+@code {
+    private const int WonStageId = 3;
+
+    private DateTime? _fromDate;
+    private DateTime? _toDate;
+    private int? _empId;
+    private bool _isLoading;
+
+    private int _totalInteractions;
+    private int _newOpps;
+    private int _wonOpps;
+    private int _completedTasks;
+    private int _activeDays;
+    private double _periodWinRate;
+    private double _avgInteractionsPerDay;
+    private double _avgNewOppsPerDay;
+    private double _avgTasksPerDay;
+    private string _busiestDayLabel = "—";
+    private int _busiestDayInteractions;
+
+    private int _prevTotalInteractions;
+    private int _prevNewOpps;
+    private int _prevWonOpps;
+    private int _prevCompletedTasks;
+
+    private List<EmployeeInfo> _employees = new();
+    private List<DailyRow> _dailyRows = new();
+    private List<DailyChartPoint> _dailyChartPoints = new();
+    private List<WeeklyChartPoint> _weeklyChartPoints = new();
+    private List<WeekdayChartPoint> _weekdayChartPoints = new();
+    private List<InsightItem> _insights = new();
+
+    private PeriodActivitySnapshot _currentSnapshot = new();
+
+    private DateTime? _selectedDay;
+    private string _selectedDayLabel = "—";
+    private int _selectedDayInteractions;
+    private int _selectedDayNewOpps;
+    private int _selectedDayWon;
+    private int _selectedDayTasks;
+    private string _selectedDayPeakHour = "—";
+    private List<HourlyChartPoint> _selectedDayHourlyPoints = new();
+    private List<OpportunityTouchPoint> _selectedDayOpportunityPoints = new();
+
+    private ApexChartOptions<DailyChartPoint> _dailyChartOptions = new();
+    private ApexChartOptions<WeeklyChartPoint> _weeklyChartOptions = new();
+    private ApexChartOptions<WeekdayChartPoint> _weekdayChartOptions = new();
+    private ApexChartOptions<HourlyChartPoint> _hourlyChartOptions = new();
+    private ApexChartOptions<OpportunityTouchPoint> _topOpportunitiesChartOptions = new();
+
+    private string _previousPeriodLabel = "غير متاح";
+
+    private static readonly CultureInfo ArCulture = CultureInfo.GetCultureInfo("ar-EG");
+
+    private string SelectedEmployeeLabel =>
+        _empId.HasValue
+            ? _employees.FirstOrDefault(x => x.Id == _empId.Value)?.Name ?? "موظف محدد"
+            : "كل الموظفين";
+
+    private string SelectedPeriodLabel =>
+        $"{(_fromDate.HasValue ? _fromDate.Value.ToString("dd MMM yyyy", ArCulture) : "البداية")} — {(_toDate.HasValue ? _toDate.Value.ToString("dd MMM yyyy", ArCulture) : "اليوم")}";
+
+    private string PreviousPeriodLabel => _previousPeriodLabel;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _fromDate = DateTime.Today.AddDays(-7);
+        _toDate = DateTime.Today;
+        ConfigureCharts();
+        await LoadEmployees();
+        await LoadData();
+    }
+
+    private void ConfigureCharts()
+    {
+        _dailyChartOptions = new ApexChartOptions<DailyChartPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#6366f1", "#3b82f6", "#10b981", "#f59e0b" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Straight,
+                Width = new List<double> { 0, 3, 3, 0 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "45%"
+                }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = -25 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _weeklyChartOptions = new ApexChartOptions<WeeklyChartPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#8b5cf6", "#06b6d4", "#10b981" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "45%"
+                }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _weekdayChartOptions = new ApexChartOptions<WeekdayChartPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#14b8a6", "#f59e0b" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke
+            {
+                Curve = Curve.Smooth,
+                Width = new List<double> { 0, 3 }
+            },
+            Markers = new Markers { Size = 0 },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Right
+            },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "55%"
+                }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+
+        _hourlyChartOptions = new ApexChartOptions<HourlyChartPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#3b82f6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 4,
+                    ColumnWidth = "60%"
+                }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+
+        _topOpportunitiesChartOptions = new ApexChartOptions<OpportunityTouchPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#8b5cf6" },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend { Show = false },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    Horizontal = true,
+                    BorderRadius = 6
+                }
+            },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = 0 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } }
+        };
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _fromDate = DateTime.Today.AddDays(-7);
+        _toDate = DateTime.Today;
+        _empId = null;
+        _selectedDay = null;
+        await LoadData();
+    }
+
+    private async Task SetLastDaysAsync(int days)
+    {
+        if (days <= 0) days = 7;
+        _fromDate = DateTime.Today.AddDays(-(days - 1));
+        _toDate = DateTime.Today;
+        _selectedDay = null;
+        await LoadData();
+    }
+
+    private async Task SetCurrentMonthAsync()
+    {
+        _fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        _toDate = DateTime.Today;
+        _selectedDay = null;
+        await LoadData();
+    }
+
+    private async Task LoadEmployees()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var raw = await db.VwSalesOpportunities
+                .AsNoTracking()
+                .Where(o => o.EmployeeId != null && o.EmployeeName != null)
+                .GroupBy(o => new { o.EmployeeId, o.EmployeeName })
+                .Select(g => new
+                {
+                    Id = g.Key.EmployeeId!.Value,
+                    Name = g.Key.EmployeeName!
+                })
+                .OrderBy(x => x.Name)
+                .ToListAsync();
+
+            _employees = raw
+                .Select(x => new EmployeeInfo
+                {
+                    Id = x.Id,
+                    Name = x.Name
+                })
+                .ToList();
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task LoadData()
+    {
+        _isLoading = true;
+
+        try
+        {
+            NormalizeDateRange();
+
+            var from = _fromDate?.Date ?? DateTime.Today.AddDays(-7);
+            var to = _toDate?.Date ?? DateTime.Today;
+            var prevTo = from.AddDays(-1);
+            var prevFrom = prevTo.AddDays(-(to - from).Days);
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            _currentSnapshot = await LoadSnapshotAsync(db, from, to, _empId);
+
+            var previousSnapshot = await LoadSnapshotAsync(db, prevFrom, prevTo, _empId);
+            _previousPeriodLabel = $"{prevFrom.ToString("dd MMM yyyy", ArCulture)} — {prevTo.ToString("dd MMM yyyy", ArCulture)}";
+
+            BuildMetrics(_currentSnapshot, true);
+            BuildPreviousMetrics(previousSnapshot);
+            BuildDailyRows(from, to);
+            BuildWeeklyRows();
+            BuildWeekdayRows();
+            BuildInsights();
+            ResolveSelectedDay();
+            BuildSelectedDayAnalytics();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ أثناء تحميل التقرير: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task<PeriodActivitySnapshot> LoadSnapshotAsync(db24804Context db, DateTime from, DateTime toInclusive, int? empId)
+    {
+        var toExclusive = toInclusive.AddDays(1);
+
+        List<int>? employeeOppIds = null;
+
+        if (empId.HasValue)
+        {
+            employeeOppIds = await db.VwSalesOpportunities
+                .AsNoTracking()
+                .Where(o => o.EmployeeId == empId.Value)
+                .Select(o => o.OpportunityId)
+                .Distinct()
+                .ToListAsync();
+        }
+
+        var newOppsQuery = db.VwSalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.CreatedAt >= from && o.CreatedAt < toExclusive);
+
+        if (empId.HasValue)
+            newOppsQuery = newOppsQuery.Where(o => o.EmployeeId == empId.Value);
+
+        var newOpps = await newOppsQuery
+            .Select(o => new OpportunityCreatedRow
+            {
+                OpportunityId = o.OpportunityId,
+                ClientName = o.ClientName ?? "—",
+                EmployeeId = o.EmployeeId ?? 0,
+                EmployeeName = o.EmployeeName ?? "—",
+                StageId = o.StageId,
+                CreatedAt = o.CreatedAt,
+                ExpectedValue = o.ExpectedValue ?? 0m
+            })
+            .ToListAsync();
+
+        List<InteractionEventRow> interactions;
+
+        if (empId.HasValue && (employeeOppIds == null || employeeOppIds.Count == 0))
+        {
+            interactions = new List<InteractionEventRow>();
+        }
+        else
+        {
+            var interactionsQuery = db.CustomerInteractions
+                .AsNoTracking()
+                .Where(i => i.InteractionDate >= from && i.InteractionDate < toExclusive);
+
+            if (empId.HasValue && employeeOppIds != null)
+                interactionsQuery = interactionsQuery.Where(i => employeeOppIds.Contains(i.OpportunityId));
+
+            interactions = await interactionsQuery
+                .Select(i => new InteractionEventRow
+                {
+                    OpportunityId = i.OpportunityId,
+                    InteractionDate = i.InteractionDate
+                })
+                .ToListAsync();
+        }
+
+        var tasksQuery = db.CrmTasks
+            .AsNoTracking()
+            .Where(t => t.DueDate >= from && t.DueDate < toExclusive && t.Status == "مكتملة");
+
+        if (empId.HasValue)
+            tasksQuery = tasksQuery.Where(t => t.AssignedTo == empId.Value);
+
+        var tasks = await tasksQuery
+            .Select(t => new TaskEventRow
+            {
+                DueDate = t.DueDate
+            })
+            .ToListAsync();
+
+        var metaOppIds = newOpps.Select(x => x.OpportunityId)
+            .Union(interactions.Select(x => x.OpportunityId))
+            .Distinct()
+            .ToList();
+
+        var metaMap = new Dictionary<int, OpportunityMetaRow>();
+
+        if (metaOppIds.Any())
+        {
+            var metaRows = await db.VwSalesOpportunities
+                .AsNoTracking()
+                .Where(o => metaOppIds.Contains(o.OpportunityId))
+                .Select(o => new OpportunityMetaRow
+                {
+                    OpportunityId = o.OpportunityId,
+                    ClientName = o.ClientName ?? "—",
+                    EmployeeName = o.EmployeeName ?? "—",
+                    StageId = o.StageId,
+                    StageName = o.StageNameAr ?? o.StageName ?? "—",
+                    StageColor = o.StageColor ?? "",
+                    ExpectedValue = o.ExpectedValue ?? 0m,
+                    CreatedAt = o.CreatedAt,
+                    LastContactDate = o.LastContactDate,
+                    AgeDays = o.DaysSinceFirstContact ?? 0d
+                })
+                .ToListAsync();
+
+            metaMap = metaRows.ToDictionary(x => x.OpportunityId, x => x);
+        }
+
+        return new PeriodActivitySnapshot
+        {
+            Opportunities = newOpps,
+            Interactions = interactions,
+            Tasks = tasks,
+            OpportunityMeta = metaMap
+        };
+    }
+
+    private void BuildMetrics(PeriodActivitySnapshot snapshot, bool current)
+    {
+        var totalInteractions = snapshot.Interactions.Count;
+        var newOpps = snapshot.Opportunities.Count;
+        var wonOpps = snapshot.Opportunities.Count(x => x.StageId == WonStageId);
+        var completedTasks = snapshot.Tasks.Count;
+
+        if (current)
+        {
+            _totalInteractions = totalInteractions;
+            _newOpps = newOpps;
+            _wonOpps = wonOpps;
+            _completedTasks = completedTasks;
+
+            _periodWinRate = _newOpps > 0 ? (double)_wonOpps / _newOpps * 100d : 0d;
+        }
+    }
+
+    private void BuildPreviousMetrics(PeriodActivitySnapshot snapshot)
+    {
+        _prevTotalInteractions = snapshot.Interactions.Count;
+        _prevNewOpps = snapshot.Opportunities.Count;
+        _prevWonOpps = snapshot.Opportunities.Count(x => x.StageId == WonStageId);
+        _prevCompletedTasks = snapshot.Tasks.Count;
+    }
+
+    private void BuildDailyRows(DateTime from, DateTime to)
+    {
+        var allDates = new List<DateTime>();
+        for (var d = from; d <= to; d = d.AddDays(1))
+            allDates.Add(d);
+
+        var interactionsByDay = _currentSnapshot.Interactions
+            .GroupBy(x => x.InteractionDate.Date)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var newOppsByDay = _currentSnapshot.Opportunities
+            .GroupBy(x => x.CreatedAt.Date)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var wonByDay = _currentSnapshot.Opportunities
+            .Where(x => x.StageId == WonStageId)
+            .GroupBy(x => x.CreatedAt.Date)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var tasksByDay = _currentSnapshot.Tasks
+            .GroupBy(x => x.DueDate.Date)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        _dailyRows = allDates
+            .Select(d => new DailyRow
+            {
+                Date = d,
+                DateStr = d.ToString("yyyy/MM/dd"),
+                DayName = ArCulture.DateTimeFormat.GetDayName(d.DayOfWeek),
+                Interactions = interactionsByDay.GetValueOrDefault(d, 0),
+                NewOpps = newOppsByDay.GetValueOrDefault(d, 0),
+                Won = wonByDay.GetValueOrDefault(d, 0),
+                Tasks = tasksByDay.GetValueOrDefault(d, 0),
+                IsToday = d == DateTime.Today
+            })
+            .OrderByDescending(x => x.Date)
+            .ToList();
+
+        _dailyChartPoints = _dailyRows
+            .OrderBy(x => x.Date)
+            .Select(x => new DailyChartPoint
+            {
+                Label = x.Date.ToString("MM/dd"),
+                Interactions = x.Interactions,
+                NewOpps = x.NewOpps,
+                Won = x.Won,
+                Tasks = x.Tasks
+            })
+            .ToList();
+
+        _activeDays = _dailyRows.Count(x => x.Interactions > 0 || x.NewOpps > 0 || x.Won > 0 || x.Tasks > 0);
+        _avgInteractionsPerDay = _dailyRows.Count > 0 ? (double)_totalInteractions / _dailyRows.Count : 0d;
+        _avgNewOppsPerDay = _dailyRows.Count > 0 ? (double)_newOpps / _dailyRows.Count : 0d;
+        _avgTasksPerDay = _dailyRows.Count > 0 ? (double)_completedTasks / _dailyRows.Count : 0d;
+
+        var busiest = _dailyRows
+            .OrderByDescending(x => x.Interactions)
+            .ThenByDescending(x => x.NewOpps)
+            .ThenByDescending(x => x.Date)
+            .FirstOrDefault();
+
+        _busiestDayLabel = busiest is null ? "—" : $"{busiest.DayName} {busiest.Date:dd/MM}";
+        _busiestDayInteractions = busiest?.Interactions ?? 0;
+    }
+
+    private void BuildWeeklyRows()
+    {
+        _weeklyChartPoints = _dailyRows
+            .GroupBy(x => StartOfWeek(x.Date, DayOfWeek.Saturday))
+            .Select(g => new WeeklyChartPoint
+            {
+                WeekStart = g.Key,
+                WeekLabel = $"أسبوع {g.Key:MM/dd}",
+                Interactions = g.Sum(x => x.Interactions),
+                NewOpps = g.Sum(x => x.NewOpps),
+                Won = g.Sum(x => x.Won),
+                Tasks = g.Sum(x => x.Tasks)
+            })
+            .OrderBy(x => x.WeekStart)
+            .ToList();
+    }
+
+    private void BuildWeekdayRows()
+    {
+        var weekdayOrder = new[]
+        {
+            DayOfWeek.Saturday,
+            DayOfWeek.Sunday,
+            DayOfWeek.Monday,
+            DayOfWeek.Tuesday,
+            DayOfWeek.Wednesday,
+            DayOfWeek.Thursday,
+            DayOfWeek.Friday
+        };
+
+        _weekdayChartPoints = weekdayOrder
+            .Select(day =>
+            {
+                var items = _dailyRows.Where(x => x.Date.DayOfWeek == day).ToList();
+
+                return new WeekdayChartPoint
+                {
+                    DayOrder = (int)day,
+                    DayName = ArCulture.DateTimeFormat.GetDayName(day),
+                    Interactions = items.Sum(x => x.Interactions),
+                    Tasks = items.Sum(x => x.Tasks)
+                };
+            })
+            .ToList();
+    }
+
+    private void BuildInsights()
+    {
+        _insights = new();
+
+        if (_dailyRows.Any())
+        {
+            var bestSalesDay = _dailyRows
+                .OrderByDescending(x => x.Won)
+                .ThenByDescending(x => x.NewOpps)
+                .ThenByDescending(x => x.Date)
+                .FirstOrDefault();
+
+            if (bestSalesDay != null)
+            {
+                _insights.Add(new InsightItem
+                {
+                    Icon = Icons.Material.Rounded.TrendingUp,
+                    Title = "أفضل يوم مبيعات",
+                    Value = $"{bestSalesDay.DayName} {bestSalesDay.Date:dd/MM}",
+                    Description = $"{bestSalesDay.Won} عملية بيع",
+                    ToneClass = "tone-green"
+                });
+            }
+
+            var bestTaskDay = _dailyRows
+                .OrderByDescending(x => x.Tasks)
+                .ThenByDescending(x => x.Date)
+                .FirstOrDefault();
+
+            if (bestTaskDay != null)
+            {
+                _insights.Add(new InsightItem
+                {
+                    Icon = Icons.Material.Rounded.TaskAlt,
+                    Title = "أعلى إنجاز مهام",
+                    Value = $"{bestTaskDay.DayName} {bestTaskDay.Date:dd/MM}",
+                    Description = $"{bestTaskDay.Tasks} مهمة مكتملة",
+                    ToneClass = "tone-gold"
+                });
+            }
+        }
+
+        if (_weeklyChartPoints.Any())
+        {
+            var bestWeek = _weeklyChartPoints
+                .OrderByDescending(x => x.Interactions)
+                .ThenByDescending(x => x.Won)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.DateRange,
+                Title = "أفضل أسبوع نشاطًا",
+                Value = bestWeek.WeekLabel,
+                Description = $"{bestWeek.Interactions} تفاعل — {bestWeek.Won} مبيعات",
+                ToneClass = "tone-indigo"
+            });
+        }
+
+        if (_weekdayChartPoints.Any())
+        {
+            var topWeekday = _weekdayChartPoints
+                .OrderByDescending(x => x.Interactions)
+                .ThenByDescending(x => x.Tasks)
+                .First();
+
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.CalendarMonth,
+                Title = "أكثر أيام الأسبوع نشاطًا",
+                Value = topWeekday.DayName,
+                Description = $"{topWeekday.Interactions} تفاعل خلال الفترة",
+                ToneClass = "tone-slate"
+            });
+        }
+
+        while (_insights.Count < 4)
+        {
+            _insights.Add(new InsightItem
+            {
+                Icon = Icons.Material.Rounded.Insights,
+                Title = "معلومة",
+                Value = "—",
+                Description = "لا توجد بيانات كافية لهذا المؤشر",
+                ToneClass = "tone-slate"
+            });
+        }
+    }
+
+    private void ResolveSelectedDay()
+    {
+        if (!_dailyRows.Any())
+        {
+            _selectedDay = null;
+            return;
+        }
+
+        if (_selectedDay.HasValue && _dailyRows.Any(x => x.Date.Date == _selectedDay.Value.Date))
+            return;
+
+        var latestWithData = _dailyRows
+            .Where(x => x.Interactions > 0 || x.NewOpps > 0 || x.Won > 0 || x.Tasks > 0)
+            .OrderByDescending(x => x.Date)
+            .FirstOrDefault();
+
+        _selectedDay = latestWithData?.Date ?? _dailyRows.OrderByDescending(x => x.Date).First().Date;
+    }
+
+    private void BuildSelectedDayAnalytics()
+    {
+        _selectedDayLabel = "—";
+        _selectedDayInteractions = 0;
+        _selectedDayNewOpps = 0;
+        _selectedDayWon = 0;
+        _selectedDayTasks = 0;
+        _selectedDayPeakHour = "—";
+        _selectedDayHourlyPoints = new();
+        _selectedDayOpportunityPoints = new();
+
+        if (!_selectedDay.HasValue)
+            return;
+
+        var day = _selectedDay.Value.Date;
+        _selectedDayLabel = $"{ArCulture.DateTimeFormat.GetDayName(day.DayOfWeek)} — {day:yyyy/MM/dd}";
+
+        var dayInteractions = _currentSnapshot.Interactions
+            .Where(x => x.InteractionDate.Date == day)
+            .ToList();
+
+        var dayNewOpps = _currentSnapshot.Opportunities
+            .Where(x => x.CreatedAt.Date == day)
+            .ToList();
+
+        var dayWon = dayNewOpps.Count(x => x.StageId == WonStageId);
+
+        var dayTasks = _currentSnapshot.Tasks
+            .Count(x => x.DueDate.Date == day);
+
+        _selectedDayInteractions = dayInteractions.Count;
+        _selectedDayNewOpps = dayNewOpps.Count;
+        _selectedDayWon = dayWon;
+        _selectedDayTasks = dayTasks;
+
+        for (var hour = 0; hour < 24; hour++)
+        {
+            var count = dayInteractions.Count(x => x.InteractionDate.Hour == hour);
+
+            _selectedDayHourlyPoints.Add(new HourlyChartPoint
+            {
+                HourLabel = hour.ToString("00"),
+                Count = count
+            });
+        }
+
+        var peakHour = _selectedDayHourlyPoints
+            .OrderByDescending(x => x.Count)
+            .ThenBy(x => x.HourLabel)
+            .FirstOrDefault();
+
+        _selectedDayPeakHour = peakHour is null || peakHour.Count == 0
+            ? "—"
+            : $"{peakHour.HourLabel}:00";
+
+        _selectedDayOpportunityPoints = dayInteractions
+            .GroupBy(x => x.OpportunityId)
+            .Select(g =>
+            {
+                var meta = _currentSnapshot.OpportunityMeta.GetValueOrDefault(g.Key);
+
+                return new OpportunityTouchPoint
+                {
+                    Opportunity = meta?.ClientName ?? $"فرصة {g.Key}",
+                    Count = g.Count()
+                };
+            })
+            .OrderByDescending(x => x.Count)
+            .ThenBy(x => x.Opportunity)
+            .Take(8)
+            .ToList();
+    }
+
+    private Task OnSelectedDayChanged(DateTime? value)
+    {
+        _selectedDay = value;
+        BuildSelectedDayAnalytics();
+        return Task.CompletedTask;
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("تقرير النشاط اليومي والأسبوعي");
+            sb.AppendLine($"الفترة الحالية,{SelectedPeriodLabel}");
+            sb.AppendLine($"الفترة السابقة,{PreviousPeriodLabel}");
+            sb.AppendLine($"الموظف,{SelectedEmployeeLabel}");
+            sb.AppendLine();
+
+            sb.AppendLine("المؤشرات الرئيسية");
+            sb.AppendLine("المؤشر,القيمة");
+            sb.AppendLine($"إجمالي التفاعلات,{_totalInteractions}");
+            sb.AppendLine($"فرص جديدة,{_newOpps}");
+            sb.AppendLine($"مبيعات مكتملة,{_wonOpps}");
+            sb.AppendLine($"مهام مكتملة,{_completedTasks}");
+            sb.AppendLine($"أيام النشاط,{_activeDays}");
+            sb.AppendLine($"معدل الحسم,{_periodWinRate:F1}%");
+            sb.AppendLine();
+
+            sb.AppendLine("التفاصيل اليومية");
+            sb.AppendLine("التاريخ,اليوم,التفاعلات,فرص جديدة,مبيعات,مهام مكتملة");
+            foreach (var row in _dailyRows.OrderBy(x => x.Date))
+            {
+                sb.AppendLine($"{row.DateStr},{row.DayName},{row.Interactions},{row.NewOpps},{row.Won},{row.Tasks}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("الملخص الأسبوعي");
+            sb.AppendLine("الأسبوع,التفاعلات,فرص جديدة,مبيعات,مهام مكتملة");
+            foreach (var row in _weeklyChartPoints)
+            {
+                sb.AppendLine($"{row.WeekLabel},{row.Interactions},{row.NewOpps},{row.Won},{row.Tasks}");
+            }
+
+            if (_selectedDay.HasValue)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"تفاصيل اليوم المحدد,{_selectedDayLabel}");
+                sb.AppendLine("الساعة,عدد التفاعلات");
+                foreach (var row in _selectedDayHourlyPoints)
+                {
+                    sb.AppendLine($"{row.HourLabel}:00,{row.Count}");
+                }
+            }
+
+            var csv = sb.ToString();
+            var fileName = $"daily-activity-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+            var dataUrl = "data:text/csv;charset=utf-8,\uFEFF" + Uri.EscapeDataString(csv);
+
+            var script = $@"
+                (function() {{
+                    const link = document.createElement('a');
+                    link.href = '{dataUrl}';
+                    link.download = '{fileName}';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }})();";
+
+            await JS.InvokeVoidAsync("eval", script);
+            Snackbar.Add("تم تصدير الملف بنجاح. يمكنك فتحه مباشرة في Excel.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تصدير الملف: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task PrintAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval", "window.print()");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذر تشغيل الطباعة: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private bool TryGetPreviousRange(out DateTime previousFrom, out DateTime previousTo)
+    {
+        previousFrom = default;
+        previousTo = default;
+
+        if (!_fromDate.HasValue || !_toDate.HasValue)
+            return false;
+
+        var currentFrom = _fromDate.Value.Date;
+        var currentTo = _toDate.Value.Date;
+        var days = (currentTo - currentFrom).Days;
+
+        previousTo = currentFrom.AddDays(-1);
+        previousFrom = previousTo.AddDays(-days);
+        return true;
+    }
+
+    private void NormalizeDateRange()
+    {
+        if (_fromDate.HasValue && _toDate.HasValue && _fromDate.Value.Date > _toDate.Value.Date)
+        {
+            var temp = _fromDate;
+            _fromDate = _toDate;
+            _toDate = temp;
+
+            Snackbar.Add("تم تبديل تاريخ البداية والنهاية تلقائيًا لأن البداية كانت أكبر من النهاية.", Severity.Info);
+        }
+    }
+
+    private static DateTime StartOfWeek(DateTime dt, DayOfWeek startOfWeek)
+    {
+        var diff = (7 + (dt.DayOfWeek - startOfWeek)) % 7;
+        return dt.AddDays(-1 * diff).Date;
+    }
+
+    private string GetSummaryRingStyle()
+    {
+        var safe = Math.Max(0, Math.Min(_periodWinRate, 100));
+        var angle = safe * 3.6;
+        return $"background: conic-gradient(#10b981 0deg, #10b981 {angle:F1}deg, rgba(255,255,255,.12) {angle:F1}deg, rgba(255,255,255,.12) 360deg);";
+    }
+
+    private string GetTrendClass(int current, int previous)
+    {
+        if (current > previous) return "trend-up";
+        if (current < previous) return "trend-down";
+        return "trend-flat";
+    }
+
+    private string GetTrendText(int current, int previous)
+    {
+        if (previous == 0)
+            return current == 0 ? "0%" : "جديد";
+
+        var change = ((double)(current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/crm/reports");
+
+    private sealed class EmployeeInfo
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    private sealed class OpportunityCreatedRow
+    {
+        public int OpportunityId { get; set; }
+        public string ClientName { get; set; } = "";
+        public int EmployeeId { get; set; }
+        public string EmployeeName { get; set; } = "";
+        public int StageId { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public decimal ExpectedValue { get; set; }
+    }
+
+    private sealed class InteractionEventRow
+    {
+        public int OpportunityId { get; set; }
+        public DateTime InteractionDate { get; set; }
+    }
+
+    private sealed class TaskEventRow
+    {
+        public DateTime DueDate { get; set; }
+    }
+
+    private sealed class OpportunityMetaRow
+    {
+        public int OpportunityId { get; set; }
+        public string ClientName { get; set; } = "";
+        public string EmployeeName { get; set; } = "";
+        public int StageId { get; set; }
+        public string StageName { get; set; } = "";
+        public string StageColor { get; set; } = "";
+        public decimal ExpectedValue { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? LastContactDate { get; set; }
+        public double AgeDays { get; set; }
+    }
+
+    private sealed class PeriodActivitySnapshot
+    {
+        public List<OpportunityCreatedRow> Opportunities { get; set; } = new();
+        public List<InteractionEventRow> Interactions { get; set; } = new();
+        public List<TaskEventRow> Tasks { get; set; } = new();
+        public Dictionary<int, OpportunityMetaRow> OpportunityMeta { get; set; } = new();
+    }
+
+    private sealed class DailyRow
+    {
+        public DateTime Date { get; set; }
+        public string DateStr { get; set; } = "";
+        public string DayName { get; set; } = "";
+        public int Interactions { get; set; }
+        public int NewOpps { get; set; }
+        public int Won { get; set; }
+        public int Tasks { get; set; }
+        public bool IsToday { get; set; }
+    }
+
+    private sealed class DailyChartPoint
+    {
+        public string Label { get; set; } = "";
+        public decimal Interactions { get; set; }
+        public decimal NewOpps { get; set; }
+        public decimal Won { get; set; }
+        public decimal Tasks { get; set; }
+    }
+
+    private sealed class WeeklyChartPoint
+    {
+        public DateTime WeekStart { get; set; }
+        public string WeekLabel { get; set; } = "";
+        public decimal Interactions { get; set; }
+        public decimal NewOpps { get; set; }
+        public decimal Won { get; set; }
+        public decimal Tasks { get; set; }
+    }
+
+    private sealed class WeekdayChartPoint
+    {
+        public int DayOrder { get; set; }
+        public string DayName { get; set; } = "";
+        public decimal Interactions { get; set; }
+        public decimal Tasks { get; set; }
+    }
+
+    private sealed class HourlyChartPoint
+    {
+        public string HourLabel { get; set; } = "";
+        public decimal Count { get; set; }
+    }
+
+    private sealed class OpportunityTouchPoint
+    {
+        public string Opportunity { get; set; } = "";
+        public decimal Count { get; set; }
+    }
+
+    private sealed class InsightItem
+    {
+        public string Icon { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Value { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string ToneClass { get; set; } = "";
+    }
+}
+
+<style>
+    .dactx-page {
+        --text: #0f172a;
+        --muted: #64748b;
+        --line: rgba(148,163,184,.16);
+        --glass: rgba(255,255,255,.72);
+        --shadow: 0 20px 50px rgba(15,23,42,.06);
+        max-width: 1460px;
+        margin: 0 auto;
+        padding: 1.25rem 1.25rem 3rem;
+        position: relative;
+        min-height: 100vh;
+    }
+
+    .dactx-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+    }
+
+    .dactx-orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(120px);
+        opacity: .16;
+    }
+
+    .orb-1 {
+        width: 420px;
+        height: 420px;
+        background: #3b82f6;
+        top: -120px;
+        right: -120px;
+        animation: dactxFloat 12s ease-in-out infinite;
+    }
+
+    .orb-2 {
+        width: 360px;
+        height: 360px;
+        background: #10b981;
+        bottom: -80px;
+        left: -80px;
+        animation: dactxFloat 18s ease-in-out infinite reverse;
+    }
+
+    .orb-3 {
+        width: 280px;
+        height: 280px;
+        background: #f59e0b;
+        top: 30%;
+        left: 45%;
+        animation: dactxFloat 16s ease-in-out infinite;
+    }
+
+    @@keyframes dactxFloat {
+        0%,100% { transform: translate(0,0) scale(1); }
+        50% { transform: translate(20px,-20px) scale(1.08); }
+    }
+
+    .glass-card {
+        position: relative;
+        z-index: 1;
+        background: var(--glass);
+        backdrop-filter: blur(20px) saturate(1.5);
+        -webkit-backdrop-filter: blur(20px) saturate(1.5);
+        border: 1px solid rgba(255,255,255,.48);
+        box-shadow: var(--shadow);
+        border-radius: 1.35rem;
+    }
+
+    .glass-inner-card {
+        background: rgba(255,255,255,.45);
+        border: 1px solid rgba(255,255,255,.4);
+        border-radius: 1.2rem;
+        padding: 1rem;
+    }
+
+    .dactx-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1.8rem;
+        margin-bottom: 1.25rem;
+        background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 45%, #4338ca 100%);
+        padding: 2rem;
+        color: #fff;
+        z-index: 1;
+    }
+
+    .dactx-hero-grid {
+        position: absolute;
+        inset: 0;
+        background-image:
+            linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+        background-size: 50px 50px;
+        mask-image: radial-gradient(circle at center, black 45%, transparent 100%);
+        pointer-events: none;
+    }
+
+    .dactx-hero-content {
+        position: relative;
+        z-index: 2;
+    }
+
+    .dactx-hero-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+
+    .dactx-back {
+        width: 2.6rem;
+        height: 2.6rem;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08);
+        color: #fff;
+        border-radius: .9rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: .25s ease;
+        backdrop-filter: blur(10px);
+    }
+
+    .dactx-back:hover {
+        transform: translateX(-3px);
+        background: rgba(255,255,255,.15);
+    }
+
+    .dactx-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: .5rem;
+        padding: .45rem .9rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,.1);
+        border: 1px solid rgba(255,255,255,.16);
+        color: #dbeafe;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .badge-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #93c5fd;
+        box-shadow: 0 0 12px #93c5fd;
+        animation: badgePulse 2s infinite;
+    }
+
+    @@keyframes badgePulse {
+        0%,100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.35); opacity: .6; }
+    }
+
+    .dactx-hero-main {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 2rem;
+    }
+
+    .dactx-hero-text {
+        flex: 1;
+    }
+
+    .dactx-hero-text h1 {
+        margin: 0 0 .6rem;
+        font-size: 2.5rem;
+        font-weight: 900;
+        letter-spacing: -.02em;
+    }
+
+    .dactx-hero-text h1 span {
+        color: #93c5fd;
+    }
+
+    .dactx-hero-text p {
+        margin: 0 0 1rem;
+        color: rgba(255,255,255,.76);
+        max-width: 760px;
+        line-height: 1.8;
+    }
+
+    .dactx-hero-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .75rem;
+    }
+
+    .hero-chip {
+        display: flex;
+        flex-direction: column;
+        gap: .15rem;
+        padding: .85rem 1rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.08);
+        border: 1px solid rgba(255,255,255,.12);
+        min-width: 210px;
+    }
+
+    .chip-label {
+        font-size: .72rem;
+        color: rgba(255,255,255,.6);
+    }
+
+    .chip-value {
+        font-size: .85rem;
+        font-weight: 700;
+        color: #fff;
+    }
+
+    .summary-ring {
+        width: 170px;
+        height: 170px;
+        border-radius: 50%;
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: inset 0 0 30px rgba(255,255,255,.08);
+    }
+
+    .summary-ring-inner {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgba(15,23,42,.92);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .summary-percent {
+        font-size: 2rem;
+        font-weight: 900;
+        line-height: 1;
+        color: #fff;
+    }
+
+    .summary-caption {
+        margin-top: .35rem;
+        font-size: .78rem;
+        color: rgba(255,255,255,.62);
+    }
+
+    .dactx-filters {
+        padding: 1.15rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .filters-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .filters-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .filters-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .83rem;
+    }
+
+    .filters-actions {
+        display: flex;
+        gap: .65rem;
+        flex-wrap: wrap;
+    }
+
+    .quick-range-row {
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .quick-range-btn {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: .45rem .85rem;
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: .2s ease;
+    }
+
+    .quick-range-btn:hover {
+        background: rgba(59,130,246,.08);
+        color: #1d4ed8;
+        border-color: rgba(59,130,246,.22);
+    }
+
+    .filters-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(180px, 1fr));
+        gap: .9rem;
+    }
+
+    .filter-field {
+        background: rgba(255,255,255,.55);
+        border-radius: .9rem;
+    }
+
+    .dactx-loading {
+        min-height: 320px;
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        text-align: center;
+        padding: 2rem;
+    }
+
+    .loading-text h3 {
+        margin: 0 0 .35rem;
+        font-size: 1rem;
+        color: var(--text);
+    }
+
+    .loading-text p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .dactx-kpis {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .kpi-card {
+        padding: 1.1rem;
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+    }
+
+    .kpi-icon {
+        width: 3rem;
+        height: 3rem;
+        border-radius: .95rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.1rem;
+        font-weight: 900;
+        flex-shrink: 0;
+    }
+
+    .kpi-icon.indigo { background: rgba(99,102,241,.12); color: #6366f1; }
+    .kpi-icon.blue { background: rgba(59,130,246,.12); color: #2563eb; }
+    .kpi-icon.green { background: rgba(16,185,129,.12); color: #10b981; }
+    .kpi-icon.amber { background: rgba(245,158,11,.12); color: #f59e0b; }
+    .kpi-icon.purple { background: rgba(139,92,246,.12); color: #8b5cf6; }
+    .kpi-icon.teal { background: rgba(20,184,166,.12); color: #0f766e; }
+
+    .kpi-body {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .kpi-head-row {
+        display: flex;
+        justify-content: space-between;
+        gap: .5rem;
+        align-items: center;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-label {
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .kpi-value {
+        color: var(--text);
+        font-size: 1.45rem;
+        font-weight: 900;
+        line-height: 1.2;
+        margin-bottom: .35rem;
+    }
+
+    .kpi-value.success { color: #059669; }
+    .kpi-name { font-size: 1.05rem; }
+
+    .kpi-sub {
+        color: var(--muted);
+        font-size: .76rem;
+        line-height: 1.5;
+    }
+
+    .trend-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .2rem .55rem;
+        font-size: .68rem;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .trend-up {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .trend-down {
+        background: rgba(239,68,68,.12);
+        color: #dc2626;
+    }
+
+    .trend-flat {
+        background: rgba(148,163,184,.14);
+        color: #475569;
+    }
+
+    .dactx-insights {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .insight-card {
+        padding: 1rem;
+        display: flex;
+        gap: .85rem;
+        align-items: flex-start;
+    }
+
+    .insight-icon {
+        width: 2.6rem;
+        height: 2.6rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .tone-gold { background: rgba(245,158,11,.12); color: #d97706; }
+    .tone-green { background: rgba(16,185,129,.12); color: #059669; }
+    .tone-red { background: rgba(239,68,68,.12); color: #dc2626; }
+    .tone-indigo { background: rgba(99,102,241,.12); color: #4f46e5; }
+    .tone-slate { background: rgba(148,163,184,.14); color: #475569; }
+
+    .insight-body {
+        min-width: 0;
+        flex: 1;
+    }
+
+    .insight-title {
+        color: var(--muted);
+        font-size: .75rem;
+        margin-bottom: .2rem;
+    }
+
+    .insight-value {
+        color: var(--text);
+        font-size: 1rem;
+        font-weight: 800;
+        margin-bottom: .25rem;
+    }
+
+    .insight-desc {
+        color: var(--muted);
+        font-size: .74rem;
+        line-height: 1.45;
+    }
+
+    .dactx-dashboard {
+        display: grid;
+        grid-template-columns: 1.6fr 1fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .dactx-analytics-grid {
+        display: grid;
+        grid-template-columns: 1fr 1.2fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .main-chart-card,
+    .side-card,
+    .dactx-table-wrapper,
+    .dactx-drill,
+    .dactx-note {
+        padding: 1rem;
+    }
+
+    .side-stack {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: .75rem;
+    }
+
+    .card-head h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .card-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .8rem;
+    }
+
+    .chart-empty {
+        min-height: 250px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: .88rem;
+    }
+
+    .chart-empty.small {
+        min-height: 180px;
+    }
+
+    .compare-list {
+        display: flex;
+        flex-direction: column;
+        gap: .75rem;
+    }
+
+    .compare-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: center;
+        padding: .75rem .85rem;
+        border-radius: 1rem;
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+    }
+
+    .compare-label {
+        font-size: .8rem;
+        font-weight: 700;
+        color: var(--text);
+    }
+
+    .compare-values {
+        display: flex;
+        align-items: center;
+        gap: .55rem;
+        color: var(--muted);
+        font-size: .8rem;
+        flex-wrap: wrap;
+    }
+
+    .compare-values strong {
+        color: var(--text);
+        font-size: .85rem;
+    }
+
+    .compare-arrow {
+        color: #94a3b8;
+        font-weight: 900;
+    }
+
+    .compare-summary {
+        margin-top: .85rem;
+        border-radius: 1rem;
+        padding: .8rem .9rem;
+        font-size: .8rem;
+        font-weight: 700;
+    }
+
+    .compare-good {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
+
+    .compare-mid {
+        background: rgba(245,158,11,.12);
+        color: #d97706;
+    }
+
+    .drill-head {
+        align-items: center;
+    }
+
+    .drill-actions {
+        display: flex;
+        gap: .75rem;
+        align-items: center;
+    }
+
+    .day-select {
+        min-width: 260px;
+    }
+
+    .drill-mini-kpis {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+
+    .mini-kpi {
+        background: rgba(255,255,255,.45);
+        border: 1px solid var(--line);
+        border-radius: 1rem;
+        padding: .85rem;
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+    }
+
+    .mini-label {
+        font-size: .72rem;
+        color: var(--muted);
+    }
+
+    .mini-kpi strong {
+        color: var(--text);
+        font-size: .92rem;
+    }
+
+    .drill-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 1rem;
+    }
+
+    .premium-table {
+        background: transparent;
+    }
+
+    .empty-data {
+        text-align: center;
+        padding: 2rem 1rem;
+    }
+
+    .empty-icon {
+        font-size: 2rem;
+        margin-bottom: .5rem;
+    }
+
+    .empty-data h4 {
+        margin: 0 0 .35rem;
+        color: var(--text);
+    }
+
+    .empty-data p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .85rem;
+    }
+
+    .dactx-note {
+        display: flex;
+        gap: .9rem;
+        align-items: flex-start;
+        margin-top: 1rem;
+    }
+
+    .note-icon {
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: .85rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(99,102,241,.10);
+        color: #4f46e5;
+        font-size: 1rem;
+        flex-shrink: 0;
+    }
+
+    .note-body h4 {
+        margin: 0 0 .3rem;
+        color: var(--text);
+        font-size: .95rem;
+        font-weight: 800;
+    }
+
+    .note-body p {
+        margin: 0;
+        color: var(--muted);
+        font-size: .82rem;
+        line-height: 1.7;
+    }
+
+    @@media (max-width: 1300px) {
+        .dactx-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 1200px) {
+        .dactx-insights {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .dactx-dashboard,
+        .dactx-analytics-grid,
+        .drill-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @@media (max-width: 900px) {
+        .dactx-hero-main,
+        .filters-head {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .drill-mini-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .drill-actions {
+            width: 100%;
+        }
+    }
+
+    @@media (max-width: 640px) {
+        .dactx-page {
+            padding: .8rem .8rem 2rem;
+        }
+
+        .dactx-hero {
+            padding: 1.25rem;
+            border-radius: 1.2rem;
+        }
+
+        .dactx-hero-text h1 {
+            font-size: 1.7rem;
+        }
+
+        .summary-ring {
+            width: 140px;
+            height: 140px;
+        }
+
+        .hero-chip {
+            min-width: 100%;
+        }
+
+        .dactx-kpis,
+        .dactx-insights,
+        .drill-mini-kpis {
+            grid-template-columns: 1fr;
+        }
+
+        .compare-row {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .filters-actions {
+            width: 100%;
+        }
+
+        .day-select {
+            min-width: 100%;
+        }
+    }
+
+    .mud-theme-dark .glass-card,
+    .mud-theme-dark .glass-inner-card {
+        background: rgba(17,24,39,.66);
+        border-color: rgba(255,255,255,.06);
+        box-shadow: 0 20px 50px rgba(0,0,0,.22);
+    }
+
+    .mud-theme-dark .filters-head h3,
+    .mud-theme-dark .card-head h3,
+    .mud-theme-dark .loading-text h3,
+    .mud-theme-dark .empty-data h4,
+    .mud-theme-dark .note-body h4,
+    .mud-theme-dark .kpi-value,
+    .mud-theme-dark .insight-value,
+    .mud-theme-dark .compare-label,
+    .mud-theme-dark .compare-values strong,
+    .mud-theme-dark .mini-kpi strong {
+        color: #f8fafc;
+    }
+
+    .mud-theme-dark .filters-head p,
+    .mud-theme-dark .card-head p,
+    .mud-theme-dark .loading-text p,
+    .mud-theme-dark .empty-data p,
+    .mud-theme-dark .note-body p,
+    .mud-theme-dark .kpi-label,
+    .mud-theme-dark .kpi-sub,
+    .mud-theme-dark .insight-title,
+    .mud-theme-dark .insight-desc,
+    .mud-theme-dark .compare-values,
+    .mud-theme-dark .mini-label {
+        color: #94a3b8;
+    }
+
+    .mud-theme-dark .compare-row,
+    .mud-theme-dark .mini-kpi {
+        background: rgba(255,255,255,.03);
+    }
+
+    .mud-theme-dark .quick-range-btn {
+        background: rgba(255,255,255,.05);
+        color: #e2e8f0;
+        border-color: rgba(255,255,255,.08);
+    }
+
+    .mud-theme-dark .quick-range-btn:hover {
+        background: rgba(59,130,246,.12);
+        color: #bfdbfe;
+    }
+
+    @@media print {
+        .dactx-bg,
+        .filters-actions,
+        .quick-range-row,
+        .dactx-back,
+        .drill-actions {
+            display: none !important;
+        }
+
+        .glass-card,
+        .glass-inner-card {
+            box-shadow: none !important;
+            border: 1px solid #ddd !important;
+            background: #fff !important;
+        }
+
+        .dactx-page {
+            max-width: 100% !important;
+            padding: 0 !important;
+        }
+    }
+</style>

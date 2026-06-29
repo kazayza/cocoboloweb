@@ -64,8 +64,14 @@ else
                 </div>
 
                 <div class="hdr-actions">
+                    <button class="qa-btn" @onclick="GoToLeads" title="Leads">
+                        <MudIcon Icon="@Icons.Material.Rounded.ContactPage" Style="font-size:1rem" />
+                    </button>
                     @if (!string.IsNullOrWhiteSpace(_opp.Phone))
                     {
+                        <button class="qa-btn" @onclick="() => CopyPhone(_opp.Phone)" title="نسخ الرقم">
+                            <MudIcon Icon="@Icons.Material.Rounded.ContentCopy" Style="font-size:1rem" />
+                        </button>
                         <button class="qa-btn" @onclick="() => CallPhone(_opp.Phone)" title="اتصال">
                             <MudIcon Icon="@Icons.Material.Rounded.Phone" Style="font-size:1rem" />
                         </button>
@@ -126,42 +132,6 @@ else
                     <span class="sc-value">@_opp.DaysSinceFirstContact</span>
                 </div>
             </div>
-            @if (_opp.SourceLeadId.HasValue)
-{
-    <MudPaper Class="source-lead-card" Elevation="0">
-        <div class="slc-icon">
-            <MudIcon Icon="@Icons.Material.Rounded.Campaign" />
-        </div>
-
-        <div class="slc-content">
-            <div class="slc-title">مصدر الفرصة: Lead من Meta</div>
-            <div class="slc-meta">
-                <span>الاسم: @_opp.SourceLeadName</span>
-                @if (!string.IsNullOrWhiteSpace(_opp.SourceLeadPhone))
-                {
-                    <span>الهاتف: @_opp.SourceLeadPhone</span>
-                }
-                @if (!string.IsNullOrWhiteSpace(_opp.SourceLeadCampaign))
-                {
-                    <span>الحملة: @_opp.SourceLeadCampaign</span>
-                }
-                @if (!string.IsNullOrWhiteSpace(_opp.SourceLeadPlatform))
-                {
-                    <span>المنصة: @(_opp.SourceLeadPlatform == "fb" ? "Facebook" : _opp.SourceLeadPlatform == "ig" ? "Instagram" : _opp.SourceLeadPlatform)</span>
-                }
-            </div>
-        </div>
-
-        <MudButton Variant="MudVariant.Outlined"
-                   Color="MudColor.Primary"
-                   Size="MudSize.Small"
-                   StartIcon="@Icons.Material.Rounded.OpenInNew"
-                   OnClick="@(() => Navigation.NavigateTo($"/crm/leads/{_opp.SourceLeadId.Value}"))">
-            فتح الـ Lead
-        </MudButton>
-    </MudPaper>
-}
-
             @if (!string.IsNullOrWhiteSpace(_opp.Notes))
             {
                 <div class="hdr-note">
@@ -300,7 +270,7 @@ else
         <div class="det-main">
 
             @* ─── Lost Banner ─── *@
-            @if (_opp.StageId == 4 || _opp.StageId == 5)
+            @if (IsExitStageId(_opp.StageId))
             {
                 <div class="lost-banner" style="--stage:@StageColor">
                     <div class="lost-icon">
@@ -445,7 +415,7 @@ else
                                    Dense="true" Class="qf-field">
                             @foreach (var s in _stages.OrderBy(s => s.StageOrder))
                             {
-                                var isDisabledStage = IsFirstInteraction && (s.StageId == 4 || s.StageId == 5);
+                                var isDisabledStage = IsFirstInteraction && IsExitStageId(s.StageId);
                                 if (!isDisabledStage)
                                 {
                                     <MudSelectItem Value="@((int?)s.StageId)">
@@ -544,8 +514,16 @@ else
                     @if (_interactions.Any())
                     {
                         <div class="timeline">
-                            @foreach (var i in _interactions)
+                            @{
+                                var interactionList = _interactions.ToList();
+                            }
+                            @for (int idx = 0; idx < interactionList.Count; idx++)
                             {
+                                var i = interactionList[idx];
+                                // هل التفاعل السابق كان عامل متابعة قادمة والتفاعل ده هو اللي خلصها؟
+                                var prevFollowUp = idx > 0 ? interactionList[idx - 1].NextFollowUpDate : (DateTime?)null;
+                                var isFollowUpCompleted = prevFollowUp.HasValue && i.InteractionDate.Date >= prevFollowUp.Value.Date;
+
                                 var stageColor = i.StageAfterId.HasValue
                                     ? _stages.FirstOrDefault(s => s.StageId == i.StageAfterId)?.StageColor ?? "#94a3b8"
                                     : "#94a3b8";
@@ -570,13 +548,19 @@ else
 </div>
 
 @* Method + Date row *@
+@{
+    // الأول نحاول من الـ DTO نفسه، لو null نأخد من الـ Enrichment
+    var resolvedStatusName = !string.IsNullOrEmpty(i.StatusName)
+        ? i.StatusName
+        : (idx < _interactionStatusNames.Count ? _interactionStatusNames[idx] : null);
+}
 <div class="tl-date-row">
-    @if (i.StatusName != null)
+    @if (resolvedStatusName != null)
     {
-        var (mIcon, mColor) = GetMethodInfo(i.StatusName);
+        var (mIcon, mColor) = GetMethodInfo(resolvedStatusName);
         <span class="tl-method" style="--mcolor:@mColor">
             <MudIcon Icon="@mIcon" Style="font-size:0.9rem" />
-            @i.StatusName
+            @resolvedStatusName
         </span>
         <span class="tl-date-sep">·</span>
     }
@@ -607,10 +591,26 @@ else
                                             {
                                                 <span class="tl-note">📌 @i.Notes</span>
                                             }
+                                            @if (isFollowUpCompleted)
+                                            {
+                                                <span class="tl-followup-done">✅ تمت متابعة @FormatDateAr(prevFollowUp.Value)</span>
+                                            }
                                             @if (i.NextFollowUpDate.HasValue)
                                             {
-                                                var fuClass = i.NextFollowUpDate.Value < DateTime.Today ? "fu-overdue" : "fu-normal";
-                                                <span class="tl-followup @fuClass">📅 متابعة: @FormatDateAr(i.NextFollowUpDate.Value)</span>
+                                                var fuDate = i.NextFollowUpDate.Value.Date;
+                                                var fuDone = _completedTaskByDate.TryGetValue(fuDate, out var fuTask);
+                                                if (fuDone)
+                                                {
+                                                    <span class="tl-followup fu-completed">
+                                                        <span class="fu-strike">📅 متابعة: @FormatDateAr(i.NextFollowUpDate.Value)</span>
+                                                        <span class="fu-done-label">✅ تمت المتابعة بتاريخ @FormatDateAr(fuTask.CompletedDate!.Value)</span>
+                                                    </span>
+                                                }
+                                                else
+                                                {
+                                                    var fuClass = i.NextFollowUpDate.Value < DateTime.Today ? "fu-overdue" : "fu-normal";
+                                                    <span class="tl-followup @fuClass">📅 متابعة قادمة: @FormatDateAr(i.NextFollowUpDate.Value)</span>
+                                                }
                                             }
                                         </div>
                                     </div>
@@ -685,6 +685,20 @@ else
                         <MudIcon Icon="@Icons.Material.Rounded.Info" Size="MudSize.Small" />
                         ملخص الفرصة
                     </h3>
+                    <div style="display:flex;gap:0.3rem;">
+                        @if (_isAdmin)
+                        {
+                            <button class="task-add-btn" @onclick="OpenReassignDialog" title="تحويل لموظف آخر">
+                                <MudIcon Icon="@Icons.Material.Rounded.SwapHoriz" Style="font-size:1rem" />
+                            </button>
+                        }
+                        @if (_canEdit)
+                        {
+                            <button class="task-add-btn" @onclick="OpenEditDialog" title="تعديل البيانات">
+                                <MudIcon Icon="@Icons.Material.Rounded.Edit" Style="font-size:1rem" />
+                            </button>
+                        }
+                    </div>
                 </div>
                 <div class="card-body">
                     <div class="info-grid">
@@ -882,6 +896,96 @@ else
             </div>
         </div>
     </div>
+
+    @* ════════════════════════════════════════════════════════════════ *@
+    @*                     DIALOGS                                   *@
+    @* ════════════════════════════════════════════════════════════════ *@
+
+    @* ─── Confirm Loss Stage Dialog ─── *@
+    @if (_showConfirmLossDialog)
+    {
+        <div class="dlg-overlay" @onclick="() => _showConfirmLossDialog = false">
+            <div class="dlg-box" @onclick:stopPropagation>
+                <div class="dlg-header dlg-header-danger">
+                    <MudIcon Icon="@Icons.Material.Rounded.Warning" Style="font-size:1.3rem" />
+                    <h3>تأكيد تغيير المرحلة</h3>
+                </div>
+                <div class="dlg-body">
+                    <p>هل أنت متأكد من تحويل الفرصة إلى مرحلة الخسارة؟</p>
+                    <p class="dlg-sub">هذا الإجراء سيؤدي لإغلاق جميع المهام المفتوحة ولا يمكن التراجع عنه.</p>
+                </div>
+                <div class="dlg-actions">
+                    <MudButton Variant="MudVariant.Outlined" OnClick="() => _showConfirmLossDialog = false">إلغاء</MudButton>
+                    <MudButton Variant="MudVariant.Filled" Color="MudColor.Error" OnClick="ConfirmLossStage">
+                        <MudIcon Icon="@Icons.Material.Rounded.Check" Style="font-size:1rem" />
+                        تأكيد
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+    }
+
+    @* ─── Edit Opportunity Dialog ─── *@
+    @if (_showEditDialog && _editForm != null)
+    {
+        <div class="dlg-overlay" @onclick="CloseEditDialog">
+            <div class="dlg-box dlg-box-wide" @onclick:stopPropagation>
+                <div class="dlg-header" style="--stage:@StageColor">
+                    <MudIcon Icon="@Icons.Material.Rounded.Edit" Style="font-size:1.3rem" />
+                    <h3>تعديل بيانات الفرصة</h3>
+                </div>
+                <div class="dlg-body">
+                    <div class="dlg-form-grid">
+                        <MudTextField T="decimal?" Label="القيمة المتوقعة (ج.م)" Variant="MudVariant.Outlined" @bind-Value="_editForm.ExpectedValue" Dense="true" />
+                        <MudTextField T="string" Label="المنتج" Variant="MudVariant.Outlined" @bind-Value="_editForm.InterestedProduct" Dense="true" />
+                        <MudSelect T="int?" Label="المصدر" Variant="MudVariant.Outlined" @bind-Value="_editForm.SourceId" Dense="true" Clearable="true">
+                            @foreach (var s in _sources)
+                            {
+                                <MudSelectItem Value="@((int?)s.SourceId)">@(s.SourceNameAr ?? s.SourceName)</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudTextField T="string" Label="الموقع" Variant="MudVariant.Outlined" @bind-Value="_editForm.Location" Dense="true" />
+                        <MudTextField T="string" Label="ملاحظات" Variant="MudVariant.Outlined" @bind-Value="_editForm.Notes" Dense="true" Lines="2" Class="dlg-full-span" />
+                        <MudTextField T="string" Label="توجيه" Variant="MudVariant.Outlined" @bind-Value="_editForm.Guidance" Dense="true" Class="dlg-full-span" />
+                    </div>
+                </div>
+                <div class="dlg-actions">
+                    <MudButton Variant="MudVariant.Outlined" OnClick="CloseEditDialog">إلغاء</MudButton>
+                    <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" OnClick="SaveEdit" StartIcon="@Icons.Material.Rounded.Save">
+                        حفظ التعديلات
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+    }
+
+    @* ─── Reassign Employee Dialog (Admin) ─── *@
+    @if (_showReassignDialog)
+    {
+        <div class="dlg-overlay" @onclick="() => _showReassignDialog = false">
+            <div class="dlg-box" @onclick:stopPropagation>
+                <div class="dlg-header">
+                    <MudIcon Icon="@Icons.Material.Rounded.SwapHoriz" Style="font-size:1.3rem" />
+                    <h3>تحويل الموظف</h3>
+                </div>
+                <div class="dlg-body">
+                    <p style="margin:0 0 0.75rem;font-size:0.85rem;color:var(--mud-palette-text-secondary)">الموظف الحالي: <strong>@(_opp.EmployeeName ?? "—")</strong></p>
+                    <MudSelect T="int" Label="الموظف الجديد" Variant="MudVariant.Outlined" @bind-Value="_reassignEmployeeId" Dense="true">
+                        @foreach (var e in _employees)
+                        {
+                            <MudSelectItem Value="@e.EmployeeId">@e.FullName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </div>
+                <div class="dlg-actions">
+                    <MudButton Variant="MudVariant.Outlined" OnClick="() => _showReassignDialog = false">إلغاء</MudButton>
+                    <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" OnClick="ConfirmReassign" StartIcon="@Icons.Material.Rounded.PersonAdd">
+                        تحويل
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+    }
 </div>
 }
 
@@ -1369,8 +1473,12 @@ else
     .tl-stage-to { font-weight: 800; }
     .tl-summary { font-size: 0.9rem; line-height: 1.55; margin-bottom: 0.15rem; }
     .tl-extras { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.1rem; }
-    .tl-note, .tl-followup { font-size: 0.75rem; color: var(--mud-palette-text-secondary); }
+    .tl-note, .tl-followup, .tl-followup-done { font-size: 0.75rem; color: var(--mud-palette-text-secondary); }
     .fu-overdue { color: #ef4444 !important; font-weight: 700; }
+    .tl-followup-done { color: #10b981 !important; font-weight: 600; }
+    .fu-completed { display: inline-flex; flex-direction: column; gap: 0.1rem; }
+    .fu-strike { text-decoration: line-through; opacity: 0.45; }
+    .fu-done-label { color: #10b981 !important; font-weight: 600; }
 
     /* ════════════════════════════════════ */
     /*        INFO GRID (SIDEBAR)          */
@@ -1461,6 +1569,39 @@ else
         .pipeline-main { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 0.25rem; }
         .pipeline-exit { flex-wrap: nowrap; overflow-x: auto; }
     }
+
+    /* ════════════════════════════════════ */
+    /*          CUSTOM DIALOGS             */
+    /* ════════════════════════════════════ */
+    .dlg-overlay {
+        position: fixed; inset: 0; z-index: 1000;
+        background: rgba(0,0,0,0.45); backdrop-filter: blur(4px);
+        display: flex; align-items: center; justify-content: center;
+        padding: 1rem; animation: dlg-fade-in 0.2s ease-out;
+    }
+    @@keyframes dlg-fade-in { from { opacity: 0; } to { opacity: 1; } }
+    .dlg-box {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-lines-default);
+        border-radius: 18px; width: 100%; max-width: 420px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+        animation: dlg-slide-in 0.25s ease-out;
+    }
+    .dlg-box-wide { max-width: 560px; }
+    @@keyframes dlg-slide-in { from { opacity: 0; transform: translateY(20px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    .dlg-header {
+        display: flex; align-items: center; gap: 0.6rem;
+        padding: 1rem 1.25rem; border-bottom: 1px solid var(--mud-palette-lines-inputs);
+        color: var(--stage, var(--mud-palette-primary));
+    }
+    .dlg-header-danger { color: #ef4444; }
+    .dlg-header h3 { margin: 0; font-size: 1.05rem; font-weight: 800; }
+    .dlg-body { padding: 1.25rem; }
+    .dlg-body p { margin: 0 0 0.35rem; font-size: 0.92rem; line-height: 1.6; }
+    .dlg-sub { font-size: 0.82rem !important; color: var(--mud-palette-text-secondary); opacity: 0.8; }
+    .dlg-actions { display: flex; gap: 0.5rem; justify-content: flex-start; padding: 0.75rem 1.25rem; border-top: 1px solid var(--mud-palette-lines-inputs); }
+    .dlg-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    .dlg-full-span { grid-column: 1 / -1; }
 </style>
 
 @code {
@@ -1485,6 +1626,10 @@ else
     private List<SalesStage> _stages = new();
     private List<ContactSource> _sources = new();
     private List<ContactStatus> _statuses = new();
+    /// <summary> mapped 1:1 with _interactions by index — StatusNameAr for each interaction </summary>
+    private List<string?> _interactionStatusNames = new();
+    /// <summary> DueDate.Date → completed task (للمقارنة مع NextFollowUpDate) </summary>
+    private Dictionary<DateTime, TaskListDto> _completedTaskByDate = new();
     private List<LostReason> _lostReasons = new();
     private List<TaskType> _taskTypes = new();
     private List<Employee> _employees = new();
@@ -1495,6 +1640,13 @@ else
     private string _selectedTaskPriority = "Medium";
     private string? _guidanceText;
     private int _stageBeforeId;
+    private bool _isAdmin;
+    private bool _showConfirmLossDialog;
+    private int _pendingStageId;
+    private bool _showEditDialog;
+    private bool _showReassignDialog;
+    private OpportunityFormDto? _editForm;
+    private int _reassignEmployeeId;
 
     // ═══════════════════════════════════════════
     //           COMPUTED PROPERTIES
@@ -1502,10 +1654,10 @@ else
     private string StageColor => _opp.StageColor ?? "#7c3aed";
 
     private bool IsFirstInteraction => _interactions.Count == 0;
-    private bool ShowLostFields => _newInteraction.StageAfterId == 4 || _newInteraction.StageAfterId == 5;
+    private bool ShowLostFields => IsExitStageId(_newInteraction.StageAfterId ?? 0);
 
-    private List<SalesStage> MainStages => _stages.Where(s => s.StageId != 4 && s.StageId != 5).OrderBy(s => s.StageOrder).ToList();
-    private List<SalesStage> ExitStages => _stages.Where(s => s.StageId == 4 || s.StageId == 5).OrderBy(s => s.StageOrder).ToList();
+    private List<SalesStage> MainStages => _stages.Where(s => !IsExitStageId(s.StageId)).OrderBy(s => s.StageOrder).ToList();
+    private List<SalesStage> ExitStages => _stages.Where(s => IsExitStageId(s.StageId)).OrderBy(s => s.StageOrder).ToList();
 
     private bool IsStagePast(int stageId)
     {
@@ -1513,6 +1665,8 @@ else
         var stageOrder = _stages.FirstOrDefault(s => s.StageId == stageId)?.StageOrder ?? 0;
         return stageOrder < currentOrder;
     }
+
+    private static bool IsExitStageId(int stageId) => stageId == 4 || stageId == 5;
 
     // ═══════════════════════════════════════════
     //           DATE HELPERS
@@ -1541,32 +1695,32 @@ else
     private static (string Icon, string Color) GetMethodInfo(string? statusName)
 {
     if (string.IsNullOrWhiteSpace(statusName)) return (Icons.Material.Rounded.HelpOutline, "#94a3b8");
-    
+
     // أول تواصل
     if (statusName.Contains("أول تواصل") || statusName.Contains("First Contact"))
-        return (Icons.Material.Rounded.NewReleases, "#8b5cf6");
-    
+        return (Icons.Material.Rounded.Handshake, "#8b5cf6");
+
     // تم الاتصال
     if (statusName.Contains("تم الاتصال") || statusName.Contains("Called"))
         return (Icons.Material.Rounded.Phone, "#3b82f6");
-    
-    // رسالة (عادية)
-    if (statusName.Contains("رسالة") && !statusName.Contains("واتس"))
-        return (Icons.Material.Rounded.Sms, "#06b6d4");
-    
-    // عميل قديم
-    if (statusName.Contains("عميل قديم") || statusName.Contains("Old Client"))
-        return (Icons.Material.Rounded.Person, "#f59e0b");
-    
-    // زيارة للمعرض
-    if (statusName.Contains("زيارة") || statusName.Contains("Visit"))
-        return (Icons.Material.Rounded.Store, "#10b981");
-    
-    // رساله واتس
+
+    // رساله واتس (لازم تتشيك قبل "رسالة" العادية)
     if (statusName.Contains("واتس") || statusName.Contains("Whats"))
         return (Icons.Custom.Brands.WhatsApp, "#25d366");
-    
-    return (Icons.Material.Rounded.QuestionMark, "#94a3b8");
+
+    // رسالة (عادية)
+    if (statusName.Contains("رسالة") || statusName.Contains("Message"))
+        return (Icons.Material.Rounded.ChatBubbleOutline, "#06b6d4");
+
+    // عميل قديم
+    if (statusName.Contains("عميل قديم") || statusName.Contains("Old Client"))
+        return (Icons.Material.Rounded.PersonPin, "#f59e0b");
+
+    // زيارة للمعرض
+    if (statusName.Contains("زيارة") || statusName.Contains("Visit") || statusName.Contains("Show Room"))
+        return (Icons.Material.Rounded.Storefront, "#10b981");
+
+    return (Icons.Material.Rounded.HelpOutline, "#94a3b8");
 }
 
     // ═══════════════════════════════════════════
@@ -1583,6 +1737,7 @@ else
             _canView = user.HasClaim("Permission", "frmNewInteraction:View") || user.IsInRole("Admin");
             _canEdit = user.HasClaim("Permission", "frmNewInteraction:Edit") || user.IsInRole("Admin");
             _canDelete = user.HasClaim("Permission", "frmNewInteraction:Delete") || user.IsInRole("Admin");
+            _isAdmin = user.IsInRole("Admin");
 
             if (!_canView) { Navigation.NavigateTo("/"); return; }
 
@@ -1603,7 +1758,9 @@ else
             _stageBeforeId = _opp.StageId;
 
             _interactions = await InteractionService.GetByOpportunityAsync(Id);
+            await LoadInteractionStatusNamesAsync();
             _tasks = await TaskService.GetByOpportunityAsync(Id);
+            BuildCompletedTaskLookup();
             await LoadSourceLeadAsync();
 
             InitInteractionForm();
@@ -1656,9 +1813,62 @@ else
         var detail = await OppService.GetOpportunityDetailAsync(Id);
         if (detail != null) _opp = detail;
         _interactions = await InteractionService.GetByOpportunityAsync(Id);
+        await LoadInteractionStatusNamesAsync();
         _tasks = await TaskService.GetByOpportunityAsync(Id);
+        BuildCompletedTaskLookup();
         await LoadSourceLeadAsync();
     }
+
+    /// <summary>
+    /// بناء Lookup من المهام المكتملة: DueDate → Task
+    /// عشان نقدر نقارن مع NextFollowUpDate في التايملاين
+    /// </summary>
+    private void BuildCompletedTaskLookup()
+    {
+        _completedTaskByDate = _tasks
+            .Where(t => t.Status == "Completed" && t.CompletedDate.HasValue)
+            .GroupBy(t => t.DueDate.Date)
+            .Select(g => g.First())
+            .ToDictionary(t => t.DueDate.Date, t => t);
+    }
+
+    /// <summary>
+    /// Enrichment: الـ Service بيرجع StatusName = null
+    /// فعملنا Query مباشر من CustomerInteractions عشان نجيب StatusId
+    /// وبعدين نعمل Lookup من _statuses
+    /// </summary>
+    private async Task LoadInteractionStatusNamesAsync()
+    {
+        _interactionStatusNames = new();
+        if (!_interactions.Any() || !_statuses.Any()) return;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            // نجيب StatusId لكل تفاعل مرتب بالفرصة - بنفس الترتيب (InteractionDate DESC)
+            var rows = await db.CustomerInteractions
+                .AsNoTracking()
+                .Where(ci => ci.OpportunityId == Id)
+                .OrderByDescending(ci => ci.InteractionDate)
+                .ThenByDescending(ci => ci.InteractionId)
+                .Select(ci => ci.StatusId)
+                .ToListAsync();
+
+            _interactionStatusNames = rows.Select(sid =>
+            {
+                if (!sid.HasValue) return null;
+                var s = _statuses.FirstOrDefault(st => st.StatusId == sid.Value);
+                return s?.StatusNameAr ?? s?.StatusName;
+            }).ToList();
+        }
+        catch
+        {
+            // لو حصل أي خطأ (مثلاً CustomerInteractions مش موجود) نتجاهل silently
+            _interactionStatusNames = new();
+        }
+    }
+
     private async Task LoadSourceLeadAsync()
 {
     await using var db = await DbFactory.CreateDbContextAsync();
@@ -1708,7 +1918,7 @@ else
     // ═══════════════════════════════════════════
     private async Task AddInteraction()
     {
-        if (IsFirstInteraction && (_newInteraction.StageAfterId == 4 || _newInteraction.StageAfterId == 5))
+        if (IsFirstInteraction && IsExitStageId(_newInteraction.StageAfterId ?? 0))
         {
             Snackbar.Add("غير مسموح بتسجيل خسارة في أول تواصل — يجب المرور بمرحلة عميل محتمل أولاً", Severity.Warning);
             return;
@@ -1750,7 +1960,7 @@ else
 
             var stageId = _newInteraction.StageAfterId.Value;
 
-            if (stageId == 4 || stageId == 5)
+            if (IsExitStageId(stageId))
             {
                 var label = stageId == 4 ? "خسارة" : "غير مهتم";
                 await TaskService.CloseAllTasksForOpportunityAsync(Id, "Completed", $"تم الإلغاء تلقائياً - العميل {label}", _currentUserName!);
@@ -1796,11 +2006,19 @@ else
     private async Task ChangeStageQuick(int newStageId)
     {
         if (_opp.StageId == newStageId) return;
-        if (IsFirstInteraction && (newStageId == 4 || newStageId == 5))
+        if (IsFirstInteraction && IsExitStageId(newStageId))
         {
             Snackbar.Add("غير مسموح في أول تواصل — يجب المرور بمرحلة عميل محتمل أولاً", Severity.Warning);
             return;
         }
+
+        if (IsExitStageId(newStageId))
+        {
+            _pendingStageId = newStageId;
+            _showConfirmLossDialog = true;
+            return;
+        }
+
         var (ok, msg) = await OppService.MoveStageAsync(Id, newStageId, _currentUserName!);
         Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
         if (ok) { await ReloadData(); _stageBeforeId = _opp.StageId; }
@@ -1895,6 +2113,107 @@ private static string GetLeadInteractionBg(string? type) => type switch
     "رفض" => "rgba(220,38,38,0.12)",
     _ => "rgba(100,116,139,0.12)"
 };
+
+    private void GoToLeads() => Navigation.NavigateTo("/crm/leads");
+
+    private async Task CopyPhone(string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return;
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", phone);
+            Snackbar.Add("تم نسخ الرقم", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("فشل نسخ الرقم", Severity.Error);
+        }
+    }
+
+    private async Task OpenEditDialog()
+    {
+        try
+        {
+            _editForm = await OppService.GetOpportunityForEditAsync(Id);
+            if (_editForm != null)
+            {
+                _showEditDialog = true;
+            }
+            else
+            {
+                Snackbar.Add("فشل تحميل بيانات الفرصة", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void CloseEditDialog()
+    {
+        _showEditDialog = false;
+        _editForm = null;
+    }
+
+    private async Task SaveEdit()
+    {
+        if (_editForm == null) return;
+        try
+        {
+            var (ok, msg, _) = await OppService.SaveOpportunityAsync(_editForm, _currentUserName!);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok)
+            {
+                _showEditDialog = false;
+                _editForm = null;
+                await ReloadData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void OpenReassignDialog()
+    {
+        _reassignEmployeeId = _opp.EmployeeId ?? 0;
+        _showReassignDialog = true;
+    }
+
+    private async Task ConfirmReassign()
+    {
+        if (_reassignEmployeeId == 0) { Snackbar.Add("اختر الموظف", Severity.Warning); return; }
+        try
+        {
+            var formDto = await OppService.GetOpportunityForEditAsync(Id);
+            if (formDto != null)
+            {
+                formDto.EmployeeId = _reassignEmployeeId;
+                var (ok, msg, _) = await OppService.SaveOpportunityAsync(formDto, _currentUserName!);
+                Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+                if (ok)
+                {
+                    _showReassignDialog = false;
+                    await ReloadData();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ConfirmLossStage()
+    {
+        _showConfirmLossDialog = false;
+        var newStageId = _pendingStageId;
+        var (ok, msg) = await OppService.MoveStageAsync(Id, newStageId, _currentUserName!);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) { await ReloadData(); _stageBeforeId = _opp.StageId; }
+    }
 
     private void GoBack() => Navigation.NavigateTo("/crm/opportunities");
 

@@ -28,6 +28,11 @@ builder.Services.AddRazorComponents()
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddMudServices();
 builder.Services.AddApexCharts();
+builder.Services.AddScoped<Radzen.DialogService>();
+builder.Services.AddScoped<Radzen.TooltipService>();
+builder.Services.AddScoped<Radzen.ContextMenuService>();
+builder.Services.AddScoped<Radzen.ThemeService>();
+
 
 // ⭐ Rate Limiting - حماية من Brute Force
 builder.Services.AddRateLimiter(options =>
@@ -145,6 +150,7 @@ builder.Services.AddScoped<IInteractionService, InteractionService>();
 builder.Services.AddScoped<ITaskService, TaskService>();
 builder.Services.AddScoped<ICrmSettingsService, CrmSettingsService>();
 builder.Services.AddScoped<ILeadsCrmService, LeadsCrmService>();
+
 
 
 

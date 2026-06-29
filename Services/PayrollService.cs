@@ -256,6 +256,121 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     }
 
     // ============================================================
+    // ⭐ حفظ بدون صرف
+    // ============================================================
+    public async Task<(bool Ok, string Msg, int? RunId)> SaveOnlyAsync(
+        string month,
+        List<PayrollCalculationDto> data,
+        string user)
+    {
+        var selected = data.Where(d => d.IsSelected && !d.HasExistingPayroll).ToList();
+        if (!selected.Any())
+            return (false, "لم يتم اختيار أي موظف", null);
+
+        using var tx = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            // 1. جلسة الصرف
+            var run = new PayrollRun
+            {
+                PayrollMonth = month,
+                Status       = "Draft",
+                CreatedBy    = user,
+                CreatedAt    = DateTime.Now
+            };
+            _db.PayrollRuns.Add(run);
+            await _db.SaveChangesAsync();
+
+            decimal sumGross = 0, sumDed = 0, sumNet = 0;
+            int count = 0;
+
+            foreach (var calc in selected)
+            {
+                if (calc.BasicSalary == 0) continue;
+
+                var bonusIn  = calc.TotalBonusInPayroll;
+                var totalDed = calc.TotalDeductions;
+                var netVal   = calc.BasicSalary + bonusIn - totalDed;
+
+                // 2. رأس الراتب
+                var payroll = new Payroll
+                {
+                    EmployeeId         = calc.EmployeeID,
+                    PayrollMonth       = month,
+                    BasicSalary        = calc.BasicSalary,
+                    BonusInPayroll     = bonusIn,
+                    Allowances         = bonusIn,
+                    Deductions         = totalDed,
+                    AbsenceDeduction   = calc.AbsenceDeduction,
+                    LateDeduction      = calc.LateDeduction,
+                    LoanDeduction      = calc.LoanDeduction,
+                    PenaltyDeduction   = calc.TotalPenalties,
+                    WorkingDaysInMonth = calc.WorkingDaysInMonth,
+                    PresentDays        = calc.PresentDays,
+                    AbsenceDays        = calc.AbsenceDays,
+                    LateMinutesTotal   = calc.LateMinutesTotal,
+                    IsManualAttendance = calc.IsManualAttendance,
+                    PaymentStatus      = "غير مدفوع",
+                    PayrollRunId       = run.RunId,
+                    CreatedBy          = user,
+                    CreatedAt          = DateTime.Now
+                };
+                _db.Payrolls.Add(payroll);
+                await _db.SaveChangesAsync();
+
+                // 3. البنود التفصيلية
+                var details = new List<PayrollDetail>();
+
+                if (calc.AbsenceDeduction > 0)
+                    details.Add(MakeDetail(payroll.PayrollId, "AbsenceDeduction",
+                        $"خصم غياب {calc.AbsenceDays} يوم",
+                        calc.AbsenceDeduction, true, user));
+
+                if (calc.LateDeduction > 0)
+                    details.Add(MakeDetail(payroll.PayrollId, "LateDeduction",
+                        $"خصم تأخير {calc.LateMinutesTotal} دقيقة",
+                        calc.LateDeduction, true, user));
+
+                foreach (var pen in calc.Penalties)
+                    details.Add(MakeDetail(payroll.PayrollId, "Penalty",
+                        pen.Description, pen.Amount, true, user));
+
+                foreach (var bon in calc.BonusItems.Where(b => b.PaymentType == "InPayroll"))
+                    details.Add(MakeDetail(payroll.PayrollId, bon.DetailType,
+                        bon.Description, bon.Amount, false, user, paymentType: "InPayroll"));
+
+                if (details.Any())
+                {
+                    _db.PayrollDetails.AddRange(details);
+                    await _db.SaveChangesAsync();
+                }
+
+                sumGross += calc.GrossSalary;
+                sumDed   += totalDed;
+                sumNet   += netVal;
+                count++;
+            }
+
+            // 4. تحديث جلسة الصرف
+            run.Status          = "Draft";
+            run.TotalEmployees  = count;
+            run.TotalGross      = sumGross;
+            run.TotalDeductions = sumDed;
+            run.TotalNet        = sumNet;
+            await _db.SaveChangesAsync();
+
+            await tx.CommitAsync();
+            return (true, $"✅ تم حفظ بيانات {count} موظف بدون صرف", run.RunId);
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            var inner = ex.InnerException?.Message ?? "";
+            return (false, $"خطأ: {ex.Message} | {inner}", null);
+        }
+    }
+
+    // ============================================================
     // ⭐ معالجة وصرف المرتبات
     // ============================================================
     public async Task<(bool Ok, string Msg, int? RunId)> ProcessMonthAsync(
@@ -881,48 +996,41 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
         .Select(s => new { s.BiometricCode, s.OffDay1, s.OffDay2 })
         .FirstOrDefaultAsync();
 
-    if (shift?.BiometricCode == null) return (0, 0, 0, false);
+    // ✅ نحسب أيام العمل أولاً (حتى لو مفيش BiometricCode)
+    var workDays = await GetWorkingDaysAsync(employeeId, month);
 
-    // ── أيام الراحة ──────────────────────────────────────────
-    var offDays = new List<DayOfWeek>();
-    if (shift.OffDay1 != null) offDays.Add((DayOfWeek)shift.OffDay1.Value);
-    if (shift.OffDay2 != null) offDays.Add((DayOfWeek)shift.OffDay2.Value);
-    if (!offDays.Any())
-        offDays = new List<DayOfWeek> { DayOfWeek.Friday, DayOfWeek.Saturday };
-
-    // ── الإجازات الرسمية ─────────────────────────────────────
-    var holidays = await _db.Calendars.AsNoTracking()
-        .Where(c => c.CalendarDate >= monthStart
-                 && c.CalendarDate < monthEnd
-                 && c.IsHoliday == true)
-        .Select(c => c.CalendarDate.Date)
-        .ToListAsync();
-
-    // ── أيام العمل الفعلية ───────────────────────────────────
-    int workDays = 0;
-    int totalDays = DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
-    for (int i = 1; i <= totalDays; i++)
+    // ✅ جيب كود البصمة: من الشيفت أولاً، ومن Employee.BioEmployeeId كبديل
+    int? bioCode = shift?.BiometricCode;
+    if (bioCode == null)
     {
-        var day = new DateTime(monthStart.Year, monthStart.Month, i);
-        if (!offDays.Contains(day.DayOfWeek) && !holidays.Contains(day.Date))
-            workDays++;
+        bioCode = await _db.Employees.AsNoTracking()
+            .Where(e => e.EmployeeId == employeeId)
+            .Select(e => e.BioEmployeeId)
+            .FirstOrDefaultAsync();
     }
 
+    // ✅ لو مفيش كود بصمة خالص → نرجع workDays صحيحة مع presentDays = 0
+    if (bioCode == null)
+        return (workDays, 0, 0, false);
+
     // ── الحضور الفعلي من Attendance ──────────────────────────
-    // نجيب فقط أيام الشغل (مش أيام الراحة والإجازات)
     var attRecords = await _db.Attendances.AsNoTracking()
-        .Where(a => a.BiometricCode == shift.BiometricCode.Value
+        .Where(a => a.BiometricCode == bioCode.Value
                  && a.LogDate >= monthStart
                  && a.LogDate < monthEnd
                  && a.TimeIn != null)
         .Select(a => new { a.LogDate, a.LateMinutes })
         .ToListAsync();
 
-    // شيل أيام الراحة والإجازات من الحضور
-    var validAtt = attRecords
-        .Where(a => !offDays.Contains(a.LogDate.DayOfWeek)
-                 && !holidays.Contains(a.LogDate.Date))
-        .ToList();
+    // ── أيام الراحة (فقط لو مسجلة في الشيفت) ────────────────
+    var offDays = new List<DayOfWeek>();
+    if (shift?.OffDay1 != null) offDays.Add((DayOfWeek)shift.OffDay1.Value);
+    if (shift?.OffDay2 != null) offDays.Add((DayOfWeek)shift.OffDay2.Value);
+
+    // شيل أيام الراحة من الحضور (فقط لو مسجلة)
+    var validAtt = offDays.Any()
+        ? attRecords.Where(a => !offDays.Contains(a.LogDate.DayOfWeek)).ToList()
+        : attRecords.ToList();
 
     int presentDays = validAtt.Count;
     int lateMinutes = validAtt.Sum(a => a.LateMinutes ?? 0);
@@ -965,22 +1073,10 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
         .Select(s => new { s.OffDay1, s.OffDay2 })
         .FirstOrDefaultAsync();
 
-    // أيام الراحة الخاصة بالموظف
+    // أيام الراحة الخاصة بالموظف (فقط لو مسجلة في الشيفت)
     var offDays = new List<DayOfWeek>();
     if (shift?.OffDay1 != null) offDays.Add((DayOfWeek)shift.OffDay1.Value);
     if (shift?.OffDay2 != null) offDays.Add((DayOfWeek)shift.OffDay2.Value);
-
-    // لو مفيش شيفت محدد → افتراضي جمعة وسبت
-    if (!offDays.Any())
-        offDays = new List<DayOfWeek> { DayOfWeek.Friday, DayOfWeek.Saturday };
-
-    // ── جيب الإجازات الرسمية من Calendar ─────────────────────
-    var holidays = await _db.Calendars.AsNoTracking()
-        .Where(c => c.CalendarDate >= monthStart
-                 && c.CalendarDate < monthEnd
-                 && c.IsHoliday == true)
-        .Select(c => c.CalendarDate.Date)
-        .ToListAsync();
 
     // ── احسب أيام العمل الفعلية ──────────────────────────────
     int count = 0;
@@ -988,7 +1084,7 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     for (int i = 1; i <= totalDays; i++)
     {
         var day = new DateTime(monthStart.Year, monthStart.Month, i);
-        if (!offDays.Contains(day.DayOfWeek) && !holidays.Contains(day.Date))
+        if (!offDays.Any() || !offDays.Contains(day.DayOfWeek))
             count++;
     }
     return count;
@@ -1011,88 +1107,4 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
 
         return box.OpeningBalance + inflow - outflow;
     }
-    public async Task<(bool Ok, string Msg, int? RunId)> SaveOnlyAsync(
-    string month, List<PayrollCalculationDto> data, string user)
-{
-    var selected = data.Where(d => d.IsSelected && !d.HasExistingPayroll).ToList();
-    if (!selected.Any())
-        return (false, "لم يتم اختيار أي موظف", null);
-
-    using var tx = await _db.Database.BeginTransactionAsync();
-    try
-    {
-        var run = new PayrollRun
-        {
-            PayrollMonth = month, Status = "Draft",
-            CashBoxId = null, CreatedBy = user, CreatedAt = DateTime.Now
-        };
-        _db.PayrollRuns.Add(run);
-        await _db.SaveChangesAsync();
-
-        int count = 0;
-
-        foreach (var calc in selected)
-        {
-            if (calc.BasicSalary == 0) continue;
-
-            var bonusIn  = calc.TotalBonusInPayroll;
-            var totalDed = calc.TotalDeductions;
-
-            var payroll = new Payroll
-            {
-                EmployeeId = calc.EmployeeID, PayrollMonth = month,
-                BasicSalary = calc.BasicSalary, BonusInPayroll = bonusIn,
-                Allowances = bonusIn, Deductions = totalDed,
-                AbsenceDeduction = calc.AbsenceDeduction,
-                LateDeduction = calc.LateDeduction,
-                LoanDeduction = calc.LoanDeduction,
-                PenaltyDeduction = calc.TotalPenalties,
-                WorkingDaysInMonth = calc.WorkingDaysInMonth,
-                PresentDays = calc.PresentDays, AbsenceDays = calc.AbsenceDays,
-                LateMinutesTotal = calc.LateMinutesTotal,
-                IsManualAttendance = calc.IsManualAttendance,
-                PaymentStatus = "غير مدفوع", PayrollRunId = run.RunId,
-                CreatedBy = user, CreatedAt = DateTime.Now
-            };
-            _db.Payrolls.Add(payroll);
-            await _db.SaveChangesAsync();
-
-            // ✅ حفظ PayrollDetails
-            var details = new List<PayrollDetail>();
-            if (calc.AbsenceDeduction > 0)
-                details.Add(MakeDetail(payroll.PayrollId, "AbsenceDeduction",
-                    $"خصم غياب {calc.AbsenceDays} يوم", calc.AbsenceDeduction, true, user));
-            if (calc.LateDeduction > 0)
-                details.Add(MakeDetail(payroll.PayrollId, "LateDeduction",
-                    $"خصم تأخير {calc.LateMinutesTotal} دقيقة", calc.LateDeduction, true, user));
-            foreach (var pen in calc.Penalties)
-                details.Add(MakeDetail(payroll.PayrollId, "Penalty",
-                    pen.Description, pen.Amount, true, user));
-            foreach (var bon in calc.BonusItems.Where(b => b.PaymentType == "InPayroll"))
-                details.Add(MakeDetail(payroll.PayrollId, bon.DetailType,
-                    bon.Description, bon.Amount, false, user, paymentType: "InPayroll"));
-
-            if (details.Any())
-            {
-                _db.PayrollDetails.AddRange(details);
-                await _db.SaveChangesAsync();
-            }
-
-            count++;
-        }
-
-        run.TotalEmployees = count;
-        run.ProcessedBy = user;
-        run.ProcessedAt = DateTime.Now;
-        await _db.SaveChangesAsync();
-
-        await tx.CommitAsync();
-        return (true, $"✅ تم حفظ {count} راتب بدون صرف", run.RunId);
-    }
-    catch (Exception ex)
-    {
-        await tx.RollbackAsync();
-        return (false, $"خطأ: {ex.Message}", null);
-    }
-}
 }
