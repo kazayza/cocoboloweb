@@ -68,11 +68,17 @@ else
                                StartIcon="@Icons.Material.Filled.ArrowBack">رجوع</MudButton>
                     <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="OpenPrintPage"
                                StartIcon="@Icons.Material.Filled.Print" Class="print-btn">طباعة</MudButton>
-                    @if (inv.InvoiceStatus != InvoiceStatuses.Cancelled)
+                    @if (inv.InvoiceStatus != InvoiceStatuses.Cancelled && inv.EditStatus != InvoiceEditStatuses.Pending && inv.EditStatus != InvoiceEditStatuses.Approved)
                     {
                         <MudButton Variant="Variant.Outlined" Color="Color.Warning"
                                    StartIcon="@Icons.Material.Filled.EditNote"
                                    OnClick="OpenEditRequestDialog">طلب تعديل</MudButton>
+                    }
+                    @if ((inv.EditStatus == InvoiceEditStatuses.Approved || (_canApproveEdit && inv.EditStatus != InvoiceEditStatuses.Pending)) && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                                   StartIcon="@Icons.Material.Filled.Edit"
+                                   OnClick="GoToEditInvoice">تعديل الفاتورة</MudButton>
                     }
                     @if (_canEdit && inv.InvoiceStatus != InvoiceStatuses.Cancelled && remaining > 0)
                     {
@@ -142,6 +148,69 @@ else
                       Variant="Variant.Filled" Dense="true">
                 ⚠️ هذه الفاتورة متأخرة عن الاستحقاق بـ <strong>@overdueDays يوم</strong>
                 — المتبقي: <strong>@FormatMoney(remaining) ج</strong>
+            </MudAlert>
+        }
+
+        @if (inv.InvoiceStatus == InvoiceStatuses.Cancelled)
+        {
+            <MudAlert Severity="Severity.Error" Class="mb-3" Icon="@Icons.Material.Filled.Cancel"
+                      Variant="Variant.Filled" Dense="true">
+                🚫 هذه الفاتورة ملغية. @(string.IsNullOrWhiteSpace(inv.EditReason) ? "" : $"سبب الإلغاء: {inv.EditReason}") @(string.IsNullOrWhiteSpace(inv.EditBy) ? "" : $"— ألغيت بواسطة: {inv.EditBy}") @(inv.EditAt.HasValue ? $"بتاريخ {inv.EditAt.Value:yyyy/MM/dd hh:mm tt}" : "")
+            </MudAlert>
+        }
+
+        @if (inv.EditStatus == InvoiceEditStatuses.Pending && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
+        {
+            <MudPaper Class="pa-4 mb-3" Style="border: 2px solid var(--mud-palette-warning); background: rgba(245, 158, 11, 0.12); border-radius: 12px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <MudIcon Icon="@Icons.Material.Filled.PendingActions" Color="Color.Warning" Size="Size.Large" />
+                        <div>
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 700; color: var(--mud-palette-warning);">
+                                ⏳ طلب تعديل معلق بانتظار موافقة الإدارة
+                            </MudText>
+                            <MudText Typo="Typo.body2">
+                                مقدم من: <strong>@(inv.EditBy ?? "غير محدد")</strong> بتاريخ <strong>@(inv.EditRequestDate?.ToString("yyyy/MM/dd hh:mm tt") ?? "-")</strong>
+                            </MudText>
+                            <MudText Typo="Typo.body2" Class="mt-1">
+                                السبب: <em>@(string.IsNullOrWhiteSpace(inv.EditReason) ? "غير محدد" : inv.EditReason)</em>
+                            </MudText>
+                        </div>
+                    </div>
+                    @if (_canApproveEdit)
+                    {
+                        <div style="display: flex; gap: 0.5rem;">
+                            <MudButton Variant="Variant.Filled" Color="Color.Success"
+                                       StartIcon="@Icons.Material.Filled.CheckCircle"
+                                       OnClick="@(() => ProcessEditRequest(true))" Disabled="@_isProcessingEdit">
+                                موافقة وفتح للتعديل
+                            </MudButton>
+                            <MudButton Variant="Variant.Filled" Color="Color.Error"
+                                       StartIcon="@Icons.Material.Filled.Cancel"
+                                       OnClick="@(() => ProcessEditRequest(false))" Disabled="@_isProcessingEdit">
+                                رفض الطلب
+                            </MudButton>
+                        </div>
+                    }
+                </div>
+            </MudPaper>
+        }
+        else if (inv.EditStatus == InvoiceEditStatuses.Approved && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
+        {
+            <MudAlert Severity="Severity.Success" Class="mb-3" Icon="@Icons.Material.Filled.LockOpen" Variant="Variant.Filled">
+                🔓 تمت الموافقة على فتح هذه الفاتورة للتعديل. @(inv.EditDone)
+            </MudAlert>
+        }
+        else if (inv.EditStatus == InvoiceEditStatuses.Rejected && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-3" Icon="@Icons.Material.Filled.Block" Variant="Variant.Outlined">
+                ❌ تم رفض طلب تعديل هذه الفاتورة. @(inv.EditDone)
+            </MudAlert>
+        }
+        else if (inv.EditStatus == InvoiceEditStatuses.Edited && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
+        {
+            <MudAlert Severity="Severity.Info" Class="mb-3" Icon="@Icons.Material.Filled.Edit" Variant="Variant.Outlined">
+                📝 تم تعديل هذه الفاتورة سابقاً. @(inv.EditDone)
             </MudAlert>
         }
 
@@ -686,10 +755,17 @@ else
     /* ============================================ */
     .details-grid {
         display: grid;
-        grid-template-columns: 1fr 350px;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 350px);
         gap: 1.5rem;
+        align-items: start;
     }
-    .main-col, .sidebar-col { display: flex; flex-direction: column; gap: 1rem; }
+    .main-col, .sidebar-col {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        min-width: 0;
+        max-width: 100%;
+    }
 
     /* ============================================ */
     /*  SECTIONS                                     */
@@ -699,6 +775,8 @@ else
         border: 1px solid var(--mud-palette-divider);
         border-radius: 14px;
         padding: 1.25rem;
+        overflow-x: auto;
+        max-width: 100%;
     }
 
     .section-title {
@@ -1007,8 +1085,8 @@ else
     /* ============================================ */
     /*  RESPONSIVE                                   */
     /* ============================================ */
-    @@media (max-width: 1100px) {
-        .details-grid { grid-template-columns: 1fr; }
+    @@media (max-width: 1250px) {
+        .details-grid { grid-template-columns: 1fr !important; }
         .summary-card { position: static; }
         .header-summary { flex-direction: column; }
         .summary-pill { min-width: auto; }
@@ -1028,6 +1106,8 @@ else
     private InvoiceDetailsDto? _details;
 
     private bool _canEdit;
+    private bool _canApproveEdit;
+    private bool _isProcessingEdit;
     private string? _currentUserName;
 
     private List<Models.CashBox> _cashBoxes = new();
@@ -1058,6 +1138,7 @@ else
             var user = auth.User;
             _currentUserName = user.Identity?.Name ?? "System";
             _canEdit = user.HasClaim("Permission", "frm_SalesInvoiveNew:Edit") || user.IsInRole("Admin");
+            _canApproveEdit = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
 
             _cashBoxes = await InvoiceService.GetCashBoxesAsync();
             await LoadInvoice();
@@ -1144,34 +1225,26 @@ else
 
         _isSendingEditRequest = true;
 
-        try
-        {
-            await AuditService.LogAsync("Transactions", "EditRequest",
-                Id.ToString(),
-                (string?)null,
-                (string?)$"فاتورة: {_details.Invoice.ReferenceNumber} - السبب: {_editRequestReason} - بواسطة: {_currentUserName}",
-                _currentUserName!);
+        var (ok, msg) = await InvoiceService.RequestInvoiceEditAsync(
+            Id, _editRequestReason!, _currentUserName!);
+        _isSendingEditRequest = false;
+        _showEditRequestDialog = false;
 
-            var title = "📝 طلب تعديل فاتورة";
-            var message = $"طلب تعديل الفاتورة {_details.Invoice.ReferenceNumber} " +
-                          $"بواسطة {_currentUserName} - السبب: {_editRequestReason}";
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadInvoice();
+    }
 
-            await NotifyService.NotifyRoleAsync(title, message, SystemRoles.AccountManager,
-                _currentUserName!, "sales/invoices", "Transactions", Id);
-            await NotifyService.NotifyRoleAsync(title, message, SystemRoles.Admin,
-                _currentUserName!, "sales/invoices", "Transactions", Id);
+    private void GoToEditInvoice() => Navigation.NavigateTo($"/sales/invoices/{Id}/edit");
 
-            _showEditRequestDialog = false;
-            Snackbar.Add("تم إرسال طلب التعديل بنجاح", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"حدث خطأ: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _isSendingEditRequest = false;
-        }
+    private async Task ProcessEditRequest(bool approve)
+    {
+        _isProcessingEdit = true;
+        var notes = approve ? "موافق" : "مرفوض";
+        var (ok, msg) = await InvoiceService.ProcessInvoiceEditRequestAsync(Id, approve, notes, _currentUserName!);
+        _isProcessingEdit = false;
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadInvoice();
     }
 
     // Helpers

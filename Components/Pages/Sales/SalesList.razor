@@ -12,6 +12,7 @@
 @inject AuthenticationStateProvider AuthProvider
 @inject IAuditService AuditService
 @inject NotificationService NotifyService
+@inject IJSRuntime JS
 
 @if (_isLoading)
 {
@@ -114,15 +115,19 @@ else
                         <span class="stat-label">فواتير اليوم</span>
                     </div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-icon-wrap stat-overdue">
-                        <MudIcon Icon="@Icons.Material.Filled.WarningAmber" />
+                <MudTooltip Text="اضغط للفلترة بالفواتير المتأخرة فقط" Placement="Placement.Bottom">
+                    <div class="stat-card @(_filter.IsOverdue == true ? "stat-card-active" : "")"
+                         @onclick="ToggleOverdueFilter"
+                         style="cursor: pointer; transition: all 0.2s;">
+                        <div class="stat-icon-wrap stat-overdue">
+                            <MudIcon Icon="@Icons.Material.Filled.WarningAmber" />
+                        </div>
+                        <div class="stat-body">
+                            <span class="stat-value">@_stats.OverdueCount</span>
+                            <span class="stat-label">متأخرة</span>
+                        </div>
                     </div>
-                    <div class="stat-body">
-                        <span class="stat-value">@_stats.OverdueCount</span>
-                        <span class="stat-label">متأخرة</span>
-                    </div>
-                </div>
+                </MudTooltip>
             </div>
         </div>
 
@@ -203,6 +208,14 @@ else
                     <MudSelectItem T="bool?" Value="@((bool?)true)">فيها متبقي</MudSelectItem>
                     <MudSelectItem T="bool?" Value="@((bool?)false)">مسددة بالكامل</MudSelectItem>
                 </MudSelect>
+
+                @if (_filter.IsOverdue == true)
+                {
+                    <MudChip T="string" Color="Color.Warning" Size="Size.Small"
+                             OnClose="@(async () => { _filter.IsOverdue = null; await OnFilterChanged(); })">
+                        ⚠️ فواتير متأخرة
+                    </MudChip>
+                }
 
                 <button class="reset-btn" @onclick="ResetFilters" title="إعادة تعيين">
                     <MudIcon Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" />
@@ -289,11 +302,25 @@ else
                         </span>
                     </MudTd>
                     <MudTd>
-                        <MudChip T="string"
-                                 Size="Size.Small"
-                                 Color="@GetStatusColor(context.InvoiceStatus)">
-                            @GetStatusText(context.InvoiceStatus)
-                        </MudChip>
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                            <MudChip T="string"
+                                     Size="Size.Small"
+                                     Color="@GetStatusColor(context.InvoiceStatus)">
+                                @GetStatusText(context.InvoiceStatus)
+                            </MudChip>
+                            @if (context.InvoiceStatus == InvoiceStatuses.Cancelled)
+                            {
+                                var reasonText = string.IsNullOrWhiteSpace(context.EditReason) ? "غير محدد" : context.EditReason;
+                                var byText = string.IsNullOrWhiteSpace(context.EditBy) ? "غير محدد" : context.EditBy;
+                                var dateText = context.EditAt.HasValue ? $" ({context.EditAt.Value:yyyy/MM/dd hh:mm tt})" : "";
+                                var infoTooltip = $"سبب الإلغاء: {reasonText} | ألغيت بواسطة: {byText}{dateText}";
+                                <MudTooltip Text="@infoTooltip" Placement="Placement.Top">
+                                    <span title="@infoTooltip" style="cursor: help; display: inline-flex; align-items: center;">
+                                        <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" Color="Color.Error" />
+                                    </span>
+                                </MudTooltip>
+                            }
+                        </div>
                     </MudTd>
                     <MudTd>
                         @if (context.IsDelivered == true)
@@ -337,6 +364,13 @@ else
                                                Size="Size.Small" Color="Color.Error"
                                                OnClick="() => ConfirmCancel(context)"
                                                Title="إلغاء الفاتورة" />
+                            }
+                            @if (_isAdmin && context.InvoiceStatus == InvoiceStatuses.Cancelled)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.DeleteForever"
+                                               Size="Size.Small" Color="Color.Error"
+                                               OnClick="() => ConfirmPermanentDelete(context)"
+                                               Title="مسح الفاتورة نهائياً من السيستيم" />
                             }
                         </div>
                     </MudTd>
@@ -392,6 +426,37 @@ else
                 <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
             }
             تأكيد الإلغاء
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- Permanent Delete Dialog -->
+<MudDialog @bind-Visible="_showPermanentDeleteDialog">
+    <TitleContent>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.DeleteForever" Color="Color.Error" />
+            <MudText Typo="Typo.h6">مسح الفاتورة نهائياً من السيستيم</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText>
+            هل أنت متأكد من رغبتك في مسح الفاتورة الملغية <strong>@(_selectedInvoice?.ReferenceNumber ?? "")</strong> نهائياً من السيستيم؟
+        </MudText>
+        <MudAlert Severity="Severity.Error" Class="mt-3" Variant="Variant.Filled">
+            تحذير: هذا الإجراء لا يمكن التراجع عنه! سيتم مسح الفاتورة وجميع الحركات والسجلات المرتبطة بها نهائياً من قاعدة البيانات.
+        </MudAlert>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showPermanentDeleteDialog = false)" Variant="Variant.Outlined">
+            تراجع
+        </MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="ExecutePermanentDelete"
+                   Disabled="@_isDeletingPermanently">
+            @if (_isDeletingPermanently)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            تأكيد المسح النهائي
         </MudButton>
     </DialogActions>
 </MudDialog>
@@ -602,6 +667,11 @@ else
         background: rgba(255,255,255,0.15);
         transform: translateY(-3px);
         box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+    }
+    .stat-card.stat-card-active {
+        border: 2px solid #fcd34d !important;
+        background: rgba(245, 158, 11, 0.25) !important;
+        box-shadow: 0 0 20px rgba(245, 158, 11, 0.4);
     }
 
     .stat-icon-wrap {
@@ -864,6 +934,9 @@ else
     private bool _showEditRequestDialog;
     private bool _isSendingEditRequest;
     private string? _editRequestReason;
+    private bool _isAdmin = false;
+    private bool _showPermanentDeleteDialog = false;
+    private bool _isDeletingPermanently = false;
 
     private InvoiceFilterDto _filter = new() { TransactionType = TransactionTypes.Sale };
     private PagedResult<InvoiceListDto> _pagedResult = new();
@@ -898,6 +971,7 @@ else
             _canAdd = user.HasClaim("Permission", "frm_PartiesInvoices:Add") || user.IsInRole("Admin");
             _canEdit = user.HasClaim("Permission", "frm_PartiesInvoices:Edit") || user.IsInRole("Admin");
             _canDelete = user.HasClaim("Permission", "frm_PartiesInvoices:Delete") || user.IsInRole("Admin");
+            _isAdmin = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.HasClaim("Permission", "Admin") || user.HasClaim(ClaimTypes.Role, "Admin");
 
             _canViewPurchases = user.IsInRole("Admin") || user.IsInRole("AccountManager") || user.IsInRole("Account");
             _canSeeAmounts = user.IsInRole("Admin") || user.IsInRole("AccountManager") || user.IsInRole("Account");
@@ -908,6 +982,7 @@ else
                 return;
             }
 
+            await RestoreFilterStateAsync();
             _cashBoxes = await InvoiceService.GetCashBoxesAsync();
             await LoadData();
             await LoadStats();
@@ -933,12 +1008,14 @@ else
     private async Task OnSearchChanged()
     {
         _filter.PageNumber = 1;
+        await SaveFilterStateAsync();
         await LoadData();
     }
 
     private async Task OnFilterChanged()
     {
         _filter.PageNumber = 1;
+        await SaveFilterStateAsync();
         await LoadData();
         await LoadStats();
     }
@@ -960,6 +1037,7 @@ else
     private async Task OnPageChanged(int page)
     {
         _filter.PageNumber = page;
+        await SaveFilterStateAsync();
         await LoadData();
     }
 
@@ -968,6 +1046,7 @@ else
         _filter = new() { TransactionType = _activeTab };
         _dateFrom = null;
         _dateTo = null;
+        await SaveFilterStateAsync();
         await LoadData();
         await LoadStats();
     }
@@ -977,6 +1056,7 @@ else
         _activeTab = tab;
         _filter.TransactionType = tab;
         _filter.PageNumber = 1;
+        await SaveFilterStateAsync();
         await LoadData();
         await LoadStats();
     }
@@ -1122,4 +1202,87 @@ else
 
     private bool IsOverdue(InvoiceListDto inv) =>
         inv.DueDate.HasValue && inv.DueDate.Value < DateTime.Today && inv.Remaining > 0;
+
+    private async Task ToggleOverdueFilter()
+    {
+        if (_filter.IsOverdue == true)
+        {
+            _filter.IsOverdue = null;
+        }
+        else
+        {
+            _filter.IsOverdue = true;
+            _filter.HasRemaining = null;
+            _filter.InvoiceStatus = null;
+        }
+        _filter.PageNumber = 1;
+        await SaveFilterStateAsync();
+        await LoadData();
+        await LoadStats();
+    }
+
+    private void ConfirmPermanentDelete(InvoiceListDto invoice)
+    {
+        _selectedInvoice = invoice;
+        _showPermanentDeleteDialog = true;
+    }
+
+    private async Task ExecutePermanentDelete()
+    {
+        if (_selectedInvoice == null) return;
+
+        _isDeletingPermanently = true;
+        var (ok, msg) = await InvoiceService.PermanentlyDeleteInvoiceAsync(
+            _selectedInvoice.TransactionId, _currentUserName!);
+        _isDeletingPermanently = false;
+        _showPermanentDeleteDialog = false;
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) { await LoadData(); await LoadStats(); }
+    }
+
+    public class SalesFilterSessionState
+    {
+        public InvoiceFilterDto Filter { get; set; } = new();
+        public string ActiveTab { get; set; } = "Sale";
+        public DateTime? DateFrom { get; set; }
+        public DateTime? DateTo { get; set; }
+    }
+
+    private async Task RestoreFilterStateAsync()
+    {
+        try
+        {
+            var json = await JS.InvokeAsync<string>("localStorage.getItem", "sales_invoices_list_filter_state");
+            if (!string.IsNullOrEmpty(json))
+            {
+                var saved = System.Text.Json.JsonSerializer.Deserialize<SalesFilterSessionState>(json);
+                if (saved != null && saved.Filter != null)
+                {
+                    _filter = saved.Filter;
+                    _activeTab = saved.ActiveTab ?? "Sale";
+                    _dateFrom = saved.DateFrom;
+                    _dateTo = saved.DateTo;
+                }
+            }
+        }
+        catch { /* ignore JS errors during prerendering */ }
+    }
+
+    private async Task SaveFilterStateAsync()
+    {
+        try
+        {
+            var state = new SalesFilterSessionState
+            {
+                Filter = _filter,
+                ActiveTab = _activeTab,
+                DateFrom = _dateFrom,
+                DateTo = _dateTo
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(state);
+            await JS.InvokeVoidAsync("localStorage.setItem", "sales_invoices_list_filter_state", json);
+        }
+        catch { /* ignore */ }
+    }
 }

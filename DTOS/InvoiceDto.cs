@@ -30,6 +30,12 @@ public class InvoiceListDto
     public int ItemsCount { get; set; }
     public string CreatedBy { get; set; } = "";
     public DateTime CreatedAt { get; set; }
+    public string? EditReason { get; set; }
+    public string? EditBy { get; set; }
+    public DateTime? EditAt { get; set; }
+    public int? EditStatus { get; set; }
+    public DateTime? EditRequestDate { get; set; }
+    public string? EditDone { get; set; }
 }
 
 // ============================
@@ -65,6 +71,12 @@ public class InvoiceFormDto
     public bool? IsDelivered { get; set; } = false;
     public string? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
+    public string? EditReason { get; set; }
+    public string? EditBy { get; set; }
+    public DateTime? EditAt { get; set; }
+    public int? EditStatus { get; set; }
+    public DateTime? EditRequestDate { get; set; }
+    public string? EditDone { get; set; }
 
     public List<InvoiceItemDto> Items { get; set; } = new();
     public List<InvoiceChargeDto> Charges { get; set; } = new();
@@ -164,6 +176,7 @@ public class InvoiceFilterDto
     public string? PaymentMethod { get; set; }
     public bool? IsDelivered { get; set; }
     public bool? HasRemaining { get; set; }
+    public bool? IsOverdue { get; set; }
     public string TransactionType { get; set; } = "Sale";
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 25;
@@ -256,6 +269,15 @@ public static class InvoiceStatuses
         { Paid, "مدفوعة بالكامل" },
         { Cancelled, "ملغية" }
     };
+}
+
+public static class InvoiceEditStatuses
+{
+    public const int None = 0;
+    public const int Pending = 1;
+    public const int Approved = 2;
+    public const int Rejected = 3;
+    public const int Edited = 4;
 }
 
 public static class TransactionTypes

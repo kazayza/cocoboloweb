@@ -86,6 +86,12 @@ public class InvoiceService : IInvoiceService
                 query = query.Where(t => t.GrandTotal <= t.PaidAmount);
         }
 
+        if (filter.IsOverdue.HasValue && filter.IsOverdue.Value)
+        {
+            var todayDate = DateTime.Today;
+            query = query.Where(t => t.GrandTotal > t.PaidAmount && t.DueDate.HasValue && t.DueDate.Value < todayDate);
+        }
+
         var totalCount = await query.CountAsync();
 
         query = filter.SortBy switch
@@ -140,7 +146,13 @@ public class InvoiceService : IInvoiceService
                 DueDate = t.DueDate,
                 ItemsCount = _db.TransactionDetails.Count(d => d.TransactionId == t.TransactionId),
                 CreatedBy = t.CreatedBy,
-                CreatedAt = t.CreatedAt
+                CreatedAt = t.CreatedAt,
+                EditReason = t.EditReason,
+                EditBy = t.EditBy,
+                EditAt = t.EditAt,
+                EditStatus = t.EditStatus,
+                EditRequestDate = t.EditRequestDate,
+                EditDone = t.EditDone
             })
             .ToListAsync();
 
@@ -289,6 +301,12 @@ public class InvoiceService : IInvoiceService
             IsDelivered = t.IsDelivered,
             CreatedBy = t.CreatedBy,
             CreatedAt = t.CreatedAt,
+            EditReason = t.EditReason,
+            EditBy = t.EditBy,
+            EditAt = t.EditAt,
+            EditStatus = t.EditStatus,
+            EditRequestDate = t.EditRequestDate,
+            EditDone = t.EditDone,
             Items = items,
             Charges = charges,
             MirrorPurchaseTransactionId = mirrorId,
@@ -695,6 +713,11 @@ public class InvoiceService : IInvoiceService
     transaction.PaymentMethod = dto.PaymentMethod;
     transaction.EditBy = currentUserName;
     transaction.EditAt = DateTime.Now;
+    if (transaction.EditStatus == InvoiceEditStatuses.Approved || transaction.EditStatus == InvoiceEditStatuses.Pending)
+    {
+        transaction.EditStatus = InvoiceEditStatuses.Edited;
+        transaction.EditDone = $"تم التعديل بواسطة {currentUserName} بتاريخ {DateTime.Now:yyyy/MM/dd HH:mm}";
+    }
 
     await _db.SaveChangesAsync();
 
@@ -719,6 +742,68 @@ public class InvoiceService : IInvoiceService
 
     return (true, "تم تحديث الفاتورة.");
 }
+
+    // ============================================================
+    //  طلب تعديل الفاتورة وإدارته (Workflow)
+    // ============================================================
+    public async Task<(bool Success, string Message)> RequestInvoiceEditAsync(
+        int transactionId, string reason, string currentUserName)
+    {
+        var transaction = await _db.Transactions
+            .FirstOrDefaultAsync(t => t.TransactionId == transactionId);
+        if (transaction == null) return (false, "الفاتورة غير موجودة.");
+        if (transaction.InvoiceStatus == InvoiceStatuses.Cancelled)
+            return (false, "لا يمكن طلب تعديل لفاتورة ملغية.");
+
+        transaction.EditStatus = InvoiceEditStatuses.Pending;
+        transaction.EditReason = reason;
+        transaction.EditBy = currentUserName;
+        transaction.EditRequestDate = DateTime.Now;
+
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync("Transactions", "EditRequest",
+            transactionId.ToString(), null, new { Reason = reason, RequestedBy = currentUserName }, currentUserName);
+
+        await SendInvoiceNotificationsAsync(transaction, currentUserName,
+            $"طلب تعديل فاتورة - السبب: {reason}");
+
+        return (true, "تم إرسال طلب التعديل وتسجيله في النظام بنجاح.");
+    }
+
+    public async Task<(bool Success, string Message)> ProcessInvoiceEditRequestAsync(
+        int transactionId, bool approve, string? notes, string currentUserName)
+    {
+        var transaction = await _db.Transactions
+            .FirstOrDefaultAsync(t => t.TransactionId == transactionId);
+        if (transaction == null) return (false, "الفاتورة غير موجودة.");
+
+        if (approve)
+        {
+            transaction.EditStatus = InvoiceEditStatuses.Approved;
+            transaction.EditDone = $"تمت الموافقة بواسطة {currentUserName}" + (string.IsNullOrWhiteSpace(notes) ? "" : $" ({notes})");
+
+            await _audit.LogAsync("Transactions", "EditApprove",
+                transactionId.ToString(), null, new { ApprovedBy = currentUserName, Notes = notes }, currentUserName);
+
+            await SendInvoiceNotificationsAsync(transaction, currentUserName,
+                $"تمت الموافقة على طلب تعديل الفاتورة رقم {transaction.ReferenceNumber}");
+        }
+        else
+        {
+            transaction.EditStatus = InvoiceEditStatuses.Rejected;
+            transaction.EditDone = $"تم الرفض بواسطة {currentUserName}" + (string.IsNullOrWhiteSpace(notes) ? "" : $" - السبب: {notes}");
+
+            await _audit.LogAsync("Transactions", "EditReject",
+                transactionId.ToString(), null, new { RejectedBy = currentUserName, Reason = notes }, currentUserName);
+
+            await SendInvoiceNotificationsAsync(transaction, currentUserName,
+                $"تم رفض طلب تعديل الفاتورة رقم {transaction.ReferenceNumber} - السبب: {notes}");
+        }
+
+        await _db.SaveChangesAsync();
+        return (true, approve ? "تمت الموافقة على فتح الفاتورة للتعديل." : "تم رفض طلب التعديل.");
+    }
 
     // ============================================================
     //  إلغاء فاتورة
@@ -820,6 +905,89 @@ public class InvoiceService : IInvoiceService
             await tx.RollbackAsync();
             return (false, $"حدث خطأ: {ex.Message}");
         }
+    }
+
+    // ============================================================
+    //  مسح الفاتورة الملغية نهائياً من النظام (لصلاحية الأدمن)
+    // ============================================================
+    public async Task<(bool Success, string Message)> PermanentlyDeleteInvoiceAsync(
+        int transactionId, string currentUserName)
+    {
+        var transaction = await _db.Transactions
+            .FirstOrDefaultAsync(t => t.TransactionId == transactionId);
+        if (transaction == null) return (false, "الفاتورة غير موجودة.");
+        if (transaction.InvoiceStatus != InvoiceStatuses.Cancelled && transaction.InvoiceStatus != "ملغية")
+            return (false, "لا يمكن مسح فاتورة غير ملغية نهائياً من السيستيم.");
+
+        using var tx = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            // إذا كانت هناك فاتورة مرآة (شراء/بيع) نحذفها هي وسجلاتها أولاً
+            var mirrorTag = "MirrorOf:" + transactionId;
+            var mirrors = await _db.Transactions.Where(t => t.ReferenceType == mirrorTag).ToListAsync();
+            foreach (var mirror in mirrors)
+            {
+                await CleanTransactionDependenciesAsync(mirror.TransactionId);
+                _db.Transactions.Remove(mirror);
+            }
+
+            await CleanTransactionDependenciesAsync(transactionId);
+            _db.Transactions.Remove(transaction);
+
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            await _audit.LogAsync("Transactions", "PermanentDelete",
+                transactionId.ToString(), transaction, null, currentUserName);
+
+            return (true, "تم مسح الفاتورة الملغية وسجلاتها نهائياً من السيستيم.");
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return (false, $"حدث خطأ أثناء المسح النهائي: {ex.Message}");
+        }
+    }
+
+    private async Task CleanTransactionDependenciesAsync(int id)
+    {
+        var opps = await _db.SalesOpportunities.Where(o => o.TransactionId == id).ToListAsync();
+        foreach (var o in opps) o.TransactionId = null;
+
+        var charges = await _db.AdditionalCharges.Where(c => c.TransactionId == id || c.AppliedToTransactionId == id).ToListAsync();
+        foreach (var c in charges)
+        {
+            if (c.TransactionId == id) _db.AdditionalCharges.Remove(c);
+            if (c.AppliedToTransactionId == id) c.AppliedToTransactionId = null;
+        }
+
+        var complaints = await _db.Complaints.Where(c => c.TransactionId == id).ToListAsync();
+        foreach (var comp in complaints) comp.TransactionId = null;
+
+        var tempPrints = await _db.TempInvoicePrintDetails.Where(t => t.TransactionId == id).ToListAsync();
+        _db.TempInvoicePrintDetails.RemoveRange(tempPrints);
+
+        var stockTrans = await _db.StockTransactions
+            .Where(st => st.ReferenceId == id &&
+                (st.ReferenceType == "SaleInvoice" || st.ReferenceType == "SaleInvoiceCancel" ||
+                 st.ReferenceType == "PurchaseInvoice" || st.ReferenceType == "PurchaseInvoiceCancel" ||
+                 st.ReferenceType == "SaleInvoiceEdit"))
+            .ToListAsync();
+        _db.StockTransactions.RemoveRange(stockTrans);
+
+        var commissions = await _db.CommissionAssignments.Where(c => c.TransactionId == id).ToListAsync();
+        _db.CommissionAssignments.RemoveRange(commissions);
+
+        var payments = await _db.Payments.Where(p => p.TransactionId == id).ToListAsync();
+        foreach (var p in payments)
+        {
+            var cashboxTrans = await _db.CashboxTransactions.Where(ct => ct.PaymentId == p.PaymentId).ToListAsync();
+            _db.CashboxTransactions.RemoveRange(cashboxTrans);
+        }
+        _db.Payments.RemoveRange(payments);
+
+        var details = await _db.TransactionDetails.Where(d => d.TransactionId == id).ToListAsync();
+        _db.TransactionDetails.RemoveRange(details);
     }
 
     // ============================================================

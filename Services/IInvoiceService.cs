@@ -19,8 +19,17 @@ public interface IInvoiceService
     Task<(bool Success, string Message)> UpdateInvoiceAsync(
         InvoiceFormDto dto, string currentUserName);
 
+    Task<(bool Success, string Message)> RequestInvoiceEditAsync(
+        int transactionId, string reason, string currentUserName);
+
+    Task<(bool Success, string Message)> ProcessInvoiceEditRequestAsync(
+        int transactionId, bool approve, string? notes, string currentUserName);
+
     Task<(bool Success, string Message)> CancelInvoiceAsync(
         int transactionId, string reason, string currentUserName);
+
+    Task<(bool Success, string Message)> PermanentlyDeleteInvoiceAsync(
+        int transactionId, string currentUserName);
 
     Task<(bool Success, string Message)> AddPaymentAsync(
         int transactionId, decimal amount, string method, int? cashBoxId,
