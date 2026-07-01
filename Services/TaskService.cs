@@ -32,7 +32,10 @@ public class TaskService : ITaskService
         if (!string.IsNullOrWhiteSpace(filter.Status))
             query = query.Where(t => t.Status == filter.Status);
         if (!string.IsNullOrWhiteSpace(filter.Priority))
-            query = query.Where(t => t.Priority == filter.Priority);
+        {
+            var dbPriority = filter.Priority == "Medium" ? "Normal" : filter.Priority;
+            query = query.Where(t => t.Priority == dbPriority);
+        }
         if (filter.IsOverdue == true)
             query = query.Where(t => t.DueDate < DateTime.Today && t.Status != "Completed");
         if (!string.IsNullOrWhiteSpace(filter.SearchText))
@@ -81,26 +84,35 @@ public class TaskService : ITaskService
                 (i.Lead.FullName != null && i.Lead.FullName.Contains(s)));
         }
 
-        var leadTasks = await leadQuery
-            .Select(i => new TaskListDto
-            {
-                TaskId = i.LeadInteractionId + 1000000, // لتجنب التعارض مع TaskId
-                LeadId = i.LeadId,
-                IsLeadTask = true,
-                ClientName = i.Lead.FullName,
-                Phone = i.Lead.Phone,
-                CampaignName = i.Lead.CampaignName,
-                Platform = i.Lead.Platform,
-                AssignedTo = i.Lead.AssignedEmployeeId ?? i.EmployeeId ?? 0,
-                AssignedToName = i.Lead.AssignedEmployeeId.HasValue ? _db.Employees.Where(e => e.EmployeeId == i.Lead.AssignedEmployeeId).Select(e => e.FullName).FirstOrDefault() : (i.Employee != null ? i.Employee.FullName : "غير محدد"),
-                TaskDescription = "متابعة Lead: " + (i.Summary ?? "تواصل مستحق"),
-                DueDate = i.NextFollowUpDate!.Value,
-                Priority = "Normal",
-                Status = "Pending",
-                IsActive = true,
-                CreatedBy = i.CreatedBy,
-                CreatedAt = i.CreatedAt
-            }).ToListAsync();
+        var rawLeads = await leadQuery.ToListAsync();
+
+        // جلب أسماء الموظفين للـ Leads في الذاكرة لتجنب أي مشكلة في ترجمة EF Core
+        var empIds = rawLeads.Where(r => r.Lead?.AssignedEmployeeId != null).Select(r => r.Lead!.AssignedEmployeeId!.Value).Distinct().ToList();
+        var empNames = new Dictionary<int, string>();
+        if (empIds.Count > 0)
+        {
+            empNames = await _db.Employees.AsNoTracking().Where(e => empIds.Contains(e.EmployeeId)).ToDictionaryAsync(e => e.EmployeeId, e => e.FullName);
+        }
+
+        var leadTasks = rawLeads.Select(i => new TaskListDto
+        {
+            TaskId = i.LeadInteractionId + 1000000,
+            LeadId = i.LeadId,
+            IsLeadTask = true,
+            ClientName = i.Lead?.FullName ?? "غير محدد",
+            Phone = i.Lead?.Phone ?? "",
+            CampaignName = i.Lead?.CampaignName,
+            Platform = i.Lead?.Platform,
+            AssignedTo = i.Lead?.AssignedEmployeeId ?? i.EmployeeId ?? 0,
+            AssignedToName = i.Lead?.AssignedEmployeeId != null && empNames.TryGetValue(i.Lead.AssignedEmployeeId.Value, out var name) ? name : (i.Employee?.FullName ?? "غير محدد"),
+            TaskDescription = "متابعة Lead: " + (i.Summary ?? "تواصل مستحق"),
+            DueDate = i.NextFollowUpDate!.Value,
+            Priority = "Normal",
+            Status = "Pending",
+            IsActive = true,
+            CreatedBy = i.CreatedBy,
+            CreatedAt = i.CreatedAt
+        }).ToList();
 
         var allItems = items.Concat(leadTasks).ToList();
 
@@ -112,6 +124,7 @@ public class TaskService : ITaskService
         };
 
         var total = allItems.Count;
+        filter.PageSize = 50000; // إجبار الباك إند على إرجاع كافة المهام لتغذية إحصائيات الشيبس بشكل صحيح
         var pagedItems = allItems.Skip((filter.PageNumber - 1) * filter.PageSize).Take(filter.PageSize).ToList();
 
         return new PagedResult<TaskListDto> { Items = pagedItems, TotalCount = total, PageNumber = filter.PageNumber, PageSize = filter.PageSize };

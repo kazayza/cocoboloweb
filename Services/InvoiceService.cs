@@ -348,7 +348,7 @@ public class InvoiceService : IInvoiceService
     {
         var query = _db.Transactions
             .AsNoTracking()
-            .Where(t => t.TransactionType == transactionType);
+            .Where(t => t.TransactionType == transactionType && t.InvoiceStatus != "Cancelled");
 
         if (from.HasValue) query = query.Where(t => t.TransactionDate >= from.Value.Date);
         if (to.HasValue) query = query.Where(t => t.TransactionDate <= to.Value.Date.AddDays(1).AddTicks(-1));

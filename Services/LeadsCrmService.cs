@@ -329,10 +329,15 @@ public async Task<(bool Success, string Message)> AddLeadInteractionAsync(
         ? null
         : dto.NewLeadStatus.Trim();
 
+    var userEmpId = await _db.Users.AsNoTracking()
+        .Where(u => u.Username == userName && u.EmployeeId != null)
+        .Select(u => u.EmployeeId)
+        .FirstOrDefaultAsync();
+
     var interaction = new LeadInteraction
     {
         LeadId = dto.LeadId,
-        EmployeeId = dto.EmployeeId ?? lead.AssignedEmployeeId,
+        EmployeeId = dto.EmployeeId ?? lead.AssignedEmployeeId ?? userEmpId,
         InteractionType = interactionType,
         InteractionDate = now,
         Summary = dto.Summary?.Trim(),

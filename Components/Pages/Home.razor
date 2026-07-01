@@ -231,6 +231,29 @@ else
                         </div>
                     </div>
                 }
+                @if (_p.ViewComplaints)
+{
+    <div class="stat-card stat-complaints animate-card" style="--delay: 0.35s"
+         @onclick='() => Navigation.NavigateTo("/complaints/list")'>
+        <div class="stat-glow"></div>
+        <div class="stat-accent"></div>
+        <div class="stat-content">
+            <div class="stat-icon-box" style="background: rgba(239,68,68,0.15); color: #ef4444;">
+                <MudIcon Icon="@Icons.Material.Rounded.SupportAgent" />
+            </div>
+            <div class="stat-data">
+                <div class="stat-value-row">
+                    <span class='stat-value @GetStatClass(_kpi.ComplaintsThisMonth.ToString())'>@_kpi.ComplaintsThisMonth</span>
+                    @if (_kpi.ComplaintsActive > 0)
+                    {
+                        <span class="stat-percent warn" style="color: #ef4444;">@_kpi.ComplaintsActive مفتوحة</span>
+                    }
+                </div>
+                <div class="stat-label">شكاوى الشهر</div>
+            </div>
+        </div>
+    </div>
+}
 
                 @if (_p.ViewExpenses)
                 {
@@ -1590,6 +1613,7 @@ else
             _p = new Perms
             {
                 ViewSales      = user.HasClaim("Permission", "frm_PartiesInvoices:View") || user.IsInRole("Admin"),
+                ViewTasks      = user.HasClaim("Permission", "frmDailyTasks:View")       || user.IsInRole("Admin"), // ⭐ ربط الصلاحية ⭐
                 ViewQuotes     = user.HasClaim("Permission", "frmQuotationsList:View")   || user.IsInRole("Admin"),
                 ViewCustomers  = user.HasClaim("Permission", "frm_PartiesList:View")     || user.IsInRole("Admin"),
                 ViewCashBox    = user.HasClaim("Permission", "frmCashBoxDashboard:View") || user.IsInRole("Admin"),
@@ -1598,6 +1622,7 @@ else
                 ViewExpenses   = user.HasClaim("Permission", "frm_ExpensesList:View")    || user.IsInRole("Admin"),
                 ViewAttendance = user.HasClaim("Permission", "frm_empAttendance:View")   || user.IsInRole("Admin"),
                 ViewLeads      = user.HasClaim("Permission", "frm_LeadsCRM:View")        || user.IsInRole("Admin"),
+                ViewComplaints = user.HasClaim("Permission", "frm_Complaints_Main:View") || user.IsInRole("Admin"),
                 AddCustomer    = user.HasClaim("Permission", "frm_Parties:Add")          || user.IsInRole("Admin"),
                 AddProduct     = user.HasClaim("Permission", "frm_ProductList:Add")      || user.IsInRole("Admin"),
                 AddQuote       = user.HasClaim("Permission", "frmQuotationsList:Add")    || user.IsInRole("Admin"),
@@ -1652,7 +1677,8 @@ else
         var links = new List<QuickLink>();
         if (_p.ViewProducts)   links.Add(new("المنتجات",     "/products",           Icons.Material.Rounded.Inventory2,           "#667eea"));
         if (_p.ViewCustomers)  links.Add(new("العملاء",      "/customers",          Icons.Material.Rounded.Groups,               "#10b981"));
-        if (_p.ViewLeads) links.Add(new("Leads", "/crm/leads", Icons.Material.Rounded.ContactPhone, "#6366f1"));
+        if (_p.ViewLeads) links.Add(new("Leads",             "/crm/leads",           Icons.Material.Rounded.ContactPhone,        "#6366f1"));
+        if (_p.ViewTasks)     links.Add(new("مهامي وجدولي", "/crm/my-calendar", Icons.Material.Rounded.CalendarMonth, "#3b82f6"));
         if (_p.ViewQuotes)     links.Add(new("عروض الأسعار", "/quotations",         Icons.Material.Rounded.RequestQuote,         "#06b6d4"));
         if (_p.ViewSales)      links.Add(new("الفواتير",     "/sales/invoices",     Icons.Material.Rounded.Receipt,              "#f59e0b"));
         if (_p.ViewCashBox)    links.Add(new("الخزنة",       "/cashbox/dashboard",  Icons.Material.Rounded.AccountBalance,       "#d4af37"));
@@ -1677,28 +1703,29 @@ else
             _kpi.CustomersActive = await db.Parties.AsNoTracking().CountAsync(p => p.IsActive == true);
 
             if (_p.ViewSales)
-            {
-                _kpi.SalesThisMonth = await db.Transactions.AsNoTracking()
-                    .Where(t => t.TransactionType == "Sale" && t.TransactionDate >= thisMonthStart)
-                    .SumAsync(t => (decimal?)t.GrandTotal) ?? 0;
+{
+    // ⭐ تنظيف مبيعات الشهر الحالي من الفواتير الملغية ⭐
+    _kpi.SalesThisMonth = await db.Transactions.AsNoTracking()
+        .Where(t => t.TransactionType == "Sale" && t.TransactionDate >= thisMonthStart && t.InvoiceStatus != "Cancelled")
+        .SumAsync(t => (decimal?)t.GrandTotal) ?? 0;
 
-                var lastMonth = await db.Transactions.AsNoTracking()
-                    .Where(t => t.TransactionType == "Sale"
-                             && t.TransactionDate >= lastMonthStart
-                             && t.TransactionDate < thisMonthStart)
-                    .SumAsync(t => (decimal?)t.GrandTotal) ?? 0;
+    // ⭐ تنظيف مبيعات الشهر الماضي من الفواتير الملغية לחساب النمو بالشكل الصحيح ⭐
+    var lastMonth = await db.Transactions.AsNoTracking()
+        .Where(t => t.TransactionType == "Sale" && t.TransactionDate >= lastMonthStart && t.TransactionDate < thisMonthStart && t.InvoiceStatus != "Cancelled")
+        .SumAsync(t => (decimal?)t.GrandTotal) ?? 0;
 
-                _kpi.SalesGrowth = lastMonth > 0
-                    ? Math.Round((_kpi.SalesThisMonth - lastMonth) / lastMonth * 100, 1)
-                    : 0;
-            }
+    _kpi.SalesGrowth = lastMonth > 0 ? Math.Round((_kpi.SalesThisMonth - lastMonth) / lastMonth * 100, 1) : 0;
+}
 
-            if (_p.ViewQuotes)
-            {
-                _kpi.QuotesTotal   = await db.Quotations.AsNoTracking().CountAsync();
-                _kpi.QuotesPending = await db.Quotations.AsNoTracking()
-                    .CountAsync(q => (q.Status == "Draft" || q.Status == "Sent") && q.InvoiceId == null);
-            }
+if (_p.ViewQuotes)
+{
+    // ⭐ تحديث إجمالي عروض الأسعار ليكون خاصاً بالشهر الحالي فقط ⭐
+    _kpi.QuotesTotal = await db.Quotations.AsNoTracking()
+        .CountAsync(q => q.QuotationDate >= thisMonthStart);
+    
+    _kpi.QuotesPending = await db.Quotations.AsNoTracking()
+        .CountAsync(q => (q.Status == "Draft" || q.Status == "Sent") && q.InvoiceId == null);
+}
 
             if (_p.ViewCashBox)
             {
@@ -1712,6 +1739,13 @@ else
                 _kpi.ProductsPendingPrice = await db.Products.AsNoTracking()
                     .CountAsync(p => p.PricingStatusId == 2);
             }
+            if (_p.ViewComplaints)
+{
+    _kpi.ComplaintsThisMonth = await db.Complaints.AsNoTracking()
+        .CountAsync(c => c.ComplaintDate >= thisMonthStart);
+    _kpi.ComplaintsActive = await db.Complaints.AsNoTracking()
+        .CountAsync(c => c.Status == 1 || c.Status == 2); // 1=جديدة، 2=قيد العمل
+}
 
             if (_p.ViewEmployees)
             {
@@ -2086,8 +2120,10 @@ else
     {
         public bool ViewSales, ViewQuotes, ViewCustomers, ViewCashBox;
         public bool ViewProducts, ViewEmployees, ViewExpenses,ViewLeads, ViewAttendance;
+        public bool ViewTasks;
         public bool AddCustomer, AddProduct, AddQuote, AddInvoice;
         public bool AddCashBox, AddComplaint, AddInspection;
+        public bool ViewComplaints;
     }
 
     private class KpiData
@@ -2097,6 +2133,7 @@ else
         public int     CustomersTotal, CustomersActive;
         public int     ProductsTotal, ProductsPendingPrice;
         public int     EmployeesTotal;
+        public int ComplaintsThisMonth, ComplaintsActive;
     }
 
     private class RecentInvoice
