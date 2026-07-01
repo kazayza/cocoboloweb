@@ -76,6 +76,21 @@
                 </div>
             }
         </div>
+
+        @if (_notifications.Count >= _limit)
+        {
+            <div style="text-align: center; margin: 2rem 0 1rem;">
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.ExpandMore"
+                           OnClick="LoadMoreAsync" Disabled="@_isLoadingMore">
+                    @if (_isLoadingMore)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                    }
+                    عرض المزيد من الإشعارات السابقة
+                </MudButton>
+            </div>
+        }
     }
     else
     {
@@ -221,9 +236,12 @@
 @code {
     private List<Notification> _notifications = new();
     private bool _isLoading = true;
+    private bool _isLoadingMore = false;
+    private int _limit = 350;
     private string _filter = "all";
     private string? _currentUserName;
     private string? _currentUserRole;
+    private List<string> _userRoles = new();
 
     private IEnumerable<Notification> FilteredNotifications => _filter switch
     {
@@ -238,7 +256,12 @@
         {
             var auth = await AuthProvider.GetAuthenticationStateAsync();
             _currentUserName = auth.User.Identity?.Name;
-            _currentUserRole = auth.User.FindFirst(ClaimTypes.Role)?.Value;
+            _userRoles = auth.User.Claims
+                .Where(c => c.Type == ClaimTypes.Role || c.Type == "role" || c.Type.EndsWith("/role"))
+                .Select(c => c.Value)
+                .Distinct()
+                .ToList();
+            _currentUserRole = _userRoles.FirstOrDefault();
 
             await Load();
         }
@@ -251,7 +274,15 @@
     private async Task Load()
     {
         _notifications = await NotificationService.GetLatestAsync(
-            _currentUserName ?? "", _currentUserRole, 50);
+            _currentUserName ?? "", _userRoles, _limit);
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        _isLoadingMore = true;
+        _limit += 300;
+        await Load();
+        _isLoadingMore = false;
     }
 
     private void SetFilter(string f) => _filter = f;
@@ -264,22 +295,18 @@
             notif.IsRead = true;
         }
 
-        //if (!string.IsNullOrWhiteSpace(notif.FormName) && notif.RelatedId.HasValue)
-        //{
-          //  Navigation.NavigateTo($"/{notif.FormName}/{notif.RelatedId.Value}");
-        //}
         var url = GetNotificationUrl(notif);
-if (!string.IsNullOrWhiteSpace(url))
-{
-    Navigation.NavigateTo(url);
-}
+        if (!string.IsNullOrWhiteSpace(url))
+        {
+            Navigation.NavigateTo(url);
+        }
     }
 
     private async Task MarkAllAsRead()
     {
-        foreach (var n in _notifications.Where(n => !n.IsRead))
+        await NotificationService.MarkAllAsReadForUserAsync(_currentUserName ?? "", _userRoles);
+        foreach (var n in _notifications)
         {
-            await NotificationService.MarkAsReadAsync(n.NotificationId);
             n.IsRead = true;
         }
         Snackbar.Add("تم تعليم جميع الإشعارات كمقروءة", Severity.Success);

@@ -305,13 +305,28 @@ else
                         </div>
                         @if (!string.IsNullOrEmpty(inv.MirrorPurchaseReferenceNumber))
                         {
-                            <div class="info-card">
+                            var isLinkAllowed = _canViewPurchases || inv.TransactionType == TransactionTypes.Purchase;
+                            <div class="info-card @(isLinkAllowed && inv.MirrorPurchaseTransactionId.HasValue ? "clickable-card" : "")"
+                                 @onclick="@(() => { if (isLinkAllowed && inv.MirrorPurchaseTransactionId.HasValue) Navigation.NavigateTo($"/sales/invoices/{inv.MirrorPurchaseTransactionId.Value}"); })"
+                                 style="@(isLinkAllowed && inv.MirrorPurchaseTransactionId.HasValue ? "cursor: pointer; border: 1px solid var(--gold-subtle);" : "")">
                                 <div class="info-card-icon">
                                     <MudIcon Icon="@Icons.Material.Filled.Link" Size="Size.Small" />
                                 </div>
                                 <div>
-                                    <span>فاتورة الشراء المرتبطة</span>
-                                    <strong>@inv.MirrorPurchaseReferenceNumber</strong>
+                                    <span>@(inv.TransactionType == TransactionTypes.Purchase ? "فاتورة المبيعات المرتبطة" : "فاتورة الشراء المرآة")</span>
+                                    @if (isLinkAllowed && inv.MirrorPurchaseTransactionId.HasValue)
+                                    {
+                                        <MudTooltip Text="اضغط لفتح الفاتورة المرتبطة" Placement="Placement.Top">
+                                            <strong style="color: var(--mud-palette-primary); text-decoration: underline;">
+                                                @inv.MirrorPurchaseReferenceNumber
+                                                <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Class="ms-1" Style="vertical-align: middle; font-size: 0.85rem;" />
+                                            </strong>
+                                        </MudTooltip>
+                                    }
+                                    else
+                                    {
+                                        <strong>@inv.MirrorPurchaseReferenceNumber</strong>
+                                    }
                                 </div>
                             </div>
                         }
@@ -1107,6 +1122,7 @@ else
 
     private bool _canEdit;
     private bool _canApproveEdit;
+    private bool _canViewPurchases;
     private bool _isProcessingEdit;
     private string? _currentUserName;
 
@@ -1132,15 +1148,21 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _currentUserName = user.Identity?.Name ?? "System";
+        _canEdit = user.HasClaim("Permission", "frm_SalesInvoiveNew:Edit") || user.IsInRole("Admin");
+        _canApproveEdit = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
+        _canViewPurchases = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager) || user.IsInRole("Account") || user.IsInRole(SystemRoles.Account);
+
+        _cashBoxes = await InvoiceService.GetCashBoxesAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _isLoading = true;
         try
         {
-            var auth = await AuthProvider.GetAuthenticationStateAsync();
-            var user = auth.User;
-            _currentUserName = user.Identity?.Name ?? "System";
-            _canEdit = user.HasClaim("Permission", "frm_SalesInvoiveNew:Edit") || user.IsInRole("Admin");
-            _canApproveEdit = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
-
-            _cashBoxes = await InvoiceService.GetCashBoxesAsync();
             await LoadInvoice();
         }
         finally

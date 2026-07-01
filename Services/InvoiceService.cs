@@ -275,6 +275,21 @@ public class InvoiceService : IInvoiceService
                 mirrorRef = mirror.ReferenceNumber;
             }
         }
+        else if (t.TransactionType == TransactionTypes.Purchase && t.ReferenceType != null && t.ReferenceType.StartsWith("MirrorOf:"))
+        {
+            if (int.TryParse(t.ReferenceType.Substring("MirrorOf:".Length), out var saleId))
+            {
+                var saleInv = await _db.Transactions
+                    .Where(x => x.TransactionId == saleId)
+                    .Select(x => new { x.TransactionId, x.ReferenceNumber })
+                    .FirstOrDefaultAsync();
+                if (saleInv != null)
+                {
+                    mirrorId = saleInv.TransactionId;
+                    mirrorRef = saleInv.ReferenceNumber;
+                }
+            }
+        }
 
         return new InvoiceFormDto
         {
@@ -778,13 +793,17 @@ public class InvoiceService : IInvoiceService
             .FirstOrDefaultAsync(t => t.TransactionId == transactionId);
         if (transaction == null) return (false, "الفاتورة غير موجودة.");
 
+        var now = DateTime.Now;
+        transaction.EditAt = now;
+        transaction.EditBy = currentUserName;
+
         if (approve)
         {
             transaction.EditStatus = InvoiceEditStatuses.Approved;
-            transaction.EditDone = $"تمت الموافقة بواسطة {currentUserName}" + (string.IsNullOrWhiteSpace(notes) ? "" : $" ({notes})");
+            transaction.EditDone = $"تمت الموافقة بواسطة {currentUserName} بتاريخ {now:yyyy/MM/dd hh:mm tt}" + (string.IsNullOrWhiteSpace(notes) ? "" : $" ({notes})");
 
             await _audit.LogAsync("Transactions", "EditApprove",
-                transactionId.ToString(), null, new { ApprovedBy = currentUserName, Notes = notes }, currentUserName);
+                transactionId.ToString(), null, new { ApprovedBy = currentUserName, ApprovedAt = now, Notes = notes }, currentUserName);
 
             await SendInvoiceNotificationsAsync(transaction, currentUserName,
                 $"تمت الموافقة على طلب تعديل الفاتورة رقم {transaction.ReferenceNumber}");
@@ -792,10 +811,10 @@ public class InvoiceService : IInvoiceService
         else
         {
             transaction.EditStatus = InvoiceEditStatuses.Rejected;
-            transaction.EditDone = $"تم الرفض بواسطة {currentUserName}" + (string.IsNullOrWhiteSpace(notes) ? "" : $" - السبب: {notes}");
+            transaction.EditDone = $"تم الرفض بواسطة {currentUserName} بتاريخ {now:yyyy/MM/dd hh:mm tt}" + (string.IsNullOrWhiteSpace(notes) ? "" : $" - السبب: {notes}");
 
             await _audit.LogAsync("Transactions", "EditReject",
-                transactionId.ToString(), null, new { RejectedBy = currentUserName, Reason = notes }, currentUserName);
+                transactionId.ToString(), null, new { RejectedBy = currentUserName, RejectedAt = now, Reason = notes }, currentUserName);
 
             await SendInvoiceNotificationsAsync(transaction, currentUserName,
                 $"تم رفض طلب تعديل الفاتورة رقم {transaction.ReferenceNumber} - السبب: {notes}");
