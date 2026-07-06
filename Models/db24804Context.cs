@@ -2252,6 +2252,15 @@ modelBuilder.Entity<LeadInteraction>(entity =>
     entity.Property(e => e.NextFollowUpDate)
         .HasColumnType("datetime");
 
+    entity.Property(e => e.IsCompleted)
+        .HasDefaultValue(false);
+
+    entity.Property(e => e.CompletedByEmployeeId)
+        .HasColumnName("CompletedByEmployeeId");
+
+    entity.Property(e => e.CompletedDate)
+        .HasColumnType("datetime");
+
     entity.Property(e => e.IsSystemGenerated)
         .HasDefaultValue(false);
 

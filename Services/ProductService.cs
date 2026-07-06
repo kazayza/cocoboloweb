@@ -21,17 +21,18 @@ public class ProductService : IProductService
                     join c in _context.Parties.AsNoTracking()
                         on p.Customer equals c.PartyId into pc
                     from customer in pc.DefaultIfEmpty()
-                    select new ProductListDto
+                    select new
                     {
-                        ProductId = p.ProductId,
-                        ProductName = p.ProductName,
-                        ProductDescription = p.ProductDescription,
+                        p.ProductId,
+                        p.ProductName,
+                        p.ProductDescription,
                         CustomerName = customer != null ? customer.PartyName : null,
-                        PricingType = p.PricingType,
-                        PricingStatusId = p.PricingStatusId,
-                        SuggestedSalePrice = p.SuggestedSalePrice,
-                        SuggestedSalePriceElite = p.SuggestedSalePriceElite,
-                        PdfPath = p.PdfPath // ✅ إضافة مسار الـ PDF الجديد
+                        p.PricingType,
+                        p.PricingStatusId,
+                        p.SuggestedSalePrice,
+                        p.SuggestedSalePriceElite,
+                        p.PdfPath,
+                        p.CreatedAt
                     };
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -45,20 +46,76 @@ public class ProductService : IProductService
             );
         }
 
-        var products = await query
+        var rawProducts = await query
             .OrderByDescending(x => x.ProductId)
             .ToListAsync();
 
-        // ✅ جلب أرقام المنتجات اللي فيها ملفات PDF قديمة فقط (بدون تحميل الملفات نفسها)
-                var idsWithOldPdf = await _context.Products
-            .Where(p => p.Pdffile != null)
+        var productIds = rawProducts.Select(p => p.ProductId).ToList();
+
+        var idsWithOldPdf = await _context.Products
+            .Where(p => p.Pdffile != null && productIds.Contains(p.ProductId))
             .Select(p => p.ProductId)
             .ToListAsync();
 
-        foreach (var p in products)
+        var factoryPricedDates = await _context.PriceHistories
+            .AsNoTracking()
+            .Where(h => productIds.Contains(h.ProductId))
+            .GroupBy(h => h.ProductId)
+            .Select(g => new { ProductId = g.Key, PricedAt = g.Min(h => h.ChangedAt) })
+            .ToDictionaryAsync(x => x.ProductId, x => x.PricedAt);
+
+        var now = DateTime.Now;
+        var products = rawProducts.Select(p =>
         {
-            p.HasOldPdf = idsWithOldPdf.Contains(p.ProductId);
-        }
+            DateTime? pricedAt = factoryPricedDates.TryGetValue(p.ProductId, out var dt) ? dt : null;
+            if (!pricedAt.HasValue && (p.PricingStatusId == 3 || (p.SuggestedSalePrice.HasValue && p.SuggestedSalePrice.Value > 0)))
+            {
+                pricedAt = p.CreatedAt;
+            }
+
+            string? delayText = null;
+            string? delayClass = null;
+
+            if (p.CreatedAt.HasValue)
+            {
+                if (pricedAt.HasValue)
+                {
+                    var span = pricedAt.Value - p.CreatedAt.Value;
+                    if (span.TotalMinutes < 60)
+                        delayText = $"تم في {(int)span.TotalMinutes} دقيقة ⚡";
+                    else if (span.TotalHours < 24)
+                        delayText = $"تم في {span.TotalHours:F1} ساعة";
+                    else
+                        delayText = $"استغرق {span.TotalDays:F1} يوم";
+
+                    delayClass = span.TotalHours <= 6 ? "badge-success" : (span.TotalHours <= 24 ? "badge-info" : "badge-warning");
+                }
+                else if (p.PricingStatusId == 2) // SentForPricing
+                {
+                    var waitSpan = now - p.CreatedAt.Value;
+                    delayText = $"بانتظار المصنع منذ {(int)waitSpan.TotalHours} ساعة ⏳";
+                    delayClass = waitSpan.TotalHours > 24 ? "badge-danger" : "badge-warning";
+                }
+            }
+
+            return new ProductListDto
+            {
+                ProductId = p.ProductId,
+                ProductName = p.ProductName,
+                ProductDescription = p.ProductDescription,
+                CustomerName = p.CustomerName,
+                PricingType = p.PricingType,
+                PricingStatusId = p.PricingStatusId,
+                SuggestedSalePrice = p.SuggestedSalePrice,
+                SuggestedSalePriceElite = p.SuggestedSalePriceElite,
+                PdfPath = p.PdfPath,
+                HasOldPdf = idsWithOldPdf.Contains(p.ProductId),
+                CreatedAt = p.CreatedAt,
+                FactoryPricedAt = pricedAt,
+                ResponseTimeText = delayText,
+                ResponseTimeClass = delayClass
+            };
+        }).ToList();
 
         return products;
     }

@@ -13,4 +13,10 @@ public class ProductListDto
     public decimal? SuggestedSalePriceElite { get; set; }
     public string? PdfPath { get; set; }
     public bool HasOldPdf { get; set; } = false;
+
+    // ⭐ تواريخ وأوقات التسجيل والتسعير
+    public DateTime? CreatedAt { get; set; }
+    public DateTime? FactoryPricedAt { get; set; }
+    public string? ResponseTimeText { get; set; }
+    public string? ResponseTimeClass { get; set; }
 }

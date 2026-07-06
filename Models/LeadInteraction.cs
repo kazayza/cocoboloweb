@@ -25,6 +25,12 @@ public partial class LeadInteraction
 
     public DateTime? NextFollowUpDate { get; set; }
 
+    public bool IsCompleted { get; set; } = false;
+
+    public int? CompletedByEmployeeId { get; set; }
+
+    public DateTime? CompletedDate { get; set; }
+
     public bool IsSystemGenerated { get; set; }
 
     public string? CreatedBy { get; set; }

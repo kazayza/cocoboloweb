@@ -63,12 +63,12 @@ public class TaskService : ITaskService
             }).ToListAsync();
 
         // ═══════════════════════════════════════════════════════════════
-        // ★ دمج مهام متابعة الـ Leads من جدول التفاعلات ★
+        // ★ دمج مهام متابعة الـ Leads المفتوحة من جدول التفاعلات ★
         // ═══════════════════════════════════════════════════════════════
         var leadQuery = _db.LeadInteractions.AsNoTracking()
             .Include(i => i.Lead)
             .Include(i => i.Employee)
-            .Where(i => i.NextFollowUpDate.HasValue && !i.Lead.IsConverted && i.Lead.LeadStatus != "محول" && i.Lead.LeadStatus != "مرفوض");
+            .Where(i => i.NextFollowUpDate.HasValue && !i.IsCompleted && !i.Lead.IsConverted && i.Lead.LeadStatus != "محول" && i.Lead.LeadStatus != "مرفوض");
 
         if (crmAccess.HasValue)
             leadQuery = leadQuery.Where(i => i.CreatedAt >= crmAccess.Value);
@@ -173,6 +173,32 @@ public class TaskService : ITaskService
     {
         try
         {
+            if (taskId > 1000000)
+            {
+                var interactionId = taskId - 1000000;
+                var leadInteraction = await _db.LeadInteractions
+                    .Include(i => i.Lead)
+                    .FirstOrDefaultAsync(i => i.LeadInteractionId == interactionId);
+                if (leadInteraction == null) return (false, "تفاعل الـ Lead غير موجود");
+
+                var userEmpId = await _db.Users.AsNoTracking()
+                    .Where(u => u.Username == userName && u.EmployeeId != null)
+                    .Select(u => u.EmployeeId)
+                    .FirstOrDefaultAsync();
+
+                var empId = leadInteraction.Lead?.AssignedEmployeeId ?? leadInteraction.EmployeeId ?? userEmpId;
+
+                leadInteraction.IsCompleted = true;
+                leadInteraction.CompletedByEmployeeId = empId;
+                leadInteraction.CompletedDate = DateTime.Now;
+                if (!string.IsNullOrWhiteSpace(notes))
+                {
+                    leadInteraction.Notes = (leadInteraction.Notes + " [ملاحظة إنجاز: " + notes + "]").Trim();
+                }
+                await _db.SaveChangesAsync();
+                return (true, "تم إتمام متابعة الـ Lead بنجاح");
+            }
+
             var task = await _db.CrmTasks.FindAsync(taskId);
             if (task == null) return (false, "المهمة غير موجودة");
             task.Status = "Completed";

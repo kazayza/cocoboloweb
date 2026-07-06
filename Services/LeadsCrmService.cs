@@ -268,6 +268,9 @@ public async Task<List<LeadInteractionDto>> GetLeadInteractionsAsync(int leadId)
             i.OldLeadStatus,
             i.NewLeadStatus,
             i.NextFollowUpDate,
+            i.IsCompleted,            // ⭐ أضف هذا السطر
+            i.CompletedByEmployeeId,  // ⭐ أضف هذا السطر
+            i.CompletedDate,          // ⭐ أضف هذا السطر
             i.IsSystemGenerated,
             i.CreatedBy,
             i.CreatedAt
@@ -305,6 +308,9 @@ public async Task<List<LeadInteractionDto>> GetLeadInteractionsAsync(int leadId)
         OldLeadStatus = i.OldLeadStatus,
         NewLeadStatus = i.NewLeadStatus,
         NextFollowUpDate = i.NextFollowUpDate,
+        IsCompleted = i.IsCompleted,
+        CompletedByEmployeeId = i.CompletedByEmployeeId,
+        CompletedDate = i.CompletedDate,
         IsSystemGenerated = i.IsSystemGenerated,
         CreatedBy = i.CreatedBy,
         CreatedAt = i.CreatedAt
@@ -334,10 +340,23 @@ public async Task<(bool Success, string Message)> AddLeadInteractionAsync(
         .Select(u => u.EmployeeId)
         .FirstOrDefaultAsync();
 
+    var empId = dto.EmployeeId ?? lead.AssignedEmployeeId ?? userEmpId;
+
+    // ⭐ إغلاق وتوثيق أي مهام متابعة مفتوحة سابقة لهذا الليد
+    var openFollowUps = await _db.LeadInteractions
+        .Where(i => i.LeadId == dto.LeadId && i.NextFollowUpDate != null && !i.IsCompleted)
+        .ToListAsync();
+    foreach (var open in openFollowUps)
+    {
+        open.IsCompleted = true;
+        open.CompletedByEmployeeId = empId;
+        open.CompletedDate = now;
+    }
+
     var interaction = new LeadInteraction
     {
         LeadId = dto.LeadId,
-        EmployeeId = dto.EmployeeId ?? lead.AssignedEmployeeId ?? userEmpId,
+        EmployeeId = empId,
         InteractionType = interactionType,
         InteractionDate = now,
         Summary = dto.Summary?.Trim(),
