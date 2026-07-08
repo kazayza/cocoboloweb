@@ -84,16 +84,20 @@ public class ProductService : IProductService
                     if (span.TotalMinutes < 60)
                         delayText = $"تم في {(int)span.TotalMinutes} دقيقة ⚡";
                     else if (span.TotalHours < 24)
-                        delayText = $"تم في {span.TotalHours:F1} ساعة";
+                        delayText = $"تم في {(int)span.TotalHours} ساعة";
                     else
-                        delayText = $"استغرق {span.TotalDays:F1} يوم";
+                        delayText = $"استغرق {Math.Round(span.TotalDays, 1)} يوم";
 
                     delayClass = span.TotalHours <= 6 ? "badge-success" : (span.TotalHours <= 24 ? "badge-info" : "badge-warning");
                 }
                 else if (p.PricingStatusId == 2) // SentForPricing
                 {
                     var waitSpan = now - p.CreatedAt.Value;
-                    delayText = $"بانتظار المصنع منذ {(int)waitSpan.TotalHours} ساعة ⏳";
+                    if (waitSpan.TotalHours < 24)
+                        delayText = $"بانتظار المصنع منذ {(int)waitSpan.TotalHours} ساعة ⏳";
+                    else
+                        delayText = $"بانتظار المصنع منذ {Math.Round(waitSpan.TotalDays, 1)} يوم ⏳";
+
                     delayClass = waitSpan.TotalHours > 24 ? "badge-danger" : "badge-warning";
                 }
             }

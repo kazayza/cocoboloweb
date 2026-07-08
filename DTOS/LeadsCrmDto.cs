@@ -221,6 +221,7 @@ public class LeadsCrmUpdateDto
     public int? AssignedEmployeeId { get; set; }
     public string? Feedback { get; set; }
     public string? RejectedReason { get; set; }
+    public string? Notes { get; set; }
 }
 
 /// <summary>

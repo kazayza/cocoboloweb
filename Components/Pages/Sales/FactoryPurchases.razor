@@ -1,0 +1,651 @@
+@page "/factory/purchases"
+@using Microsoft.AspNetCore.Authorization
+@attribute [Authorize(Roles = "factory")]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using System.Security.Claims
+
+@inject IInvoiceService InvoiceService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <div class="loading-spinner">
+            <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        </div>
+        <MudText Typo="Typo.h6" Class="mt-4" Style="color: var(--gold);">جاري تحميل الفواتير...</MudText>
+    </div>
+}
+else
+{
+    <div class="factory-purchases-page" dir="rtl">
+
+        <!-- Header -->
+        <div class="page-header">
+            <div class="header-overlay"></div>
+            <div class="header-content">
+                <div class="header-info">
+                    <div class="header-badge">
+                        <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" />
+                    </div>
+                    <div>
+                        <h1>فواتير الشراء</h1>
+                        <p>متابعة فواتير المشتريات الخاصة بالمصنع</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-icon-wrap stat-total">
+                        <MudIcon Icon="@Icons.Material.Filled.Receipt" />
+                    </div>
+                    <div class="stat-body">
+                        <span class="stat-value">@_stats.TotalCount</span>
+                        <span class="stat-label">إجمالي الفواتير</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon-wrap stat-today">
+                        <MudIcon Icon="@Icons.Material.Filled.Today" />
+                    </div>
+                    <div class="stat-body">
+                        <span class="stat-value">@_stats.TodayCount</span>
+                        <span class="stat-label">فواتير اليوم</span>
+                    </div>
+                </div>
+                <MudTooltip Text="اضغط للفلترة بالفواتير المتأخرة فقط" Placement="Placement.Bottom">
+                    <div class="stat-card @(_filter.IsOverdue == true ? "stat-card-active" : "")"
+                         @onclick="ToggleOverdueFilter"
+                         style="cursor: pointer; transition: all 0.2s;">
+                        <div class="stat-icon-wrap stat-overdue">
+                            <MudIcon Icon="@Icons.Material.Filled.WarningAmber" />
+                        </div>
+                        <div class="stat-body">
+                            <span class="stat-value">@_stats.OverdueCount</span>
+                            <span class="stat-label">متأخرة</span>
+                        </div>
+                    </div>
+                </MudTooltip>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters-card">
+            <div class="filters-row">
+                <div class="search-field">
+                    <MudTextField T="string"
+                                  Value="_filter.SearchText"
+                                  ValueChanged="@(async (string v) => { _filter.SearchText = v; await OnSearchChanged(); })"
+                                  Placeholder="بحث برقم الفاتورة أو اسم العميل..."
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Immediate="true"
+                                  DebounceInterval="400"
+                                  Clearable="true" />
+                </div>
+
+                <MudDatePicker Date="_dateFrom"
+                               DateChanged="OnDateFromChanged"
+                               Label="من تاريخ"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Class="filter-select"
+                               Clearable="true" />
+
+                <MudDatePicker Date="_dateTo"
+                               DateChanged="OnDateToChanged"
+                               Label="إلى تاريخ"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Class="filter-select"
+                               Clearable="true" />
+
+                <MudSelect T="string"
+                           Value="_filter.InvoiceStatus"
+                           ValueChanged="@(async (string v) => { _filter.InvoiceStatus = v; await OnFilterChanged(); })"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Placeholder="الحالة"
+                           Clearable="true"
+                           Class="filter-select">
+                    @foreach (var status in InvoiceStatuses.All)
+                    {
+                        <MudSelectItem T="string" Value="@status.Key">@status.Value</MudSelectItem>
+                    }
+                </MudSelect>
+
+                @if (_filter.IsOverdue == true)
+                {
+                    <MudChip T="string" Color="Color.Warning" Size="Size.Small"
+                             OnClose="@(async () => { _filter.IsOverdue = null; await OnFilterChanged(); })">
+                        ⚠️ فواتير متأخرة
+                    </MudChip>
+                }
+
+                <button type="button" class="reset-btn" @onclick="ResetFilters" title="إعادة تعيين">
+                    <MudIcon Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" />
+                </button>
+            </div>
+
+            <div class="results-bar">
+                <div class="results-count">
+                    <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
+                    <span>عرض @_pagedResult.Items.Count من @_pagedResult.TotalCount فاتورة</span>
+                </div>
+            </div>
+        </div>
+
+        @if (_isTableLoading)
+        {
+            <div class="table-loading">
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+            </div>
+        }
+
+        <!-- Table -->
+        <div class="table-card">
+            <MudTable Items="@_pagedResult.Items"
+                      Hover="true"
+                      Striped="true"
+                      Dense="false"
+                      FixedHeader="true"
+                      Height="600px"
+                      OnRowClick="@((TableRowClickEventArgs<InvoiceListDto> args) => GoToDetails(args.Item.TransactionId))"
+                      RowClass="table-row"
+                      Class="invoices-table">
+                <HeaderContent>
+                    <MudTh>رقم الفاتورة</MudTh>
+                    <MudTh>التاريخ</MudTh>
+                    <MudTh>العميل (من فاتورة البيع)</MudTh>
+                    <MudTh>الإجمالي</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh>عرض</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <span class="invoice-number">@(context.ReferenceNumber ?? $"#{context.TransactionId}")</span>
+                    </MudTd>
+                    <MudTd>
+                        <div class="date-cell">
+                            <span class="date-main">@context.TransactionDate.ToString("yyyy/MM/dd")</span>
+                            @if (context.DueDate.HasValue)
+                            {
+                                <span class="date-due @(IsOverdue(context) ? "overdue" : "")">
+                                    <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
+                                    @context.DueDate.Value.ToString("yyyy/MM/dd")
+                                </span>
+                            }
+                        </div>
+                    </MudTd>
+                    <MudTd>
+                        <div class="customer-cell">
+                            <span class="customer-name">@(context.EmpName ?? "-")</span>
+                        </div>
+                    </MudTd>
+                    <MudTd><strong class="amount-total">@FormatMoney(context.GrandTotal)</strong></MudTd>
+                    <MudTd>
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                            <MudChip T="string"
+                                     Size="Size.Small"
+                                     Color="@GetStatusColor(context.InvoiceStatus)">
+                                @GetStatusText(context.InvoiceStatus)
+                            </MudChip>
+                            @if (context.InvoiceStatus == InvoiceStatuses.Cancelled)
+                            {
+                                var reasonText = string.IsNullOrWhiteSpace(context.EditReason) ? "غير محدد" : context.EditReason;
+                                var byText = string.IsNullOrWhiteSpace(context.EditBy) ? "غير محدد" : context.EditBy;
+                                var dateText = context.EditAt.HasValue ? $" ({context.EditAt.Value:yyyy/MM/dd hh:mm tt})" : "";
+                                var infoTooltip = $"سبب الإلغاء: {reasonText} | ألغيت بواسطة: {byText}{dateText}";
+                                <MudTooltip Text="@infoTooltip" Placement="Placement.Top">
+                                    <span title="@infoTooltip" style="cursor: help; display: inline-flex; align-items: center;">
+                                        <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" Color="Color.Error" />
+                                    </span>
+                                </MudTooltip>
+                            }
+                        </div>
+                    </MudTd>
+                    <MudTd>
+                        <div class="table-actions" @onclick:stopPropagation="true">
+                            <MudIconButton Icon="@Icons.Material.Filled.Visibility"
+                                           Size="Size.Small" Color="Color.Info"
+                                           OnClick="() => GoToDetails(context.TransactionId)"
+                                           Title="عرض" />
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </div>
+
+        <!-- Pagination -->
+        @if (_pagedResult.TotalPages > 1)
+        {
+            <div class="pagination-container">
+                <MudPagination Count="@_pagedResult.TotalPages"
+                               Selected="@_filter.PageNumber"
+                               SelectedChanged="OnPageChanged"
+                               Color="Color.Primary"
+                               Variant="Variant.Filled"
+                               ShowFirstButton="true"
+                               ShowLastButton="true" />
+            </div>
+        }
+    </div>
+}
+
+<style>
+    /* ===== Page ===== */
+    .factory-purchases-page {
+        padding: 1.5rem;
+        max-width: 1600px;
+        margin: 0 auto;
+        direction: rtl;
+    }
+
+    /* ===== Header ===== */
+    .page-header {
+        position: relative;
+        background: linear-gradient(135deg, #1a2842 0%, #2a3f6a 50%, #1a2842 100%);
+        border-radius: 20px;
+        padding: 2rem;
+        margin-bottom: 1.5rem;
+        overflow: hidden;
+    }
+
+    .header-overlay {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23d4af37' fill-opacity='0.06'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+        pointer-events: none;
+    }
+
+    .header-content {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1.75rem;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+    .header-info {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .header-badge {
+        width: 52px;
+        height: 52px;
+        background: linear-gradient(135deg, #d4af37, #f0d060);
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #1a2842;
+    }
+
+    .header-badge .mud-icon-root { font-size: 1.75rem; }
+
+    .header-info h1 {
+        color: #fff;
+        font-size: 1.5rem;
+        font-weight: 800;
+        margin: 0;
+    }
+
+    .header-info p {
+        color: rgba(255, 255, 255, 0.75);
+        margin: 0.25rem 0 0 0;
+        font-size: 0.9rem;
+    }
+
+    /* ===== Stats ===== */
+    .stats-row {
+        position: relative;
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .stat-card {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex: 1;
+        min-width: 170px;
+        transition: all 0.2s;
+    }
+
+    .stat-card:hover { background: rgba(255, 255, 255, 0.12); }
+
+    .stat-card-active {
+        background: rgba(212, 175, 55, 0.2) !important;
+        border-color: rgba(212, 175, 55, 0.5) !important;
+    }
+
+    .stat-icon-wrap {
+        width: 40px; height: 40px;
+        border-radius: 10px;
+        display: flex; align-items: center; justify-content: center;
+        color: #fff; font-size: 1.1rem;
+    }
+
+    .stat-total  { background: linear-gradient(135deg, #667eea, #764ba4); }
+    .stat-today  { background: linear-gradient(135deg, #4caf50, #2e7d32); }
+    .stat-overdue { background: linear-gradient(135deg, #ff9800, #f57c00); }
+
+    .stat-body { display: flex; flex-direction: column; }
+    .stat-value { color: #fff; font-weight: 700; font-size: 1.15rem; line-height: 1.2; }
+    .stat-label { color: rgba(255, 255, 255, 0.65); font-size: 0.75rem; }
+
+    /* ===== Filters ===== */
+    .filters-card {
+        background: var(--mud-palette-surface);
+        border-radius: 16px;
+        padding: 1.25rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+    }
+
+    .filters-row {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .search-field { flex: 1; min-width: 200px; }
+
+    .filter-select { min-width: 140px; }
+
+    .reset-btn {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 8px;
+        width: 38px; height: 38px;
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer;
+        color: var(--mud-palette-text-secondary);
+        transition: all 0.2s;
+    }
+
+    .reset-btn:hover {
+        background: var(--mud-palette-action-default-hover);
+        color: var(--mud-palette-text-primary);
+    }
+
+    .results-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--mud-palette-divider);
+    }
+
+    .results-count {
+        display: flex; align-items: center; gap: 0.4rem;
+        font-size: 0.85rem; color: var(--mud-palette-text-secondary);
+    }
+
+    /* ===== Table ===== */
+    .table-card {
+        background: var(--mud-palette-surface);
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+    }
+
+    .table-loading { margin: 1rem 0; }
+
+    .invoices-table .mud-table-head { background: var(--mud-palette-background); }
+
+    .table-row { cursor: pointer; transition: background-color 0.15s; }
+
+    .invoice-number {
+        font-weight: 700;
+        color: var(--mud-palette-primary);
+    }
+
+    .date-cell { display: flex; flex-direction: column; gap: 2px; }
+    .date-main { font-weight: 500; }
+
+    .date-due {
+        font-size: 0.75rem;
+        color: var(--mud-palette-text-secondary);
+        display: flex; align-items: center; gap: 2px;
+    }
+
+    .date-due.overdue { color: var(--mud-palette-error); font-weight: 600; }
+
+    .customer-cell { display: flex; flex-direction: column; }
+    .customer-name { font-weight: 500; }
+
+    .amount-total { color: var(--gold); }
+
+    .table-actions { display: flex; align-items: center; gap: 2px; }
+
+    /* ===== Pagination ===== */
+    .pagination-container {
+        display: flex;
+        justify-content: center;
+        margin-top: 1.5rem;
+    }
+
+    /* ===== Loading ===== */
+    .loading-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 400px;
+    }
+
+    /* ===== Gold variable ===== */
+    :root {
+        --gold: #d4af37;
+        --gold-dark: #b48214;
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _isTableLoading;
+    private bool _canView;
+
+    private InvoiceFilterDto _filter = new() { TransactionType = TransactionTypes.Purchase };
+    private PagedResult<InvoiceListDto> _pagedResult = new();
+    private InvoiceStatsDto _stats = new();
+
+    private DateTime? _dateFrom;
+    private DateTime? _dateTo;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _isLoading = true;
+
+            // ✅ التحقق من صلاحية فواتير المشتريات
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            _canView = user.HasClaim("Permission", "frm_SupplierInvoices:View") || user.IsInRole("Admin");
+
+            if (!_canView)
+            {
+                Navigation.NavigateTo("/");
+                return;
+            }
+
+            await RestoreFilterStateAsync();
+            await LoadData();
+            await LoadStats();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[FactoryPurchases] Init Error: {ex}");
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task LoadData()
+    {
+        _isTableLoading = true;
+        _pagedResult = await InvoiceService.GetInvoicesAsync(_filter);
+        _isTableLoading = false;
+    }
+
+    private async Task LoadStats()
+    {
+        _stats = await InvoiceService.GetStatsAsync(_filter.DateFrom, _filter.DateTo, TransactionTypes.Purchase);
+    }
+
+    private async Task OnSearchChanged()
+    {
+        _filter.PageNumber = 1;
+        await SaveFilterStateAsync();
+        await LoadData();
+    }
+
+    private async Task OnFilterChanged()
+    {
+        _filter.PageNumber = 1;
+        await SaveFilterStateAsync();
+        await LoadData();
+        await LoadStats();
+    }
+
+    private async Task OnDateFromChanged(DateTime? date)
+    {
+        _dateFrom = date;
+        _filter.DateFrom = date;
+        await OnFilterChanged();
+    }
+
+    private async Task OnDateToChanged(DateTime? date)
+    {
+        _dateTo = date;
+        _filter.DateTo = date;
+        await OnFilterChanged();
+    }
+
+    private async Task OnPageChanged(int page)
+    {
+        _filter.PageNumber = page;
+        await SaveFilterStateAsync();
+        await LoadData();
+    }
+
+    private async Task ResetFilters()
+    {
+        _filter = new() { TransactionType = TransactionTypes.Purchase };
+        _dateFrom = null;
+        _dateTo = null;
+        await SaveFilterStateAsync();
+        await LoadData();
+        await LoadStats();
+    }
+
+    private async Task ToggleOverdueFilter()
+    {
+        if (_filter.IsOverdue == true)
+            _filter.IsOverdue = null;
+        else
+        {
+            _filter.IsOverdue = true;
+            _filter.HasRemaining = null;
+            _filter.InvoiceStatus = null;
+        }
+        _filter.PageNumber = 1;
+        await SaveFilterStateAsync();
+        await LoadData();
+        await LoadStats();
+    }
+
+    private void GoToDetails(int id) => Navigation.NavigateTo($"/sales/invoices/{id}");
+
+    // ===== Helpers =====
+    private string FormatMoney(decimal value) => $"{value:N2} ج";
+
+    private string GetStatusText(string? status) => status switch
+    {
+        InvoiceStatuses.Open => "مفتوحة",
+        InvoiceStatuses.PartiallyPaid => "مدفوعة جزئياً",
+        InvoiceStatuses.Paid => "مدفوعة",
+        InvoiceStatuses.Cancelled => "ملغية",
+        _ => status ?? "-"
+    };
+
+    private Color GetStatusColor(string? status) => status switch
+    {
+        InvoiceStatuses.Paid => Color.Success,
+        InvoiceStatuses.PartiallyPaid => Color.Warning,
+        InvoiceStatuses.Cancelled => Color.Error,
+        _ => Color.Info
+    };
+
+    private bool IsOverdue(InvoiceListDto inv) =>
+        inv.DueDate.HasValue && inv.DueDate.Value < DateTime.Today && inv.Remaining > 0;
+
+    // ===== Filter Persistence =====
+    private class FactoryFilterSessionState
+    {
+        public InvoiceFilterDto? Filter { get; set; }
+        public DateTime? DateFrom { get; set; }
+        public DateTime? DateTo { get; set; }
+    }
+
+    private async Task RestoreFilterStateAsync()
+    {
+        try
+        {
+            var json = await JS.InvokeAsync<string>("localStorage.getItem", "factory_purchases_filter_state");
+            if (!string.IsNullOrEmpty(json))
+            {
+                var saved = System.Text.Json.JsonSerializer.Deserialize<FactoryFilterSessionState>(json);
+                if (saved?.Filter != null)
+                {
+                    _filter = saved.Filter;
+                    _filter.TransactionType = TransactionTypes.Purchase; // ✅ دايماً Purchase
+                    _dateFrom = saved.DateFrom;
+                    _dateTo = saved.DateTo;
+                }
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    private async Task SaveFilterStateAsync()
+    {
+        try
+        {
+            var state = new FactoryFilterSessionState
+            {
+                Filter = _filter,
+                DateFrom = _dateFrom,
+                DateTo = _dateTo
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(state);
+            await JS.InvokeVoidAsync("localStorage.setItem", "factory_purchases_filter_state", json);
+        }
+        catch { /* ignore */ }
+    }
+
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+}

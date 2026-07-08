@@ -160,9 +160,10 @@ else
                 </div>
             </div>
 
-            @* KPI *@
+            @* KPI - Clickable Filter Cards *@
             <div class="kpi-grid">
-                <div class="kpi-card @(_stats.Overdue > 0 ? "kpi-alert" : "")">
+                <button type="button" class="kpi-card kpi-clickable @(_stats.Overdue > 0 ? "kpi-alert" : "") @(_quickFilter == "overdue" ? "kpi-selected" : "")"
+                        @onclick="@(() => SetQuickFilter("overdue"))">
                     <div class="kpi-icon" style="background:rgba(248,113,113,.15);color:#f87171">
                         <MudIcon Icon="@Icons.Material.Rounded.Warning" Size="MudSize.Small" />
                     </div>
@@ -171,8 +172,9 @@ else
                         <span class="kpi-label">⚠️ متأخرة</span>
                     </div>
                     @if (_stats.Overdue > 0) { <span class="kpi-live-dot" style="background:#f87171;box-shadow:0 0 8px #f87171"></span> }
-                </div>
-                <div class="kpi-card">
+                </button>
+                <button type="button" class="kpi-card kpi-clickable @(_quickFilter == "today" ? "kpi-selected" : "")"
+                        @onclick="@(() => SetQuickFilter("today"))">
                     <div class="kpi-icon" style="background:rgba(251,191,36,.15);color:#fbbf24">
                         <MudIcon Icon="@Icons.Material.Rounded.Today" Size="MudSize.Small" />
                     </div>
@@ -180,8 +182,9 @@ else
                         <span class="kpi-value">@_stats.DueToday</span>
                         <span class="kpi-label">🕐 اليوم</span>
                     </div>
-                </div>
-                <div class="kpi-card">
+                </button>
+                <button type="button" class="kpi-card kpi-clickable @(_quickFilter == "tomorrow" ? "kpi-selected" : "")"
+                        @onclick="@(() => SetQuickFilter("tomorrow"))">
                     <div class="kpi-icon" style="background:rgba(96,165,250,.15);color:#60a5fa">
                         <MudIcon Icon="@Icons.Material.Rounded.Event" Size="MudSize.Small" />
                     </div>
@@ -189,8 +192,9 @@ else
                         <span class="kpi-value">@_stats.DueTomorrow</span>
                         <span class="kpi-label">📅 غداً</span>
                     </div>
-                </div>
-                <div class="kpi-card">
+                </button>
+                <button type="button" class="kpi-card kpi-clickable @(_quickFilter == "upcoming" ? "kpi-selected" : "")"
+                        @onclick="@(() => SetQuickFilter("upcoming"))">
                     <div class="kpi-icon" style="background:rgba(52,211,153,.15);color:#34d399">
                         <MudIcon Icon="@Icons.Material.Rounded.Upcoming" Size="MudSize.Small" />
                     </div>
@@ -198,8 +202,9 @@ else
                         <span class="kpi-value">@_stats.Upcoming</span>
                         <span class="kpi-label">🟢 قادمة</span>
                     </div>
-                </div>
-                <div class="kpi-card">
+                </button>
+                <button type="button" class="kpi-card kpi-clickable @(_quickFilter == "all" ? "kpi-selected" : "")"
+                        @onclick="@(() => SetQuickFilter("all"))">
                     <div class="kpi-icon" style="background:rgba(99,102,241,.15);color:#818cf8">
                         <MudIcon Icon="@Icons.Material.Rounded.Inventory2" Size="MudSize.Small" />
                     </div>
@@ -207,7 +212,7 @@ else
                         <span class="kpi-value">@_stats.TotalActive</span>
                         <span class="kpi-label">إجمالي النشطة</span>
                     </div>
-                </div>
+                </button>
             </div>
 
             @* ═══ 5. MINI PROGRESS ═══ *@
@@ -673,6 +678,9 @@ else
     .kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:.65rem}
     .kpi-card{position:relative;background:rgba(255,255,255,.09);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.1);border-radius:var(--radius-md);padding:.85rem;display:flex;align-items:center;gap:.65rem;transition:all .25s;overflow:hidden}
     .kpi-card:hover{background:rgba(255,255,255,.15);transform:translateY(-2px)}
+    .kpi-clickable{cursor:pointer;border:none;width:100%;text-align:right;color:inherit;font:inherit}
+    .kpi-clickable:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+    .kpi-selected{background:rgba(212,175,55,.22)!important;border-color:rgba(212,175,55,.55)!important;box-shadow:0 0 18px rgba(212,175,55,.18)}
     .kpi-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
     .kpi-data{display:flex;flex-direction:column;min-width:0}
     .kpi-value{font-size:1.35rem;font-weight:900;line-height:1}
@@ -1082,6 +1090,11 @@ else
             _canExport = user.HasClaim("Permission", "frmTasks:Export") || user.IsInRole("Admin");
             _crmAccessFrom = user.GetAccessFromDate();
             _employees = await OppService.GetActiveEmployeesAsync();
+            // ✅ فلتر الموظفين: إدارة المبيعات أو إدارة العلاقات العامة فقط
+            _employees = _employees
+                .Where(e => e.Department == "المبيعات" || e.Department == "إدارة العلاقات العامة")
+                .OrderBy(e => e.FullName)
+                .ToList();
             // _taskTypes = await TaskService.GetTaskTypesAsync();
 
             // لو جاى من MyLeads ومفلتر بموظف
@@ -1217,6 +1230,27 @@ else
             if (ps.HasValue) _filter.PageSize = ps.Value;
             var gm = await JS.InvokeAsync<string?>("loadTasksPrefs", "groupMode");
             if (gm != null && Enum.TryParse<GroupMode>(gm, out var g)) _groupMode = g;
+
+            // ✅ تثبيت الفلتر - نفس فكرة شاشة المنتجات
+            var filterJson = await JS.InvokeAsync<string?>("loadTasksPrefs", "filterState");
+            if (!string.IsNullOrEmpty(filterJson))
+            {
+                try
+                {
+                    var saved = System.Text.Json.JsonSerializer.Deserialize<TaskFilterState>(filterJson);
+                    if (saved != null)
+                    {
+                        if (saved.SearchText != null) _filter.SearchText = saved.SearchText;
+                        if (saved.AssignedTo.HasValue) _filter.AssignedTo = saved.AssignedTo;
+                        if (saved.TaskTypeId.HasValue) _filter.TaskTypeId = saved.TaskTypeId;
+                        if (saved.Priority != null) _filter.Priority = saved.Priority;
+                        if (saved.Status != null) _filter.Status = saved.Status;
+                        if (saved.DateFrom.HasValue) _filter.DateFrom = saved.DateFrom;
+                        if (saved.DateTo.HasValue) _filter.DateTo = saved.DateTo;
+                    }
+                }
+                catch { /* ignore bad JSON */ }
+            }
         }
         catch { }
     }
@@ -1229,8 +1263,34 @@ else
             await JS.InvokeVoidAsync("saveTasksPrefs", "quickFilter", _quickFilter);
             await JS.InvokeVoidAsync("saveTasksPrefs", "pageSize", _filter.PageSize);
             await JS.InvokeVoidAsync("saveTasksPrefs", "groupMode", _groupMode.ToString());
+
+            // ✅ تثبيت الفلتر
+            var filterState = new TaskFilterState
+            {
+                SearchText = _filter.SearchText,
+                AssignedTo = _filter.AssignedTo,
+                TaskTypeId = _filter.TaskTypeId,
+                Priority = _filter.Priority,
+                Status = _filter.Status,
+                DateFrom = _filter.DateFrom,
+                DateTo = _filter.DateTo
+            };
+            var filterJson = System.Text.Json.JsonSerializer.Serialize(filterState);
+            await JS.InvokeVoidAsync("saveTasksPrefs", "filterState", filterJson);
         }
         catch { }
+    }
+
+    // ✅ DTO لحفظ حالة الفلتر
+    private class TaskFilterState
+    {
+        public string? SearchText { get; set; }
+        public int? AssignedTo { get; set; }
+        public int? TaskTypeId { get; set; }
+        public string? Priority { get; set; }
+        public string? Status { get; set; }
+        public DateTime? DateFrom { get; set; }
+        public DateTime? DateTo { get; set; }
     }
 
     private async Task PrintPage() { try { await JS.InvokeVoidAsync("printTasks"); } catch { } }

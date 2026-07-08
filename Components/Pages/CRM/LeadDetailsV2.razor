@@ -1,0 +1,1830 @@
+@page "/crm/leads/{LeadId:int}"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@using MudVariant = MudBlazor.Variant
+
+@attribute [Authorize]
+
+@inject ILeadsCrmService LeadsService
+@inject IInteractionService InteractionService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+
+<PageTitle>تفاصيل Lead V2 — CRM</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="ld-loading-screen">
+        <div class="ld-loading-card">
+            <MudProgressCircular Color="MudColor.Primary" Size="MudSize.Large" Indeterminate="true" />
+            <MudText Typo="Typo.h6" Class="mt-3">جاري تحميل بيانات الـ Lead...</MudText>
+        </div>
+    </div>
+}
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="ld2-page" dir="rtl">
+        <MudAlert Severity="Severity.Error" Variant="MudVariant.Filled" Class="mb-3">
+            @_loadError
+        </MudAlert>
+        <div class="ld2-error-actions">
+            <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" OnClick="LoadLeadAsync">
+                إعادة المحاولة
+            </MudButton>
+            <MudButton Variant="MudVariant.Text" Color="MudColor.Default" OnClick="GoBack">
+                رجوع
+            </MudButton>
+        </div>
+    </div>
+}
+else if (_lead is null)
+{
+    <div class="ld2-page" dir="rtl">
+        <MudAlert Severity="Severity.Warning" Variant="MudVariant.Filled">
+            لم يتم العثور على الـ Lead.
+        </MudAlert>
+        <MudButton Variant="MudVariant.Text" Color="MudColor.Default" OnClick="GoBack" Class="mt-3">
+            رجوع
+        </MudButton>
+    </div>
+}
+else
+{
+    <div class="ld2-page" dir="rtl">
+
+        @* ════════════════════════════════════════
+           DUPLICATE ALERT
+           ════════════════════════════════════════ *@
+        @if (_lead.IsDuplicate)
+        {
+            <div class="ld2-duplicate-alert">
+                <MudIcon Icon="@Icons.Material.Rounded.WarningAmber" />
+                <span>هذا Lead مكرر — الرقم مطابق لعميل موجود: <strong>@_lead.DuplicateOfPhone</strong></span>
+                <MudButton Variant="MudVariant.Text" Color="MudColor.Error" Size="MudSize.Small"
+                           OnClick='@(() => Navigation.NavigateTo("/crm/leads"))'>
+                    عرض الليدز
+                </MudButton>
+            </div>
+        }
+
+        @* ════════════════════════════════════════
+           HERO
+           ════════════════════════════════════════ *@
+        <section class="ld2-hero">
+            <div class="ld2-hero-bg"></div>
+            <div class="ld2-hero-dots"></div>
+            <div class="ld2-hero-orb orb-1"></div>
+            <div class="ld2-hero-orb orb-2"></div>
+
+            <div class="ld2-hero-content">
+                <div class="ld2-person-block">
+                    <div class="ld2-avatar" style="background:@GetTemperatureBg()">
+                        @GetInitials(_lead.FullName)
+                    </div>
+
+                    <div class="ld2-person-text">
+                        <div class="ld2-title-line">
+                            <h1>@_lead.FullName</h1>
+                            <span class="@GetStatusClass(_lead.LeadStatus)">@(_lead.LeadStatus ?? "غير محدد")</span>
+                            <span class="@GetFollowClass()">@GetFollowText()</span>
+                            @if (GetTemperatureBadge() is { } tempBadge)
+                            {
+                                <span class="@tempBadge.Class">@tempBadge.Icon @tempBadge.Text</span>
+                            }
+                        </div>
+
+                        <div class="ld2-meta-line">
+                            @if (!string.IsNullOrWhiteSpace(_lead.Phone))
+                            {
+                                <span class="ltr">
+                                    @_lead.Phone
+                                    <MudIconButton Icon="@Icons.Material.Rounded.ContentCopy" Size="MudSize.Small"
+                                                   Color="MudColor.Inherit" Class="ld2-copy-btn"
+                                                   OnClick='@(() => CopyToClipboard(_lead.Phone))'
+                                                   Title="نسخ الرقم" />
+                                </span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(_lead.City))
+                            {
+                                <span>• @_lead.City</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(_lead.CampaignName))
+                            {
+                                <span>• @_lead.CampaignName</span>
+                            }
+                            <span>• وصل @FormatElapsed(_lead.CreatedAt)</span>
+                            @if (_leadInteractions.Any())
+                            {
+                                <span>• @_leadInteractions.Count تواصلات</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ld2-hero-actions">
+                    @if (!string.IsNullOrWhiteSpace(_lead.Phone))
+                    {
+                        <MudButton Variant="MudVariant.Filled" Color="MudColor.Success" Size="MudSize.Small"
+                                   StartIcon="@Icons.Custom.Brands.WhatsApp"
+                                   OnClick="@(() => OpenWhatsApp(_lead.Phone))">
+                            واتساب
+                        </MudButton>
+                        <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" Size="MudSize.Small"
+                                   StartIcon="@Icons.Material.Rounded.Phone"
+                                   OnClick="@(() => CallPhone(_lead.Phone))">
+                            اتصال
+                        </MudButton>
+                    }
+                    <MudButton Variant="MudVariant.Outlined" Color="MudColor.Inherit" Size="MudSize.Small"
+                               StartIcon="@Icons.Material.Rounded.ArrowBack"
+                               OnClick="GoBack">
+                        رجوع
+                    </MudButton>
+                </div>
+            </div>
+        </section>
+
+        @* ════════════════════════════════════════
+           QUICK ACTIONS
+           ════════════════════════════════════════ *@
+        <section class="ld2-action-strip">
+            <div class="ld2-action-title">
+                <MudIcon Icon="@Icons.Material.Rounded.Bolt" Size="MudSize.Small" />
+                إجراءات سريعة
+            </div>
+
+            <div class="ld2-action-buttons">
+                @if (_canEdit && _lead.LeadStatus != "محول" && _lead.LeadStatus != "مرفوض")
+                {
+                    <MudButton Variant="MudVariant.Filled"
+                               Color="MudColor.Primary"
+                               Size="MudSize.Small"
+                               StartIcon="@Icons.Material.Rounded.AddComment"
+                               OnClick="OpenInteractionDialog">
+                        تسجيل تواصل
+                    </MudButton>
+                }
+                @if (_canEdit && CanConvertLead())
+                {
+                    <MudButton Variant="MudVariant.Filled"
+                               Color="MudColor.Success"
+                               Size="MudSize.Small"
+                               StartIcon="@Icons.Material.Rounded.PersonAdd"
+                               OnClick="OpenConvertDialog">
+                        تحويل لفرصة
+                    </MudButton>
+                }
+
+                @if (_lead.IsConverted && _lead.ConvertedOpportunityId.HasValue)
+                {
+                    <MudButton Variant="MudVariant.Filled"
+                               Color="MudColor.Success"
+                               Size="MudSize.Small"
+                               StartIcon="@Icons.Material.Rounded.OpenInNew"
+                               OnClick="@(() => Navigation.NavigateTo($"/crm/opportunities/{_lead.ConvertedOpportunityId.Value}"))">
+                        فتح الفرصة
+                    </MudButton>
+                }
+
+                @if (_lead.IsConverted && _lead.ConvertedPartyId.HasValue)
+                {
+                    <MudButton Variant="MudVariant.Outlined"
+                               Color="MudColor.Primary"
+                               Size="MudSize.Small"
+                               StartIcon="@Icons.Material.Rounded.ContactPage"
+                               OnClick="@(() => Navigation.NavigateTo($"/crm/customers/{_lead.ConvertedPartyId.Value}"))">
+                        بطاقة العميل
+                    </MudButton>
+                }
+                @if (_canEdit && _lead.LeadStatus != "تم التواصل" && _lead.LeadStatus != "محول" && _lead.LeadStatus != "مرفوض")
+                {
+                    <MudButton Variant="MudVariant.Outlined" Color="MudColor.Info" Size="MudSize.Small"
+                               StartIcon="@Icons.Material.Rounded.PhoneCallback"
+                               OnClick='@(() => ChangeStatusAsync("تم التواصل"))'>
+                        تم التواصل
+                    </MudButton>
+                }
+
+                @if (_canEdit && _lead.LeadStatus != "مرفوض" && _lead.LeadStatus != "محول")
+                {
+                    <MudButton Variant="MudVariant.Outlined" Color="MudColor.Error" Size="MudSize.Small"
+                               StartIcon="@Icons.Material.Rounded.Cancel"
+                               OnClick='@(() => ChangeStatusAsync("مرفوض"))'>
+                        مرفوض
+                    </MudButton>
+                }
+
+                <MudButton Variant="MudVariant.Text" Color="MudColor.Primary" Size="MudSize.Small"
+                           StartIcon="@Icons.Material.Rounded.ListAlt"
+                           OnClick='@(() => Navigation.NavigateTo("/crm/leads"))'>
+                    قائمة Leads
+                </MudButton>
+
+                <MudButton Variant="MudVariant.Text" Color="MudColor.Primary" Size="MudSize.Small"
+                           StartIcon="@Icons.Material.Rounded.AssignmentInd"
+                           OnClick='@(() => Navigation.NavigateTo("/crm/leads/my"))'>
+                    My Leads
+                </MudButton>
+            </div>
+        </section>
+
+        @* ════════════════════════════════════════
+           SUMMARY CARDS
+           ════════════════════════════════════════ *@
+        <section class="ld2-summary-grid">
+            <div class="ld2-summary-card">
+                <div class="sum-icon blue"><MudIcon Icon="@Icons.Material.Rounded.Source" /></div>
+                <div>
+                    <span>المصدر</span>
+                    <strong>@GetPlatformText(_lead.Platform)</strong>
+                </div>
+            </div>
+            <div class="ld2-summary-card">
+                <div class="sum-icon purple"><MudIcon Icon="@Icons.Material.Rounded.Campaign" /></div>
+                <div>
+                    <span>الحملة</span>
+                    <strong title="@_lead.CampaignName">@Safe(_lead.CampaignName)</strong>
+                </div>
+            </div>
+            <div class="ld2-summary-card">
+                <div class="sum-icon green"><MudIcon Icon="@Icons.Material.Rounded.HomeWork" /></div>
+                <div>
+                    <span>نوع المشروع</span>
+                    <strong>@Safe(_lead.ProjectType)</strong>
+                </div>
+            </div>
+            <div class="ld2-summary-card">
+                <div class="sum-icon amber"><MudIcon Icon="@Icons.Material.Rounded.Payments" /></div>
+                <div>
+                    <span>الميزانية</span>
+                    <strong>@Safe(_lead.Budget)</strong>
+                </div>
+            </div>
+            <div class="ld2-summary-card">
+                <div class="sum-icon rose"><MudIcon Icon="@Icons.Material.Rounded.PersonPin" /></div>
+                <div>
+                    <span>الموظف المسؤول</span>
+                    <strong>@Safe(_lead.AssignedEmployeeName)</strong>
+                </div>
+            </div>
+        </section>
+
+        @* ════════════════════════════════════════
+           MAIN CONTENT — COLLAPSIBLE SECTIONS
+           ════════════════════════════════════════ *@
+        <section class="ld2-content-grid">
+
+            @* ─── بيانات العميل ─── *@
+            <MudPaper Class="ld2-section" Elevation="0">
+                <div class="ld2-section-header" @onclick="@(() => _customerExpanded = !_customerExpanded)">
+                    <div class="sec-icon customer"><MudIcon Icon="@Icons.Material.Rounded.ContactPhone" /></div>
+                    <div class="ld2-section-title">
+                        <h3>بيانات العميل</h3>
+                        <p>معلومات التواصل الأساسية (@CountCustomerFields())</p>
+                    </div>
+                    <MudIcon Icon="@(_customerExpanded ? Icons.Material.Rounded.ExpandLess : Icons.Material.Rounded.ExpandMore)"
+                             Class="ld2-collapse-icon" />
+                </div>
+                @if (_customerExpanded)
+                {
+                    <div class="ld2-info-grid ld2-section-body">
+                        @InfoTile("الاسم", _lead.FullName)
+                        @InfoTile("الهاتف", _lead.Phone, ltr: true)
+                        @InfoTile("هاتف إضافي", _lead.Phone2, ltr: true)
+                        @InfoTile("البريد", _lead.Email)
+                        @InfoTile("المدينة", _lead.City)
+                        @InfoTile("المنطقة", _lead.Area)
+                        @InfoTile("العنوان", _lead.Address, wide: true)
+                    </div>
+                }
+            </MudPaper>
+
+            @* ─── بيانات الإعلان ─── *@
+            <MudPaper Class="ld2-section" Elevation="0">
+                <div class="ld2-section-header" @onclick="@(() => _adsExpanded = !_adsExpanded)">
+                    <div class="sec-icon ads"><MudIcon Icon="@Icons.Material.Rounded.Campaign" /></div>
+                    <div class="ld2-section-title">
+                        <h3>بيانات الإعلان</h3>
+                        <p>@(HasAdData() ? $"مصدر الـ Lead من Meta ({CountAdFields()})" : "لا توجد بيانات إعلان")</p>
+                    </div>
+                    <MudIcon Icon="@(_adsExpanded ? Icons.Material.Rounded.ExpandLess : Icons.Material.Rounded.ExpandMore)"
+                             Class="ld2-collapse-icon" />
+                </div>
+                @if (_adsExpanded)
+                {
+                    <div class="ld2-section-body">
+                        @if (HasAdData())
+                        {
+                            <div class="ld2-info-grid">
+                                @InfoTile("المنصة", GetPlatformText(_lead.Platform))
+                                @InfoTile("الحملة", _lead.CampaignName)
+                                @InfoTile("الإعلان", _lead.AdName)
+                                @InfoTile("مجموعة الإعلان", _lead.AdSetName)
+                                @InfoTile("النموذج", _lead.FormName)
+                                @InfoTile("Meta Lead Id", _lead.MetaLeadId)
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ld2-empty-section">
+                                <MudIcon Icon="@Icons.Material.Rounded.NaturePeople" />
+                                <span>Lead عضوي — لا توجد بيانات إعلان من Meta</span>
+                            </div>
+                        }
+                    </div>
+                }
+            </MudPaper>
+
+            @* ─── بيانات المشروع ─── *@
+            <MudPaper Class="ld2-section" Elevation="0">
+                <div class="ld2-section-header" @onclick="@(() => _projectExpanded = !_projectExpanded)">
+                    <div class="sec-icon project"><MudIcon Icon="@Icons.Material.Rounded.HomeWork" /></div>
+                    <div class="ld2-section-title">
+                        <h3>بيانات المشروع</h3>
+                        <p>تفاصيل احتياج العميل المحتمل (@CountProjectFields())</p>
+                    </div>
+                    <MudIcon Icon="@(_projectExpanded ? Icons.Material.Rounded.ExpandLess : Icons.Material.Rounded.ExpandMore)"
+                             Class="ld2-collapse-icon" />
+                </div>
+                @if (_projectExpanded)
+                {
+                    <div class="ld2-info-grid ld2-section-body">
+                        @InfoTile("نوع المشروع", _lead.ProjectType)
+                        @InfoTile("مرحلة المشروع", _lead.ProjectStage)
+                        @InfoTile("الميزانية", _lead.Budget)
+                        @InfoTile("صاحب القرار", _lead.DecisionMaker)
+                        @InfoTile("الإجراء المطلوب", _lead.NextAction)
+                        @InfoTile("أفضل وقت للتواصل", _lead.BestTimeToReach)
+                    </div>
+                }
+            </MudPaper>
+
+            @* ─── المتابعة والتحويل ─── *@
+            <MudPaper Class="ld2-section" Elevation="0">
+                <div class="ld2-section-header" @onclick="@(() => _followExpanded = !_followExpanded)">
+                    <div class="sec-icon follow"><MudIcon Icon="@Icons.Material.Rounded.TrackChanges" /></div>
+                    <div class="ld2-section-title">
+                        <h3>المتابعة والتحويل</h3>
+                        <p>حالة المعالجة داخل CRM</p>
+                    </div>
+                    <MudIcon Icon="@(_followExpanded ? Icons.Material.Rounded.ExpandLess : Icons.Material.Rounded.ExpandMore)"
+                             Class="ld2-collapse-icon" />
+                </div>
+                @if (_followExpanded)
+                {
+                    <div class="ld2-info-grid ld2-section-body">
+                        @InfoTile("تاريخ الوصول", FormatDateTime(_lead.CreatedAt))
+                        @InfoTile("آخر تواصل", FormatDateTime(_lead.LastContactDate))
+                        @InfoTile("تاريخ التحويل", FormatDateTime(_lead.QualifiedDate))
+                        @InfoTile("الموظف المسؤول", _lead.AssignedEmployeeName)
+
+                        @if (_lead.IsConverted)
+                        {
+                            @InfoTile("تم التحويل", GetConversionText(), wide: true)
+                            @InfoTile("تاريخ التحويل", FormatDateTime(_lead.ConvertedDate))
+                            @InfoTile("بواسطة", _lead.ConvertedBy)
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(_lead.RejectedReason))
+                        {
+                            @InfoTile("سبب الرفض", _lead.RejectedReason, wide: true)
+                        }
+                    </div>
+
+                    @* روابط سريعة للفرصة/العميل داخل القسم *@
+                    @if (_lead.IsConverted)
+                    {
+                        <div class="ld2-quick-links">
+                            @if (_lead.ConvertedOpportunityId.HasValue)
+                            {
+                                <button type="button" class="ld2-quick-link opp"
+                                        @onclick="@(() => Navigation.NavigateTo($"/crm/opportunities/{_lead.ConvertedOpportunityId.Value}"))">
+                                    <MudIcon Icon="@Icons.Material.Rounded.OpenInNew" Size="MudSize.Small" />
+                                    <span>فتح الفرصة #@_lead.ConvertedOpportunityId</span>
+                                </button>
+                            }
+                            @if (_lead.ConvertedPartyId.HasValue)
+                            {
+                                <button type="button" class="ld2-quick-link cust"
+                                        @onclick="@(() => Navigation.NavigateTo($"/crm/customers/{_lead.ConvertedPartyId.Value}"))">
+                                    <MudIcon Icon="@Icons.Material.Rounded.ContactPage" Size="MudSize.Small" />
+                                    <span>بطاقة العميل #@_lead.ConvertedPartyId</span>
+                                </button>
+                            }
+                        </div>
+                    }
+                }
+            </MudPaper>
+
+            @* ─── ملاحظات و Feedback ─── *@
+            <MudPaper Class="ld2-section ld2-wide" Elevation="0">
+                <div class="ld2-section-header" @onclick="@(() => _notesExpanded = !_notesExpanded)">
+                    <div class="sec-icon notes"><MudIcon Icon="@Icons.Material.Rounded.Notes" /></div>
+                    <div class="ld2-section-title">
+                        <h3>ملاحظات و Feedback</h3>
+                        <p>ملخص بيانات الفورم وملاحظات فريق المبيعات</p>
+                    </div>
+                    <div class="ld2-header-actions">
+                        @if (_canEdit && _notesExpanded && !_isEditingNotes)
+                        {
+                            <div @onclick:stopPropagation>
+                                <MudIconButton Icon="@Icons.Material.Rounded.Edit" Size="MudSize.Small"
+                                               Color="MudColor.Primary" OnClick="StartEditNotes"
+                                               Title="تعديل الملاحظات" />
+                            </div>
+                        }
+                        <MudIcon Icon="@(_notesExpanded ? Icons.Material.Rounded.ExpandLess : Icons.Material.Rounded.ExpandMore)"
+                                 Class="ld2-collapse-icon" />
+                    </div>
+                </div>
+                @if (_notesExpanded)
+                {
+                    <div class="ld2-section-body">
+                        @if (_isEditingNotes)
+                        {
+                            <div class="ld2-notes-edit">
+                                <MudTextField T="string"
+                                              Label="الملاحظات"
+                                              Variant="MudVariant.Outlined"
+                                              @bind-Value="_editingNotes"
+                                              Lines="4" />
+                                <div class="ld2-notes-edit-actions">
+                                    <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary"
+                                               Size="MudSize.Small" Disabled="_isSavingNotes"
+                                               OnClick="SaveNotesAsync">
+                                        @if (_isSavingNotes)
+                                        {
+                                            <MudProgressCircular Size="MudSize.Small" Indeterminate="true" Class="me-2" />
+                                        }
+                                        حفظ
+                                    </MudButton>
+                                    <MudButton Variant="MudVariant.Text" Color="MudColor.Default"
+                                               Size="MudSize.Small" OnClick="CancelEditNotes"
+                                               Disabled="_isSavingNotes">
+                                        إلغاء
+                                    </MudButton>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ld2-notes-box">
+                                @if (!string.IsNullOrWhiteSpace(_lead.Notes))
+                                {
+                                    <p>@_lead.Notes</p>
+                                }
+                                else
+                                {
+                                    <span class="muted">لا توجد ملاحظات.</span>
+                                }
+
+                                @if (!string.IsNullOrWhiteSpace(_lead.Feedback))
+                                {
+                                    <div class="feedback-box">
+                                        <strong>Feedback</strong>
+                                        <p>@_lead.Feedback</p>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </MudPaper>
+
+            @* ─── سجل التواصلات ─── *@
+            <MudPaper Class="ld2-section ld2-wide" Elevation="0">
+                <div class="ld2-section-header" @onclick="@(() => _timelineExpanded = !_timelineExpanded)">
+                    <div class="sec-icon timeline">
+                        <MudIcon Icon="@Icons.Material.Rounded.Timeline" />
+                    </div>
+                    <div class="ld2-section-title">
+                        <h3>سجل التواصلات الكامل</h3>
+                        <p>تواصلات الـ Lead قبل التحويل + تواصلات فرصة البيع بعد التحويل
+                           @if (_leadInteractions.Any() || _opportunityInteractions.Any())
+                           {
+                               <span class="ld2-count-badge">@(_leadInteractions.Count + _opportunityInteractions.Count)</span>
+                           }
+                        </p>
+                    </div>
+                    <MudIcon Icon="@(_timelineExpanded ? Icons.Material.Rounded.ExpandLess : Icons.Material.Rounded.ExpandMore)"
+                             Class="ld2-collapse-icon" />
+                </div>
+                @if (_timelineExpanded)
+                {
+                    <div class="ld2-section-body">
+                        @if (_leadInteractions.Any() || _opportunityInteractions.Any())
+                        {
+                            <div class="lead-interactions-list">
+
+                                @if (_leadInteractions.Any())
+                                {
+                                    <div class="timeline-group-title">
+                                        <MudIcon Icon="@Icons.Material.Rounded.FiberNew" Size="MudSize.Small" />
+                                        قبل التحويل — تواصلات الـ Lead
+                                    </div>
+
+                                    @foreach (var item in _leadInteractions)
+                                    {
+                                        <div class="lead-interaction-item" style="--tl-color:@GetInteractionColor(item.InteractionType)">
+                                            <div class="li-icon @GetInteractionClass(item.InteractionType)">
+                                                <MudIcon Icon="@GetInteractionIcon(item.InteractionType)" Size="MudSize.Small" />
+                                            </div>
+
+                                            <div class="li-content">
+                                                <div class="li-head">
+                                                    <strong>@item.InteractionType</strong>
+                                                    <span>@item.InteractionDate.ToString("yyyy/MM/dd HH:mm")</span>
+                                                </div>
+
+                                                @if (!string.IsNullOrWhiteSpace(item.Summary))
+                                                {
+                                                    <p>@item.Summary</p>
+                                                }
+
+                                                @if (!string.IsNullOrWhiteSpace(item.Notes))
+                                                {
+                                                    <small>@item.Notes</small>
+                                                }
+
+                                                <div class="li-meta">
+                                                    <span>قبل التحويل</span>
+
+                                                    @if (!string.IsNullOrWhiteSpace(item.EmployeeName))
+                                                    {
+                                                        <span>الموظف: @item.EmployeeName</span>
+                                                    }
+
+                                                    @if (!string.IsNullOrWhiteSpace(item.CreatedBy))
+                                                    {
+                                                        <span>بواسطة: @item.CreatedBy</span>
+                                                    }
+
+                                                    @if (item.NextFollowUpDate.HasValue)
+                                                    {
+                                                        <span>متابعة: @item.NextFollowUpDate.Value.ToString("yyyy/MM/dd")</span>
+                                                    }
+
+                                                    @if (!string.IsNullOrWhiteSpace(item.OldLeadStatus) ||
+                                                         !string.IsNullOrWhiteSpace(item.NewLeadStatus))
+                                                    {
+                                                        <span>
+                                                            الحالة:
+                                                            @(item.OldLeadStatus ?? "—")
+                                                            ←
+                                                            @(item.NewLeadStatus ?? "—")
+                                                        </span>
+                                                    }
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                }
+
+                                @if (_opportunityInteractions.Any())
+                                {
+                                    <div class="timeline-group-title after-convert">
+                                        <MudIcon Icon="@Icons.Material.Rounded.TrackChanges" Size="MudSize.Small" />
+                                        بعد التحويل — تواصلات فرصة البيع
+                                    </div>
+
+                                    @foreach (var item in _opportunityInteractions.OrderByDescending(i => i.InteractionDate))
+                                    {
+                                        <div class="lead-interaction-item" style="--tl-color:#047857">
+                                            <div class="li-icon li-opportunity">
+                                                <MudIcon Icon="@Icons.Material.Rounded.Forum" Size="MudSize.Small" />
+                                            </div>
+
+                                            <div class="li-content">
+                                                <div class="li-head">
+                                                    <strong>@(item.StatusNameAr ?? item.StatusName ?? "تواصل مع فرصة البيع")</strong>
+                                                    <span>@item.InteractionDate.ToString("yyyy/MM/dd HH:mm")</span>
+                                                </div>
+
+                                                @if (!string.IsNullOrWhiteSpace(item.Summary))
+                                                {
+                                                    <p>@item.Summary</p>
+                                                }
+                                                else
+                                                {
+                                                    <p>تم تسجيل تواصل على فرصة البيع بعد تحويل الـ Lead.</p>
+                                                }
+
+                                                @if (!string.IsNullOrWhiteSpace(item.Notes))
+                                                {
+                                                    <small>@item.Notes</small>
+                                                }
+
+                                                <div class="li-meta">
+                                                    <span>بعد التحويل</span>
+
+                                                    @if (!string.IsNullOrWhiteSpace(item.EmployeeName))
+                                                    {
+                                                        <span>الموظف: @item.EmployeeName</span>
+                                                    }
+
+                                                    @if (!string.IsNullOrWhiteSpace(item.CreatedBy))
+                                                    {
+                                                        <span>بواسطة: @item.CreatedBy</span>
+                                                    }
+
+                                                    @if (!string.IsNullOrWhiteSpace(item.StageBeforeNameAr) ||
+                                                         !string.IsNullOrWhiteSpace(item.StageAfterNameAr))
+                                                    {
+                                                        <span>
+                                                            المرحلة:
+                                                            @(item.StageBeforeNameAr ?? item.StageBeforeName ?? "—")
+                                                            ←
+                                                            @(item.StageAfterNameAr ?? item.StageAfterName ?? "—")
+                                                        </span>
+                                                    }
+
+                                                    @if (item.NextFollowUpDate.HasValue)
+                                                    {
+                                                        <span>متابعة: @item.NextFollowUpDate.Value.ToString("yyyy/MM/dd")</span>
+                                                    }
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="timeline-empty">
+                                <MudIcon Icon="@Icons.Material.Rounded.ChatBubbleOutline" />
+                                <span>لم يتم تسجيل أي تواصل مع هذا الـ Lead أو فرصته بعد.</span>
+                            </div>
+                        }
+                    </div>
+                }
+            </MudPaper>
+        </section>
+    </div>
+}
+
+@* ════════════════════════════════════════
+   DIALOG: تسجيل تواصل
+   ════════════════════════════════════════ *@
+<MudDialog @bind-Visible="_showInteractionDialog" Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true })">
+    <TitleContent>
+        <div style="display:flex;align-items:center;gap:.5rem;">
+            <MudIcon Icon="@Icons.Material.Rounded.AddComment" Color="MudColor.Primary" />
+            <MudText Typo="Typo.h6">تسجيل تواصل مع Lead</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div dir="rtl" style="display:flex;flex-direction:column;gap:1rem;">
+
+            <MudSelect T="string"
+                       Label="نوع التواصل"
+                       Variant="MudVariant.Outlined"
+                       @bind-Value="_interactionModel.InteractionType"
+                       Dense="true">
+                @foreach (var t in LeadInteractionTypes.All)
+                {
+                    <MudSelectItem T="string" Value="@t.Key">@t.Value</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField T="string"
+                          Label="ملخص التواصل *"
+                          Variant="MudVariant.Outlined"
+                          @bind-Value="_interactionModel.Summary"
+                          Dense="true"
+                          Lines="2"
+                          Placeholder="مثال: تم الاتصال والعميل مهتم بالتفاصيل" />
+
+            <MudTextField T="string"
+                          Label="ملاحظات"
+                          Variant="MudVariant.Outlined"
+                          @bind-Value="_interactionModel.Notes"
+                          Dense="true"
+                          Lines="3" />
+
+            <MudDatePicker Label="تاريخ متابعة قادم"
+                           Variant="MudVariant.Outlined"
+                           @bind-Date="_interactionModel.NextFollowUpDate"
+                           Dense="true"
+                           Clearable="true" />
+
+            <MudSelect T="string"
+                       Label="تحديث الحالة بعد التواصل"
+                       Variant="MudVariant.Outlined"
+                       @bind-Value="_interactionModel.NewLeadStatus"
+                       Dense="true"
+                       Clearable="true">
+                <MudSelectItem T="string" Value="@("تم التواصل")">تم التواصل</MudSelectItem>
+                <MudSelectItem T="string" Value="@("مرفوض")">مرفوض</MudSelectItem>
+            </MudSelect>
+
+            @if (_interactionModel.NewLeadStatus == "مرفوض")
+            {
+                <MudTextField T="string"
+                              Label="سبب الرفض"
+                              Variant="MudVariant.Outlined"
+                              @bind-Value="_interactionModel.RejectedReason"
+                              Dense="true"
+                              Lines="2" />
+            }
+
+            <MudAlert Severity="Severity.Info" Dense="true">
+                إذا لم تختار حالة، سيتم اعتبار التواصل كـ "تم التواصل" تلقائيًا عند الاتصال أو واتساب أو متابعة.
+            </MudAlert>
+        </div>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="MudVariant.Text"
+                   Color="MudColor.Default"
+                   OnClick="@(() => _showInteractionDialog = false)">
+            إلغاء
+        </MudButton>
+
+        <MudButton Variant="MudVariant.Filled"
+                   Color="MudColor.Primary"
+                   Disabled="_isSavingInteraction"
+                   OnClick="SaveInteractionAsync">
+            @if (_isSavingInteraction)
+            {
+                <MudProgressCircular Size="MudSize.Small" Indeterminate="true" Class="me-2" />
+            }
+            حفظ التواصل
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@* ════════════════════════════════════════
+   DIALOG: تحويل لفرصة
+   ════════════════════════════════════════ *@
+<MudDialog @bind-Visible="_showConvertDialog"
+           Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true })">
+    <TitleContent>
+        <div style="display:flex;align-items:center;gap:.5rem;">
+            <MudIcon Icon="@Icons.Material.Rounded.PersonAdd" Color="MudColor.Success" />
+            <MudText Typo="Typo.h6">تحويل Lead إلى فرصة بيع</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div dir="rtl" style="display:flex;flex-direction:column;gap:1rem;">
+
+            <MudAlert Severity="Severity.Info" Dense="true">
+                سيتم إنشاء عميل + فرصة بيع على مرحلة <strong>مهتم</strong>.
+            </MudAlert>
+
+            <MudNumericField T="decimal"
+                             Label="قيمة الفرصة المتوقعة"
+                             Variant="MudVariant.Outlined"
+                             @bind-Value="_convertExpectedValue"
+                             Min="0m"
+                             Dense="true"
+                             Adornment="Adornment.End"
+                             AdornmentText="ج" />
+
+            <MudTextField T="string"
+                          Label="ملاحظات التحويل"
+                          Variant="MudVariant.Outlined"
+                          @bind-Value="_convertNotes"
+                          Dense="true"
+                          Lines="3" />
+
+        </div>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="MudVariant.Text"
+                   Color="MudColor.Default"
+                   OnClick="@(() => _showConvertDialog = false)">
+            إلغاء
+        </MudButton>
+
+        <MudButton Variant="MudVariant.Filled"
+                   Color="MudColor.Success"
+                   Disabled="_isConverting"
+                   OnClick="ConvertLeadAsync">
+            @if (_isConverting)
+            {
+                <MudProgressCircular Size="MudSize.Small" Indeterminate="true" Class="me-2" />
+            }
+            تحويل
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .ld2-page {
+        padding: 1rem 1.5rem 3rem;
+        max-width: 1800px;
+        margin: 0 auto;
+        direction: rtl;
+    }
+
+    .ld-loading-screen {
+        min-height: 60vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .ld-loading-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 18px;
+        padding: 2rem 3rem;
+        box-shadow: 0 10px 30px rgba(15,23,42,.08);
+    }
+    .ld2-error-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+
+    /* ═══ DUPLICATE ALERT ═══ */
+    .ld2-duplicate-alert {
+        display: flex;
+        align-items: center;
+        gap: .65rem;
+        background: linear-gradient(135deg, #fef2f2, #fee2e2);
+        border: 1px solid #fca5a5;
+        border-radius: 14px;
+        padding: .75rem 1rem;
+        margin-bottom: .85rem;
+        color: #991b1b;
+        font-weight: 700;
+        font-size: .88rem;
+        flex-wrap: wrap;
+    }
+    .ld2-duplicate-alert strong {
+        color: #7f1d1d;
+        direction: ltr;
+        unicode-bidi: plaintext;
+    }
+
+    /* ═══ HERO ═══ */
+    .ld2-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 22px;
+        margin-bottom: .85rem;
+        color: #fff;
+        box-shadow: 0 14px 40px rgba(67,56,202,.22);
+    }
+    .ld2-hero-bg {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(135deg, #1e1b4b 0%, #312e81 35%, #4338ca 68%, #6366f1 100%);
+    }
+    .ld2-hero-dots {
+        position: absolute;
+        inset: 0;
+        background-image: radial-gradient(rgba(255,255,255,.08) 1px, transparent 1px);
+        background-size: 22px 22px;
+    }
+    .ld2-hero-orb { position: absolute; border-radius: 50%; filter: blur(58px); }
+    .orb-1 { width: 220px; height: 220px; background: rgba(129,140,248,.28); top: -70px; right: 12%; }
+    .orb-2 { width: 170px; height: 170px; background: rgba(16,185,129,.18); bottom: -60px; left: 18%; }
+    .ld2-hero-content {
+        position: relative;
+        z-index: 1;
+        padding: 1.35rem 1.5rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+    .ld2-person-block { display: flex; align-items: center; gap: 1rem; min-width: 0; }
+    .ld2-avatar {
+        width: 62px;
+        height: 62px;
+        border-radius: 20px;
+        border: 1px solid rgba(255,255,255,.28);
+        backdrop-filter: blur(10px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.4rem;
+        font-weight: 900;
+        flex-shrink: 0;
+        color: #fff;
+    }
+    .ld2-title-line { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+    .ld2-title-line h1 { margin: 0; font-size: 1.55rem; font-weight: 900; letter-spacing: -.4px; }
+    .ld2-meta-line { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; opacity: .86; margin-top: .25rem; font-size: .88rem; }
+    .ltr { direction: ltr; unicode-bidi: plaintext; }
+    .ld2-copy-btn {
+        --mud-icon-button-size: 24px !important;
+        opacity: .6;
+        transition: opacity .2s;
+    }
+    .ld2-copy-btn:hover { opacity: 1; }
+    .ld2-hero-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+
+    /* ═══ TEMPERATURE BADGES ═══ */
+    .temp-hot { background: rgba(239,68,68,.7); color: #fff; border: 1px solid rgba(255,255,255,.3); }
+    .temp-warm { background: rgba(245,158,11,.7); color: #fff; border: 1px solid rgba(255,255,255,.3); }
+    .temp-cold { background: rgba(59,130,246,.6); color: #fff; border: 1px solid rgba(255,255,255,.3); }
+    .temp-responded { background: rgba(34,197,94,.6); color: #fff; border: 1px solid rgba(255,255,255,.3); }
+
+    /* ═══ QUICK ACTIONS ═══ */
+    .ld2-action-strip {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        padding: .75rem .9rem;
+        margin-bottom: .85rem;
+        box-shadow: 0 2px 8px rgba(15,23,42,.04);
+    }
+    .ld2-action-title { display: flex; align-items: center; gap: .45rem; font-weight: 900; color: var(--mud-palette-text-primary); }
+    .ld2-action-buttons { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+
+    /* ═══ SUMMARY ═══ */
+    .ld2-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: .65rem;
+        margin-bottom: .85rem;
+    }
+    .ld2-summary-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        padding: .85rem 1rem;
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+        min-width: 0;
+        box-shadow: 0 2px 8px rgba(15,23,42,.04);
+    }
+    .ld2-summary-card span { display: block; font-size: .72rem; color: var(--mud-palette-text-secondary); font-weight: 700; margin-bottom: .15rem; }
+    .ld2-summary-card strong { display: block; font-size: .9rem; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sum-icon { width: 42px; height: 42px; border-radius: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .sum-icon.blue { background:#dbeafe; color:#1d4ed8; }
+    .sum-icon.purple { background:#ede9fe; color:#6d28d9; }
+    .sum-icon.green { background:#dcfce7; color:#166534; }
+    .sum-icon.amber { background:#fef3c7; color:#92400e; }
+    .sum-icon.rose { background:#ffe4e6; color:#be123c; }
+
+    /* ═══ CONTENT ═══ */
+    .ld2-content-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: .85rem;
+    }
+    .ld2-section {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        padding: 1rem;
+        box-shadow: 0 2px 8px rgba(15,23,42,.04);
+        min-width: 0;
+    }
+    .ld2-wide { grid-column: 1 / -1; }
+
+    /* Section Header - Clickable */
+    .ld2-section-header {
+        display: flex;
+        align-items: center;
+        gap: .7rem;
+        padding-bottom: .7rem;
+        margin-bottom: 0;
+        cursor: pointer;
+        user-select: none;
+        transition: background .2s;
+        border-radius: 12px;
+        padding: .5rem .6rem;
+        margin: -.5rem -.6rem .0rem;
+    }
+    .ld2-section-header:hover {
+        background: rgba(99,102,241,.04);
+    }
+    .ld2-section-header:not(:hover) {
+        border-bottom: 1px solid var(--mud-palette-divider);
+        padding-bottom: .7rem;
+        margin-bottom: 0;
+    }
+    .ld2-section-title { flex: 1; min-width: 0; }
+    .ld2-section-title h3 { margin: 0; font-size: 1rem; font-weight: 900; }
+    .ld2-section-title p { margin: .1rem 0 0; font-size: .75rem; color: var(--mud-palette-text-secondary); }
+    .ld2-header-actions {
+        display: flex;
+        align-items: center;
+        gap: .25rem;
+    }
+    .ld2-collapse-icon {
+        color: var(--mud-palette-text-secondary);
+        transition: transform .3s ease;
+    }
+
+    /* Section Body - Animated */
+    .ld2-section-body {
+        animation: ld2-slide-down .25s ease-out;
+        padding-top: .85rem;
+    }
+    @@keyframes ld2-slide-down {
+        from { opacity: 0; max-height: 0; transform: translateY(-8px); }
+        to { opacity: 1; max-height: 2000px; transform: translateY(0); }
+    }
+
+    .sec-icon { width: 42px; height: 42px; border-radius: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .sec-icon.customer { background:#dbeafe; color:#1d4ed8; }
+    .sec-icon.ads { background:#ede9fe; color:#6d28d9; }
+    .sec-icon.project { background:#dcfce7; color:#166534; }
+    .sec-icon.follow { background:#fef3c7; color:#92400e; }
+    .sec-icon.notes { background:#e0f2fe; color:#0369a1; }
+    .sec-icon.timeline { background:#f3f4f6; color:#475569; }
+
+    /* Empty Section */
+    .ld2-empty-section {
+        display: flex;
+        align-items: center;
+        gap: .6rem;
+        color: var(--mud-palette-text-secondary);
+        background: #f8fafc;
+        border: 1px dashed #cbd5e1;
+        border-radius: 12px;
+        padding: 1rem;
+        font-size: .88rem;
+    }
+
+    /* Count Badge */
+    .ld2-count-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #6366f1;
+        color: #fff;
+        border-radius: 999px;
+        min-width: 22px;
+        height: 22px;
+        font-size: .72rem;
+        font-weight: 900;
+        padding: 0 6px;
+        margin-right: .3rem;
+    }
+
+    /* Info Grid */
+    .ld2-info-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+    .info-tile {
+        background: rgba(148,163,184,.07);
+        border: 1px solid rgba(148,163,184,.14);
+        border-radius: 12px;
+        padding: .65rem .75rem;
+        min-width: 0;
+    }
+    .info-tile.wide { grid-column: 1 / -1; }
+    .info-label { display: block; color: var(--mud-palette-text-secondary); font-size: .72rem; font-weight: 800; margin-bottom: .25rem; }
+    .info-value { display: block; color: var(--mud-palette-text-primary); font-size: .9rem; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .info-value.ltr { direction: ltr; text-align: right; }
+    .muted { color: var(--mud-palette-text-secondary); }
+
+    /* Quick Links in Follow Section */
+    .ld2-quick-links {
+        display: flex;
+        gap: .65rem;
+        flex-wrap: wrap;
+        margin-top: .65rem;
+        padding-top: .65rem;
+        border-top: 1px solid var(--mud-palette-divider);
+    }
+    .ld2-quick-link {
+        display: inline-flex;
+        align-items: center;
+        gap: .4rem;
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        border-radius: 12px;
+        padding: .5rem .85rem;
+        font-size: .82rem;
+        font-weight: 800;
+        color: #166534;
+        cursor: pointer;
+        transition: all .2s;
+    }
+    .ld2-quick-link:hover {
+        background: #dcfce7;
+        box-shadow: 0 2px 8px rgba(22,101,52,.12);
+    }
+    .ld2-quick-link.cust {
+        background: #eff6ff;
+        border-color: #bfdbfe;
+        color: #1d4ed8;
+    }
+    .ld2-quick-link.cust:hover {
+        background: #dbeafe;
+        box-shadow: 0 2px 8px rgba(29,78,216,.12);
+    }
+
+    /* Notes */
+    .ld2-notes-box p { margin: 0; white-space: pre-wrap; line-height: 1.75; }
+    .ld2-notes-edit {
+        display: flex;
+        flex-direction: column;
+        gap: .75rem;
+    }
+    .ld2-notes-edit-actions {
+        display: flex;
+        gap: .5rem;
+        justify-content: flex-start;
+    }
+    .feedback-box { margin-top: 1rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: .8rem; }
+    .feedback-box strong { display: block; margin-bottom: .35rem; color: #334155; }
+    .timeline-empty { display: flex; align-items: center; gap: .6rem; color: var(--mud-palette-text-secondary); background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 12px; padding: 1rem; }
+
+    /* Timeline */
+    .timeline-group-title {
+        display: inline-flex;
+        align-items: center;
+        gap: .4rem;
+        width: fit-content;
+        background: #eef2ff;
+        color: #3730a3;
+        border: 1px solid #c7d2fe;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: .78rem;
+        font-weight: 900;
+        margin: .25rem 0;
+    }
+    .timeline-group-title.after-convert {
+        background: #ecfdf5;
+        color: #047857;
+        border-color: #bbf7d0;
+    }
+    .li-opportunity {
+        background: #ecfdf5;
+        color: #047857;
+    }
+    .lead-interactions-list {
+        display: flex;
+        flex-direction: column;
+        gap: .75rem;
+    }
+    .lead-interaction-item {
+        display: grid;
+        grid-template-columns: 42px minmax(0, 1fr);
+        gap: .75rem;
+        position: relative;
+    }
+    .lead-interaction-item:not(:last-child)::before {
+        content: "";
+        position: absolute;
+        top: 42px;
+        right: 20px;
+        width: 2px;
+        height: calc(100% - 30px);
+        background: linear-gradient(180deg, var(--tl-color, #cbd5e1), rgba(203, 213, 225, 0.35));
+    }
+    .li-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1;
+    }
+    .li-call { background: #dbeafe; color: #1d4ed8; }
+    .li-whatsapp { background: #dcfce7; color: #166534; }
+    .li-assigned { background: #e0f2fe; color: #0369a1; }
+    .li-rejected { background: #fee2e2; color: #991b1b; }
+    .li-note { background: #f3f4f6; color: #475569; }
+    .li-content {
+        background: #ffffff;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-right: 4px solid var(--tl-color, #94a3b8);
+        border-radius: 14px;
+        padding: .8rem .95rem;
+        min-width: 0;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+    }
+    .li-head {
+        display: flex;
+        justify-content: space-between;
+        gap: .75rem;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    .li-head strong {
+        color: var(--tl-color, #0f172a);
+        font-size: .92rem;
+        font-weight: 900;
+    }
+    .li-head span {
+        color: #64748b;
+        font-size: .75rem;
+        font-weight: 700;
+        direction: ltr;
+    }
+    .li-content p {
+        margin: .45rem 0 0;
+        color: #0f172a;
+        font-size: .92rem;
+        line-height: 1.65;
+        font-weight: 700;
+        background: rgba(248, 250, 252, 0.9);
+        border-right: 3px solid var(--tl-color, #94a3b8);
+        padding: .45rem .65rem;
+        border-radius: 8px;
+    }
+    .li-content small {
+        display: block;
+        margin-top: .35rem;
+        color: #64748b;
+        font-size: .75rem;
+    }
+    .li-meta {
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+        margin-top: .5rem;
+    }
+    .li-meta span {
+        background: #f8fafc;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 999px;
+        padding: 3px 9px;
+        font-size: .7rem;
+        color: #475569;
+        font-weight: 800;
+    }
+
+    /* BADGES */
+    .status-new, .status-contacted, .status-qualified, .status-converted, .status-rejected, .status-default,
+    .follow-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-size: .73rem; font-weight: 900; white-space: nowrap; }
+    .status-new { background:#dbeafe; color:#1d4ed8; }
+    .status-contacted { background:#fef3c7; color:#92400e; }
+    .status-qualified { background:#dcfce7; color:#166534; }
+    .status-converted { background:#ede9fe; color:#6d28d9; }
+    .status-rejected { background:#fee2e2; color:#991b1b; }
+    .status-default { background:#f3f4f6; color:#374151; }
+    .follow-new { background:#dbeafe; color:#1d4ed8; }
+    .follow-warn { background:#fef3c7; color:#92400e; }
+    .follow-late { background:#fee2e2; color:#991b1b; }
+    .follow-contact { background:#e0f2fe; color:#0369a1; }
+    .follow-done { background:#dcfce7; color:#166534; }
+    .follow-rejected { background:#f3f4f6; color:#4b5563; }
+
+    @@media (max-width: 1000px) {
+        .ld2-content-grid { grid-template-columns: 1fr; }
+    }
+    @@media (max-width: 700px) {
+        .ld2-page { padding: .75rem; }
+        .ld2-hero-content { align-items: flex-start; }
+        .ld2-person-block { align-items: flex-start; }
+        .ld2-avatar { width: 52px; height: 52px; }
+        .ld2-title-line h1 { font-size: 1.2rem; }
+        .ld2-info-grid { grid-template-columns: 1fr; }
+        .info-tile.wide { grid-column: auto; }
+    }
+</style>
+
+@code {
+    [Parameter] public int LeadId { get; set; }
+
+    // ─── State ───
+    private bool _isLoading = true;
+    private bool _canEdit;
+    private string _currentUserName = "system";
+    private string? _loadError;
+    private LeadsCrmDetailDto? _lead;
+    private bool _showConvertDialog = false;
+    private bool _isConverting = false;
+    private int? _convertEmployeeId;
+    private decimal _convertExpectedValue = 0;
+    private string? _convertNotes;
+    private List<LeadInteractionDto> _leadInteractions = new();
+    private List<InteractionListDto> _opportunityInteractions = new();
+
+    private bool _showInteractionDialog = false;
+    private bool _isSavingInteraction = false;
+    private LeadInteractionCreateDto _interactionModel = new();
+
+    // ─── Collapsible Section State ───
+    private bool _customerExpanded = true;
+    private bool _adsExpanded = false;       // مطوي افتراضياً
+    private bool _projectExpanded = true;
+    private bool _followExpanded = true;
+    private bool _notesExpanded = true;
+    private bool _timelineExpanded = true;
+
+    // ─── Inline Notes Edit ───
+    private bool _isEditingNotes = false;
+    private bool _isSavingNotes = false;
+    private string _editingNotes = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            _currentUserName = user.Identity?.Name ?? "system";
+            _canEdit = LeadsCrmPermissions.CanEdit(user);
+
+            await LoadLeadAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task LoadLeadAsync()
+    {
+        _isLoading = true;
+        _loadError = null;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            _lead = await LeadsService.GetLeadByIdAsync(LeadId);
+
+            _leadInteractions = _lead != null
+                ? await LeadsService.GetLeadInteractionsAsync(LeadId)
+                : new List<LeadInteractionDto>();
+
+            if (_lead?.ConvertedOpportunityId.HasValue == true)
+            {
+                _opportunityInteractions = await InteractionService
+                    .GetByOpportunityAsync(_lead.ConvertedOpportunityId.Value);
+            }
+            else
+            {
+                _opportunityInteractions = new();
+            }
+
+            if (_lead == null)
+                _loadError = "لم يتم العثور على الـ Lead المطلوب.";
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.GetBaseException().Message;
+            Snackbar.Add("تعذّر تحميل تفاصيل الـ Lead: " + _loadError, Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    //  تغيير الحالة
+    // ═══════════════════════════════════════════
+    private async Task ChangeStatusAsync(string status)
+    {
+        if (_lead is null) return;
+
+        try
+        {
+            var dto = new LeadsCrmUpdateDto
+            {
+                LeadId = _lead.LeadId,
+                LeadStatus = status,
+                AssignedEmployeeId = _lead.AssignedEmployeeId,
+                Feedback = status == "تم التواصل" ? "تم التواصل من صفحة تفاصيل Lead" : null,
+                RejectedReason = status == "مرفوض" ? "تم الرفض من صفحة تفاصيل Lead" : null
+            };
+
+            var (ok, msg) = await LeadsService.UpdateLeadAsync(dto, _currentUserName);
+            Snackbar.Add(ok ? "تم تحديث الحالة" : msg, ok ? Severity.Success : Severity.Error);
+            if (ok) await LoadLeadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("تعذّر تحديث الحالة: " + ex.Message, Severity.Error);
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    //  تسجيل تواصل
+    // ═══════════════════════════════════════════
+    private void OpenInteractionDialog()
+    {
+        if (_lead == null) return;
+
+        _interactionModel = new LeadInteractionCreateDto
+        {
+            LeadId = _lead.LeadId,
+            EmployeeId = _lead.AssignedEmployeeId,
+            InteractionType = LeadInteractionTypes.Call,
+            NewLeadStatus = "تم التواصل"
+        };
+
+        _showInteractionDialog = true;
+    }
+
+    private async Task SaveInteractionAsync()
+    {
+        if (_lead == null) return;
+
+        if (string.IsNullOrWhiteSpace(_interactionModel.Summary))
+        {
+            Snackbar.Add("يرجى كتابة ملخص التواصل", Severity.Warning);
+            return;
+        }
+
+        _isSavingInteraction = true;
+
+        try
+        {
+            _interactionModel.LeadId = _lead.LeadId;
+
+            var (success, message) = await LeadsService.AddLeadInteractionAsync(
+                _interactionModel,
+                _currentUserName);
+
+            if (success)
+            {
+                Snackbar.Add("تم تسجيل التواصل بنجاح", Severity.Success);
+                _showInteractionDialog = false;
+                await LoadLeadAsync();
+            }
+            else
+            {
+                Snackbar.Add(message, Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("تعذّر تسجيل التواصل: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isSavingInteraction = false;
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    //  تحويل لفرصة
+    // ═══════════════════════════════════════════
+    private bool CanConvertLead()
+    {
+        if (_lead == null) return false;
+        if (_lead.IsConverted || _lead.LeadStatus == "محول" || _lead.LeadStatus == "مرفوض")
+            return false;
+
+        return _lead.LeadStatus == "تم التواصل" || _lead.LastContactDate.HasValue;
+    }
+
+    private void OpenConvertDialog()
+    {
+        if (_lead == null) return;
+
+        _convertEmployeeId = _lead.AssignedEmployeeId;
+        _convertExpectedValue = 0;
+        _convertNotes = _lead.Notes;
+
+        _showConvertDialog = true;
+    }
+
+    private async Task ConvertLeadAsync()
+    {
+        if (_lead == null || _isConverting) return;
+
+        _isConverting = true;
+
+        try
+        {
+            var dto = new LeadConvertDto
+            {
+                LeadId = _lead.LeadId,
+                EmployeeId = _convertEmployeeId,
+                ExpectedValue = _convertExpectedValue,
+                Notes = _convertNotes
+            };
+
+            var result = await LeadsService.ConvertLeadToClientAsync(dto, _currentUserName);
+
+            if (result.Success)
+            {
+                Snackbar.Add("تم تحويل الـ Lead إلى فرصة بيع بنجاح", Severity.Success);
+                _showConvertDialog = false;
+
+                if (result.OpportunityId > 0)
+                    Navigation.NavigateTo($"/crm/opportunities/{result.OpportunityId}");
+                else
+                    await LoadLeadAsync();
+            }
+            else
+            {
+                Snackbar.Add(result.Message, Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("تعذّر التحويل: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isConverting = false;
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    //  تعديل الملاحظات Inline
+    // ═══════════════════════════════════════════
+    private void StartEditNotes()
+    {
+        _editingNotes = _lead?.Notes ?? "";
+        _isEditingNotes = true;
+    }
+
+    private void CancelEditNotes()
+    {
+        _isEditingNotes = false;
+        _editingNotes = "";
+    }
+
+    private async Task SaveNotesAsync()
+    {
+        if (_lead == null) return;
+
+        _isSavingNotes = true;
+
+        try
+        {
+            var dto = new LeadsCrmUpdateDto
+            {
+                LeadId = _lead.LeadId,
+                LeadStatus = _lead.LeadStatus,
+                AssignedEmployeeId = _lead.AssignedEmployeeId,
+                Notes = _editingNotes
+            };
+
+            var (ok, msg) = await LeadsService.UpdateLeadAsync(dto, _currentUserName);
+
+            if (ok)
+            {
+                Snackbar.Add("تم حفظ الملاحظات", Severity.Success);
+                _isEditingNotes = false;
+                await LoadLeadAsync();
+            }
+            else
+            {
+                Snackbar.Add(msg, Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("تعذّر حفظ الملاحظات: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isSavingNotes = false;
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    //  نسخ رقم التليفون
+    // ═══════════════════════════════════════════
+    private async Task CopyToClipboard(string text)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Snackbar.Add("تم نسخ الرقم ✅", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("تعذّر النسخ", Severity.Warning);
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    //  بيانات الإعلان - هل فيها بيانات؟
+    // ═══════════════════════════════════════════
+    private bool HasAdData()
+    {
+        if (_lead == null) return false;
+        return !string.IsNullOrWhiteSpace(_lead.CampaignName)
+            || !string.IsNullOrWhiteSpace(_lead.AdName)
+            || !string.IsNullOrWhiteSpace(_lead.AdSetName)
+            || !string.IsNullOrWhiteSpace(_lead.FormName)
+            || !string.IsNullOrWhiteSpace(_lead.MetaLeadId)
+            || !string.IsNullOrWhiteSpace(_lead.Platform);
+    }
+
+    private int CountAdFields()
+    {
+        if (_lead == null) return 0;
+        int count = 0;
+        if (!string.IsNullOrWhiteSpace(_lead.Platform)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.CampaignName)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.AdName)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.AdSetName)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.FormName)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.MetaLeadId)) count++;
+        return count;
+    }
+
+    private int CountCustomerFields()
+    {
+        if (_lead == null) return 0;
+        int count = 0;
+        if (!string.IsNullOrWhiteSpace(_lead.FullName)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.Phone)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.Phone2)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.Email)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.City)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.Area)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.Address)) count++;
+        return count;
+    }
+
+    private int CountProjectFields()
+    {
+        if (_lead == null) return 0;
+        int count = 0;
+        if (!string.IsNullOrWhiteSpace(_lead.ProjectType)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.ProjectStage)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.Budget)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.DecisionMaker)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.NextAction)) count++;
+        if (!string.IsNullOrWhiteSpace(_lead.BestTimeToReach)) count++;
+        return count;
+    }
+
+    // ═══════════════════════════════════════════
+    //  مؤشر سرعة الاستجابة (Response Time Badge)
+    // ═══════════════════════════════════════════
+    private record TemperatureBadge(string Class, string Icon, string Text);
+
+    private TemperatureBadge? GetTemperatureBadge()
+    {
+        if (_lead is null) return null;
+
+        // لو محول أو مرفوض → مفيش badge
+        if (_lead.IsConverted || _lead.LeadStatus == "محول" || _lead.LeadStatus == "مرفوض")
+            return null;
+
+        // لو تم التواصل → "تم الرد"
+        if (_lead.LeadStatus == "تم التواصل" || _lead.LastContactDate.HasValue)
+            return new("follow-badge temp-responded", "✓", "تم الرد");
+
+        // لو لسه جديد → نحسب الوقت
+        var age = DateTime.Now - _lead.CreatedAt;
+        if (age.TotalMinutes < 15)
+            return new("follow-badge temp-hot", "🔥", "حار");
+        if (age.TotalHours < 1)
+            return new("follow-badge temp-warm", "🟡", "يحتاج متابعة");
+
+        return new("follow-badge temp-cold", "❄️", "متأخر");
+    }
+
+    private string GetTemperatureBg()
+    {
+        if (_lead is null) return "rgba(255,255,255,.16)";
+        if (_lead.IsConverted || _lead.LeadStatus == "محول") return "rgba(34,197,94,.4)";
+        if (_lead.LeadStatus == "مرفوض") return "rgba(239,68,68,.4)";
+        if (_lead.LeadStatus == "تم التواصل" || _lead.LastContactDate.HasValue) return "rgba(34,197,94,.35)";
+
+        var age = DateTime.Now - _lead.CreatedAt;
+        if (age.TotalMinutes < 15) return "rgba(239,68,68,.5)";     // حار
+        if (age.TotalHours < 1) return "rgba(245,158,11,.5)";       // دافئ
+        return "rgba(59,130,246,.5)";                                 // بارد
+    }
+
+    // ═══════════════════════════════════════════
+    //  Helpers
+    // ═══════════════════════════════════════════
+    private RenderFragment InfoTile(string label, string? value, bool wide = false, bool ltr = false) => @<div class="info-tile @(wide ? "wide" : "")">
+        <span class="info-label">@label</span>
+        <span class="info-value @(ltr ? "ltr" : "")">@(string.IsNullOrWhiteSpace(value) ? "—" : value)</span>
+    </div>;
+
+    private static string Safe(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+
+    private static string? FormatDateTime(DateTime? value)
+        => value.HasValue ? value.Value.ToString("yyyy/MM/dd HH:mm") : null;
+
+    private string GetConversionText()
+    {
+        if (_lead is null) return "—";
+        return $"عميل #{_lead.ConvertedPartyId} — فرصة #{_lead.ConvertedOpportunityId}";
+    }
+
+    private static string GetInitials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "؟";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1) return parts[0][0].ToString();
+        return $"{parts[0][0]}{parts[1][0]}";
+    }
+
+    private string GetStatusClass(string? status) => status switch
+    {
+        "جديد" => "status-new",
+        "تم التواصل" => "status-contacted",
+        "مؤهل" => "status-qualified",
+        "محول" => "status-converted",
+        "مرفوض" => "status-rejected",
+        _ => "status-default"
+    };
+
+    private string GetPlatformText(string? platform) => platform switch
+    {
+        "fb" => "Facebook",
+        "ig" => "Instagram",
+        _ => platform ?? "—"
+    };
+
+    private static string GetInteractionClass(string? type) => type switch
+    {
+        LeadInteractionTypes.Call => "li-call",
+        LeadInteractionTypes.WhatsApp => "li-whatsapp",
+        LeadInteractionTypes.Assigned => "li-assigned",
+        LeadInteractionTypes.Rejected => "li-rejected",
+        _ => "li-note"
+    };
+
+    private static string GetInteractionIcon(string? type) => type switch
+    {
+        LeadInteractionTypes.Call => Icons.Material.Rounded.Phone,
+        LeadInteractionTypes.WhatsApp => Icons.Custom.Brands.WhatsApp,
+        LeadInteractionTypes.Assigned => Icons.Material.Rounded.AssignmentInd,
+        LeadInteractionTypes.FollowUp => Icons.Material.Rounded.EventRepeat,
+        LeadInteractionTypes.Rejected => Icons.Material.Rounded.Cancel,
+        _ => Icons.Material.Rounded.Notes
+    };
+
+    private static string GetInteractionColor(string? type) => type switch
+    {
+        LeadInteractionTypes.Assigned => "#0ea5e9",
+        LeadInteractionTypes.Call => "#2563eb",
+        LeadInteractionTypes.WhatsApp => "#16a34a",
+        LeadInteractionTypes.FollowUp => "#f59e0b",
+        LeadInteractionTypes.Converted => "#7c3aed",
+        LeadInteractionTypes.Rejected => "#dc2626",
+        _ => "#64748b"
+    };
+
+    private string GetFollowText()
+    {
+        if (_lead is null) return "—";
+        if (_lead.IsConverted || _lead.LeadStatus == "محول") return "تم التحويل";
+        if (_lead.LeadStatus == "مرفوض") return "مرفوض";
+        if (_lead.LastContactDate.HasValue) return $"آخر تواصل {FormatElapsed(_lead.LastContactDate.Value)}";
+        return $"وصل {FormatElapsed(_lead.CreatedAt)}";
+    }
+
+    private string GetFollowClass()
+    {
+        if (_lead is null) return "follow-badge follow-new";
+        if (_lead.IsConverted || _lead.LeadStatus == "محول") return "follow-badge follow-done";
+        if (_lead.LeadStatus == "مرفوض") return "follow-badge follow-rejected";
+        if (_lead.LastContactDate.HasValue) return "follow-badge follow-contact";
+
+        var age = DateTime.Now - _lead.CreatedAt;
+        if (age.TotalHours >= 1) return "follow-badge follow-late";
+        if (age.TotalMinutes >= 15) return "follow-badge follow-warn";
+        return "follow-badge follow-new";
+    }
+
+    private static string FormatElapsed(DateTime date)
+    {
+        var span = DateTime.Now - date;
+        if (span.TotalMinutes < 1) return "الآن";
+        if (span.TotalMinutes < 60) return $"منذ {(int)span.TotalMinutes} د";
+        if (span.TotalHours < 24) return $"منذ {(int)span.TotalHours} س";
+        if (span.TotalDays < 30) return $"منذ {(int)span.TotalDays} يوم";
+        return date.ToString("yyyy/MM/dd");
+    }
+
+    private void OpenWhatsApp(string phone)
+    {
+        var clean = phone.Replace(" ", "").Replace("-", "");
+        if (!clean.StartsWith("+") && !clean.StartsWith("2")) clean = "2" + clean;
+        if (!clean.StartsWith("+")) clean = "+" + clean;
+        Navigation.NavigateTo($"https://wa.me/{clean[1..]}", forceLoad: true);
+    }
+
+    private void CallPhone(string phone)
+    {
+        Navigation.NavigateTo($"tel:{phone}", forceLoad: true);
+    }
+
+    private void GoBack()
+    {
+        Navigation.NavigateTo("/crm/leads");
+    }
+}

@@ -367,7 +367,7 @@ if (f.DateTo.HasValue)
     public async Task<List<InterestCategory>> GetCategoriesAsync() => await _db.InterestCategories.AsNoTracking().Where(c => c.IsActive).ToListAsync();
     public async Task<List<LostReason>> GetLostReasonsAsync() => await _db.LostReasons.AsNoTracking().Where(r => r.IsActive).ToListAsync();
     public async Task<List<AdType>> GetAdTypesAsync() => await _db.AdTypes.AsNoTracking().ToListAsync();
-    public async Task<List<Employee>> GetActiveEmployeesAsync() => await _db.Employees.AsNoTracking().Where(e => e.Status == "نشط").Select(e => new Employee { EmployeeId = e.EmployeeId, FullName = e.FullName }).ToListAsync();
+    public async Task<List<Employee>> GetActiveEmployeesAsync() => await _db.Employees.AsNoTracking().Where(e => e.Status == "نشط").Select(e => new Employee { EmployeeId = e.EmployeeId, FullName = e.FullName, Department = e.Department }).ToListAsync();
 
     // ════════════════════ PRIVATE HELPERS ════════════════════
     private static IQueryable<VwSalesOpportunity> ApplyVwFilters(IQueryable<VwSalesOpportunity> q, OpportunityFilterDto f)
@@ -707,6 +707,31 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
                     t.CompletedBy = userName;
                     t.CompletionNotes = $"تم الإلغاء تلقائياً — العميل {reasonText}";
                 }
+
+                // ═══ تحديث حالة الـ Lead المرتبط إلى "مرفوض" ═══
+                var lostLead = await _db.LeadsCRMs
+                    .FirstOrDefaultAsync(l => l.ConvertedOpportunityId == opportunityId);
+                if (lostLead != null && lostLead.LeadStatus == "محول")
+                {
+                    var oldLeadStatus = lostLead.LeadStatus;
+                    lostLead.LeadStatus = "مرفوض";
+                    lostLead.RejectedReason = $"الفرصة المرتبطة أصبحت خسارة — {reasonText}";
+
+                    _db.LeadInteractions.Add(new LeadInteraction
+                    {
+                        LeadId = lostLead.LeadId,
+                        EmployeeId = lostLead.AssignedEmployeeId,
+                        InteractionType = "رفض",
+                        InteractionDate = now,
+                        Summary = $"تم تحديث حالة الـ Lead تلقائياً — الفرصة #{opportunityId} أصبحت خسارة",
+                        Notes = lostLead.RejectedReason,
+                        OldLeadStatus = oldLeadStatus,
+                        NewLeadStatus = "مرفوض",
+                        IsSystemGenerated = true,
+                        CreatedBy = userName,
+                        CreatedAt = now
+                    });
+                }
             }
             else if (stageId == 3)
             {
@@ -723,7 +748,37 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
                     t.CompletionNotes = "تم الإغلاق تلقائياً — تم البيع بنجاح";
                 }
             }
-            else if (dto.NextFollowUpDate.HasValue)
+
+            // ═══ إرجاع حالة الـ Lead لـ "محول" لو الفرصة رجعت من خسارة لمرحلة نشطة ═══
+            if (stageId != 4 && stageId != 5 && stageBefore != stageId)
+            {
+                var revivedLead = await _db.LeadsCRMs
+                    .FirstOrDefaultAsync(l => l.ConvertedOpportunityId == opportunityId);
+                if (revivedLead != null && revivedLead.LeadStatus == "مرفوض"
+                    && revivedLead.RejectedReason != null
+                    && revivedLead.RejectedReason.Contains("خسارة"))
+                {
+                    var oldLeadStatus = revivedLead.LeadStatus;
+                    revivedLead.LeadStatus = "محول";
+                    revivedLead.RejectedReason = null;
+
+                    _db.LeadInteractions.Add(new LeadInteraction
+                    {
+                        LeadId = revivedLead.LeadId,
+                        EmployeeId = revivedLead.AssignedEmployeeId,
+                        InteractionType = "متابعة",
+                        InteractionDate = now,
+                        Summary = $"تم إرجاع حالة الـ Lead تلقائياً — الفرصة #{opportunityId} رجعت من خسارة لمرحلة نشطة",
+                        OldLeadStatus = oldLeadStatus,
+                        NewLeadStatus = "محول",
+                        IsSystemGenerated = true,
+                        CreatedBy = userName,
+                        CreatedAt = now
+                    });
+                }
+            }
+
+            if (dto.NextFollowUpDate.HasValue)
             {
                 // مرحلة عادية + متابعة → إغلاق القديمة + إنشاء جديدة
 

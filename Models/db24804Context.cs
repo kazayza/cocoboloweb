@@ -637,6 +637,7 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
 
             entity.HasIndex(e => e.ExemptionDate, "idx_exemptions_date");
 
+            // ── الأعمدة الأصلية ──
             entity.Property(e => e.ExemptionId).HasColumnName("ExemptionID");
             entity.Property(e => e.ApprovedBy)
                 .HasMaxLength(100)
@@ -648,8 +649,31 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
             entity.Property(e => e.Description).HasColumnType("text");
             entity.Property(e => e.ExemptionDate).HasColumnType("datetime");
             entity.Property(e => e.ReasonCode)
+                .HasMaxLength(50)
+                .IsUnicode(true);
+
+            // ── الأعمدة الجديدة ──
+            entity.Property(e => e.EmployeeId).HasColumnName("EmployeeID");
+            entity.Property(e => e.IsFullDay)
+                .HasDefaultValue(true);
+            entity.Property(e => e.Hours)
+                .HasColumnType("decimal(10, 2)");
+            entity.Property(e => e.IsDeducted)
+                .HasDefaultValue(true);
+            entity.Property(e => e.Notes)
+                .HasMaxLength(500);
+            entity.Property(e => e.CreatedBy)
+                .HasMaxLength(100);
+            entity.Property(e => e.Status)
                 .HasMaxLength(20)
-                .IsUnicode(false);
+                .HasDefaultValue("Approved");
+
+            // ── علاقة مع Employees ──
+            entity.HasOne<Employee>()
+                .WithMany()
+                .HasForeignKey(d => d.EmployeeId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_DailyExemptions_Employees");
         });
 
         modelBuilder.Entity<Employee>(entity =>

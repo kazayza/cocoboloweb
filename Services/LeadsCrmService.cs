@@ -475,6 +475,12 @@ public async Task<(bool Success, string Message)> AddLeadInteractionAsync(
             hasContactAction = true;
     }
 
+    // 2b) تحديث الملاحظات
+    if (dto.Notes != null)
+    {
+        lead.Notes = dto.Notes;
+    }
+
     // 3) تحديث الموظف المسؤول
     var assignmentChanged = oldAssignedEmployeeId != dto.AssignedEmployeeId;
 

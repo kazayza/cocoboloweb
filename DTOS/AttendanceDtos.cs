@@ -11,7 +11,10 @@ public static class AttendanceStatus
     public const string EarlyLeave = "خروج مبكر";
     public const string Holiday = "إجازة";
     public const string Weekend = "عطلة أسبوعية";
-    
+    public const string Permission = "إذن";           // إذن شخصي
+    public const string Errand = "مأمورية";           // مأمورية شغل
+    public const string OffDay = "راحة";              // راحة أسبوعية من الشفت
+
     public static string GetColor(string? status) => status switch
     {
         Present => "#4CAF50",
@@ -20,6 +23,9 @@ public static class AttendanceStatus
         EarlyLeave => "#FF5722",
         Holiday => "#2196F3",
         Weekend => "#9E9E9E",
+        Permission => "#9C27B0",
+        Errand => "#00BCD4",
+        OffDay => "#78909C",
         _ => "#757575"
     };
 
@@ -31,8 +37,152 @@ public static class AttendanceStatus
         EarlyLeave => "ExitToApp",
         Holiday => "BeachAccess",
         Weekend => "Weekend",
+        Permission => "EventNote",
+        Errand => "WorkOutline",
+        OffDay => "Hotel",
         _ => "Help"
     };
+}
+
+// ═══════════════════════════════════════════════════════════
+// أنواع الاستثناءات - ReasonCode نص حر
+// الكلمات المفتاحية بتحدد المنطق (خصم ولا لا)
+// ═══════════════════════════════════════════════════════════
+public static class ExemptionReasonCodes
+{
+    // كلمات مفتاحية لتحديد المنطق
+    public const string Permission = "إذن";              // إذن شخصي
+    public const string Errand = "مأمورية";              // مأمورية شغل  
+    public const string EarlyLeave = "انصراف مبكر";     // انصراف مبكر
+
+    /// <summary>
+    /// أي قيم ReasonCode متعارف عليها (للعرض في الـ dropdown كمقترحات بس)
+    /// </summary>
+    public static readonly string[] Suggestions = { "إذن", "مأمورية", "مهمة رسمية", "انصراف مبكر" };
+
+    /// <summary>
+    /// هل السبب يعني مأمورية/شغل شركة؟ → مفيش خصم
+    /// </summary>
+    public static bool IsErrandType(string? reasonCode)
+    {
+        if (string.IsNullOrWhiteSpace(reasonCode)) return false;
+        var lower = reasonCode.Trim();
+        return lower.Contains("مأمورية") || lower.Contains("مهمة رسمية") ||
+               lower.Contains("مهمة") || lower.Contains("عمل");
+    }
+
+    /// <summary>
+    /// هل السبب يعني انصراف مبكر؟ → مفيش خصم (تسجيل بس)
+    /// </summary>
+    public static bool IsEarlyLeaveType(string? reasonCode)
+    {
+        if (string.IsNullOrWhiteSpace(reasonCode)) return false;
+        return reasonCode.Trim().Contains("انصراف مبكر") || reasonCode.Trim().Contains("خروج مبكر");
+    }
+
+    /// <summary>
+    /// هل السبب يعني إذن شخصي؟ → يُخصم افتراضياً
+    /// </summary>
+    public static bool IsPermissionType(string? reasonCode)
+    {
+        if (string.IsNullOrWhiteSpace(reasonCode)) return false;
+        return reasonCode.Trim().Contains("إذن") || reasonCode.Trim().Contains("اذن");
+    }
+
+    /// <summary>
+    /// Default: يُخصم ولا لا بناءً على نوع السبب
+    /// مأمورية/مهمة رسمية → لا يُخصم
+    /// انصراف مبكر → لا يُخصم (تسجيل)
+    /// إذن → يُخصم
+    /// أي حاجة تانية → يُخصم
+    /// </summary>
+    public static bool DefaultIsDeducted(string? reasonCode)
+    {
+        if (IsErrandType(reasonCode)) return false;
+        if (IsEarlyLeaveType(reasonCode)) return false;
+        return true; // إذن أو أي حاجة تانية → يُخصم
+    }
+
+    /// <summary>
+    /// لون العرض
+    /// </summary>
+    public static string GetColor(string? code)
+    {
+        if (IsErrandType(code)) return "#00BCD4";
+        if (IsEarlyLeaveType(code)) return "#FF9800";
+        if (IsPermissionType(code)) return "#9C27B0";
+        return "#757575";
+    }
+
+    /// <summary>
+    /// أيقونة العرض
+    /// </summary>
+    public static string GetIcon(string? code)
+    {
+        if (IsErrandType(code)) return "WorkOutline";
+        if (IsEarlyLeaveType(code)) return "ExitToApp";
+        if (IsPermissionType(code)) return "EventNote";
+        return "Help";
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// حالات الاستثناء
+// الآن بنستخدم عمود Status بشكل صريح: Pending, Approved, Rejected
+// ═══════════════════════════════════════════════════════════
+public static class ExemptionStatus
+{
+    public const string Pending = "Pending";
+    public const string Approved = "Approved";
+    public const string Rejected = "Rejected";
+
+    /// <summary>
+    /// الحالة بالعربي
+    /// </summary>
+    public static string GetArabic(string? status) => status switch
+    {
+        Pending => "قيد الاعتماد",
+        Approved => "معتمد",
+        Rejected => "مرفوض",
+        _ => "غير معروف"
+    };
+
+    /// <summary>
+    /// لون الحالة
+    /// </summary>
+    public static string GetColor(string? status) => status switch
+    {
+        Pending => "#F59E0B",
+        Approved => "#10B981",
+        Rejected => "#EF4444",
+        _ => "#757575"
+    };
+
+    /// <summary>
+    /// لون MudBlazor كـ string (للـ UI)
+    /// </summary>
+    public static string GetMudColorName(string? status) => status switch
+    {
+        Pending => "Warning",
+        Approved => "Success",
+        Rejected => "Error",
+        _ => "Default"
+    };
+
+    public static bool IsApproved(string? status) => status == Approved;
+    public static bool IsPending(string? status) => status == Pending;
+    public static bool IsRejected(string? status) => status == Rejected;
+
+    /// <summary>
+    /// التوافق مع البيانات القديمة: لو ApprovedBy موجود = معتمد
+    /// </summary>
+    public static string InferStatus(string? status, string? approvedBy)
+    {
+        if (!string.IsNullOrWhiteSpace(status) && status != "Approved")
+            return status;
+        // لو مفيش Status صريح، نستنتج من ApprovedBy
+        return string.IsNullOrWhiteSpace(approvedBy) ? Pending : Approved;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════

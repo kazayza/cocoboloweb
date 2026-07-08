@@ -820,7 +820,6 @@ public class AttendanceService : IAttendanceService
             return (false, "لا توجد سجلات بصمة لهذا اليوم.");
 
         // ── 2. جيب الشيفتات الفعالة دفعة واحدة ───────────────
-        // بدل ما نجيب شيفت كل موظف لوحده
         var shifts = await _db.EmployeeShifts.AsNoTracking()
             .Where(s => s.BiometricCode.HasValue
                      && s.EffectiveFrom <= date
@@ -828,16 +827,18 @@ public class AttendanceService : IAttendanceService
             .Select(s => new
             {
                 s.BiometricCode,
-                s.StartTime,   // ✅ لحساب التأخير
-                s.EndTime      // ✅ لحساب الانصراف المبكر
+                s.StartTime,
+                s.EndTime
             })
             .ToListAsync();
 
-        // ── 3. جيب الإعفاءات اليومية دفعة واحدة ──────────────
-        var exemptedCodes = await _db.DailyExemptions.AsNoTracking()
-            .Where(x => x.ExemptionDate.Date == date.Date)
-            .Select(x => x.BioEmployeeId)
+        // ── 3. جيب الاستثناءات المعتمدة لليوم ──────────────
+        var approvedExemptions = await _db.DailyExemptions.AsNoTracking()
+            .Where(x => x.ExemptionDate.Date == date.Date && x.Status == ExemptionStatus.Approved)
+            .Select(x => new { x.BioEmployeeId, x.ReasonCode, x.IsDeducted })
             .ToListAsync();
+
+        var exemptedCodes = approvedExemptions.Select(x => x.BioEmployeeId).ToList();
 
         // ── 4. جيب السجلات الموجودة دفعة واحدة للـ Upsert ────
         var bioCodes = logs.Select(l => l.BiometricCode).Distinct().ToList();
@@ -872,7 +873,7 @@ public class AttendanceService : IAttendanceService
                 totalHours = (decimal)dur.TotalHours;
             }
 
-            // ✅ التأخير من وقت الشيفت الفعلي مش ثابت 8 صباحاً
+            // ✅ التأخير من وقت الشيفت الفعلي
             var shift      = shifts.FirstOrDefault(s => s.BiometricCode == bioCode);
             var expectedIn = shift?.StartTime ?? new TimeOnly(8, 0);
             int lateMinutes = timeIn > expectedIn
@@ -920,9 +921,74 @@ public class AttendanceService : IAttendanceService
             processed++;
         }
 
-        // ✅ Save مرة واحدة بعد الـ loop كله (أسرع بكتير)
+        // ✅ Save مرة واحدة بعد الـ loop كله
         if (toAdd.Any()) _db.Attendances.AddRange(toAdd);
         await _db.SaveChangesAsync();
+
+        // ✅ إنشاء سجلات حضور للاستثناءات المعتمدة اللي مفيش ليها بصمات
+        var processedCodes = logs.Select(l => l.BiometricCode).ToHashSet();
+        var existingAttCodes = existingRecords.Select(a => a.BiometricCode).ToHashSet();
+
+        var exemptionAttendanceToAdd = new List<Attendance>();
+
+        foreach (var exm in approvedExemptions.Where(e => !processedCodes.Contains(e.BioEmployeeId)
+                                                        && !existingAttCodes.Contains(e.BioEmployeeId)))
+        {
+            var shift = shifts.FirstOrDefault(s => s.BiometricCode == exm.BioEmployeeId);
+            var startTime = shift?.StartTime ?? new TimeOnly(8, 0);
+            var endTime = shift?.EndTime ?? new TimeOnly(17, 0);
+            TimeOnly? timeIn = null;
+            TimeOnly? timeOut = null;
+            decimal? totalHours = null;
+            string status;
+
+            var isErrand = ExemptionReasonCodes.IsErrandType(exm.ReasonCode);
+            var isPermission = ExemptionReasonCodes.IsPermissionType(exm.ReasonCode);
+            var isEarlyLeave = ExemptionReasonCodes.IsEarlyLeaveType(exm.ReasonCode);
+            // نستخدم IsDeducted من الداتابيز مباشرة لو موجود
+            var isDeducted = exm.IsDeducted;
+
+            if (isErrand)
+            {
+                timeIn = startTime; timeOut = endTime;
+                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
+                status = AttendanceStatus.Errand;
+            }
+            else if (isPermission && !isDeducted)
+            {
+                timeIn = startTime; timeOut = endTime;
+                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
+                status = AttendanceStatus.Permission;
+            }
+            else if (isPermission && isDeducted)
+            {
+                status = AttendanceStatus.Permission;
+            }
+            else if (isEarlyLeave)
+            {
+                timeIn = startTime; timeOut = endTime;
+                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
+                status = AttendanceStatus.EarlyLeave;
+            }
+            else
+            {
+                status = AttendanceStatus.Permission;
+            }
+
+            exemptionAttendanceToAdd.Add(new Attendance
+            {
+                BiometricCode = exm.BioEmployeeId,
+                LogDate = date.Date,
+                TimeIn = timeIn,
+                TimeOut = timeOut,
+                TotalHours = totalHours,
+                LateMinutes = 0,
+                EarlyLeaveMinutes = 0,
+                Status = status
+            });
+        }
+
+        if (exemptionAttendanceToAdd.Any()) { _db.Attendances.AddRange(exemptionAttendanceToAdd); await _db.SaveChangesAsync(); }
 
         await _audit.LogAsync("Attendance", "Process",
             date.ToString("yyyy-MM-dd"), null,
@@ -1037,6 +1103,8 @@ public class AttendanceService : IAttendanceService
 
     private int GetWorkingDays(DateTime from, DateTime to, bool includeWeekends)
     {
+        // ⚠️ Fallback: uses hardcoded Friday+Saturday
+        // Use GetWorkingDaysForEmployeeAsync for per-employee off days from shifts
         int count = 0;
         for (var date = from.Date; date <= to.Date; date = date.AddDays(1))
         {
@@ -1044,6 +1112,455 @@ public class AttendanceService : IAttendanceService
                 count++;
         }
         return count;
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  أيام العمل حسب راحات الشفت (OffDay1/OffDay2)
+    // ════════════════════════════════════════════════════════════
+    public async Task<int> GetWorkingDaysForEmployeeAsync(int employeeId, DateTime from, DateTime to)
+    {
+        // جيب شيفت الموظف الفعال
+        var shift = await _db.EmployeeShifts.AsNoTracking()
+            .Where(s => s.EmployeeId == employeeId
+                     && s.EffectiveFrom <= to
+                     && (s.EffectiveTo == null || s.EffectiveTo >= from))
+            .OrderByDescending(s => s.EffectiveFrom)
+            .Select(s => new { s.OffDay1, s.OffDay2 })
+            .FirstOrDefaultAsync();
+
+        var offDays = new List<DayOfWeek>();
+        if (shift?.OffDay1 != null) offDays.Add((DayOfWeek)shift.OffDay1.Value);
+        if (shift?.OffDay2 != null) offDays.Add((DayOfWeek)shift.OffDay2.Value);
+
+        int count = 0;
+        for (var date = from.Date; date <= to.Date; date = date.AddDays(1))
+        {
+            if (!offDays.Contains(date.DayOfWeek))
+                count++;
+        }
+        return count;
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  الاستثناءات - CRUD كامل مع Status workflow
+    // ════════════════════════════════════════════════════════════
+    public async Task<PagedResult<ExemptionListDto>> GetExemptionsAsync(ExemptionFilterDto filter)
+    {
+        var query = _db.DailyExemptions.AsNoTracking().AsQueryable();
+
+        // === الفلاتر ===
+        if (filter.DateFrom.HasValue)
+            query = query.Where(e => e.ExemptionDate >= filter.DateFrom.Value.Date);
+        if (filter.DateTo.HasValue)
+            query = query.Where(e => e.ExemptionDate <= filter.DateTo.Value.Date);
+        if (!string.IsNullOrWhiteSpace(filter.ReasonCode))
+            query = query.Where(e => e.ReasonCode.Contains(filter.ReasonCode));
+
+        // فلتر الحالة - الآن بنستخدم Status column
+        if (!string.IsNullOrWhiteSpace(filter.Status))
+        {
+            query = query.Where(e => e.Status == filter.Status);
+        }
+        else if (filter.IsApproved == true)
+        {
+            // للتوافق مع الكود القديم
+            query = query.Where(e => e.Status == ExemptionStatus.Approved);
+        }
+        else if (filter.IsApproved == false)
+        {
+            query = query.Where(e => e.Status == ExemptionStatus.Pending);
+        }
+
+        // فلتر الخصم
+        if (filter.IsDeducted.HasValue)
+            query = query.Where(e => e.IsDeducted == filter.IsDeducted.Value);
+
+        // البحث بالاسم أو القسم
+        if (!string.IsNullOrWhiteSpace(filter.SearchText) || !string.IsNullOrWhiteSpace(filter.Department))
+        {
+            var empQuery = _db.Employees.AsNoTracking().AsQueryable();
+            if (!string.IsNullOrWhiteSpace(filter.SearchText))
+            {
+                var st = filter.SearchText.Trim();
+                empQuery = empQuery.Where(e => e.FullName.Contains(st));
+            }
+            if (!string.IsNullOrWhiteSpace(filter.Department))
+                empQuery = empQuery.Where(e => e.Department == filter.Department);
+
+            var bioIds = await empQuery.Where(e => e.BioEmployeeId.HasValue)
+                .Select(e => e.BioEmployeeId!.Value).ToListAsync();
+
+            query = query.Where(e => bioIds.Contains(e.BioEmployeeId));
+        }
+
+        var totalCount = await query.CountAsync();
+
+        var items = await query
+            .OrderByDescending(e => e.ExemptionDate)
+            .ThenByDescending(e => e.ExemptionId)
+            .Skip((filter.PageNumber - 1) * filter.PageSize)
+            .Take(filter.PageSize)
+            .ToListAsync();
+
+        // ربط بيانات الموظفين
+        var allBioCodes = items.Select(i => i.BioEmployeeId).Distinct().ToList();
+
+        var employees = await _db.Employees.AsNoTracking()
+            .Where(e => e.BioEmployeeId.HasValue && allBioCodes.Contains(e.BioEmployeeId.Value))
+            .Select(e => new { e.EmployeeId, e.BioEmployeeId, e.FullName, e.Department })
+            .ToListAsync();
+
+        var dtos = items.Select(item =>
+        {
+            var emp = employees.FirstOrDefault(e => e.BioEmployeeId == item.BioEmployeeId);
+
+            return new ExemptionListDto
+            {
+                ExemptionId = item.ExemptionId,
+                BioEmployeeId = item.BioEmployeeId,
+                EmployeeId = item.EmployeeId ?? emp?.EmployeeId,
+                EmployeeName = emp?.FullName ?? $"كود: {item.BioEmployeeId}",
+                Department = emp?.Department,
+                ExemptionDate = item.ExemptionDate,
+                ReasonCode = item.ReasonCode,
+                Description = item.Description,
+                ApprovedBy = item.ApprovedBy,
+                CreatedDate = item.CreatedDate,
+                IsFullDay = item.IsFullDay,
+                Hours = item.Hours,
+                IsDeducted = item.IsDeducted,
+                Notes = item.Notes,
+                CreatedBy = item.CreatedBy,
+                Status = item.Status
+            };
+        }).ToList();
+
+        return new PagedResult<ExemptionListDto>
+        {
+            Items = dtos,
+            TotalCount = totalCount,
+            PageNumber = filter.PageNumber,
+            PageSize = filter.PageSize
+        };
+    }
+
+    public async Task<ExemptionStatsDto> GetExemptionStatsAsync(ExemptionFilterDto filter)
+    {
+        var query = _db.DailyExemptions.AsNoTracking().AsQueryable();
+
+        if (filter.DateFrom.HasValue)
+            query = query.Where(e => e.ExemptionDate >= filter.DateFrom.Value.Date);
+        if (filter.DateTo.HasValue)
+            query = query.Where(e => e.ExemptionDate <= filter.DateTo.Value.Date);
+
+        var all = await query.ToListAsync();
+
+        return new ExemptionStatsDto
+        {
+            TotalCount = all.Count,
+            ApprovedCount = all.Count(e => e.Status == ExemptionStatus.Approved),
+            PendingCount = all.Count(e => e.Status == ExemptionStatus.Pending),
+            RejectedCount = all.Count(e => e.Status == ExemptionStatus.Rejected),
+            PermissionCount = all.Count(e => ExemptionReasonCodes.IsPermissionType(e.ReasonCode)),
+            ErrandCount = all.Count(e => ExemptionReasonCodes.IsErrandType(e.ReasonCode)),
+            EarlyLeaveCount = all.Count(e => ExemptionReasonCodes.IsEarlyLeaveType(e.ReasonCode)),
+            DeductedCount = all.Count(e => e.IsDeducted),
+            NotDeductedCount = all.Count(e => !e.IsDeducted)
+        };
+    }
+
+    public async Task<(bool Success, string Message)> CreateExemptionAsync(
+        ExemptionCreateDto dto, string currentUserName)
+    {
+        // جلب بيانات الموظف
+        var employee = await _db.Employees.AsNoTracking()
+            .FirstOrDefaultAsync(e => e.EmployeeId == dto.EmployeeId);
+        if (employee == null)
+            return (false, "الموظف غير موجود.");
+
+        if (employee.BioEmployeeId == null)
+            return (false, "الموظف ليس لديه كود بصمة.");
+
+        // التحقق من عدم وجود استثناء لنفس اليوم (مش المرفوض)
+        var exists = await _db.DailyExemptions.AnyAsync(e =>
+            e.BioEmployeeId == employee.BioEmployeeId.Value &&
+            e.ExemptionDate.Date == dto.ExemptionDate.Date &&
+            e.Status != ExemptionStatus.Rejected);
+        if (exists)
+            return (false, "يوجد استثناء مسجل بالفعل لهذا الموظف في هذا اليوم.");
+
+        // التحقق من أن اليوم ليس راحة للموظف
+        var shift = await _db.EmployeeShifts.AsNoTracking()
+            .Where(s => s.EmployeeId == dto.EmployeeId
+                     && s.EffectiveFrom <= dto.ExemptionDate
+                     && (s.EffectiveTo == null || s.EffectiveTo >= dto.ExemptionDate))
+            .OrderByDescending(s => s.EffectiveFrom)
+            .Select(s => new { s.OffDay1, s.OffDay2 })
+            .FirstOrDefaultAsync();
+
+        var offDays = new List<DayOfWeek>();
+        if (shift?.OffDay1 != null) offDays.Add((DayOfWeek)shift.OffDay1.Value);
+        if (shift?.OffDay2 != null) offDays.Add((DayOfWeek)shift.OffDay2.Value);
+        if (offDays.Contains(dto.ExemptionDate.DayOfWeek))
+            return (false, "هذا اليوم هو راحة أسبوعية للموظف - لا حاجة لاستثناء.");
+
+        // تحديد IsDeducted
+        var isDeducted = dto.IsDeducted ?? ExemptionReasonCodes.DefaultIsDeducted(dto.ReasonCode);
+
+        // التحقق من Hours لو مش يوم كامل
+        if (!dto.IsFullDay && (!dto.Hours.HasValue || dto.Hours.Value <= 0))
+            return (false, "يرجى تحديد عدد الساعات للاستثناء الجزئي.");
+
+        // ✅ Admin + AccountManager → معتمد مباشرة
+        // غير كده → Pending (قيد الاعتماد)
+        var user = await _db.Users.AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Username == currentUserName);
+        var isAdminOrManager = user?.Role == "Admin" || user?.Role == "AccountManager";
+
+        var status = isAdminOrManager ? ExemptionStatus.Approved : ExemptionStatus.Pending;
+        var approvedBy = isAdminOrManager ? currentUserName : null;
+
+        // إنشاء الاستثناء
+        var exemption = new DailyExemption
+        {
+            EmployeeId = dto.EmployeeId,
+            BioEmployeeId = employee.BioEmployeeId.Value,
+            ExemptionDate = dto.ExemptionDate.Date,
+            ReasonCode = dto.ReasonCode,
+            Description = dto.Description,
+            IsFullDay = dto.IsFullDay,
+            Hours = dto.IsFullDay ? null : dto.Hours,
+            IsDeducted = isDeducted,
+            Notes = dto.Notes,
+            CreatedBy = currentUserName,
+            Status = status,
+            ApprovedBy = approvedBy,
+            CreatedDate = DateTime.Now
+        };
+
+        _db.DailyExemptions.Add(exemption);
+        await _db.SaveChangesAsync();
+
+        // ✅ لو معتمد مباشرة → إنشاء/تحديث سجل الحضور
+        if (status == ExemptionStatus.Approved)
+        {
+            await CreateOrUpdateExemptionAttendanceAsync(exemption);
+            await _db.SaveChangesAsync();
+        }
+
+        await _audit.LogAsync("DailyExemption", "Create",
+            exemption.ExemptionId.ToString(), null,
+            new { BioEmployeeId = exemption.BioEmployeeId, exemption.ExemptionDate, exemption.ReasonCode, Status = status, exemption.IsDeducted },
+            currentUserName);
+
+        return (true, status == ExemptionStatus.Approved
+            ? " تم تسجيل الاستثناء واعتماده بنجاح."
+            : " تم تسجيل الاستثناء وهو قيد الاعتماد من المدير.");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  اعتماد استثناء
+    // ════════════════════════════════════════════════════════════
+    public async Task<(bool Success, string Message)> ApproveExemptionAsync(
+        int exemptionId, string currentUserName)
+    {
+        var exemption = await _db.DailyExemptions.FindAsync(exemptionId);
+        if (exemption == null)
+            return (false, "الاستثناء غير موجود.");
+
+        if (exemption.Status == ExemptionStatus.Approved)
+            return (false, "الاستثناء معتمد بالفعل.");
+
+        if (exemption.Status == ExemptionStatus.Rejected)
+            return (false, "لا يمكن اعتماد استثناء مرفوض.");
+
+        exemption.Status = ExemptionStatus.Approved;
+        exemption.ApprovedBy = currentUserName;
+
+        // ✅ إنشاء/تحديث سجل الحضور
+        await CreateOrUpdateExemptionAttendanceAsync(exemption);
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync<object>("DailyExemption", "Approve",
+    exemptionId.ToString(),
+    new { Status = ExemptionStatus.Pending },
+    new { Status = ExemptionStatus.Approved, ApprovedBy = currentUserName },
+    currentUserName);
+
+        return (true, "تم اعتماد الاستثناء بنجاح.");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  رفض استثناء
+    // ════════════════════════════════════════════════════════════
+    public async Task<(bool Success, string Message)> RejectExemptionAsync(
+        int exemptionId, string currentUserName, string? reason = null)
+    {
+        var exemption = await _db.DailyExemptions.FindAsync(exemptionId);
+        if (exemption == null)
+            return (false, "الاستثناء غير موجود.");
+
+        if (exemption.Status == ExemptionStatus.Rejected)
+            return (false, "الاستثناء مرفوض بالفعل.");
+
+        if (exemption.Status == ExemptionStatus.Approved)
+            return (false, "لا يمكن رفض استثناء معتمد. احذفه بدلاً من ذلك.");
+
+        exemption.Status = ExemptionStatus.Rejected;
+        // نحفظ سبب الرفض في Notes
+        if (!string.IsNullOrWhiteSpace(reason))
+            exemption.Notes = string.IsNullOrWhiteSpace(exemption.Notes)
+                ? $"[سبب الرفض: {reason}]"
+                : $"{exemption.Notes}\n[سبب الرفض: {reason}]";
+
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync<object>("DailyExemption", "Reject",
+    exemptionId.ToString(),
+    new { Status = ExemptionStatus.Pending },
+    new { Status = ExemptionStatus.Rejected, RejectionReason = reason },
+    currentUserName);
+
+        return (true, "تم رفض الاستثناء.");
+    }
+
+    public async Task<(bool Success, string Message)> DeleteExemptionAsync(
+        int exemptionId, string currentUserName)
+    {
+        var exemption = await _db.DailyExemptions.FindAsync(exemptionId);
+        if (exemption == null)
+            return (false, "الاستثناء غير موجود.");
+
+        // لو معتمد، شيل سجل الحضور المرتبط بيه
+        if (exemption.Status == ExemptionStatus.Approved)
+        {
+            var relatedAttendance = await _db.Attendances.FirstOrDefaultAsync(a =>
+                a.BiometricCode == exemption.BioEmployeeId &&
+                a.LogDate.Date == exemption.ExemptionDate.Date &&
+                (a.Status == AttendanceStatus.Errand ||
+                 a.Status == AttendanceStatus.Permission));
+
+            if (relatedAttendance != null)
+                _db.Attendances.Remove(relatedAttendance);
+        }
+
+        _db.DailyExemptions.Remove(exemption);
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync("DailyExemption", "Delete",
+            exemptionId.ToString(),
+            new { exemption.BioEmployeeId, exemption.ExemptionDate, exemption.ReasonCode, exemption.Status }, null,
+            currentUserName);
+
+        return (true, "✅ تم حذف الاستثناء.");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  Helper: إنشاء/تحديث سجل حضور للاستثناء
+    // ════════════════════════════════════════════════════════════
+    private async Task CreateOrUpdateExemptionAttendanceAsync(DailyExemption exemption)
+    {
+        var date = exemption.ExemptionDate.Date;
+
+        // جيب شيفت الموظف
+        var shift = await _db.EmployeeShifts.AsNoTracking()
+            .Where(s => s.BiometricCode == exemption.BioEmployeeId
+                     && s.EffectiveFrom <= date
+                     && (s.EffectiveTo == null || s.EffectiveTo >= date))
+            .Select(s => new { s.StartTime, s.EndTime })
+            .FirstOrDefaultAsync();
+
+        var startTime = shift?.StartTime ?? new TimeOnly(8, 0);
+        var endTime = shift?.EndTime ?? new TimeOnly(17, 0);
+
+        // هل في سجل حضور موجود بالفعل (من البصمة)؟
+        var existing = await _db.Attendances.FirstOrDefaultAsync(a =>
+            a.BiometricCode == exemption.BioEmployeeId &&
+            a.LogDate.Date == date);
+
+        var isErrand = ExemptionReasonCodes.IsErrandType(exemption.ReasonCode);
+        var isPermission = ExemptionReasonCodes.IsPermissionType(exemption.ReasonCode);
+        var isEarlyLeave = ExemptionReasonCodes.IsEarlyLeaveType(exemption.ReasonCode);
+        var isDeducted = exemption.IsDeducted;
+
+        if (existing != null)
+        {
+            // لو في سجل حضور فعلي (من البصمة)، نعدّل الحالة
+            if (existing.TimeIn != null)
+            {
+                if (isErrand)
+                {
+                    existing.Status = AttendanceStatus.Errand;
+                }
+                else if (isPermission && !isDeducted)
+                {
+                    // إذن بدون خصم → نعتبره حاضر
+                    existing.Status = AttendanceStatus.Present;
+                    existing.LateMinutes = 0;
+                }
+                else if (isEarlyLeave)
+                {
+                    // انصراف مبكر → نشيل خصم الانصراف
+                    existing.EarlyLeaveMinutes = 0;
+                }
+                // إذن مع خصم → نسيب سجل البصمة زي هو
+            }
+        }
+        else
+        {
+            // مفيش سجل حضور → نعمل سجل جديد
+            TimeOnly? timeIn = null;
+            TimeOnly? timeOut = null;
+            decimal? totalHours = null;
+            string status;
+
+            if (isErrand)
+            {
+                // مأمورية → حاضر (مفيش خصم)
+                timeIn = startTime;
+                timeOut = endTime;
+                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
+                status = AttendanceStatus.Errand;
+            }
+            else if (isPermission && !isDeducted)
+            {
+                // إذن بدون خصم → حاضر
+                timeIn = startTime;
+                timeOut = endTime;
+                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
+                status = AttendanceStatus.Permission;
+            }
+            else if (isPermission && isDeducted)
+            {
+                // إذن مع خصم → غائب
+                status = AttendanceStatus.Permission;
+            }
+            else if (isEarlyLeave)
+            {
+                // انصراف مبكر → حاضر (تسجيل)
+                timeIn = startTime;
+                timeOut = endTime;
+                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
+                status = AttendanceStatus.EarlyLeave;
+            }
+            else
+            {
+                // أي سبب تاني → يُخصم (غائب)
+                status = AttendanceStatus.Permission;
+            }
+
+            _db.Attendances.Add(new Attendance
+            {
+                BiometricCode = exemption.BioEmployeeId,
+                LogDate = date,
+                TimeIn = timeIn,
+                TimeOut = timeOut,
+                TotalHours = totalHours,
+                LateMinutes = 0,
+                EarlyLeaveMinutes = 0,
+                Status = status
+            });
+        }
     }
 
 }

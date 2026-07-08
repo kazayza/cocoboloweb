@@ -1,0 +1,606 @@
+@page "/hr/exemptions"
+@using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using MudBlazor
+@inject IAttendanceService AttendanceService
+@inject IOpportunityService OpportunityService
+@inject AuthenticationStateProvider AuthState
+@inject ISnackbar Snackbar
+
+<PageTitle>الاستثناءات</PageTitle>
+
+<MudText Typo="Typo.h4" Style="font-weight:700; color:#1E293B;">الاستثناءات</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">إذن • مأمورية • مهمة رسمية • انصراف مبكر</MudText>
+
+@if (!string.IsNullOrWhiteSpace(_errorMessage))
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_errorMessage</MudAlert>
+}
+
+@* ═══ KPI Cards ═══ *@
+<MudGrid Class="mb-4">
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Style="@GetStatusBorderStyle(null, "#3B82F6")" @onclick="() => FilterByStatus(null)">
+            <MudText Typo="Typo.caption" Color="Color.Secondary">الإجمالي</MudText>
+            <MudText Typo="Typo.h5" Style="font-weight:700; color:#3B82F6;">@_stats.TotalCount</MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Style="@GetStatusBorderStyle("Pending", "#F59E0B")" @onclick='() => FilterByStatus("Pending")'>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">قيد الاعتماد</MudText>
+            <MudText Typo="Typo.h5" Style="font-weight:700; color:#F59E0B;">@_stats.PendingCount</MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Style="@GetStatusBorderStyle("Approved", "#10B981")" @onclick='() => FilterByStatus("Approved")'>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">معتمد</MudText>
+            <MudText Typo="Typo.h5" Style="font-weight:700; color:#10B981;">@_stats.ApprovedCount</MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Style="@GetStatusBorderStyle("Rejected", "#EF4444")" @onclick='() => FilterByStatus("Rejected")'>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">مرفوض</MudText>
+            <MudText Typo="Typo.h5" Style="font-weight:700; color:#EF4444;">@_stats.RejectedCount</MudText>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@* ═══ Filter Bar ═══ *@
+<MudPaper Class="pa-3 mb-4">
+    <MudGrid>
+        <MudItem xs="12" sm="3">
+            <MudTextField T="string" Label="بحث بالاسم" @bind-Value="_filter.SearchText"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          OnKeyUp="OnSearchKey" Clearable />
+        </MudItem>
+        <MudItem xs="6" sm="2">
+            <MudDatePicker Label="من تاريخ" @bind-Value="_filter.DateFrom" Editable="false" />
+        </MudItem>
+        <MudItem xs="6" sm="2">
+            <MudDatePicker Label="إلى تاريخ" @bind-Value="_filter.DateTo" Editable="false" />
+        </MudItem>
+        <MudItem xs="6" sm="2">
+            <MudSelect T="string" Label="السبب" @bind-Value="_filter.ReasonCode" Clearable>
+                @foreach (var rc in ExemptionReasonCodes.Suggestions)
+                {
+                    <MudSelectItem Value="@rc">@rc</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="6" sm="2">
+            <MudSelect T="string" Label="القسم" @bind-Value="_filter.Department" Clearable>
+                @foreach (var d in _departments)
+                {
+                    <MudSelectItem Value="@d">@d</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="6" sm="1">
+            <MudSelect T="bool?" Label="الخصم" @bind-Value="_filter.IsDeducted" Clearable>
+                <MudSelectItem Value="@true">يُخصم</MudSelectItem>
+                <MudSelectItem Value="@false">لا يُخصم</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="6" sm="2" Class="d-flex align-center">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LoadData" FullWidth type="button">
+                <MudIcon Icon="@Icons.Material.Filled.FilterList" Class="ml-2" />
+                فلتر
+            </MudButton>
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+<div class="d-flex justify-end mb-3" style="gap:8px;">
+    <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.Refresh" OnClick="LoadData" type="button">
+        تحديث
+    </MudButton>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="OpenCreateDialog" type="button">
+        إضافة استثناء
+    </MudButton>
+</div>
+
+@if (_loading && _items.Count == 0)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" />
+}
+
+@* ═══ Table ═══ *@
+<MudTable Items="@_items" Hover="true" Elevation="2" Class="mt-2"
+          RowsPerPage="@_filter.PageSize">
+    <ToolBarContent>
+        <MudText Typo="Typo.h6" Style="font-weight:600;">قائمة الاستثناءات</MudText>
+    </ToolBarContent>
+    <HeaderContent>
+        <MudTh>الموظف</MudTh>
+        <MudTh>القسم</MudTh>
+        <MudTh>التاريخ</MudTh>
+        <MudTh>السبب</MudTh>
+        <MudTh>المدة</MudTh>
+        <MudTh>الخصم</MudTh>
+        <MudTh>الحالة</MudTh>
+        <MudTh>الوصف</MudTh>
+        <MudTh>أنشأه</MudTh>
+        <MudTh>اعتمده</MudTh>
+        <MudTh>إجراءات</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="الموظف">
+            <MudText Typo="Typo.body2" Style="font-weight:600;">@context.EmployeeName</MudText>
+        </MudTd>
+        <MudTd DataLabel="القسم">@context.Department</MudTd>
+        <MudTd DataLabel="التاريخ">
+            <div>@context.DateDisplay</div>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.DayName</MudText>
+        </MudTd>
+        <MudTd DataLabel="السبب">
+            <MudChip T="string" Color="@GetReasonColor(context.ReasonCode)" Size="Size.Small" Variant="Variant.Outlined">
+                @context.ReasonCode
+            </MudChip>
+        </MudTd>
+        <MudTd DataLabel="المدة">
+            <MudText Typo="Typo.body2" Style="font-weight:500;">@context.DurationDisplay</MudText>
+        </MudTd>
+        <MudTd DataLabel="الخصم">
+            <MudText Typo="Typo.body2" Style="@($"color:{context.DeductionColor}; font-weight:600;")">@context.DeductionDisplay</MudText>
+        </MudTd>
+        <MudTd DataLabel="الحالة">
+            <MudChip T="string" Color="@GetMudColorForStatus(context.Status)" Size="Size.Small">
+                @context.StatusAr
+            </MudChip>
+        </MudTd>
+        <MudTd DataLabel="الوصف">
+            <MudText Typo="Typo.caption" Style="max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:block;">
+                @context.Description
+            </MudText>
+        </MudTd>
+        <MudTd DataLabel="أنشأه">
+            <MudText Typo="Typo.caption">@context.CreatedBy</MudText>
+        </MudTd>
+        <MudTd DataLabel="اعتمده">
+            <MudText Typo="Typo.caption">@context.ApprovedBy</MudText>
+        </MudTd>
+        <MudTd DataLabel="إجراءات">
+            <div class="d-flex" style="gap:4px;">
+                @if (context.IsPendingStatus && _isAdminOrManager)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Check" Color="Color.Success"
+                                   Size="Size.Small" @onclick='() => ApproveExemption(context.ExemptionId)'
+                                   type="button" Title="اعتماد" />
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Error"
+                                   Size="Size.Small" @onclick='() => OpenRejectDialog(context.ExemptionId)'
+                                   type="button" Title="رفض" />
+                }
+                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error"
+                               Size="Size.Small" @onclick='() => DeleteExemption(context.ExemptionId)'
+                               type="button" Title="حذف" />
+            </div>
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>
+        <MudText Typo="Typo.body1" Align="Align.Center" Class="py-4">
+            @if (_loading)
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+            }
+            else if (!string.IsNullOrWhiteSpace(_errorMessage))
+            {
+                <span style="color:#EF4444;">⚠️ @_errorMessage</span>
+            }
+            else
+            {
+                <span>لا توجد استثناءات في الفترة المحددة</span>
+            }
+        </MudText>
+    </NoRecordsContent>
+</MudTable>
+
+@* ═══ Create Dialog ═══ *@
+<MudDialog @bind-IsOpen="_createDialogOpen">
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-4">إضافة استثناء جديد</MudText>
+        <MudForm @ref="_createForm">
+            <MudGrid>
+                <MudItem xs="12" sm="6">
+                    <MudAutocomplete T="EmployeeSimple"
+                                     Label="الموظف"
+                                     @bind-Value="_newExemption.Employee"
+                                     SearchFunc="@SearchEmployees"
+                                     ToStringFunc="@(e => e?.Name ?? "")"
+                                     Required="true" RequiredError="اختر الموظف"
+                                     Clearable>
+                        <ItemTemplate>
+                            <div style="padding:8px 12px;">
+                                <strong>@context.Name</strong>
+                                <br />
+                                <small style="color:#757575;">@context.Department</small>
+                            </div>
+                        </ItemTemplate>
+                    </MudAutocomplete>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudDatePicker Label="التاريخ" @bind-Value="_newExemption.Date" Editable="false" Required="true" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudAutocomplete T="string"
+                                     Label="السبب"
+                                     @bind-Value="_newExemption.ReasonCode"
+                                     SearchFunc="@SearchReasons"
+                                     Required="true" RequiredError="اكتب السبب"
+                                     Clearable />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField T="string" Label="وصف تفصيلي (اختياري)" @bind-Value="_newExemption.Description" Lines="2" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudSwitch T="bool" Label="يوم كامل" @bind-Checked="_newExemption.IsFullDay" Color="Color.Primary" />
+                </MudItem>
+                @if (!_newExemption.IsFullDay)
+                {
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="decimal?" Label="عدد الساعات" @bind-Value="_newExemption.Hours"
+                                         Min="0.5m" Max="12m" Step="0.5m" Required="true" RequiredError="حدد الساعات" />
+                    </MudItem>
+                }
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="bool" Label="الخصم من الراتب" @bind-Value="_newExemption.IsDeductedExplicit">
+                        <MudSelectItem Value="@true">يُخصم</MudSelectItem>
+                        <MudSelectItem Value="@false">لا يُخصم</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField T="string" Label="ملاحظات" @bind-Value="_newExemption.Notes" Lines="2" />
+                </MudItem>
+            </MudGrid>
+        </MudForm>
+
+        @if (!string.IsNullOrWhiteSpace(_newExemption.ReasonCode))
+        {
+            <MudAlert Severity="@(_newExemption.IsDeductedExplicit ? Severity.Error : Severity.Success)" Class="mt-3">
+                @if (ExemptionReasonCodes.IsErrandType(_newExemption.ReasonCode))
+                {
+                    <text>مأمورية / مهمة رسمية → <b>لا يُخصم</b> من الراتب (يعتبر حضور)</text>
+                }
+                else if (ExemptionReasonCodes.IsEarlyLeaveType(_newExemption.ReasonCode))
+                {
+                    <text>انصراف مبكر → <b>لا يُخصم</b> من الراتب (تسجيل فقط)</text>
+                }
+                else if (ExemptionReasonCodes.IsPermissionType(_newExemption.ReasonCode))
+                {
+                    <text>إذن شخصي → <b>@(_newExemption.IsDeductedExplicit ? "يُخصم" : "لا يُخصم")</b> من الراتب</text>
+                }
+                else
+                {
+                    <text>هذا السبب → <b>@(_newExemption.IsDeductedExplicit ? "يُخصم" : "لا يُخصم")</b> من الراتب</text>
+                }
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SubmitCreate" Disabled="@_loading" type="button">
+            @if (_loading)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            حفظ
+        </MudButton>
+        <MudButton OnClick="CloseCreateDialog" type="button">إلغاء</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@* ═══ Reject Dialog ═══ *@
+<MudDialog @bind-IsOpen="_rejectDialogOpen">
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-4">رفض الاستثناء</MudText>
+        <MudTextField T="string" Label="سبب الرفض (اختياري)" @bind-Value="_rejectReason" Lines="3" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="SubmitReject" type="button">رفض</MudButton>
+        <MudButton OnClick="CloseRejectDialog" type="button">إلغاء</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    // ═══ State ═══
+    private List<ExemptionListDto> _items = new();
+    private ExemptionFilterDto _filter = new();
+    private ExemptionStatsDto _stats = new();
+    private List<string> _departments = new();
+    private bool _loading = false;
+    private bool _isAdminOrManager = false;
+    private string? _errorMessage;
+
+    // Create dialog
+    private bool _createDialogOpen = false;
+    private MudForm _createForm = new();
+    private NewExemptionForm _newExemption = new();
+    private List<EmployeeSimple> _allEmployees = new();
+
+    // Reject dialog
+    private bool _rejectDialogOpen = false;
+    private int _rejectExemptionId = 0;
+    private string _rejectReason = "";
+
+    // ═══ Models ═══
+    public class EmployeeSimple
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+        public string? Department { get; set; }
+        public int? BioEmployeeId { get; set; }
+    }
+
+    public class NewExemptionForm
+    {
+        public EmployeeSimple? Employee { get; set; }
+        public DateTime? Date { get; set; } = DateTime.Today;
+        public string ReasonCode { get; set; } = "";
+        public string? Description { get; set; }
+        public bool IsFullDay { get; set; } = true;
+        public decimal? Hours { get; set; }
+        public bool IsDeductedExplicit { get; set; } = true;
+        public string? Notes { get; set; }
+    }
+
+    // ═══ Lifecycle ═══
+    protected override async Task OnInitializedAsync()
+    {
+        _filter.DateFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        _filter.DateTo = DateTime.Today;
+
+        try
+        {
+            // نحمل الموظفين من GetActiveEmployeesAsync
+            var employees = await OpportunityService.GetActiveEmployeesAsync();
+            _allEmployees = employees.Select(e => new EmployeeSimple
+            {
+                Id = e.EmployeeId,              // ← EmployeeId مش EmployeeID
+                Name = e.FullName ??  "",  // ← FullName مش EmployeeName
+                Department = e.Department,
+                BioEmployeeId = e.BioEmployeeId
+            }).ToList();
+
+            _departments = employees
+                .Where(e => !string.IsNullOrWhiteSpace(e.Department))
+                .Select(e => e.Department!)
+                .Distinct()
+                .OrderBy(d => d)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"خطأ في تحميل الموظفين: {ex.Message}";
+        }
+
+        try
+        {
+            var authState = await AuthState.GetAuthenticationStateAsync();
+            _isAdminOrManager = authState.User.IsInRole("Admin") || authState.User.IsInRole("AccountManager");
+        }
+        catch { }
+
+        await LoadData();
+    }
+
+    // ═══ Data Loading ═══
+    private async Task LoadData()
+    {
+        _loading = true;
+        _errorMessage = null;
+        try
+        {
+            var result = await AttendanceService.GetExemptionsAsync(_filter);
+            _items = result?.Items?.ToList() ?? new List<ExemptionListDto>();
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"خطأ في تحميل البيانات: {ex.Message}";
+            _items = new List<ExemptionListDto>();
+        }
+
+        try
+        {
+            _stats = await AttendanceService.GetExemptionStatsAsync(_filter) ?? new ExemptionStatsDto();
+        }
+        catch (Exception ex)
+        {
+            if (string.IsNullOrWhiteSpace(_errorMessage))
+                _errorMessage = $"خطأ في تحميل الإحصائيات: {ex.Message}";
+            _stats = new ExemptionStatsDto();
+        }
+
+        _loading = false;
+        StateHasChanged();
+    }
+
+    private void OnSearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") LoadData();
+    }
+
+    private async void FilterByStatus(string? status)
+    {
+        _filter.Status = status;
+        await LoadData();
+    }
+
+    // ═══ Create ═══
+    private void OpenCreateDialog()
+    {
+        _newExemption = new NewExemptionForm
+        {
+            Date = DateTime.Today,
+            ReasonCode = "",
+            IsFullDay = true,
+            IsDeductedExplicit = true
+        };
+        _createDialogOpen = true;
+    }
+
+    private void CloseCreateDialog() => _createDialogOpen = false;
+
+    private async Task SubmitCreate()
+    {
+        await _createForm.ValidateAsync();
+        if (!_createForm.IsValid) return;
+
+        if (_newExemption.Employee == null || _newExemption.Date == null || string.IsNullOrWhiteSpace(_newExemption.ReasonCode))
+        {
+            Snackbar.Add("يرجى ملء جميع الحقول المطلوبة", Severity.Warning);
+            return;
+        }
+
+        if (!_newExemption.IsFullDay && (!_newExemption.Hours.HasValue || _newExemption.Hours.Value <= 0))
+        {
+            Snackbar.Add("يرجى تحديد عدد الساعات للاستثناء الجزئي", Severity.Warning);
+            return;
+        }
+
+        _loading = true;
+        try
+        {
+            var dto = new ExemptionCreateDto
+            {
+                EmployeeId = _newExemption.Employee.Id,
+                BioEmployeeId = _newExemption.Employee.BioEmployeeId,   // ← شيلنا ده لو مش موجود في DTO
+                ExemptionDate = _newExemption.Date.Value,
+                ReasonCode = _newExemption.ReasonCode,
+                Description = _newExemption.Description,
+                IsFullDay = _newExemption.IsFullDay,
+                Hours = _newExemption.IsFullDay ? null : _newExemption.Hours,
+                IsDeducted = _newExemption.IsDeductedExplicit,
+                Notes = _newExemption.Notes
+            };
+
+            var authState = await AuthState.GetAuthenticationStateAsync();
+            var userName = authState.User.Identity?.Name ?? "System";
+
+            var (success, message) = await AttendanceService.CreateExemptionAsync(dto, userName);
+            Snackbar.Add(message, success ? Severity.Success : Severity.Error);
+
+            if (success)
+            {
+                _createDialogOpen = false;
+                await LoadData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task<IEnumerable<EmployeeSimple>> SearchEmployees(string search, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+            return _allEmployees.Take(20);
+
+        return _allEmployees
+            .Where(e => e.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        (e.Department?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                        (e.BioEmployeeId?.ToString()?.Contains(search) ?? false))
+            .Take(20);
+    }
+
+    private Task<IEnumerable<string>> SearchReasons(string search, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+            return Task.FromResult(ExemptionReasonCodes.Suggestions.AsEnumerable());
+
+        return Task.FromResult(ExemptionReasonCodes.Suggestions
+            .Where(s => s.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .AsEnumerable());
+    }
+
+    // ═══ Approve ═══
+    private async Task ApproveExemption(int id)
+    {
+        try
+        {
+            var authState = await AuthState.GetAuthenticationStateAsync();
+            var userName = authState.User.Identity?.Name ?? "System";
+
+            var (success, message) = await AttendanceService.ApproveExemptionAsync(id, userName);
+            Snackbar.Add(message, success ? Severity.Success : Severity.Error);
+            if (success) await LoadData();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ═══ Reject ═══
+    private void OpenRejectDialog(int exemptionId)
+    {
+        _rejectExemptionId = exemptionId;
+        _rejectReason = "";
+        _rejectDialogOpen = true;
+    }
+
+    private void CloseRejectDialog() => _rejectDialogOpen = false;
+
+    private async Task SubmitReject()
+    {
+        try
+        {
+            var authState = await AuthState.GetAuthenticationStateAsync();
+            var userName = authState.User.Identity?.Name ?? "System";
+
+            var (success, message) = await AttendanceService.RejectExemptionAsync(_rejectExemptionId, userName, _rejectReason);
+            Snackbar.Add(message, success ? Severity.Success : Severity.Error);
+            _rejectDialogOpen = false;
+            if (success) await LoadData();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ═══ Delete ═══
+    private async Task DeleteExemption(int id)
+    {
+        try
+        {
+            var authState = await AuthState.GetAuthenticationStateAsync();
+            var userName = authState.User.Identity?.Name ?? "System";
+
+            var (success, message) = await AttendanceService.DeleteExemptionAsync(id, userName);
+            Snackbar.Add(message, success ? Severity.Success : Severity.Error);
+            if (success) await LoadData();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ═══ Helpers ═══
+    private Color GetReasonColor(string? code)
+    {
+        if (ExemptionReasonCodes.IsErrandType(code)) return Color.Info;
+        if (ExemptionReasonCodes.IsEarlyLeaveType(code)) return Color.Warning;
+        if (ExemptionReasonCodes.IsPermissionType(code)) return Color.Primary;
+        return Color.Default;
+    }
+
+    private Color GetMudColorForStatus(string? status) => status switch
+    {
+        "Pending" => Color.Warning,
+        "Approved" => Color.Success,
+        "Rejected" => Color.Error,
+        _ => Color.Default
+    };
+
+    private string GetStatusBorderStyle(string? status, string activeColor)
+    {
+        var borderColor = _filter.Status == status ? activeColor : "#94A3B8";
+        return $"cursor:pointer; border-right:4px solid {borderColor};";
+    }
+}

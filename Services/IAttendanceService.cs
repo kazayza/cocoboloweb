@@ -23,7 +23,19 @@ public interface IAttendanceService
     // ═══════════════ بصمتي ═══════════════
     Task<List<AttendanceListDto>> GetMyAttendanceAsync(string userName, DateTime? month = null);
     Task<AttendanceStatisticsDto> GetMyStatisticsAsync(string userName, DateTime? month = null);
-        // ═══════════════ Dashboard ═══════════════
+    
+    // ═══════════════ Dashboard ═══════════════
     Task<AttendanceDashboardDto> GetDashboardDataAsync(DateTime? dateFrom = null, DateTime? dateTo = null);
     Task<AttendanceStatisticsDto> GetTodayStatisticsAsync();
+
+    // ═══════════════ الاستثناءات ═══════════════
+    Task<PagedResult<ExemptionListDto>> GetExemptionsAsync(ExemptionFilterDto filter);
+    Task<ExemptionStatsDto> GetExemptionStatsAsync(ExemptionFilterDto filter);
+    Task<(bool Success, string Message)> CreateExemptionAsync(ExemptionCreateDto dto, string currentUserName);
+    Task<(bool Success, string Message)> DeleteExemptionAsync(int exemptionId, string currentUserName);
+    Task<(bool Success, string Message)> ApproveExemptionAsync(int exemptionId, string currentUserName);
+    Task<(bool Success, string Message)> RejectExemptionAsync(int exemptionId, string currentUserName, string? reason = null);
+
+    // ═══════════════ أيام العمل ═══════════════
+    Task<int> GetWorkingDaysForEmployeeAsync(int employeeId, DateTime from, DateTime to);
 }
