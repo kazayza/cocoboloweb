@@ -602,6 +602,7 @@ namespace COCOBOLOERPNEW.Services
                     FullName = e.FullName,
                     JobTitle = e.JobTitle,
                     Department = e.Department,
+                    BioEmployeeId = e.BioEmployeeId,
                     NationalId = e.NationalId,
                     MobilePhone = e.MobilePhone,
                     CurrentSalaryBase = e.CurrentSalaryBase,

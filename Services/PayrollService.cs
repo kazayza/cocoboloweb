@@ -1077,6 +1077,13 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     var offDays = new List<DayOfWeek>();
     if (shift?.OffDay1 != null) offDays.Add((DayOfWeek)shift.OffDay1.Value);
     if (shift?.OffDay2 != null) offDays.Add((DayOfWeek)shift.OffDay2.Value);
+    if (!offDays.Any()) offDays.AddRange(new[] { DayOfWeek.Friday, DayOfWeek.Saturday });
+
+    var holidayDates = await _db.Calendars.AsNoTracking()
+        .Where(c => c.CalendarDate >= monthStart.Date && c.CalendarDate < monthEnd.Date && c.IsHoliday == true)
+        .Select(c => c.CalendarDate.Date)
+        .ToListAsync();
+    var holidaySet = holidayDates.ToHashSet();
 
     // ── احسب أيام العمل الفعلية ──────────────────────────────
     int count = 0;
@@ -1084,7 +1091,7 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     for (int i = 1; i <= totalDays; i++)
     {
         var day = new DateTime(monthStart.Year, monthStart.Month, i);
-        if (!offDays.Any() || !offDays.Contains(day.DayOfWeek))
+        if (!offDays.Contains(day.DayOfWeek) && !holidaySet.Contains(day.Date))
             count++;
     }
     return count;

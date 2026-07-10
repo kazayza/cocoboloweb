@@ -9,6 +9,7 @@ public interface IAttendanceService
     Task<AttendanceListDto?> GetAttendanceByIdAsync(int attendanceId);
     Task<AttendanceStatisticsDto> GetStatisticsAsync(AttendanceFilterDto filter);
     Task<(bool Success, string Message)> UpdateAttendanceAsync(AttendanceEditDto dto, string currentUserName);
+    Task<(bool Success, string Message, int? AttendanceId)> UpsertAttendanceAsync(AttendanceEditDto dto, string currentUserName);
     Task<(bool Success, string Message)> DeleteAttendanceAsync(int attendanceId, string currentUserName);
     
     // ═══════════════ التقارير ═══════════════
@@ -19,6 +20,8 @@ public interface IAttendanceService
     // ═══════════════ سجلات البصمة الخام ═══════════════
     Task<PagedResult<BiometricLogDto>> GetBiometricLogsAsync(BiometricLogFilterDto filter);
     Task<(bool Success, string Message)> ProcessBiometricLogsAsync(DateTime date, string currentUserName);
+    Task<BiometricImportResultDto> ImportBiometricLogsAsync(Stream fileStream, string fileName, BiometricImportOptionsDto options, string currentUserName);
+    Task<byte[]> GetBiometricImportTemplateAsync();
     
     // ═══════════════ بصمتي ═══════════════
     Task<List<AttendanceListDto>> GetMyAttendanceAsync(string userName, DateTime? month = null);

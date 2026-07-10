@@ -27,6 +27,7 @@ public partial class ShiftsList : ComponentBase
     private bool _hasEditPermission;
     private bool _hasDeletePermission;
     private bool _canSeeAllShifts;
+    private bool _canOpenAttendance;
     private string _userName = "";
     
     #endregion
@@ -76,6 +77,47 @@ public partial class ShiftsList : ComponentBase
     
     #endregion
 
+    #region UI Helpers
+
+    private int SummaryActiveCount => _canSeeAllShifts ? _activeCount : _shifts.Count(s => s.IsActive);
+    private int SummaryMorningCount => _canSeeAllShifts ? _morningCount : _shifts.Count(s => s.ShiftType == ShiftTypes.Morning);
+    private int SummaryEveningCount => _canSeeAllShifts ? _eveningCount : _shifts.Count(s => s.ShiftType == ShiftTypes.Evening);
+    private int SummaryDailyCount => _canSeeAllShifts ? _dailyCount : _shifts.Count(s => s.ShiftType == ShiftTypes.DailyWork);
+    private int SummaryEndedCount => Math.Max(0, _totalCount - SummaryActiveCount);
+
+    private int ActiveFiltersCount =>
+        (string.IsNullOrWhiteSpace(_filter.SearchText) ? 0 : 1) +
+        (string.IsNullOrWhiteSpace(_filter.ShiftType) ? 0 : 1) +
+        (_filter.EffectiveFrom.HasValue ? 1 : 0) +
+        (_filter.EffectiveTo.HasValue ? 1 : 0) +
+        (_filter.ActiveOnly.HasValue ? 1 : 0);
+
+    private int FromRecord => _canSeeAllShifts
+        ? (_totalCount == 0 ? 0 : ((_currentPage - 1) * _filter.PageSize) + 1)
+        : (_totalCount == 0 ? 0 : 1);
+
+    private int ToRecord => _canSeeAllShifts
+        ? Math.Min(_currentPage * _filter.PageSize, _totalCount)
+        : _totalCount;
+
+    private string CurrentScopeLabel => !_canSeeAllShifts
+        ? "شيفتاتي"
+        : _filter.ActiveOnly == true ? "الشيفتات النشطة"
+        : _filter.ActiveOnly == false ? "الشيفتات المنتهية"
+        : !string.IsNullOrWhiteSpace(_filter.ShiftType) ? $"نوع: {_filter.ShiftType}"
+        : "كل الشيفتات";
+
+    private string CurrentRangeLabel =>
+        _filter.EffectiveFrom.HasValue && _filter.EffectiveTo.HasValue
+            ? $"من {_filter.EffectiveFrom.Value:yyyy/MM/dd} إلى {_filter.EffectiveTo.Value:yyyy/MM/dd}"
+            : _filter.EffectiveFrom.HasValue
+                ? $"من {_filter.EffectiveFrom.Value:yyyy/MM/dd}"
+                : _filter.EffectiveTo.HasValue
+                    ? $"إلى {_filter.EffectiveTo.Value:yyyy/MM/dd}"
+                    : "كل الفترات";
+
+    #endregion
+
     #region Lifecycle
 
     protected override async Task OnInitializedAsync()
@@ -102,6 +144,8 @@ public partial class ShiftsList : ComponentBase
         _canSeeAllShifts = user.IsInRole("Admin") || 
                            user.IsInRole("Hr") || 
                            user.IsInRole("HR") || 
+                           user.IsInRole("HrManager") ||
+                           user.IsInRole("HRManager") ||
                            user.IsInRole("Accountant") || 
                            user.IsInRole("Account") || 
                            user.IsInRole("SalesManager") || 
@@ -109,10 +153,18 @@ public partial class ShiftsList : ComponentBase
                            user.HasClaim("Permission", "frm_AllShifts:View");
 
         _hasViewPermission = user.Identity?.IsAuthenticated == true;
+        _canOpenAttendance = user.IsInRole("Admin")
+                             || user.IsInRole("HrManager")
+                             || user.IsInRole("HRManager")
+                             || user.IsInRole("Accountant")
+                             || user.IsInRole("AccountsManager")
+                             || user.IsInRole("AccountManager")
+                             || user.HasClaim("Permission", "frm_empAttendance:View")
+                             || user.HasClaim("Permission", "frm_Attendance:View");
         
-        _hasAddPermission = _canSeeAllShifts && (user.IsInRole("Admin") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Add"));
-        _hasEditPermission = _canSeeAllShifts && (user.IsInRole("Admin") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Edit"));
-        _hasDeletePermission = _canSeeAllShifts && (user.IsInRole("Admin") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Delete"));
+        _hasAddPermission = _canSeeAllShifts && (user.IsInRole("Admin") || user.IsInRole("HrManager") || user.IsInRole("HRManager") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Add"));
+        _hasEditPermission = _canSeeAllShifts && (user.IsInRole("Admin") || user.IsInRole("HrManager") || user.IsInRole("HRManager") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Edit"));
+        _hasDeletePermission = _canSeeAllShifts && (user.IsInRole("Admin") || user.IsInRole("HrManager") || user.IsInRole("HRManager") || user.HasClaim("Permission", "frm_EmpolyeeShifts:Delete"));
     }
 
     #endregion
@@ -183,7 +235,7 @@ public partial class ShiftsList : ComponentBase
 
     private async Task ResetFilters()
     {
-        _filter = new EmployeeShiftFilterDto();
+        _filter = new EmployeeShiftFilterDto { PageSize = _filter.PageSize };
         _currentPage = 1;
         _isLoadingData = true;
         StateHasChanged();
@@ -191,6 +243,20 @@ public partial class ShiftsList : ComponentBase
         await LoadData();
         
         _isLoadingData = false;
+        StateHasChanged();
+    }
+
+    private async Task RefreshView()
+    {
+        _isLoadingData = true;
+        _isLoadingStats = true;
+        StateHasChanged();
+
+        await LoadData();
+        await LoadStatistics();
+
+        _isLoadingData = false;
+        _isLoadingStats = false;
         StateHasChanged();
     }
 

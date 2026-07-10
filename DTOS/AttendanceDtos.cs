@@ -215,11 +215,30 @@ public class AttendanceListDto
     public string PenaltyDisplay => PenaltyHours > 0 ? $"{PenaltyHours:F1}" : "--";
     
     // Status Checks
-    public bool IsPresent => Status == AttendanceStatus.Present || TimeIn.HasValue;
-    public bool IsAbsent => Status == AttendanceStatus.Absent || (!TimeIn.HasValue && !TimeOut.HasValue);
-    public bool IsLate => LateMinutes > 0;
-    public bool HasEarlyLeave => EarlyLeaveMinutes > 0;
+    public bool IsPresent => TimeIn.HasValue || Status == AttendanceStatus.Present || Status == AttendanceStatus.Late || Status == AttendanceStatus.Errand || Status == AttendanceStatus.EarlyLeave;
+    public bool IsAbsent => Status == AttendanceStatus.Absent;
+    public bool IsLate => Status == AttendanceStatus.Late || (LateMinutes ?? 0) > 0;
+    public bool HasEarlyLeave => Status == AttendanceStatus.EarlyLeave || (EarlyLeaveMinutes ?? 0) > 0;
+    public bool IsHolidayStatus => Status == AttendanceStatus.Holiday;
+    public bool IsOffDayStatus => Status == AttendanceStatus.OffDay || Status == AttendanceStatus.Weekend;
+    public bool IsPermissionStatus => Status == AttendanceStatus.Permission;
+    public bool IsErrandStatus => Status == AttendanceStatus.Errand;
     public bool IsWeekend => LogDate.DayOfWeek == DayOfWeek.Friday || LogDate.DayOfWeek == DayOfWeek.Saturday;
+    public bool IsWorkingDayRecord => !IsHolidayStatus && !IsOffDayStatus;
+    public string StatusDisplay => Status switch
+    {
+        AttendanceStatus.Absent => "غائب",
+        AttendanceStatus.Late => "متأخر",
+        AttendanceStatus.Holiday => "إجازة رسمية",
+        AttendanceStatus.OffDay => "راحة",
+        AttendanceStatus.Weekend => "عطلة أسبوعية",
+        AttendanceStatus.Permission => "إذن",
+        AttendanceStatus.Errand => "مأمورية",
+        AttendanceStatus.EarlyLeave => "انصراف مبكر",
+        AttendanceStatus.Present => "حاضر",
+        _ when IsPresent => "حاضر",
+        _ => Status ?? "غير محدد"
+    };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -375,6 +394,49 @@ public class BiometricLogFilterDto
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 50;
 }
+
+// ═══════════════════════════════════════════════════════════
+// الحضور اليدوي اليومي
+// ═══════════════════════════════════════════════════════════
+public class DailyManualAttendanceDto
+{
+    public int? AttendanceId { get; set; }
+    public int EmployeeId { get; set; }
+    public int BiometricCode { get; set; }
+    public string EmployeeName { get; set; } = "";
+    public string? Department { get; set; }
+    public DateTime LogDate { get; set; } = DateTime.Today;
+    public TimeOnly? TimeIn { get; set; }
+    public TimeOnly? TimeOut { get; set; }
+    public string Status { get; set; } = AttendanceStatus.Present;
+    public string? EditReason { get; set; }
+    public bool HasExistingRecord { get; set; }
+    public decimal? TotalHours { get; set; }
+    public int? LateMinutes { get; set; }
+    public int? EarlyLeaveMinutes { get; set; }
+}
+
+// ═══════════════════════════════════════════════════════════
+// استيراد البصمة
+// ═══════════════════════════════════════════════════════════
+public class BiometricImportOptionsDto
+{
+    public int? SpecificBiometricCode { get; set; }
+    public bool ProcessAfterImport { get; set; } = true;
+    public bool GenerateDailyCoverage { get; set; } = false;
+}
+
+public class BiometricImportResultDto
+{
+    public int TotalRows { get; set; }
+    public int ImportedCount { get; set; }
+    public int SkippedCount { get; set; }
+    public int ErrorCount { get; set; }
+    public List<DateTime> ImportedDates { get; set; } = new();
+    public List<string> Warnings { get; set; } = new();
+    public List<string> Errors { get; set; } = new();
+}
+
 // ═══════════════════════════════════════════════════════════
 // DTO للـ Dashboard
 // ═══════════════════════════════════════════════════════════

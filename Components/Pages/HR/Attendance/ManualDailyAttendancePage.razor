@@ -1,0 +1,956 @@
+@page "/attendance/manual-daily"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
+
+@inject IAttendanceService AttendanceService
+@inject IEmployeeService EmployeeService
+@inject AuthenticationStateProvider AuthState
+@inject ISnackbar Snackbar
+
+<PageTitle>الحضور اليدوي اليومي</PageTitle>
+
+<AuthorizeView>
+    <Authorized>
+        @if (!_hasPermission)
+        {
+            <MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+                <MudPaper Class="pa-8 text-center" Elevation="3" Style="border-radius:20px;">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Large" Style="font-size:64px; color:#EF5350;" Class="mb-4" />
+                    <MudText Typo="Typo.h5" Color="Color.Error">غير مصرح</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">
+                        ليس لديك صلاحية إضافة أو تعديل الحضور اليدوي اليومي.
+                    </MudText>
+                </MudPaper>
+            </MudContainer>
+        }
+        else
+        {
+            <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4 hr-page-shell manual-daily-v2">
+
+                @* ================= HERO ================= *@
+                <MudPaper Class="manual-daily-hero mb-4" Elevation="0">
+                    <div class="manual-daily-hero__content">
+                        <div class="manual-daily-hero__headline">
+                            <MudAvatar Size="Size.Large" Class="manual-daily-hero__avatar">
+                                <MudIcon Icon="@Icons.Material.Filled.EditCalendar" Size="Size.Medium" Color="Color.Surface" />
+                            </MudAvatar>
+                            <div>
+                                <div class="section-header-chip mb-2">
+                                    <MudIcon Icon="@Icons.Material.Filled.FactCheck" Size="Size.Small" />
+                                    Daily Manual Attendance
+                                </div>
+                                <MudText Typo="Typo.h4" Color="Color.Surface" Class="font-weight-bold mb-1">
+                                    الحضور اليدوي اليومي
+                                </MudText>
+                                <MudText Typo="Typo.body2" Class="manual-daily-hero__subtitle">
+                                    شاشة مرنة لإنشاء أو تعديل سجل حضور لموظف في يوم محدد مع توثيق السبب ومراجعة السجل الحالي قبل الحفظ.
+                                </MudText>
+                            </div>
+                        </div>
+
+                        <div class="manual-daily-hero__actions">
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Info"
+                                       StartIcon="@Icons.Material.Filled.History"
+                                       Href="/attendance/logs"
+                                       Class="manual-daily-action">
+                                سجلات البصمة
+                            </MudButton>
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Dark"
+                                       StartIcon="@Icons.Material.Filled.Refresh"
+                                       OnClick="RefreshView"
+                                       Class="manual-daily-action">
+                                تحديث
+                            </MudButton>
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Surface"
+                                       StartIcon="@Icons.Material.Filled.ArrowBack"
+                                       Href="/attendance"
+                                       Class="manual-daily-action">
+                                العودة
+                            </MudButton>
+                        </div>
+                    </div>
+                </MudPaper>
+
+                @* ================= STICKY SELECTOR ================= *@
+                <div class="sticky-filter-shell">
+                    <MudPaper Class="manual-card mb-3" Elevation="2">
+                        <div class="manual-section-head">
+                            <div>
+                                <MudText Typo="Typo.h6" Class="font-weight-bold">١) اختر اليوم والموظف</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    يبدأ العمل هنا: اختر التاريخ والموظف ثم حمّل السجل الحالي لنفس اليوم إذا كان موجودًا.
+                                </MudText>
+                            </div>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                                @SelectedDateDisplay
+                            </MudChip>
+                        </div>
+
+                        <MudGrid Spacing="3">
+                            <MudItem xs="12" md="3">
+                                <MudDatePicker Label="تاريخ الحركة"
+                                               Date="_selectedDate"
+                                               DateChanged="OnDateChanged"
+                                               Variant="Variant.Outlined"
+                                               Margin="Margin.Dense"
+                                               Editable="true"
+                                               DateFormat="yyyy/MM/dd" />
+                            </MudItem>
+
+                            <MudItem xs="12" md="5">
+                                <MudAutocomplete T="EmployeeListDto"
+                                                 Label="الموظف"
+                                                 Variant="Variant.Outlined"
+                                                 Margin="Margin.Dense"
+                                                 Value="_selectedEmployee"
+                                                 SearchFunc="SearchEmployees"
+                                                 ToStringFunc="@(e => e is null ? string.Empty : e.FullName)"
+                                                 ValueChanged="OnEmployeeChanged"
+                                                 Clearable="true"
+                                                 ResetValueOnEmptyText="true"
+                                                 Dense="true"
+                                                 Placeholder="ابحث باسم الموظف أو القسم أو الرقم القومي">
+                                    <ItemTemplate Context="emp">
+                                        <div class="manual-employee-option">
+                                            <strong>@emp.FullName</strong>
+                                            <small>@(emp.Department ?? "بدون قسم") @(emp.BioEmployeeId.HasValue ? $"• كود: {emp.BioEmployeeId}" : string.Empty)</small>
+                                        </div>
+                                    </ItemTemplate>
+                                </MudAutocomplete>
+                            </MudItem>
+
+                            <MudItem xs="12" sm="6" md="2">
+                                <MudTextField T="string"
+                                              Label="كود البصمة"
+                                              Value="@(_selectedEmployee?.BioEmployeeId?.ToString() ?? "—")"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              ReadOnly="true" />
+                            </MudItem>
+
+                            <MudItem xs="12" sm="6" md="2" Class="d-flex align-end gap-2">
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           FullWidth="true"
+                                           StartIcon="@Icons.Material.Filled.Search"
+                                           OnClick="LoadSelectedAttendance">
+                                    تحميل السجل
+                                </MudButton>
+                            </MudItem>
+                        </MudGrid>
+                    </MudPaper>
+                </div>
+
+                @* ================= DAY SUMMARY ================= *@
+                <MudPaper Class="manual-summary-strip mb-3" Elevation="1">
+                    <div class="manual-summary-strip__grid">
+                        <div class="manual-summary-strip__tile">
+                            <span class="manual-summary-strip__label">إجمالي سجلات اليوم</span>
+                            <strong class="manual-summary-strip__value">@_dayRecords.Count</strong>
+                        </div>
+                        <div class="manual-summary-strip__tile">
+                            <span class="manual-summary-strip__label">حالات حضور</span>
+                            <strong class="manual-summary-strip__value text-success">@PresentCountToday</strong>
+                        </div>
+                        <div class="manual-summary-strip__tile">
+                            <span class="manual-summary-strip__label">حالات غياب</span>
+                            <strong class="manual-summary-strip__value text-error">@AbsentCountToday</strong>
+                        </div>
+                        <div class="manual-summary-strip__tile">
+                            <span class="manual-summary-strip__label">حالات خاصة</span>
+                            <strong class="manual-summary-strip__value text-info">@SpecialCountToday</strong>
+                        </div>
+                    </div>
+                </MudPaper>
+
+                <MudGrid Spacing="3">
+
+                    @* ================= LEFT COLUMN ================= *@
+                    <MudItem xs="12" lg="5">
+                        <div class="manual-column-stack">
+
+                            <MudPaper Class="manual-card" Elevation="1">
+                                <div class="manual-section-head compact">
+                                    <div>
+                                        <MudText Typo="Typo.h6" Class="font-weight-bold">٢) ملخص الاختيار الحالي</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            قبل التعديل راجع بيانات الموظف والحالة الحالية للسجل.
+                                        </MudText>
+                                    </div>
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Style="@CurrentRecordChipStyle">
+                                        @CurrentRecordChipText
+                                    </MudChip>
+                                </div>
+
+                                <div class="manual-grid-2">
+                                    <div class="manual-info-box">
+                                        <span class="manual-info-box__label">الموظف</span>
+                                        <div class="manual-info-box__value">@(_selectedEmployee?.FullName ?? "—")</div>
+                                    </div>
+                                    <div class="manual-info-box">
+                                        <span class="manual-info-box__label">القسم</span>
+                                        <div class="manual-info-box__value">@(_selectedEmployee?.Department ?? "—")</div>
+                                    </div>
+                                    <div class="manual-info-box">
+                                        <span class="manual-info-box__label">التاريخ</span>
+                                        <div class="manual-info-box__value">@SelectedDateDisplay</div>
+                                    </div>
+                                    <div class="manual-info-box">
+                                        <span class="manual-info-box__label">اليوم</span>
+                                        <div class="manual-info-box__value">@SelectedDayName</div>
+                                    </div>
+                                    <div class="manual-info-box">
+                                        <span class="manual-info-box__label">كود البصمة</span>
+                                        <div class="manual-info-box__value">@(_selectedEmployee?.BioEmployeeId?.ToString() ?? "—")</div>
+                                    </div>
+                                    <div class="manual-info-box">
+                                        <span class="manual-info-box__label">الحالة الحالية</span>
+                                        <div class="manual-info-box__value">@StatusDisplay</div>
+                                    </div>
+                                </div>
+                            </MudPaper>
+
+                            <MudPaper Class="manual-card" Elevation="1">
+                                <div class="manual-section-head compact">
+                                    <div>
+                                        <MudText Typo="Typo.h6" Class="font-weight-bold">٣) اختر الحالة بسرعة</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            اختيارات سريعة لتقليل الأخطاء وتسريع الإدخال اليدوي.
+                                        </MudText>
+                                    </div>
+                                </div>
+
+                                <div class="d-flex flex-wrap gap-2">
+                                    @foreach (var item in QuickStatuses)
+                                    {
+                                        <MudChip T="string"
+                                                 Variant="@(_status == item.Status ? Variant.Filled : Variant.Outlined)"
+                                                 Color="@item.Color"
+                                                 OnClick="() => ApplyQuickStatus(item.Status)">
+                                            @item.Label
+                                        </MudChip>
+                                    }
+                                </div>
+                            </MudPaper>
+
+                            <MudPaper Class="manual-card" Elevation="1">
+                                <div class="manual-section-head compact">
+                                    <div>
+                                        <MudText Typo="Typo.h6" Class="font-weight-bold">٤) أنشئ أو عدّل السجل</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            أدخل الأوقات فقط عندما تكون الحالة بحاجة إلى وقت حضور أو انصراف.
+                                        </MudText>
+                                    </div>
+                                </div>
+
+                                @if (!DisableTimeInputs)
+                                {
+                                    <MudGrid Spacing="2" Class="mb-2">
+                                        <MudItem xs="12" sm="6">
+                                            <MudTimePicker Label="وقت الحضور"
+                                                           @bind-Time="_timeIn"
+                                                           AmPm="false"
+                                                           Editable="true"
+                                                           Clearable="true"
+                                                           Variant="Variant.Outlined"
+                                                           Margin="Margin.Dense" />
+                                        </MudItem>
+                                        <MudItem xs="12" sm="6">
+                                            <MudTimePicker Label="وقت الانصراف"
+                                                           @bind-Time="_timeOut"
+                                                           AmPm="false"
+                                                           Editable="true"
+                                                           Clearable="true"
+                                                           Variant="Variant.Outlined"
+                                                           Margin="Margin.Dense" />
+                                        </MudItem>
+                                    </MudGrid>
+                                }
+                                else
+                                {
+                                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                                        الحالة الحالية لا تحتاج إلى إدخال وقت حضور أو انصراف.
+                                    </MudAlert>
+                                }
+
+                                <MudSelect T="string"
+                                           Label="الحالة"
+                                           Value="_status"
+                                           ValueChanged="OnStatusChanged"
+                                           Variant="Variant.Outlined"
+                                           Margin="Margin.Dense"
+                                           Class="mb-2">
+                                    <MudSelectItem T="string" Value="@AttendanceStatus.Present">حاضر</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@AttendanceStatus.Late">متأخر</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@AttendanceStatus.Absent">غائب</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@AttendanceStatus.Permission">إذن</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@AttendanceStatus.Errand">مأمورية</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@AttendanceStatus.EarlyLeave">انصراف مبكر</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@AttendanceStatus.Holiday">إجازة رسمية</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@AttendanceStatus.OffDay">راحة</MudSelectItem>
+                                </MudSelect>
+
+                                <MudTextField T="string"
+                                              Label="سبب الإدخال / التعديل"
+                                              @bind-Value="_reason"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Lines="3"
+                                              Required="true"
+                                              Placeholder="مثال: نسي الموظف البصمة / عطل بالجهاز / تصحيح إداري" />
+
+                                <MudAlert Severity="@CurrentHintSeverity" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                                    @CurrentHintText
+                                </MudAlert>
+
+                                <div class="manual-form-actions mt-3">
+                                    <MudButton Variant="Variant.Filled"
+                                               Color="Color.Success"
+                                               StartIcon="@Icons.Material.Filled.Save"
+                                               Disabled="@(_saving || !CanSave)"
+                                               OnClick="SaveAttendanceAsync">
+                                        @(_saving ? "جاري الحفظ..." : "حفظ السجل")
+                                    </MudButton>
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Default"
+                                               StartIcon="@Icons.Material.Filled.RestartAlt"
+                                               OnClick="ResetForm">
+                                        سجل جديد
+                                    </MudButton>
+                                    @if (_currentAttendanceId.HasValue)
+                                    {
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Error"
+                                                   StartIcon="@Icons.Material.Filled.Delete"
+                                                   OnClick="DeleteCurrentAttendanceAsync">
+                                            حذف السجل الحالي
+                                        </MudButton>
+                                    }
+                                </div>
+                            </MudPaper>
+
+                            <MudPaper Class="manual-card" Elevation="1">
+                                <div class="manual-section-head compact">
+                                    <div>
+                                        <MudText Typo="Typo.h6" Class="font-weight-bold">٥) معاينة قبل الحفظ</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            راجع الأثر المتوقع قبل تسجيل التعديل.
+                                        </MudText>
+                                    </div>
+                                </div>
+
+                                <div class="manual-grid-2">
+                                    <div class="manual-info-box subtle">
+                                        <span class="manual-info-box__label">الحالة النهائية</span>
+                                        <div class="manual-info-box__value">@StatusDisplay</div>
+                                    </div>
+                                    <div class="manual-info-box subtle">
+                                        <span class="manual-info-box__label">ساعات العمل</span>
+                                        <div class="manual-info-box__value">@PreviewHoursDisplay</div>
+                                    </div>
+                                    <div class="manual-info-box subtle">
+                                        <span class="manual-info-box__label">التأخير المتوقع</span>
+                                        <div class="manual-info-box__value">@PreviewLateDisplay</div>
+                                    </div>
+                                    <div class="manual-info-box subtle">
+                                        <span class="manual-info-box__label">الخروج المبكر المتوقع</span>
+                                        <div class="manual-info-box__value">@PreviewEarlyLeaveDisplay</div>
+                                    </div>
+                                </div>
+                            </MudPaper>
+                        </div>
+                    </MudItem>
+
+                    @* ================= RIGHT COLUMN ================= *@
+                    <MudItem xs="12" lg="7">
+                        <MudPaper Class="manual-card fill-card-height" Elevation="1">
+                            <div class="manual-section-head compact">
+                                <div>
+                                    <MudText Typo="Typo.h6" Class="font-weight-bold">٦) سجلات اليوم المحدد</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        يمكنك تحميل أي سجل من الجدول مباشرة داخل نموذج التعديل.
+                                    </MudText>
+                                </div>
+                                <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined" Size="Size.Small">
+                                    @_dayRecords.Count سجل
+                                </MudChip>
+                            </div>
+
+                            @if (_loadingRecords)
+                            {
+                                <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+                            }
+                            else if (!_dayRecords.Any())
+                            {
+                                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+                                    لا توجد سجلات مسجلة لليوم المختار حتى الآن. ابدأ بإنشاء أول سجل من النموذج الجانبي.
+                                </MudAlert>
+                            }
+                            else
+                            {
+                                <MudTable Items="_dayRecords" Dense="true" Hover="true" Striped="true" Elevation="0">
+                                    <HeaderContent>
+                                        <MudTh>الموظف</MudTh>
+                                        <MudTh>الحضور</MudTh>
+                                        <MudTh>الانصراف</MudTh>
+                                        <MudTh>الحالة</MudTh>
+                                        <MudTh>إجراء</MudTh>
+                                    </HeaderContent>
+                                    <RowTemplate Context="item">
+                                        <MudTd>
+                                            <div>
+                                                <MudText Typo="Typo.body2" Class="font-weight-bold">@item.EmployeeName</MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">@(item.Department ?? "—")</MudText>
+                                            </div>
+                                        </MudTd>
+                                        <MudTd>@item.TimeInDisplay</MudTd>
+                                        <MudTd>@item.TimeOutDisplay</MudTd>
+                                        <MudTd>
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Style="@GetStatusStyle(item.Status)">
+                                                @item.StatusDisplay
+                                            </MudChip>
+                                        </MudTd>
+                                        <MudTd>
+                                            <MudButton Variant="Variant.Text"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.Edit"
+                                                       OnClick="() => LoadRecordIntoEditor(item)">
+                                                تحميل
+                                            </MudButton>
+                                        </MudTd>
+                                    </RowTemplate>
+                                </MudTable>
+                            }
+                        </MudPaper>
+                    </MudItem>
+                </MudGrid>
+            </MudContainer>
+        }
+    </Authorized>
+</AuthorizeView>
+
+<style>
+    .manual-daily-v2 {
+        direction: rtl;
+    }
+
+    .manual-daily-hero {
+        border-radius: 20px;
+        overflow: hidden;
+        background: linear-gradient(135deg, #0F766E 0%, #0D9488 50%, #14B8A6 100%);
+        box-shadow: 0 12px 32px rgba(15, 118, 110, 0.18);
+    }
+
+    .manual-daily-hero__content {
+        padding: 1.25rem 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .manual-daily-hero__headline {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .manual-daily-hero__avatar {
+        background: rgba(255,255,255,.15);
+        backdrop-filter: blur(10px);
+    }
+
+    .manual-daily-hero__subtitle {
+        color: rgba(255,255,255,.82);
+        max-width: 760px;
+    }
+
+    .manual-daily-hero__actions {
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        flex-wrap: wrap;
+    }
+
+    .manual-daily-action {
+        min-height: 44px;
+        border-radius: 12px;
+        padding-inline: 14px;
+    }
+
+    .manual-card {
+        padding: 1rem;
+        border-radius: 18px;
+        border: 1px solid rgba(148,163,184,.18);
+    }
+
+    .manual-column-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .manual-section-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+    }
+
+    .manual-section-head.compact {
+        margin-bottom: .85rem;
+    }
+
+    .manual-grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: .75rem;
+    }
+
+    .manual-info-box {
+        padding: .8rem .9rem;
+        border-radius: 14px;
+        background: var(--mud-palette-background-grey);
+        border: 1px solid rgba(148,163,184,.14);
+    }
+
+    .manual-info-box.subtle {
+        background: transparent;
+        border-style: dashed;
+    }
+
+    .manual-info-box__label {
+        display: block;
+        font-size: .75rem;
+        color: var(--mud-palette-text-secondary);
+        margin-bottom: .2rem;
+    }
+
+    .manual-info-box__value {
+        font-size: .95rem;
+        font-weight: 700;
+        color: var(--mud-palette-text-primary);
+    }
+
+    .manual-summary-strip {
+        border-radius: 16px;
+        border: 1px solid rgba(148,163,184,.18);
+    }
+
+    .manual-summary-strip__grid {
+        padding: .85rem 1rem;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: .75rem;
+    }
+
+    .manual-summary-strip__tile {
+        background: rgba(148,163,184,.08);
+        border-radius: 14px;
+        padding: .75rem .85rem;
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+    }
+
+    .manual-summary-strip__label {
+        font-size: .78rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .manual-summary-strip__value {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: var(--mud-palette-text-primary);
+    }
+
+    .manual-form-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .5rem;
+    }
+
+    .manual-employee-option {
+        display: flex;
+        flex-direction: column;
+        gap: .15rem;
+        padding: 8px 12px;
+    }
+
+    .manual-employee-option small {
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .fill-card-height {
+        height: 100%;
+    }
+
+    .text-success { color: #2E7D32; }
+    .text-error { color: #C62828; }
+    .text-info { color: #1565C0; }
+
+    @@media (max-width: 900px) {
+        .manual-summary-strip__grid,
+        .manual-grid-2 {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @@media (max-width: 600px) {
+        .manual-daily-hero__content {
+            padding: 1rem;
+        }
+
+        .manual-daily-hero__headline {
+            align-items: flex-start;
+        }
+
+        .manual-daily-hero__actions {
+            width: 100%;
+        }
+
+        .manual-daily-action {
+            flex: 1 1 calc(50% - .5rem);
+        }
+
+        .manual-summary-strip__grid,
+        .manual-grid-2 {
+            grid-template-columns: 1fr;
+        }
+
+        .manual-form-actions > * {
+            flex: 1 1 100%;
+        }
+    }
+</style>
+
+@code {
+    private bool _hasPermission;
+    private bool _saving;
+    private bool _loadingRecords = true;
+
+    private DateTime? _selectedDate = DateTime.Today;
+    private EmployeeListDto? _selectedEmployee;
+    private TimeSpan? _timeIn;
+    private TimeSpan? _timeOut;
+    private string _status = AttendanceStatus.Present;
+    private string? _reason;
+    private int? _currentAttendanceId;
+
+    private List<AttendanceListDto> _dayRecords = new();
+
+    private static readonly HashSet<string> NoTimeStatuses = new()
+    {
+        AttendanceStatus.Absent,
+        AttendanceStatus.Holiday,
+        AttendanceStatus.OffDay,
+        AttendanceStatus.Weekend
+    };
+
+    private readonly (string Status, string Label, Color Color)[] QuickStatuses =
+    {
+        (AttendanceStatus.Present, "حاضر", Color.Success),
+        (AttendanceStatus.Late, "متأخر", Color.Warning),
+        (AttendanceStatus.Absent, "غائب", Color.Error),
+        (AttendanceStatus.Permission, "إذن", Color.Secondary),
+        (AttendanceStatus.Errand, "مأمورية", Color.Info),
+        (AttendanceStatus.EarlyLeave, "انصراف مبكر", Color.Warning),
+        (AttendanceStatus.Holiday, "إجازة", Color.Info),
+        (AttendanceStatus.OffDay, "راحة", Color.Default)
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        _hasPermission = user.IsInRole("Admin")
+                         || user.IsInRole("HrManager")
+                         || user.IsInRole("HRManager")
+                         || user.IsInRole("AccountManager")
+                         || user.HasClaim("Permission", "frm_Attendance:Edit");
+
+        if (_hasPermission)
+            await ReloadDayRecords();
+    }
+
+    private string SelectedDateDisplay => _selectedDate?.ToString("yyyy/MM/dd") ?? "—";
+    private string SelectedDayName => _selectedDate?.ToString("dddd", new System.Globalization.CultureInfo("ar-EG")) ?? "—";
+    private bool DisableTimeInputs => NoTimeStatuses.Contains(_status);
+    private bool CanSave => _selectedEmployee != null && _selectedDate.HasValue && !string.IsNullOrWhiteSpace(_reason);
+
+    private string CurrentRecordChipText => _currentAttendanceId.HasValue ? "سجل قائم تم تحميله" : "سجل جديد";
+    private string CurrentRecordChipStyle => _currentAttendanceId.HasValue
+        ? "background:#E3F2FD; color:#1565C0;"
+        : "background:#E8F5E9; color:#2E7D32;";
+
+    private int PresentCountToday => _dayRecords.Count(x => x.IsPresent);
+    private int AbsentCountToday => _dayRecords.Count(x => x.IsAbsent);
+    private int SpecialCountToday => _dayRecords.Count(x => x.IsHolidayStatus || x.IsOffDayStatus || x.IsPermissionStatus || x.IsErrandStatus || x.HasEarlyLeave);
+
+    private string StatusDisplay => QuickStatuses.FirstOrDefault(x => x.Status == _status).Label ?? _status;
+    private Severity CurrentHintSeverity => _status switch
+    {
+        var s when s == AttendanceStatus.Absent => Severity.Error,
+        var s when s == AttendanceStatus.Holiday || s == AttendanceStatus.OffDay => Severity.Info,
+        var s when s == AttendanceStatus.Permission || s == AttendanceStatus.Errand => Severity.Normal,
+        var s when s == AttendanceStatus.EarlyLeave || s == AttendanceStatus.Late => Severity.Warning,
+        _ => Severity.Success
+    };
+
+    private string CurrentHintText => _status switch
+    {
+        var s when s == AttendanceStatus.Absent => "في حالة الغياب أو الإجازة أو الراحة سيتم تجاهل أوقات الحضور والانصراف وحفظ الحالة فقط.",
+        var s when s == AttendanceStatus.Holiday => "الإجازة الرسمية تحفظ بدون أوقات، وتظهر في التقارير كإجازة رسمية.",
+        var s when s == AttendanceStatus.OffDay => "الراحة تحفظ بدون أوقات، وتظهر في التقارير كراحة أسبوعية أو راحة شيفت.",
+        var s when s == AttendanceStatus.Permission => "الإذن يمكن حفظه مع أو بدون وقت حسب الحالة الفعلية وسيظهر كإذن في السجل.",
+        var s when s == AttendanceStatus.Errand => "المأمورية تعتبر حالة عمل رسمية ويفضل إدخال وقت حضور وانصراف إذا كان متاحًا.",
+        var s when s == AttendanceStatus.EarlyLeave => "الانصراف المبكر يسمح بإدخال وقت الانصراف لتوثيق الحالة بدقة.",
+        _ => "أدخل الأوقات بدقة، وسيتم حساب الساعات والتأخير والخروج المبكر تلقائيًا أثناء الحفظ."
+    };
+
+    private decimal? PreviewHours
+    {
+        get
+        {
+            if (DisableTimeInputs || !_timeIn.HasValue || !_timeOut.HasValue) return null;
+            var duration = _timeOut.Value - _timeIn.Value;
+            if (duration < TimeSpan.Zero) duration += TimeSpan.FromHours(24);
+            return (decimal)duration.TotalHours;
+        }
+    }
+
+    private int PreviewLateMinutes => DisableTimeInputs || !_timeIn.HasValue
+        ? 0
+        : Math.Max(0, (int)(_timeIn.Value - new TimeSpan(8, 0, 0)).TotalMinutes);
+
+    private int PreviewEarlyLeaveMinutes => DisableTimeInputs || !_timeOut.HasValue
+        ? 0
+        : Math.Max(0, (int)(new TimeSpan(17, 0, 0) - _timeOut.Value).TotalMinutes);
+
+    private string PreviewHoursDisplay => PreviewHours.HasValue ? $"{PreviewHours.Value:F1} ساعة" : "—";
+    private string PreviewLateDisplay => PreviewLateMinutes > 0 ? $"{PreviewLateMinutes} دقيقة" : "—";
+    private string PreviewEarlyLeaveDisplay => PreviewEarlyLeaveMinutes > 0 ? $"{PreviewEarlyLeaveMinutes} دقيقة" : "—";
+
+    private async Task<IEnumerable<EmployeeListDto>> SearchEmployees(string value, CancellationToken ct)
+    {
+        var rows = await EmployeeService.SearchEmployeesAsync(value ?? string.Empty, 20);
+        return rows.Where(x => x.BioEmployeeId.HasValue);
+    }
+
+    private async Task RefreshView()
+    {
+        await ReloadDayRecords();
+        if (_selectedEmployee != null)
+            await LoadSelectedAttendance();
+    }
+
+    private async Task OnEmployeeChanged(EmployeeListDto? employee)
+    {
+        _selectedEmployee = employee;
+        await LoadSelectedAttendance();
+    }
+
+    private async Task OnDateChanged(DateTime? value)
+    {
+        _selectedDate = value;
+        await ReloadDayRecords();
+        if (_selectedEmployee != null)
+            await LoadSelectedAttendance();
+    }
+
+    private async Task OnStatusChanged(string? value)
+    {
+        _status = string.IsNullOrWhiteSpace(value) ? AttendanceStatus.Present : value;
+        if (DisableTimeInputs)
+        {
+            _timeIn = null;
+            _timeOut = null;
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ApplyQuickStatus(string status)
+    {
+        await OnStatusChanged(status);
+    }
+
+    private async Task LoadSelectedAttendance()
+    {
+        if (_selectedEmployee?.EmployeeId == null || !_selectedDate.HasValue)
+        {
+            ResetEditorValues();
+            return;
+        }
+
+        var result = await AttendanceService.GetAttendanceAsync(new AttendanceFilterDto
+        {
+            EmployeeId = _selectedEmployee.EmployeeId,
+            DateFrom = _selectedDate.Value.Date,
+            DateTo = _selectedDate.Value.Date,
+            PageNumber = 1,
+            PageSize = 5
+        });
+
+        var record = result.Items.FirstOrDefault();
+        if (record == null)
+        {
+            ResetEditorValues();
+            return;
+        }
+
+        LoadRecordIntoEditor(record);
+    }
+
+    private async Task SaveAttendanceAsync()
+    {
+        if (_selectedEmployee == null || !_selectedDate.HasValue)
+        {
+            Snackbar.Add("اختر الموظف والتاريخ أولاً", Severity.Warning);
+            return;
+        }
+
+        if (!_selectedEmployee.BioEmployeeId.HasValue)
+        {
+            Snackbar.Add("الموظف لا يملك كود بصمة، استخدم الحضور اليدوي الشهري للمعفيين", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_reason))
+        {
+            Snackbar.Add("سبب الإدخال أو التعديل مطلوب", Severity.Warning);
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            var authState = await AuthState.GetAuthenticationStateAsync();
+            var userName = authState.User.Identity?.Name ?? "System";
+
+            var dto = new AttendanceEditDto
+            {
+                AttendanceId = _currentAttendanceId ?? 0,
+                BiometricCode = _selectedEmployee.BioEmployeeId.Value,
+                LogDate = _selectedDate.Value.Date,
+                TimeIn = _timeIn.HasValue ? TimeOnly.FromTimeSpan(_timeIn.Value) : null,
+                TimeOut = _timeOut.HasValue ? TimeOnly.FromTimeSpan(_timeOut.Value) : null,
+                Status = _status,
+                EditReason = _reason
+            };
+
+            var (success, message, attendanceId) = await AttendanceService.UpsertAttendanceAsync(dto, userName);
+            Snackbar.Add(message, success ? Severity.Success : Severity.Error);
+
+            if (success)
+            {
+                _currentAttendanceId = attendanceId;
+                await ReloadDayRecords();
+                await LoadSelectedAttendance();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task DeleteCurrentAttendanceAsync()
+    {
+        if (!_currentAttendanceId.HasValue)
+            return;
+
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        var userName = authState.User.Identity?.Name ?? "System";
+        var result = await AttendanceService.DeleteAttendanceAsync(_currentAttendanceId.Value, userName);
+        Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+
+        if (result.Success)
+        {
+            ResetEditorValues();
+            await ReloadDayRecords();
+        }
+    }
+
+    private async Task ReloadDayRecords()
+    {
+        if (!_selectedDate.HasValue)
+        {
+            _dayRecords = new();
+            return;
+        }
+
+        _loadingRecords = true;
+        var result = await AttendanceService.GetAttendanceAsync(new AttendanceFilterDto
+        {
+            DateFrom = _selectedDate.Value.Date,
+            DateTo = _selectedDate.Value.Date,
+            PageNumber = 1,
+            PageSize = 500
+        });
+        _dayRecords = result.Items;
+        _loadingRecords = false;
+    }
+
+    private void ResetForm()
+    {
+        ResetEditorValues();
+        StateHasChanged();
+    }
+
+    private void ResetEditorValues()
+    {
+        _currentAttendanceId = null;
+        _timeIn = null;
+        _timeOut = null;
+        _status = AttendanceStatus.Present;
+        _reason = null;
+    }
+
+    private void LoadRecordIntoEditor(AttendanceListDto item)
+    {
+        _selectedEmployee = new EmployeeListDto
+        {
+            EmployeeId = item.EmployeeId ?? 0,
+            FullName = item.EmployeeName,
+            Department = item.Department,
+            BioEmployeeId = item.BiometricCode,
+            Status = EmployeeStatuses.Active
+        };
+        _selectedDate = item.LogDate.Date;
+        _currentAttendanceId = item.AttendanceId;
+        _timeIn = item.TimeIn?.ToTimeSpan();
+        _timeOut = item.TimeOut?.ToTimeSpan();
+        _status = item.Status ?? AttendanceStatus.Present;
+        _reason = null;
+    }
+
+    private string GetStatusStyle(string? status) => status switch
+    {
+        var s when s == AttendanceStatus.Absent => "background:#FFEBEE; color:#C62828;",
+        var s when s == AttendanceStatus.Late => "background:#FFF3E0; color:#E65100;",
+        var s when s == AttendanceStatus.Holiday => "background:#E3F2FD; color:#1565C0;",
+        var s when s == AttendanceStatus.OffDay || s == AttendanceStatus.Weekend => "background:#ECEFF1; color:#455A64;",
+        var s when s == AttendanceStatus.Permission => "background:#F3E5F5; color:#7B1FA2;",
+        var s when s == AttendanceStatus.Errand => "background:#E0F7FA; color:#006064;",
+        var s when s == AttendanceStatus.EarlyLeave => "background:#FBE9E7; color:#D84315;",
+        _ => "background:#E8F5E9; color:#2E7D32;"
+    };
+}

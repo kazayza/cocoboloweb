@@ -1,0 +1,322 @@
+@page "/attendance/import"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using MudBlazor
+
+@inject IAttendanceService AttendanceService
+@inject IEmployeeService EmployeeService
+@inject AuthenticationStateProvider AuthState
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<PageTitle>استيراد ملف البصمة</PageTitle>
+
+<AuthorizeView>
+    <Authorized>
+        @if (!_hasPermission)
+        {
+            <MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+                <MudPaper Class="pa-8 text-center" Elevation="3" Style="border-radius:20px;">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Large" Style="font-size:64px; color:#EF5350;" Class="mb-4" />
+                    <MudText Typo="Typo.h5" Color="Color.Error">غير مصرح</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">
+                        ليس لديك صلاحية استيراد ملفات البصمة.
+                    </MudText>
+                </MudPaper>
+            </MudContainer>
+        }
+        else
+        {
+            <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4 hr-page-shell">
+                <MudPaper Class="mb-4 overflow-hidden" Elevation="0"
+                          Style="border-radius: 20px; background: linear-gradient(135deg, #37474F 0%, #455A64 50%, #607D8B 100%);">
+                    <div class="pa-5">
+                        <div class="d-flex align-center justify-space-between flex-wrap gap-3">
+                            <div class="d-flex align-center gap-3">
+                                <MudAvatar Size="Size.Large" Style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px);">
+                                    <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Medium" Color="Color.Surface" />
+                                </MudAvatar>
+                                <div>
+                                    <MudText Typo="Typo.h5" Color="Color.Surface" Class="font-weight-bold">استيراد ملف البصمة</MudText>
+                                    <MudText Typo="Typo.body2" Style="color: rgba(255,255,255,0.75);">
+                                        رفع ملف بصمة لموظف واحد أو أكثر مع منع التكرار ومعالجة اختيارية بعد الاستيراد
+                                    </MudText>
+                                </div>
+                            </div>
+
+                            <div class="d-flex flex-wrap gap-2">
+                                <MudButton Variant="Variant.Filled" Color="Color.Dark" StartIcon="@Icons.Material.Filled.Download" OnClick="DownloadTemplateAsync">
+                                    تحميل القالب
+                                </MudButton>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Surface" StartIcon="@Icons.Material.Filled.ArrowBack" Href="/attendance/logs">
+                                    العودة
+                                </MudButton>
+                            </div>
+                        </div>
+                    </div>
+                </MudPaper>
+
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" lg="5">
+                        <MudPaper Class="pa-4 rounded-xl soft-card">
+                            <MudText Typo="Typo.h6" Class="font-weight-bold mb-3">إعدادات الاستيراد</MudText>
+
+                            <MudAutocomplete T="EmployeeListDto"
+                                             Label="موظف محدد (اختياري)"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Value="_selectedEmployee"
+                                             SearchFunc="SearchEmployees"
+                                             ToStringFunc="@(e => e is null ? string.Empty : $"{e.FullName} - {(string.IsNullOrWhiteSpace(e.Department) ? "بدون قسم" : e.Department)}")"
+                                             ValueChanged="OnEmployeeChanged"
+                                             Clearable="true">
+                                <ItemTemplate Context="emp">
+                                    <div style="padding:8px 12px;">
+                                        <strong>@emp.FullName</strong><br />
+                                        <small style="color:#64748B;">@(emp.Department ?? "بدون قسم") @(emp.BioEmployeeId.HasValue ? $"- كود: {emp.BioEmployeeId}" : "")</small>
+                                    </div>
+                                </ItemTemplate>
+                            </MudAutocomplete>
+
+                            <MudTextField T="string" Label="كود البصمة المختار" Value="@(_options.SpecificBiometricCode?.ToString() ?? "كل الأكواد")" Variant="Variant.Outlined" Margin="Margin.Dense" ReadOnly="true" Class="mt-2" />
+
+                            <MudCheckBox T="bool" @bind-Value="_options.ProcessAfterImport" Color="Color.Primary" Label="معالجة السجلات بعد الاستيراد" Class="mt-3" />
+                            <MudCheckBox T="bool" @bind-Value="_options.GenerateDailyCoverage" Color="Color.Warning" Disabled="@(!_options.ProcessAfterImport)" Label="إنشاء تغطية يومية كاملة (غياب/راحة/إجازة لباقي الموظفين في نفس اليوم)" />
+
+                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                                لو كنت تستورد بصمة لموظف واحد فقط، اترك خيار <b>إنشاء تغطية يومية كاملة</b> مغلقًا حتى لا يعتبر باقي الموظفين غيابًا في نفس اليوم.
+                            </MudAlert>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" lg="7">
+                        <MudPaper Class="pa-4 rounded-xl soft-card">
+                            <MudText Typo="Typo.h6" Class="font-weight-bold mb-3">رفع الملف</MudText>
+
+                            @if (!_isImporting && _importResult == null)
+                            {
+                                <MudPaper Class="pa-6 text-center" Elevation="0" Style="border:2px dashed #B0BEC5; border-radius:16px; background:#FAFAFA;">
+                                    @if (_fileBytes == null)
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Size="Size.Large" Style="font-size:56px;" Color="Color.Secondary" />
+                                        <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-3 mb-3">اختر ملف بصمة</MudText>
+                                        <MudFileUpload T="IBrowserFile" Accept=".xlsx,.xls,.csv,.txt" FilesChanged="OnFileSelected" MaximumFileCount="1">
+                                            <ActivatorContent>
+                                                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.FolderOpen">
+                                                    اختر الملف
+                                                </MudButton>
+                                            </ActivatorContent>
+                                        </MudFileUpload>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-3 d-block">
+                                            الصيغ المدعومة: xlsx / csv / txt — الحد الأقصى 10 MB
+                                        </MudText>
+                                    }
+                                    else
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Filled.Description" Size="Size.Large" Style="font-size:48px;" Color="Color.Success" />
+                                        <MudText Typo="Typo.h6" Class="mt-3 font-weight-bold">@_fileName</MudText>
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">@FormatFileSize(_fileSize)</MudText>
+                                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" StartIcon="@Icons.Material.Filled.Close" OnClick="ClearFile" Class="mt-2">
+                                            إزالة الملف
+                                        </MudButton>
+                                    }
+                                </MudPaper>
+                            }
+                            else if (_isImporting)
+                            {
+                                <MudPaper Class="pa-6 text-center" Elevation="0" Style="border:2px dashed #1976D2; border-radius:16px; background:#E3F2FD;">
+                                    <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" Class="mb-3" />
+                                    <MudText Typo="Typo.h6" Color="Color.Primary">جاري الاستيراد...</MudText>
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">يرجى الانتظار حتى اكتمال الحفظ والمعالجة</MudText>
+                                </MudPaper>
+                            }
+                            else if (_importResult != null)
+                            {
+                                <MudGrid Spacing="2">
+                                    <MudItem xs="3">
+                                        <div class="text-center pa-3" style="background:#E3F2FD; border-radius:8px;">
+                                            <MudText Typo="Typo.h5" Color="Color.Primary" Class="font-weight-bold">@_importResult.TotalRows</MudText>
+                                            <MudText Typo="Typo.caption">صف</MudText>
+                                        </div>
+                                    </MudItem>
+                                    <MudItem xs="3">
+                                        <div class="text-center pa-3" style="background:#E8F5E9; border-radius:8px;">
+                                            <MudText Typo="Typo.h5" Style="color:#2E7D32;" Class="font-weight-bold">@_importResult.ImportedCount</MudText>
+                                            <MudText Typo="Typo.caption">مستورد</MudText>
+                                        </div>
+                                    </MudItem>
+                                    <MudItem xs="3">
+                                        <div class="text-center pa-3" style="background:#FFF8E1; border-radius:8px;">
+                                            <MudText Typo="Typo.h5" Style="color:#E65100;" Class="font-weight-bold">@_importResult.SkippedCount</MudText>
+                                            <MudText Typo="Typo.caption">متخطى</MudText>
+                                        </div>
+                                    </MudItem>
+                                    <MudItem xs="3">
+                                        <div class="text-center pa-3" style="background:#FFEBEE; border-radius:8px;">
+                                            <MudText Typo="Typo.h5" Style="color:#C62828;" Class="font-weight-bold">@_importResult.ErrorCount</MudText>
+                                            <MudText Typo="Typo.caption">خطأ</MudText>
+                                        </div>
+                                    </MudItem>
+                                </MudGrid>
+
+                                @if (_importResult.ImportedDates.Any())
+                                {
+                                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                                        تم الاستيراد لتواريخ: @string.Join(" ، ", _importResult.ImportedDates.Select(d => d.ToString("yyyy/MM/dd")))
+                                    </MudAlert>
+                                }
+
+                                @if (_importResult.Warnings.Any())
+                                {
+                                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                                        @foreach (var w in _importResult.Warnings.Take(5))
+                                        {
+                                            <div>• @w</div>
+                                        }
+                                    </MudAlert>
+                                }
+
+                                @if (_importResult.Errors.Any())
+                                {
+                                    <MudExpansionPanels Class="mt-3" Elevation="0">
+                                        <MudExpansionPanel Text="@($"عرض الأخطاء ({_importResult.Errors.Count})")">
+                                            @foreach (var e in _importResult.Errors.Take(20))
+                                            {
+                                                <MudText Typo="Typo.body2" Class="mb-1">• @e</MudText>
+                                            }
+                                        </MudExpansionPanel>
+                                    </MudExpansionPanels>
+                                }
+                            }
+
+                            <MudDivider Class="my-3" />
+                            <div class="d-flex flex-wrap gap-2">
+                                <MudButton Variant="Variant.Text" Color="Color.Default" Href="/attendance/logs">العودة للسجلات</MudButton>
+                                @if (_importResult == null && !_isImporting)
+                                {
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CloudUpload" Disabled="@(_fileBytes == null)" OnClick="ExecuteImportAsync">
+                                        استيراد الآن
+                                    </MudButton>
+                                }
+                                else if (_importResult != null)
+                                {
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh" OnClick="ImportAnother">
+                                        استيراد ملف آخر
+                                    </MudButton>
+                                }
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+                </MudGrid>
+            </MudContainer>
+        }
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private bool _hasPermission;
+    private bool _isImporting;
+    private byte[]? _fileBytes;
+    private string? _fileName;
+    private long _fileSize;
+    private BiometricImportResultDto? _importResult;
+    private BiometricImportOptionsDto _options = new();
+    private EmployeeListDto? _selectedEmployee;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        var user = authState.User;
+        _hasPermission = user.IsInRole("Admin")
+                         || user.IsInRole("HrManager")
+                         || user.IsInRole("HRManager")
+                         || user.IsInRole("AccountManager")
+                         || user.HasClaim("Permission", "frm_ImportBiometric:View");
+    }
+
+    private async Task<IEnumerable<EmployeeListDto>> SearchEmployees(string value, CancellationToken ct)
+    {
+        var rows = await EmployeeService.SearchEmployeesAsync(value ?? string.Empty, 20);
+        return rows.Where(x => x.BioEmployeeId.HasValue);
+    }
+
+    private Task OnEmployeeChanged(EmployeeListDto? employee)
+    {
+        _selectedEmployee = employee;
+        _options.SpecificBiometricCode = employee?.BioEmployeeId;
+        return Task.CompletedTask;
+    }
+
+    private async Task OnFileSelected(IBrowserFile file)
+    {
+        if (file == null) return;
+        await using var stream = file.OpenReadStream(10 * 1024 * 1024);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        _fileBytes = ms.ToArray();
+        _fileName = file.Name;
+        _fileSize = file.Size;
+        _importResult = null;
+    }
+
+    private void ClearFile()
+    {
+        _fileBytes = null;
+        _fileName = null;
+        _fileSize = 0;
+        _importResult = null;
+    }
+
+    private async Task ExecuteImportAsync()
+    {
+        if (_fileBytes == null || string.IsNullOrWhiteSpace(_fileName)) return;
+
+        _isImporting = true;
+        try
+        {
+            using var ms = new MemoryStream(_fileBytes);
+            var authState = await AuthState.GetAuthenticationStateAsync();
+            var userName = authState.User.Identity?.Name ?? "System";
+            _importResult = await AttendanceService.ImportBiometricLogsAsync(ms, _fileName, _options, userName);
+
+            if (_importResult.ImportedCount > 0)
+                Snackbar.Add($"تم استيراد {_importResult.ImportedCount} سجل بصمة بنجاح", Severity.Success);
+            else if (_importResult.ErrorCount == 0)
+                Snackbar.Add("لم يتم استيراد سجلات جديدة", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ أثناء الاستيراد: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isImporting = false;
+        }
+    }
+
+    private async Task DownloadTemplateAsync()
+    {
+        var bytes = await AttendanceService.GetBiometricImportTemplateAsync();
+        var base64 = Convert.ToBase64String(bytes);
+        await JS.InvokeVoidAsync("downloadFileFromBase64", base64, "biometric_import_template.xlsx");
+    }
+
+    private void ImportAnother()
+    {
+        ClearFile();
+        _options = new BiometricImportOptionsDto();
+        _selectedEmployee = null;
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes / (1024.0 * 1024.0):F1} MB";
+    }
+}

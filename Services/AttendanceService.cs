@@ -9,11 +9,13 @@ public class AttendanceService : IAttendanceService
 {
     private readonly db24804Context _db;
     private readonly IAuditService _audit;
+    private readonly NotificationService _notify;
 
-    public AttendanceService(db24804Context db, IAuditService audit)
+    public AttendanceService(db24804Context db, IAuditService audit, NotificationService notify)
     {
         _db = db;
         _audit = audit;
+        _notify = notify;
     }
 
     // ════════════════════════════════════════════════════════════
@@ -40,7 +42,8 @@ public class AttendanceService : IAttendanceService
             query = query.Where(a => a.LateMinutes > 0);
 
         if (filter.AbsentOnly == true)
-            query = query.Where(a => a.Status == AttendanceStatus.Absent || (a.TimeIn == null && a.TimeOut == null));
+            query = query.Where(a => a.Status == AttendanceStatus.Absent ||
+                                     ((a.Status == null || a.Status == "") && a.TimeIn == null && a.TimeOut == null));
 
         // === البحث بالاسم أو القسم ===
         List<int>? matchingBiometricCodes = null;
@@ -167,15 +170,17 @@ public class AttendanceService : IAttendanceService
         var totalRecords = records.Count;
         var totalEmployees = records.Select(r => r.BiometricCode).Distinct().Count();
         var totalDays = records.Select(r => r.LogDate.Date).Distinct().Count();
-        
-        var presentCount = records.Count(a => a.TimeIn != null);
-        var absentCount = records.Count(a => a.TimeIn == null && a.TimeOut == null);
-        var lateCount = records.Count(a => a.LateMinutes > 0);
-        var earlyLeaveCount = records.Count(a => a.EarlyLeaveMinutes > 0);
-        
-        var totalHours = records.Sum(a => a.TotalHours ?? 0);
-        var totalLateMinutes = records.Sum(a => a.LateMinutes ?? 0);
-        var totalPenaltyHours = records.Sum(a => a.PenaltyHours ?? 0);
+
+        var workingRecords = records.Where(IsWorkingAttendanceRecord).ToList();
+        var presentCount = workingRecords.Count(IsPresentAttendanceRecord);
+        var absentCount = workingRecords.Count(IsAbsentAttendanceRecord);
+        var lateCount = workingRecords.Count(a => a.Status == AttendanceStatus.Late || (a.LateMinutes ?? 0) > 0);
+        var earlyLeaveCount = workingRecords.Count(a => a.Status == AttendanceStatus.EarlyLeave || (a.EarlyLeaveMinutes ?? 0) > 0);
+
+        var totalHours = workingRecords.Sum(a => a.TotalHours ?? 0);
+        var totalLateMinutes = workingRecords.Sum(a => a.LateMinutes ?? 0);
+        var totalPenaltyHours = workingRecords.Sum(a => a.PenaltyHours ?? 0);
+        var attendanceBase = workingRecords.Count;
 
         return new AttendanceStatisticsDto
         {
@@ -191,8 +196,8 @@ public class AttendanceService : IAttendanceService
             AverageHoursPerEmployee = totalEmployees > 0 ? Math.Round(totalHours / totalEmployees, 1) : 0,
             TotalLateMinutes = totalLateMinutes,
             TotalPenaltyHours = totalPenaltyHours,
-            AttendanceRate = totalRecords > 0 ? Math.Round((decimal)presentCount / totalRecords * 100, 1) : 0,
-            AbsenceRate = totalRecords > 0 ? Math.Round((decimal)absentCount / totalRecords * 100, 1) : 0,
+            AttendanceRate = attendanceBase > 0 ? Math.Round((decimal)presentCount / attendanceBase * 100, 1) : 0,
+            AbsenceRate = attendanceBase > 0 ? Math.Round((decimal)absentCount / attendanceBase * 100, 1) : 0,
             LateRate = presentCount > 0 ? Math.Round((decimal)lateCount / presentCount * 100, 1) : 0
         };
     }
@@ -204,28 +209,28 @@ public class AttendanceService : IAttendanceService
             .Where(a => a.LogDate == today)
             .ToListAsync();
 
-        // عدد الموظفين النشطين
-        var activeEmployees = await _db.Employees.AsNoTracking()
-            .CountAsync(e => e.Status == "نشط" && e.BioEmployeeId.HasValue);
+        var workingToday = todayRecords.Where(IsWorkingAttendanceRecord).ToList();
+        var trackedEmployees = await _db.Employees.AsNoTracking()
+            .CountAsync(e => (e.Status == "نشط" || e.Status == "Active") && e.BioEmployeeId.HasValue);
 
-        var presentCount = todayRecords.Count(a => a.TimeIn != null);
-        var lateCount = todayRecords.Count(a => a.LateMinutes > 0);
-        var absentCount = activeEmployees - presentCount;
+        var presentCount = workingToday.Count(IsPresentAttendanceRecord);
+        var lateCount = workingToday.Count(a => a.Status == AttendanceStatus.Late || (a.LateMinutes ?? 0) > 0);
+        var absentCount = workingToday.Count(IsAbsentAttendanceRecord);
 
         return new AttendanceStatisticsDto
         {
             TotalRecords = todayRecords.Count,
-            TotalEmployees = activeEmployees,
+            TotalEmployees = trackedEmployees,
             TotalDays = 1,
             PresentCount = presentCount,
-            AbsentCount = Math.Max(0, absentCount),
+            AbsentCount = absentCount,
             LateCount = lateCount,
             TodayPresent = presentCount,
-            TodayAbsent = Math.Max(0, absentCount),
+            TodayAbsent = absentCount,
             TodayLate = lateCount,
-            TotalHours = todayRecords.Sum(a => a.TotalHours ?? 0),
-            AverageHours = presentCount > 0 ? Math.Round(todayRecords.Sum(a => a.TotalHours ?? 0) / presentCount, 1) : 0,
-            AttendanceRate = activeEmployees > 0 ? Math.Round((decimal)presentCount / activeEmployees * 100, 1) : 0,
+            TotalHours = workingToday.Sum(a => a.TotalHours ?? 0),
+            AverageHours = presentCount > 0 ? Math.Round(workingToday.Sum(a => a.TotalHours ?? 0) / presentCount, 1) : 0,
+            AttendanceRate = workingToday.Count > 0 ? Math.Round((decimal)presentCount / workingToday.Count * 100, 1) : 0,
             LateRate = presentCount > 0 ? Math.Round((decimal)lateCount / presentCount * 100, 1) : 0
         };
     }
@@ -260,9 +265,9 @@ public class AttendanceService : IAttendanceService
             .Select(g => new DailyAttendanceSummary
             {
                 Date = g.Key,
-                PresentCount = g.Count(a => a.TimeIn != null),
-                AbsentCount = g.Count(a => a.TimeIn == null),
-                LateCount = g.Count(a => a.LateMinutes > 0)
+                PresentCount = g.Count(a => (a.TimeIn != null) || a.Status == AttendanceStatus.Present || a.Status == AttendanceStatus.Late || a.Status == AttendanceStatus.Errand || a.Status == AttendanceStatus.EarlyLeave),
+                AbsentCount = g.Count(a => a.Status == AttendanceStatus.Absent),
+                LateCount = g.Count(a => a.Status == AttendanceStatus.Late || (a.LateMinutes ?? 0) > 0)
             })
             .OrderBy(d => d.Date)
             .ToListAsync();
@@ -291,17 +296,19 @@ public class AttendanceService : IAttendanceService
             {
                 var deptCodes = g.Select(e => e.BioEmployeeId!.Value).ToList();
                 var deptAttendance = attendanceInPeriod.Where(a => deptCodes.Contains(a.BiometricCode)).ToList();
-                var presentCount = deptAttendance.Count(a => a.TimeIn != null);
-                var totalRecords = deptAttendance.Count;
+                var workingRecords = deptAttendance.Where(IsWorkingAttendanceRecord).ToList();
+                var presentCount = workingRecords.Count(IsPresentAttendanceRecord);
+                var absentCount = workingRecords.Count(IsAbsentAttendanceRecord);
+                var totalRecords = workingRecords.Count;
 
                 return new DepartmentAttendanceSummary
                 {
                     Department = g.Key,
                     EmployeeCount = g.Count(),
                     PresentCount = presentCount,
-                    AbsentCount = totalRecords - presentCount,
+                    AbsentCount = absentCount,
                     AttendanceRate = totalRecords > 0 ? Math.Round((decimal)presentCount / totalRecords * 100, 1) : 0,
-                    AverageHours = presentCount > 0 ? Math.Round(deptAttendance.Sum(a => a.TotalHours ?? 0) / presentCount, 1) : 0
+                    AverageHours = presentCount > 0 ? Math.Round(workingRecords.Sum(a => a.TotalHours ?? 0) / presentCount, 1) : 0
                 };
             })
             .OrderByDescending(d => d.AttendanceRate)
@@ -339,7 +346,8 @@ public class AttendanceService : IAttendanceService
         var ranks = employees.Select(emp =>
         {
             var empAttendance = attendanceData.Where(a => a.BiometricCode == emp.BioEmployeeId!.Value).ToList();
-            var presentDays = empAttendance.Count(a => a.TimeIn != null);
+            var presentDays = empAttendance.Count(IsPresentAttendanceRecord);
+            var explicitAbsence = empAttendance.Count(IsAbsentAttendanceRecord);
 
             return new EmployeeAttendanceRank
             {
@@ -347,8 +355,8 @@ public class AttendanceService : IAttendanceService
                 EmployeeName = emp.FullName,
                 Department = emp.Department,
                 PresentDays = presentDays,
-                AbsentDays = workingDays - presentDays,
-                LateDays = empAttendance.Count(a => a.LateMinutes > 0),
+                AbsentDays = Math.Max(explicitAbsence, workingDays - presentDays),
+                LateDays = empAttendance.Count(a => a.Status == AttendanceStatus.Late || (a.LateMinutes ?? 0) > 0),
                 AttendanceRate = workingDays > 0 ? Math.Round((decimal)presentDays / workingDays * 100, 1) : 0,
                 TotalHours = empAttendance.Sum(a => a.TotalHours ?? 0)
             };
@@ -428,26 +436,12 @@ public class AttendanceService : IAttendanceService
                 attendance.TimeOut,
                 attendance.Status,
                 attendance.TotalHours,
-                attendance.LateMinutes
+                attendance.LateMinutes,
+                attendance.EarlyLeaveMinutes
             };
 
-            // تحديث البيانات
-            attendance.TimeIn = dto.TimeIn;
-            attendance.TimeOut = dto.TimeOut;
-            attendance.Status = dto.Status;
-
-            // إعادة حساب الساعات
-            if (dto.TimeIn.HasValue && dto.TimeOut.HasValue)
-            {
-                var start = dto.TimeIn.Value.ToTimeSpan();
-                var end = dto.TimeOut.Value.ToTimeSpan();
-                var duration = end > start ? end - start : TimeSpan.FromHours(24) - start + end;
-                attendance.TotalHours = (decimal)duration.TotalHours;
-            }
-            else
-            {
-                attendance.TotalHours = null;
-            }
+            var (expectedIn, expectedOut) = await GetExpectedShiftWindowAsync(dto.BiometricCode, dto.LogDate);
+            ApplyAttendanceEditValues(attendance, dto, expectedIn, expectedOut);
 
             await _db.SaveChangesAsync();
 
@@ -470,6 +464,83 @@ public class AttendanceService : IAttendanceService
         catch (Exception ex)
         {
             return (false, $"حدث خطأ: {ex.Message}");
+        }
+    }
+
+    public async Task<(bool Success, string Message, int? AttendanceId)> UpsertAttendanceAsync(AttendanceEditDto dto, string currentUserName)
+    {
+        if (dto.BiometricCode <= 0)
+            return (false, "كود البصمة مطلوب.", null);
+
+        var employeeExists = await _db.Employees.AsNoTracking()
+            .AnyAsync(e => e.BioEmployeeId == dto.BiometricCode);
+        if (!employeeExists)
+            return (false, "الموظف المرتبط بكود البصمة غير موجود.", null);
+
+        try
+        {
+            var attendance = dto.AttendanceId > 0
+                ? await _db.Attendances.FirstOrDefaultAsync(a => a.AttendanceId == dto.AttendanceId)
+                : await _db.Attendances.FirstOrDefaultAsync(a => a.BiometricCode == dto.BiometricCode && a.LogDate.Date == dto.LogDate.Date);
+
+            var isNew = attendance == null;
+            object? oldData = null;
+
+            if (attendance == null)
+            {
+                attendance = new Attendance
+                {
+                    BiometricCode = dto.BiometricCode,
+                    LogDate = dto.LogDate.Date
+                };
+                _db.Attendances.Add(attendance);
+            }
+            else
+            {
+                oldData = new
+                {
+                    attendance.TimeIn,
+                    attendance.TimeOut,
+                    attendance.Status,
+                    attendance.TotalHours,
+                    attendance.LateMinutes,
+                    attendance.EarlyLeaveMinutes
+                };
+            }
+
+            attendance.BiometricCode = dto.BiometricCode;
+            attendance.LogDate = dto.LogDate.Date;
+
+            var (expectedIn, expectedOut) = await GetExpectedShiftWindowAsync(dto.BiometricCode, dto.LogDate);
+            ApplyAttendanceEditValues(attendance, dto, expectedIn, expectedOut);
+
+            await _db.SaveChangesAsync();
+
+            await _audit.LogAsync("Attendance", isNew ? "Insert" : "Update",
+                attendance.AttendanceId.ToString(),
+                oldData,
+                new
+                {
+                    attendance.BiometricCode,
+                    attendance.LogDate,
+                    attendance.TimeIn,
+                    attendance.TimeOut,
+                    attendance.Status,
+                    attendance.TotalHours,
+                    attendance.LateMinutes,
+                    attendance.EarlyLeaveMinutes,
+                    dto.EditReason,
+                    Source = "ManualDailyEntry"
+                },
+                currentUserName);
+
+            return (true,
+                isNew ? "تم إنشاء سجل الحضور اليدوي بنجاح." : "تم تحديث سجل الحضور اليدوي بنجاح.",
+                attendance.AttendanceId);
+        }
+        catch (Exception ex)
+        {
+            return (false, $"حدث خطأ: {ex.Message}", null);
         }
     }
 
@@ -535,17 +606,20 @@ public class AttendanceService : IAttendanceService
                         biometricCodes.Contains(a.BiometricCode))
             .ToListAsync();
 
-        // حساب أيام العمل
-        var workingDays = GetWorkingDays(filter.DateFrom, filter.DateTo, filter.IncludeWeekends);
-
         var report = new List<AttendanceReportDto>();
 
         foreach (var emp in employees)
         {
+            var workingDays = filter.IncludeWeekends
+                ? (filter.DateTo.Date - filter.DateFrom.Date).Days + 1
+                : await GetWorkingDaysForEmployeeAsync(emp.EmployeeId, filter.DateFrom, filter.DateTo);
+
             var empAttendance = attendanceRecords
                 .Where(a => a.BiometricCode == emp.BioEmployeeId!.Value)
                 .ToList();
 
+            var presentDays = empAttendance.Count(IsPresentAttendanceRecord);
+            var explicitAbsence = empAttendance.Count(IsAbsentAttendanceRecord);
             var dto = new AttendanceReportDto
             {
                 EmployeeId = emp.EmployeeId,
@@ -553,10 +627,10 @@ public class AttendanceService : IAttendanceService
                 EmployeeName = emp.FullName,
                 Department = emp.Department,
                 WorkingDays = workingDays,
-                PresentDays = empAttendance.Count(a => a.TimeIn != null),
-                AbsentDays = workingDays - empAttendance.Count(a => a.TimeIn != null),
-                LateDays = empAttendance.Count(a => a.LateMinutes > 0),
-                EarlyLeaveDays = empAttendance.Count(a => a.EarlyLeaveMinutes > 0),
+                PresentDays = presentDays,
+                AbsentDays = Math.Max(explicitAbsence, workingDays - presentDays),
+                LateDays = empAttendance.Count(a => a.Status == AttendanceStatus.Late || (a.LateMinutes ?? 0) > 0),
+                EarlyLeaveDays = empAttendance.Count(a => a.Status == AttendanceStatus.EarlyLeave || (a.EarlyLeaveMinutes ?? 0) > 0),
                 TotalHours = empAttendance.Sum(a => a.TotalHours ?? 0),
                 RequiredHours = workingDays * 8, // افتراضي 8 ساعات
                 TotalLateMinutes = empAttendance.Sum(a => a.LateMinutes ?? 0),
@@ -816,9 +890,6 @@ public class AttendanceService : IAttendanceService
             .ThenBy(b => b.LogTime)
             .ToListAsync();
 
-        if (!logs.Any())
-            return (false, "لا توجد سجلات بصمة لهذا اليوم.");
-
         // ── 2. جيب الشيفتات الفعالة دفعة واحدة ───────────────
         var shifts = await _db.EmployeeShifts.AsNoTracking()
             .Where(s => s.BiometricCode.HasValue
@@ -826,45 +897,58 @@ public class AttendanceService : IAttendanceService
                      && (s.EffectiveTo == null || s.EffectiveTo >= date))
             .Select(s => new
             {
+                s.EmployeeId,
                 s.BiometricCode,
                 s.StartTime,
-                s.EndTime
+                s.EndTime,
+                s.OffDay1,
+                s.OffDay2
             })
             .ToListAsync();
 
-        // ── 3. جيب الاستثناءات المعتمدة لليوم ──────────────
-        var approvedExemptions = await _db.DailyExemptions.AsNoTracking()
-            .Where(x => x.ExemptionDate.Date == date.Date && x.Status == ExemptionStatus.Approved)
-            .Select(x => new { x.BioEmployeeId, x.ReasonCode, x.IsDeducted })
+        // ── 3. جميع الموظفين النشطين الذين لديهم كود بصمة ────
+        var trackedEmployees = await _db.Employees.AsNoTracking()
+            .Where(e => (e.Status == "نشط" || e.Status == "Active") && e.BioEmployeeId.HasValue)
+            .Select(e => new
+            {
+                e.EmployeeId,
+                BioEmployeeId = e.BioEmployeeId!.Value,
+                e.FullName
+            })
             .ToListAsync();
 
-        var exemptedCodes = approvedExemptions.Select(x => x.BioEmployeeId).ToList();
+        if (!trackedEmployees.Any())
+            return (false, "لا يوجد موظفون مرتبطون بالبصمة لمعالجة هذا اليوم.");
 
-        // ── 4. جيب السجلات الموجودة دفعة واحدة للـ Upsert ────
-        var bioCodes = logs.Select(l => l.BiometricCode).Distinct().ToList();
+        // ── 4. الاستثناءات المعتمدة لليوم (مع دعم البيانات القديمة) ────
+        var approvedExemptions = await _db.DailyExemptions
+            .Where(x => x.ExemptionDate.Date == date.Date)
+            .ToListAsync();
+
+        approvedExemptions = approvedExemptions
+            .Where(x => ExemptionStatus.InferStatus(x.Status, x.ApprovedBy) == ExemptionStatus.Approved)
+            .ToList();
+
+        // ── 5. جيب السجلات الموجودة دفعة واحدة للـ Upsert ────
+        var trackedBioCodes = trackedEmployees.Select(e => e.BioEmployeeId).Distinct().ToList();
         var existingRecords = await _db.Attendances
-            .Where(a => a.LogDate.Date == date.Date
-                     && bioCodes.Contains(a.BiometricCode))
+            .Where(a => a.LogDate.Date == date.Date && trackedBioCodes.Contains(a.BiometricCode))
             .ToListAsync();
 
-        // ── 5. المعالجة ───────────────────────────────────────
-        var toAdd    = new List<Attendance>();
+        // ── 6. معالجة من لديه بصمة فعلاً ─────────────────────
+        var toAdd = new List<Attendance>();
         int processed = 0;
 
         foreach (var group in logs.GroupBy(l => l.BiometricCode))
         {
             var bioCode = group.Key;
 
-            // تخطى المعفيين
-            if (exemptedCodes.Contains(bioCode)) continue;
-
             var dayLogs = group.OrderBy(l => l.LogTime).ToList();
-            var timeIn  = dayLogs.First().LogTime;
+            var timeIn = dayLogs.First().LogTime;
             var timeOut = dayLogs.Count > 1
                 ? dayLogs.Last().LogTime
                 : (TimeOnly?)null;
 
-            // ── حساب الساعات ─────────────────────────────────
             decimal? totalHours = null;
             if (timeOut.HasValue)
             {
@@ -873,135 +957,286 @@ public class AttendanceService : IAttendanceService
                 totalHours = (decimal)dur.TotalHours;
             }
 
-            // ✅ التأخير من وقت الشيفت الفعلي
-            var shift      = shifts.FirstOrDefault(s => s.BiometricCode == bioCode);
+            var shift = shifts.FirstOrDefault(s => s.BiometricCode == bioCode);
             var expectedIn = shift?.StartTime ?? new TimeOnly(8, 0);
+            var expectedOut = shift?.EndTime ?? new TimeOnly(17, 0);
+
             int lateMinutes = timeIn > expectedIn
                 ? (int)(timeIn - expectedIn).TotalMinutes
                 : 0;
 
-            // ✅ الانصراف المبكر من وقت الشيفت الفعلي
-            var expectedOut = shift?.EndTime ?? new TimeOnly(17, 0);
             int earlyLeaveMinutes = timeOut.HasValue && timeOut.Value < expectedOut
                 ? (int)(expectedOut - timeOut.Value).TotalMinutes
                 : 0;
 
-            var status = lateMinutes > 0
-                ? AttendanceStatus.Late
-                : AttendanceStatus.Present;
+            var status = lateMinutes > 0 ? AttendanceStatus.Late : AttendanceStatus.Present;
 
-            // ── Upsert بدون SaveChanges داخل الـ loop ─────────
-            var existing = existingRecords
-                .FirstOrDefault(a => a.BiometricCode == bioCode);
-
+            var existing = existingRecords.FirstOrDefault(a => a.BiometricCode == bioCode);
             if (existing != null)
             {
-                existing.TimeIn           = timeIn;
-                existing.TimeOut          = timeOut;
-                existing.TotalHours       = totalHours;
-                existing.LateMinutes      = lateMinutes;
+                existing.TimeIn = timeIn;
+                existing.TimeOut = timeOut;
+                existing.TotalHours = totalHours;
+                existing.LateMinutes = lateMinutes;
                 existing.EarlyLeaveMinutes = earlyLeaveMinutes;
-                existing.Status           = status;
+                existing.Status = status;
             }
             else
             {
                 toAdd.Add(new Attendance
                 {
-                    BiometricCode        = bioCode,
-                    LogDate              = date.Date,
-                    TimeIn               = timeIn,
-                    TimeOut              = timeOut,
-                    TotalHours           = totalHours,
-                    LateMinutes          = lateMinutes,
-                    EarlyLeaveMinutes    = earlyLeaveMinutes,
-                    Status               = status
+                    BiometricCode = bioCode,
+                    LogDate = date.Date,
+                    TimeIn = timeIn,
+                    TimeOut = timeOut,
+                    TotalHours = totalHours,
+                    LateMinutes = lateMinutes,
+                    EarlyLeaveMinutes = earlyLeaveMinutes,
+                    Status = status
                 });
             }
 
             processed++;
         }
 
-        // ✅ Save مرة واحدة بعد الـ loop كله
-        if (toAdd.Any()) _db.Attendances.AddRange(toAdd);
+        if (toAdd.Any())
+            _db.Attendances.AddRange(toAdd);
+
         await _db.SaveChangesAsync();
 
-        // ✅ إنشاء سجلات حضور للاستثناءات المعتمدة اللي مفيش ليها بصمات
-        var processedCodes = logs.Select(l => l.BiometricCode).ToHashSet();
-        var existingAttCodes = existingRecords.Select(a => a.BiometricCode).ToHashSet();
+        // ── 7. طبّق الاستثناءات المعتمدة على السجلات الموجودة/المفقودة ────
+        foreach (var exemption in approvedExemptions)
+            await CreateOrUpdateExemptionAttendanceAsync(exemption);
 
-        var exemptionAttendanceToAdd = new List<Attendance>();
+        await _db.SaveChangesAsync();
 
-        foreach (var exm in approvedExemptions.Where(e => !processedCodes.Contains(e.BioEmployeeId)
-                                                        && !existingAttCodes.Contains(e.BioEmployeeId)))
+        // ── 8. أكمل التغطية اليومية: راحة / إجازة / غياب ─────────
+        var isHoliday = await _db.Calendars.AsNoTracking()
+            .AnyAsync(c => c.CalendarDate.Date == date.Date && c.IsHoliday == true);
+
+        var finalRecords = await _db.Attendances
+            .Where(a => a.LogDate.Date == date.Date && trackedBioCodes.Contains(a.BiometricCode))
+            .ToListAsync();
+
+        var attendanceByCode = finalRecords.ToDictionary(a => a.BiometricCode, a => a);
+        int generatedCoverage = 0;
+
+        foreach (var employee in trackedEmployees)
         {
-            var shift = shifts.FirstOrDefault(s => s.BiometricCode == exm.BioEmployeeId);
-            var startTime = shift?.StartTime ?? new TimeOnly(8, 0);
-            var endTime = shift?.EndTime ?? new TimeOnly(17, 0);
-            TimeOnly? timeIn = null;
-            TimeOnly? timeOut = null;
-            decimal? totalHours = null;
-            string status;
+            if (attendanceByCode.ContainsKey(employee.BioEmployeeId))
+                continue;
 
-            var isErrand = ExemptionReasonCodes.IsErrandType(exm.ReasonCode);
-            var isPermission = ExemptionReasonCodes.IsPermissionType(exm.ReasonCode);
-            var isEarlyLeave = ExemptionReasonCodes.IsEarlyLeaveType(exm.ReasonCode);
-            // نستخدم IsDeducted من الداتابيز مباشرة لو موجود
-            var isDeducted = exm.IsDeducted;
+            var shift = shifts.FirstOrDefault(s => s.BiometricCode == employee.BioEmployeeId);
+            var isOffDay = IsEmployeeOffDay(date, shift?.OffDay1, shift?.OffDay2);
 
-            if (isErrand)
-            {
-                timeIn = startTime; timeOut = endTime;
-                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
-                status = AttendanceStatus.Errand;
-            }
-            else if (isPermission && !isDeducted)
-            {
-                timeIn = startTime; timeOut = endTime;
-                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
-                status = AttendanceStatus.Permission;
-            }
-            else if (isPermission && isDeducted)
-            {
-                status = AttendanceStatus.Permission;
-            }
-            else if (isEarlyLeave)
-            {
-                timeIn = startTime; timeOut = endTime;
-                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
-                status = AttendanceStatus.EarlyLeave;
-            }
-            else
-            {
-                status = AttendanceStatus.Permission;
-            }
+            var status = isHoliday
+                ? AttendanceStatus.Holiday
+                : isOffDay
+                    ? AttendanceStatus.OffDay
+                    : AttendanceStatus.Absent;
 
-            exemptionAttendanceToAdd.Add(new Attendance
+            _db.Attendances.Add(new Attendance
             {
-                BiometricCode = exm.BioEmployeeId,
+                BiometricCode = employee.BioEmployeeId,
                 LogDate = date.Date,
-                TimeIn = timeIn,
-                TimeOut = timeOut,
-                TotalHours = totalHours,
+                TimeIn = null,
+                TimeOut = null,
+                TotalHours = null,
                 LateMinutes = 0,
                 EarlyLeaveMinutes = 0,
                 Status = status
             });
+
+            generatedCoverage++;
         }
 
-        if (exemptionAttendanceToAdd.Any()) { _db.Attendances.AddRange(exemptionAttendanceToAdd); await _db.SaveChangesAsync(); }
+        if (generatedCoverage > 0)
+            await _db.SaveChangesAsync();
 
         await _audit.LogAsync("Attendance", "Process",
             date.ToString("yyyy-MM-dd"), null,
-            new { ProcessedCount = processed, Date = date },
+            new
+            {
+                ProcessedCount = processed,
+                GeneratedCoverage = generatedCoverage,
+                RawLogs = logs.Count,
+                Date = date
+            },
             currentUserName);
 
-        return (true, $"✅ تمت معالجة {processed} سجل بنجاح.");
+        return (true,
+            $"✅ تمت معالجة {processed} موظف من البصمة" +
+            (generatedCoverage > 0 ? $" + إنشاء {generatedCoverage} سجل (غياب/راحة/إجازة)" : string.Empty));
     }
     catch (Exception ex)
     {
         return (false, $"حدث خطأ: {ex.Message}");
     }
 }
+
+    public async Task<BiometricImportResultDto> ImportBiometricLogsAsync(Stream fileStream, string fileName, BiometricImportOptionsDto options, string currentUserName)
+    {
+        var result = new BiometricImportResultDto();
+
+        try
+        {
+            var rows = await ParseBiometricImportRowsAsync(fileStream, fileName, options);
+            result.TotalRows = rows.Count;
+
+            if (!rows.Any())
+            {
+                result.Warnings.Add("لم يتم العثور على أي صفوف صالحة داخل الملف.");
+                return result;
+            }
+
+            var uniqueRows = rows
+                .GroupBy(x => new { x.BiometricCode, Date = x.LogDate.Date, x.LogTime })
+                .Select(g => g.First())
+                .ToList();
+
+            result.SkippedCount += rows.Count - uniqueRows.Count;
+            if (rows.Count != uniqueRows.Count)
+                result.Warnings.Add("تم تجاهل بعض الصفوف المكررة داخل الملف نفسه.");
+
+            var allCodes = uniqueRows.Select(x => x.BiometricCode).Distinct().ToList();
+            var knownCodes = await _db.Employees.AsNoTracking()
+                .Where(e => e.BioEmployeeId.HasValue && allCodes.Contains(e.BioEmployeeId.Value))
+                .Select(e => e.BioEmployeeId!.Value)
+                .Distinct()
+                .ToListAsync();
+            var knownCodeSet = knownCodes.ToHashSet();
+
+            var validRows = uniqueRows.Where(x => knownCodeSet.Contains(x.BiometricCode)).ToList();
+            var unknownRows = uniqueRows.Where(x => !knownCodeSet.Contains(x.BiometricCode)).ToList();
+            foreach (var invalid in unknownRows.Take(20))
+                result.Errors.Add($"كود بصمة غير معروف: {invalid.BiometricCode} بتاريخ {invalid.LogDate:yyyy/MM/dd} {invalid.LogTime:HH:mm:ss}");
+            result.ErrorCount += unknownRows.Count;
+
+            if (!validRows.Any())
+                return result;
+
+            var minDate = validRows.Min(x => x.LogDate.Date);
+            var maxDate = validRows.Max(x => x.LogDate.Date);
+            var existingRows = await _db.BiometricLogs.AsNoTracking()
+                .Where(b => b.LogDate >= minDate && b.LogDate <= maxDate && allCodes.Contains(b.BiometricCode))
+                .Select(b => new { b.BiometricCode, Date = b.LogDate.Date, b.LogTime })
+                .ToListAsync();
+            var existingSet = existingRows
+                .Select(x => $"{x.BiometricCode}|{x.Date:yyyyMMdd}|{x.LogTime:HHmmss}")
+                .ToHashSet();
+
+            var toInsert = new List<BiometricLog>();
+            foreach (var row in validRows)
+            {
+                var key = $"{row.BiometricCode}|{row.LogDate:yyyyMMdd}|{row.LogTime:HHmmss}";
+                if (existingSet.Contains(key))
+                {
+                    result.SkippedCount++;
+                    continue;
+                }
+
+                toInsert.Add(new BiometricLog
+                {
+                    BiometricCode = row.BiometricCode,
+                    LogDate = row.LogDate.Date,
+                    LogTime = row.LogTime
+                });
+                existingSet.Add(key);
+            }
+
+            if (toInsert.Any())
+            {
+                _db.BiometricLogs.AddRange(toInsert);
+                await _db.SaveChangesAsync();
+            }
+
+            result.ImportedCount = toInsert.Count;
+            result.ImportedDates = toInsert.Select(x => x.LogDate.Date).Distinct().OrderBy(x => x).ToList();
+
+            if (options.ProcessAfterImport && toInsert.Any())
+            {
+                if (options.GenerateDailyCoverage)
+                {
+                    foreach (var date in result.ImportedDates)
+                    {
+                        var processResult = await ProcessBiometricLogsAsync(date, currentUserName);
+                        if (!processResult.Success)
+                            result.Warnings.Add($"تعذر معالجة تاريخ {date:yyyy/MM/dd}: {processResult.Message}");
+                    }
+                }
+                else
+                {
+                    foreach (var dateGroup in toInsert.GroupBy(x => x.LogDate.Date))
+                    {
+                        await ProcessBiometricLogsForBiometricCodesAsync(
+                            dateGroup.Key,
+                            dateGroup.Select(x => x.BiometricCode).Distinct().ToList(),
+                            currentUserName);
+                    }
+                }
+            }
+
+            await _audit.LogAsync("BiometricLog", "Import", fileName, null,
+                new
+                {
+                    fileName,
+                    result.TotalRows,
+                    result.ImportedCount,
+                    result.SkippedCount,
+                    result.ErrorCount,
+                    options.ProcessAfterImport,
+                    options.GenerateDailyCoverage,
+                    options.SpecificBiometricCode
+                },
+                currentUserName);
+        }
+        catch (Exception ex)
+        {
+            result.Errors.Add(ex.Message);
+            result.ErrorCount++;
+        }
+
+        return result;
+    }
+
+    public async Task<byte[]> GetBiometricImportTemplateAsync()
+    {
+        await Task.CompletedTask;
+
+        using var workbook = new XLWorkbook();
+        var ws = workbook.Worksheets.Add("BiometricImport");
+        ws.RightToLeft = true;
+
+        ws.Cell(1, 1).Value = "BiometricCode";
+        ws.Cell(1, 2).Value = "LogDate";
+        ws.Cell(1, 3).Value = "LogTime";
+
+        ws.Cell(2, 1).Value = 101;
+        ws.Cell(2, 2).Value = DateTime.Today.ToString("yyyy/MM/dd");
+        ws.Cell(2, 3).Value = "08:55:00";
+        ws.Cell(3, 1).Value = 101;
+        ws.Cell(3, 2).Value = DateTime.Today.ToString("yyyy/MM/dd");
+        ws.Cell(3, 3).Value = "17:04:00";
+
+        ws.Row(1).Style.Font.Bold = true;
+        ws.Row(1).Style.Fill.BackgroundColor = XLColor.FromArgb(0x1A, 0x23, 0x7E);
+        ws.Row(1).Style.Font.FontColor = XLColor.White;
+        ws.Columns().AdjustToContents();
+
+        var help = workbook.Worksheets.Add("Instructions");
+        help.RightToLeft = true;
+        help.Cell(1, 1).Value = "تعليمات استيراد البصمة";
+        help.Cell(1, 1).Style.Font.Bold = true;
+        help.Cell(3, 1).Value = "1) الأعمدة الافتراضية: BiometricCode, LogDate, LogTime";
+        help.Cell(4, 1).Value = "2) يمكن أيضًا استخدام عمود واحد باسم DateTime أو Timestamp";
+        help.Cell(5, 1).Value = "3) إذا كان الملف لموظف واحد فقط يمكنك تحديد كود البصمة من الشاشة";
+        help.Cell(6, 1).Value = "4) لو فعلت خيار إنشاء تغطية يومية سيقوم النظام بإنشاء غياب/راحة/إجازة لباقي الموظفين في نفس اليوم";
+        help.Columns().AdjustToContents();
+
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        return stream.ToArray();
+    }
 
     // ════════════════════════════════════════════════════════════
     //  بصمتي الشخصية
@@ -1064,25 +1299,322 @@ public class AttendanceService : IAttendanceService
         if (!myAttendance.Any())
             return new AttendanceStatisticsDto();
 
+        var workingRecords = myAttendance.Where(a => a.IsWorkingDayRecord).ToList();
+
         return new AttendanceStatisticsDto
         {
             TotalRecords = myAttendance.Count,
-            PresentCount = myAttendance.Count(a => a.TimeIn != null),
-            AbsentCount = myAttendance.Count(a => a.IsAbsent),
-            LateCount = myAttendance.Count(a => a.IsLate),
-            EarlyLeaveCount = myAttendance.Count(a => a.HasEarlyLeave),
-            TotalHours = myAttendance.Sum(a => a.TotalHours ?? 0),
-            AverageHours = myAttendance.Where(a => a.TotalHours > 0).Any()
-                ? Math.Round(myAttendance.Where(a => a.TotalHours > 0).Average(a => a.TotalHours ?? 0), 1)
+            PresentCount = workingRecords.Count(a => a.IsPresent),
+            AbsentCount = workingRecords.Count(a => a.IsAbsent),
+            LateCount = workingRecords.Count(a => a.IsLate),
+            EarlyLeaveCount = workingRecords.Count(a => a.HasEarlyLeave),
+            TotalHours = workingRecords.Sum(a => a.TotalHours ?? 0),
+            AverageHours = workingRecords.Where(a => a.TotalHours > 0).Any()
+                ? Math.Round(workingRecords.Where(a => a.TotalHours > 0).Average(a => a.TotalHours ?? 0), 1)
                 : 0,
-            TotalLateMinutes = myAttendance.Sum(a => a.LateMinutes ?? 0),
-            TotalPenaltyHours = myAttendance.Sum(a => a.PenaltyHours ?? 0)
+            TotalLateMinutes = workingRecords.Sum(a => a.LateMinutes ?? 0),
+            TotalPenaltyHours = workingRecords.Sum(a => a.PenaltyHours ?? 0)
         };
     }
 
     // ════════════════════════════════════════════════════════════
     //  Helper Methods
     // ════════════════════════════════════════════════════════════
+    private sealed class ImportedBiometricRow
+    {
+        public int BiometricCode { get; set; }
+        public DateTime LogDate { get; set; }
+        public TimeOnly LogTime { get; set; }
+    }
+
+    private async Task<List<ImportedBiometricRow>> ParseBiometricImportRowsAsync(Stream fileStream, string fileName, BiometricImportOptionsDto options)
+    {
+        var extension = Path.GetExtension(fileName)?.ToLowerInvariant();
+        return extension switch
+        {
+            ".xlsx" or ".xls" => await ParseBiometricRowsFromExcelAsync(fileStream, options),
+            ".csv" or ".txt" => await ParseBiometricRowsFromDelimitedAsync(fileStream, options),
+            _ => throw new Exception("نوع الملف غير مدعوم. استخدم xlsx أو csv أو txt")
+        };
+    }
+
+    private async Task<List<ImportedBiometricRow>> ParseBiometricRowsFromDelimitedAsync(Stream fileStream, BiometricImportOptionsDto options)
+    {
+        using var reader = new StreamReader(fileStream, leaveOpen: true);
+        var text = await reader.ReadToEndAsync();
+        fileStream.Position = 0;
+
+        var lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+        var rows = new List<ImportedBiometricRow>();
+        if (!lines.Any()) return rows;
+
+        var separators = new[] { ',', ';', '\t', '|' };
+        var firstLine = lines[0];
+        var separator = separators.OrderByDescending(s => firstLine.Count(c => c == s)).FirstOrDefault();
+        if (separator == default) separator = ',';
+
+        var headerCells = firstLine.Split(separator).Select(x => x.Trim()).ToList();
+        var hasHeader = headerCells.Any(c => c.Equals("BiometricCode", StringComparison.OrdinalIgnoreCase)
+                                          || c.Equals("Code", StringComparison.OrdinalIgnoreCase)
+                                          || c.Equals("DateTime", StringComparison.OrdinalIgnoreCase)
+                                          || c.Equals("LogDate", StringComparison.OrdinalIgnoreCase));
+
+        int startIndex = hasHeader ? 1 : 0;
+        var codeIndex = hasHeader ? FindColumnIndex(headerCells, "BiometricCode", "Code", "EmployeeCode", "UserId") : 0;
+        var dateIndex = hasHeader ? FindColumnIndex(headerCells, "LogDate", "Date") : 1;
+        var timeIndex = hasHeader ? FindColumnIndex(headerCells, "LogTime", "Time") : 2;
+        var dateTimeIndex = hasHeader ? FindColumnIndex(headerCells, "DateTime", "Timestamp", "LogDateTime") : -1;
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            var cells = lines[i].Split(separator).Select(x => x.Trim()).ToArray();
+            var row = TryParseImportedRow(cells, codeIndex, dateIndex, timeIndex, dateTimeIndex, options);
+            if (row != null) rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    private async Task<List<ImportedBiometricRow>> ParseBiometricRowsFromExcelAsync(Stream fileStream, BiometricImportOptionsDto options)
+    {
+        await Task.CompletedTask;
+        using var workbook = new XLWorkbook(fileStream);
+        var ws = workbook.Worksheet(1);
+        var lastRow = ws.LastRowUsed()?.RowNumber() ?? 1;
+        var lastCol = ws.LastColumnUsed()?.ColumnNumber() ?? 1;
+        var rows = new List<ImportedBiometricRow>();
+        if (lastRow < 1) return rows;
+
+        var firstRowCells = Enumerable.Range(1, lastCol).Select(c => ws.Cell(1, c).GetString().Trim()).ToList();
+        var hasHeader = firstRowCells.Any(c => c.Equals("BiometricCode", StringComparison.OrdinalIgnoreCase)
+                                            || c.Equals("Code", StringComparison.OrdinalIgnoreCase)
+                                            || c.Equals("DateTime", StringComparison.OrdinalIgnoreCase)
+                                            || c.Equals("LogDate", StringComparison.OrdinalIgnoreCase));
+
+        int startRow = hasHeader ? 2 : 1;
+        var codeIndex = hasHeader ? FindColumnIndex(firstRowCells, "BiometricCode", "Code", "EmployeeCode", "UserId") : 0;
+        var dateIndex = hasHeader ? FindColumnIndex(firstRowCells, "LogDate", "Date") : 1;
+        var timeIndex = hasHeader ? FindColumnIndex(firstRowCells, "LogTime", "Time") : 2;
+        var dateTimeIndex = hasHeader ? FindColumnIndex(firstRowCells, "DateTime", "Timestamp", "LogDateTime") : -1;
+
+        for (int rowNumber = startRow; rowNumber <= lastRow; rowNumber++)
+        {
+            var cells = Enumerable.Range(1, lastCol).Select(c => ws.Cell(rowNumber, c).GetFormattedString().Trim()).ToArray();
+            var row = TryParseImportedRow(cells, codeIndex, dateIndex, timeIndex, dateTimeIndex, options);
+            if (row != null) rows.Add(row);
+        }
+
+        fileStream.Position = 0;
+        return rows;
+    }
+
+    private static int FindColumnIndex(IReadOnlyList<string> headers, params string[] aliases)
+    {
+        for (int i = 0; i < headers.Count; i++)
+        {
+            if (aliases.Any(a => headers[i].Equals(a, StringComparison.OrdinalIgnoreCase)))
+                return i;
+        }
+        return -1;
+    }
+
+    private static ImportedBiometricRow? TryParseImportedRow(string[] cells, int codeIndex, int dateIndex, int timeIndex, int dateTimeIndex, BiometricImportOptionsDto options)
+    {
+        if (cells.Length == 0) return null;
+
+        int biometricCode;
+        if (codeIndex >= 0 && codeIndex < cells.Length && int.TryParse(cells[codeIndex], out var parsedCode))
+        {
+            biometricCode = parsedCode;
+        }
+        else if (options.SpecificBiometricCode.HasValue)
+        {
+            biometricCode = options.SpecificBiometricCode.Value;
+        }
+        else
+        {
+            return null;
+        }
+
+        if (options.SpecificBiometricCode.HasValue && biometricCode != options.SpecificBiometricCode.Value)
+            return null;
+
+        DateTime logDate;
+        TimeOnly logTime;
+
+        if (dateTimeIndex >= 0 && dateTimeIndex < cells.Length && DateTime.TryParse(cells[dateTimeIndex], out var dateTimeValue))
+        {
+            logDate = dateTimeValue.Date;
+            logTime = TimeOnly.FromDateTime(dateTimeValue);
+        }
+        else
+        {
+            var actualDateIndex = dateIndex;
+            var actualTimeIndex = timeIndex;
+
+            // ملف خاص بموظف واحد بدون عمود كود بصمة: Date | Time
+            if (options.SpecificBiometricCode.HasValue && cells.Length == 2)
+            {
+                actualDateIndex = 0;
+                actualTimeIndex = 1;
+            }
+
+            if (actualDateIndex < 0 || actualDateIndex >= cells.Length || !DateTime.TryParse(cells[actualDateIndex], out var dateValue))
+                return null;
+
+            if (actualTimeIndex < 0 || actualTimeIndex >= cells.Length)
+                return null;
+
+            if (!TimeOnly.TryParse(cells[actualTimeIndex], out var timeValue))
+            {
+                if (TimeSpan.TryParse(cells[actualTimeIndex], out var timeSpanValue))
+                    timeValue = TimeOnly.FromTimeSpan(timeSpanValue);
+                else
+                    return null;
+            }
+
+            logDate = dateValue.Date;
+            logTime = timeValue;
+        }
+
+        return new ImportedBiometricRow
+        {
+            BiometricCode = biometricCode,
+            LogDate = logDate,
+            LogTime = logTime
+        };
+    }
+
+    private async Task ProcessBiometricLogsForBiometricCodesAsync(DateTime date, IReadOnlyCollection<int> biometricCodes, string currentUserName)
+    {
+        if (!biometricCodes.Any()) return;
+
+        var logs = await _db.BiometricLogs.AsNoTracking()
+            .Where(b => b.LogDate.Date == date.Date && biometricCodes.Contains(b.BiometricCode))
+            .OrderBy(b => b.BiometricCode)
+            .ThenBy(b => b.LogTime)
+            .ToListAsync();
+
+        var shifts = await _db.EmployeeShifts.AsNoTracking()
+            .Where(s => s.BiometricCode.HasValue
+                     && biometricCodes.Contains(s.BiometricCode.Value)
+                     && s.EffectiveFrom <= date
+                     && (s.EffectiveTo == null || s.EffectiveTo >= date))
+            .Select(s => new { s.BiometricCode, s.StartTime, s.EndTime })
+            .ToListAsync();
+
+        var exemptions = await _db.DailyExemptions
+            .Where(x => x.ExemptionDate.Date == date.Date && biometricCodes.Contains(x.BioEmployeeId))
+            .ToListAsync();
+        exemptions = exemptions.Where(x => ExemptionStatus.InferStatus(x.Status, x.ApprovedBy) == ExemptionStatus.Approved).ToList();
+
+        var existingRecords = await _db.Attendances
+            .Where(a => a.LogDate.Date == date.Date && biometricCodes.Contains(a.BiometricCode))
+            .ToListAsync();
+
+        foreach (var group in logs.GroupBy(l => l.BiometricCode))
+        {
+            var bioCode = group.Key;
+            var dayLogs = group.OrderBy(l => l.LogTime).ToList();
+            var timeIn = dayLogs.First().LogTime;
+            var timeOut = dayLogs.Count > 1 ? dayLogs.Last().LogTime : (TimeOnly?)null;
+
+            var shift = shifts.FirstOrDefault(s => s.BiometricCode == bioCode);
+            var expectedIn = shift?.StartTime ?? new TimeOnly(8, 0);
+            var expectedOut = shift?.EndTime ?? new TimeOnly(17, 0);
+            int lateMinutes = timeIn > expectedIn ? (int)(timeIn - expectedIn).TotalMinutes : 0;
+            int earlyLeaveMinutes = timeOut.HasValue && timeOut.Value < expectedOut ? (int)(expectedOut - timeOut.Value).TotalMinutes : 0;
+
+            decimal? totalHours = null;
+            if (timeOut.HasValue)
+            {
+                var duration = timeOut.Value.ToTimeSpan() - timeIn.ToTimeSpan();
+                if (duration < TimeSpan.Zero) duration += TimeSpan.FromHours(24);
+                totalHours = (decimal)duration.TotalHours;
+            }
+
+            var status = lateMinutes > 0 ? AttendanceStatus.Late : AttendanceStatus.Present;
+            var existing = existingRecords.FirstOrDefault(a => a.BiometricCode == bioCode);
+            if (existing == null)
+            {
+                existing = new Attendance { BiometricCode = bioCode, LogDate = date.Date };
+                _db.Attendances.Add(existing);
+                existingRecords.Add(existing);
+            }
+
+            existing.TimeIn = timeIn;
+            existing.TimeOut = timeOut;
+            existing.TotalHours = totalHours;
+            existing.LateMinutes = lateMinutes;
+            existing.EarlyLeaveMinutes = earlyLeaveMinutes;
+            existing.Status = status;
+        }
+
+        await _db.SaveChangesAsync();
+
+        foreach (var exemption in exemptions)
+            await CreateOrUpdateExemptionAttendanceAsync(exemption);
+
+        await _db.SaveChangesAsync();
+    }
+
+    private async Task<(TimeOnly StartTime, TimeOnly EndTime)> GetExpectedShiftWindowAsync(int biometricCode, DateTime date)
+    {
+        var shift = await _db.EmployeeShifts.AsNoTracking()
+            .Where(s => s.BiometricCode == biometricCode
+                     && s.EffectiveFrom <= date
+                     && (s.EffectiveTo == null || s.EffectiveTo >= date))
+            .Select(s => new { s.StartTime, s.EndTime })
+            .FirstOrDefaultAsync();
+
+        return (shift?.StartTime ?? new TimeOnly(8, 0), shift?.EndTime ?? new TimeOnly(17, 0));
+    }
+
+    private static void ApplyAttendanceEditValues(Attendance attendance, AttendanceEditDto dto, TimeOnly expectedIn, TimeOnly expectedOut)
+    {
+        var status = dto.Status ?? AttendanceStatus.Present;
+        attendance.Status = status;
+        attendance.TimeIn = dto.TimeIn;
+        attendance.TimeOut = dto.TimeOut;
+
+        if (status == AttendanceStatus.Absent || status == AttendanceStatus.Holiday || status == AttendanceStatus.OffDay || status == AttendanceStatus.Weekend)
+        {
+            attendance.TimeIn = null;
+            attendance.TimeOut = null;
+            attendance.TotalHours = null;
+            attendance.LateMinutes = 0;
+            attendance.EarlyLeaveMinutes = 0;
+            attendance.PenaltyHours = 0;
+            return;
+        }
+
+        attendance.TotalHours = null;
+        attendance.LateMinutes = 0;
+        attendance.EarlyLeaveMinutes = 0;
+        attendance.PenaltyHours = 0;
+
+        if (attendance.TimeIn.HasValue)
+        {
+            attendance.LateMinutes = attendance.TimeIn.Value > expectedIn
+                ? (int)(attendance.TimeIn.Value - expectedIn).TotalMinutes
+                : 0;
+        }
+
+        if (attendance.TimeIn.HasValue && attendance.TimeOut.HasValue)
+        {
+            var duration = attendance.TimeOut.Value.ToTimeSpan() - attendance.TimeIn.Value.ToTimeSpan();
+            if (duration < TimeSpan.Zero) duration += TimeSpan.FromHours(24);
+            attendance.TotalHours = (decimal)duration.TotalHours;
+
+            attendance.EarlyLeaveMinutes = attendance.TimeOut.Value < expectedOut
+                ? (int)(expectedOut - attendance.TimeOut.Value).TotalMinutes
+                : 0;
+        }
+
+        if (status == AttendanceStatus.Present || status == AttendanceStatus.Late)
+            attendance.Status = attendance.LateMinutes > 0 ? AttendanceStatus.Late : AttendanceStatus.Present;
+    }
+
     private async Task FillEmployeeData(List<AttendanceListDto> items)
     {
         var biometricCodes = items.Select(i => i.BiometricCode).Distinct().ToList();
@@ -1101,14 +1633,53 @@ public class AttendanceService : IAttendanceService
         }
     }
 
+    private static bool IsPresentAttendanceRecord(Attendance attendance)
+    {
+        return attendance.TimeIn != null
+            || attendance.Status == AttendanceStatus.Present
+            || attendance.Status == AttendanceStatus.Late
+            || attendance.Status == AttendanceStatus.Errand
+            || attendance.Status == AttendanceStatus.EarlyLeave;
+    }
+
+    private static bool IsAbsentAttendanceRecord(Attendance attendance)
+    {
+        return attendance.Status == AttendanceStatus.Absent;
+    }
+
+    private static bool IsWorkingAttendanceRecord(Attendance attendance)
+    {
+        return attendance.Status != AttendanceStatus.OffDay
+            && attendance.Status != AttendanceStatus.Weekend
+            && attendance.Status != AttendanceStatus.Holiday;
+    }
+
+    private static bool IsEmployeeOffDay(DateTime date, byte? offDay1, byte? offDay2)
+    {
+        var offDays = new List<DayOfWeek>();
+        if (offDay1.HasValue) offDays.Add((DayOfWeek)offDay1.Value);
+        if (offDay2.HasValue) offDays.Add((DayOfWeek)offDay2.Value);
+
+        if (!offDays.Any())
+            offDays.AddRange(new[] { DayOfWeek.Friday, DayOfWeek.Saturday });
+
+        return offDays.Contains(date.DayOfWeek);
+    }
+
     private int GetWorkingDays(DateTime from, DateTime to, bool includeWeekends)
     {
-        // ⚠️ Fallback: uses hardcoded Friday+Saturday
-        // Use GetWorkingDaysForEmployeeAsync for per-employee off days from shifts
+        // Fallback عام للشاشات التي لا تعتمد على شيفت موظف بعينه
+        var holidayDates = _db.Calendars.AsNoTracking()
+            .Where(c => c.CalendarDate >= from.Date && c.CalendarDate <= to.Date && c.IsHoliday == true)
+            .Select(c => c.CalendarDate.Date)
+            .ToList();
+        var holidaySet = holidayDates.ToHashSet();
+
         int count = 0;
         for (var date = from.Date; date <= to.Date; date = date.AddDays(1))
         {
-            if (includeWeekends || (date.DayOfWeek != DayOfWeek.Friday && date.DayOfWeek != DayOfWeek.Saturday))
+            var isWeekend = date.DayOfWeek == DayOfWeek.Friday || date.DayOfWeek == DayOfWeek.Saturday;
+            if ((includeWeekends || !isWeekend) && !holidaySet.Contains(date))
                 count++;
         }
         return count;
@@ -1132,10 +1703,16 @@ public class AttendanceService : IAttendanceService
         if (shift?.OffDay1 != null) offDays.Add((DayOfWeek)shift.OffDay1.Value);
         if (shift?.OffDay2 != null) offDays.Add((DayOfWeek)shift.OffDay2.Value);
 
+        var holidayDates = await _db.Calendars.AsNoTracking()
+            .Where(c => c.CalendarDate >= from.Date && c.CalendarDate <= to.Date && c.IsHoliday == true)
+            .Select(c => c.CalendarDate.Date)
+            .ToListAsync();
+
+        var holidaySet = holidayDates.ToHashSet();
         int count = 0;
         for (var date = from.Date; date <= to.Date; date = date.AddDays(1))
         {
-            if (!offDays.Contains(date.DayOfWeek))
+            if (!offDays.Contains(date.DayOfWeek) && !holidaySet.Contains(date))
                 count++;
         }
         return count;
@@ -1146,52 +1723,7 @@ public class AttendanceService : IAttendanceService
     // ════════════════════════════════════════════════════════════
     public async Task<PagedResult<ExemptionListDto>> GetExemptionsAsync(ExemptionFilterDto filter)
     {
-        var query = _db.DailyExemptions.AsNoTracking().AsQueryable();
-
-        // === الفلاتر ===
-        if (filter.DateFrom.HasValue)
-            query = query.Where(e => e.ExemptionDate >= filter.DateFrom.Value.Date);
-        if (filter.DateTo.HasValue)
-            query = query.Where(e => e.ExemptionDate <= filter.DateTo.Value.Date);
-        if (!string.IsNullOrWhiteSpace(filter.ReasonCode))
-            query = query.Where(e => e.ReasonCode.Contains(filter.ReasonCode));
-
-        // فلتر الحالة - الآن بنستخدم Status column
-        if (!string.IsNullOrWhiteSpace(filter.Status))
-        {
-            query = query.Where(e => e.Status == filter.Status);
-        }
-        else if (filter.IsApproved == true)
-        {
-            // للتوافق مع الكود القديم
-            query = query.Where(e => e.Status == ExemptionStatus.Approved);
-        }
-        else if (filter.IsApproved == false)
-        {
-            query = query.Where(e => e.Status == ExemptionStatus.Pending);
-        }
-
-        // فلتر الخصم
-        if (filter.IsDeducted.HasValue)
-            query = query.Where(e => e.IsDeducted == filter.IsDeducted.Value);
-
-        // البحث بالاسم أو القسم
-        if (!string.IsNullOrWhiteSpace(filter.SearchText) || !string.IsNullOrWhiteSpace(filter.Department))
-        {
-            var empQuery = _db.Employees.AsNoTracking().AsQueryable();
-            if (!string.IsNullOrWhiteSpace(filter.SearchText))
-            {
-                var st = filter.SearchText.Trim();
-                empQuery = empQuery.Where(e => e.FullName.Contains(st));
-            }
-            if (!string.IsNullOrWhiteSpace(filter.Department))
-                empQuery = empQuery.Where(e => e.Department == filter.Department);
-
-            var bioIds = await empQuery.Where(e => e.BioEmployeeId.HasValue)
-                .Select(e => e.BioEmployeeId!.Value).ToListAsync();
-
-            query = query.Where(e => bioIds.Contains(e.BioEmployeeId));
-        }
+        var query = await BuildExemptionsQueryAsync(filter);
 
         var totalCount = await query.CountAsync();
 
@@ -1202,17 +1734,27 @@ public class AttendanceService : IAttendanceService
             .Take(filter.PageSize)
             .ToListAsync();
 
-        // ربط بيانات الموظفين
+        var employeeIds = items
+            .Where(i => i.EmployeeId.HasValue)
+            .Select(i => i.EmployeeId!.Value)
+            .Distinct()
+            .ToList();
+
         var allBioCodes = items.Select(i => i.BioEmployeeId).Distinct().ToList();
 
         var employees = await _db.Employees.AsNoTracking()
-            .Where(e => e.BioEmployeeId.HasValue && allBioCodes.Contains(e.BioEmployeeId.Value))
+            .Where(e => employeeIds.Contains(e.EmployeeId) ||
+                        (e.BioEmployeeId.HasValue && allBioCodes.Contains(e.BioEmployeeId.Value)))
             .Select(e => new { e.EmployeeId, e.BioEmployeeId, e.FullName, e.Department })
             .ToListAsync();
 
         var dtos = items.Select(item =>
         {
-            var emp = employees.FirstOrDefault(e => e.BioEmployeeId == item.BioEmployeeId);
+            var emp = item.EmployeeId.HasValue
+                ? employees.FirstOrDefault(e => e.EmployeeId == item.EmployeeId.Value)
+                : employees.FirstOrDefault(e => e.BioEmployeeId == item.BioEmployeeId);
+
+            var normalizedStatus = ExemptionStatus.InferStatus(item.Status, item.ApprovedBy);
 
             return new ExemptionListDto
             {
@@ -1231,7 +1773,7 @@ public class AttendanceService : IAttendanceService
                 IsDeducted = item.IsDeducted,
                 Notes = item.Notes,
                 CreatedBy = item.CreatedBy,
-                Status = item.Status
+                Status = normalizedStatus
             };
         }).ToList();
 
@@ -1246,27 +1788,139 @@ public class AttendanceService : IAttendanceService
 
     public async Task<ExemptionStatsDto> GetExemptionStatsAsync(ExemptionFilterDto filter)
     {
-        var query = _db.DailyExemptions.AsNoTracking().AsQueryable();
+        var query = await BuildExemptionsQueryAsync(filter);
 
-        if (filter.DateFrom.HasValue)
-            query = query.Where(e => e.ExemptionDate >= filter.DateFrom.Value.Date);
-        if (filter.DateTo.HasValue)
-            query = query.Where(e => e.ExemptionDate <= filter.DateTo.Value.Date);
+        var all = await query
+            .Select(e => new
+            {
+                e.ReasonCode,
+                e.IsDeducted,
+                e.Status,
+                e.ApprovedBy
+            })
+            .ToListAsync();
 
-        var all = await query.ToListAsync();
+        var normalized = all
+            .Select(e => new
+            {
+                e.ReasonCode,
+                e.IsDeducted,
+                Status = ExemptionStatus.InferStatus(e.Status, e.ApprovedBy)
+            })
+            .ToList();
 
         return new ExemptionStatsDto
         {
-            TotalCount = all.Count,
-            ApprovedCount = all.Count(e => e.Status == ExemptionStatus.Approved),
-            PendingCount = all.Count(e => e.Status == ExemptionStatus.Pending),
-            RejectedCount = all.Count(e => e.Status == ExemptionStatus.Rejected),
-            PermissionCount = all.Count(e => ExemptionReasonCodes.IsPermissionType(e.ReasonCode)),
-            ErrandCount = all.Count(e => ExemptionReasonCodes.IsErrandType(e.ReasonCode)),
-            EarlyLeaveCount = all.Count(e => ExemptionReasonCodes.IsEarlyLeaveType(e.ReasonCode)),
-            DeductedCount = all.Count(e => e.IsDeducted),
-            NotDeductedCount = all.Count(e => !e.IsDeducted)
+            TotalCount = normalized.Count,
+            ApprovedCount = normalized.Count(e => e.Status == ExemptionStatus.Approved),
+            PendingCount = normalized.Count(e => e.Status == ExemptionStatus.Pending),
+            RejectedCount = normalized.Count(e => e.Status == ExemptionStatus.Rejected),
+            PermissionCount = normalized.Count(e => ExemptionReasonCodes.IsPermissionType(e.ReasonCode)),
+            ErrandCount = normalized.Count(e => ExemptionReasonCodes.IsErrandType(e.ReasonCode)),
+            EarlyLeaveCount = normalized.Count(e => ExemptionReasonCodes.IsEarlyLeaveType(e.ReasonCode)),
+            DeductedCount = normalized.Count(e => e.IsDeducted),
+            NotDeductedCount = normalized.Count(e => !e.IsDeducted)
         };
+    }
+
+    private async Task<IQueryable<DailyExemption>> BuildExemptionsQueryAsync(ExemptionFilterDto filter)
+    {
+        var query = _db.DailyExemptions.AsNoTracking().AsQueryable();
+
+        if (filter.DateFrom.HasValue)
+        {
+            var fromDate = filter.DateFrom.Value.Date;
+            query = query.Where(e => e.ExemptionDate >= fromDate);
+        }
+
+        if (filter.DateTo.HasValue)
+        {
+            var toExclusive = filter.DateTo.Value.Date.AddDays(1);
+            query = query.Where(e => e.ExemptionDate < toExclusive);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.ReasonCode))
+        {
+            var reasonCode = filter.ReasonCode.Trim();
+            query = query.Where(e => e.ReasonCode.Contains(reasonCode));
+        }
+
+        if (filter.IsDeducted.HasValue)
+            query = query.Where(e => e.IsDeducted == filter.IsDeducted.Value);
+
+        var desiredStatus = !string.IsNullOrWhiteSpace(filter.Status)
+            ? filter.Status!.Trim()
+            : filter.IsApproved == true
+                ? ExemptionStatus.Approved
+                : filter.IsApproved == false
+                    ? ExemptionStatus.Pending
+                    : null;
+
+        if (!string.IsNullOrWhiteSpace(desiredStatus))
+        {
+            if (desiredStatus == ExemptionStatus.Pending)
+            {
+                query = query.Where(e =>
+                    e.Status == ExemptionStatus.Pending ||
+                    ((e.Status == null || e.Status == "") && (e.ApprovedBy == null || e.ApprovedBy == "")));
+            }
+            else if (desiredStatus == ExemptionStatus.Approved)
+            {
+                query = query.Where(e =>
+                    e.Status == ExemptionStatus.Approved ||
+                    ((e.Status == null || e.Status == "") && (e.ApprovedBy != null && e.ApprovedBy != "")));
+            }
+            else if (desiredStatus == ExemptionStatus.Rejected)
+            {
+                query = query.Where(e => e.Status == ExemptionStatus.Rejected);
+            }
+            else
+            {
+                query = query.Where(e => e.Status == desiredStatus);
+            }
+        }
+
+        if (filter.EmployeeId.HasValue ||
+            !string.IsNullOrWhiteSpace(filter.SearchText) ||
+            !string.IsNullOrWhiteSpace(filter.Department))
+        {
+            var employeesQuery = _db.Employees.AsNoTracking().AsQueryable();
+
+            if (filter.EmployeeId.HasValue)
+                employeesQuery = employeesQuery.Where(e => e.EmployeeId == filter.EmployeeId.Value);
+
+            if (!string.IsNullOrWhiteSpace(filter.SearchText))
+            {
+                var searchText = filter.SearchText.Trim();
+                employeesQuery = employeesQuery.Where(e =>
+                    e.FullName.Contains(searchText) ||
+                    (e.Department != null && e.Department.Contains(searchText)) ||
+                    (e.NationalId != null && e.NationalId.Contains(searchText)));
+            }
+
+            if (!string.IsNullOrWhiteSpace(filter.Department))
+                employeesQuery = employeesQuery.Where(e => e.Department == filter.Department);
+
+            var employees = await employeesQuery
+                .Select(e => new { e.EmployeeId, e.BioEmployeeId })
+                .ToListAsync();
+
+            if (!employees.Any())
+                return query.Where(e => false);
+
+            var employeeIds = employees.Select(e => e.EmployeeId).Distinct().ToList();
+            var bioIds = employees
+                .Where(e => e.BioEmployeeId.HasValue)
+                .Select(e => e.BioEmployeeId!.Value)
+                .Distinct()
+                .ToList();
+
+            query = query.Where(e =>
+                (e.EmployeeId.HasValue && employeeIds.Contains(e.EmployeeId.Value)) ||
+                bioIds.Contains(e.BioEmployeeId));
+        }
+
+        return query;
     }
 
     public async Task<(bool Success, string Message)> CreateExemptionAsync(
@@ -1311,14 +1965,14 @@ public class AttendanceService : IAttendanceService
         if (!dto.IsFullDay && (!dto.Hours.HasValue || dto.Hours.Value <= 0))
             return (false, "يرجى تحديد عدد الساعات للاستثناء الجزئي.");
 
-        // ✅ Admin + AccountManager → معتمد مباشرة
+        // ✅ Admin + AccountManager + HrManager → معتمد مباشرة
         // غير كده → Pending (قيد الاعتماد)
         var user = await _db.Users.AsNoTracking()
             .FirstOrDefaultAsync(u => u.Username == currentUserName);
-        var isAdminOrManager = user?.Role == "Admin" || user?.Role == "AccountManager";
+        var canAutoApprove = IsExemptionManagerRole(user?.Role);
 
-        var status = isAdminOrManager ? ExemptionStatus.Approved : ExemptionStatus.Pending;
-        var approvedBy = isAdminOrManager ? currentUserName : null;
+        var status = canAutoApprove ? ExemptionStatus.Approved : ExemptionStatus.Pending;
+        var approvedBy = canAutoApprove ? currentUserName : null;
 
         // إنشاء الاستثناء
         var exemption = new DailyExemption
@@ -1353,6 +2007,11 @@ public class AttendanceService : IAttendanceService
             new { BioEmployeeId = exemption.BioEmployeeId, exemption.ExemptionDate, exemption.ReasonCode, Status = status, exemption.IsDeducted },
             currentUserName);
 
+        if (status == ExemptionStatus.Pending)
+            await NotifyPendingExemptionAsync(exemption, employee.FullName, currentUserName);
+        else
+            await NotifyAutoApprovedExemptionAsync(exemption, employee.FullName, currentUserName);
+
         return (true, status == ExemptionStatus.Approved
             ? " تم تسجيل الاستثناء واعتماده بنجاح."
             : " تم تسجيل الاستثناء وهو قيد الاعتماد من المدير.");
@@ -1364,6 +2023,11 @@ public class AttendanceService : IAttendanceService
     public async Task<(bool Success, string Message)> ApproveExemptionAsync(
         int exemptionId, string currentUserName)
     {
+        var approver = await _db.Users.AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Username == currentUserName);
+        if (!IsExemptionManagerRole(approver?.Role))
+            return (false, "ليس لديك صلاحية اعتماد الاستثناءات.");
+
         var exemption = await _db.DailyExemptions.FindAsync(exemptionId);
         if (exemption == null)
             return (false, "الاستثناء غير موجود.");
@@ -1387,6 +2051,9 @@ public class AttendanceService : IAttendanceService
     new { Status = ExemptionStatus.Approved, ApprovedBy = currentUserName },
     currentUserName);
 
+        var employeeName = await GetEmployeeNameForExemptionAsync(exemption);
+        await NotifyExemptionDecisionAsync(exemption, employeeName, true, currentUserName);
+
         return (true, "تم اعتماد الاستثناء بنجاح.");
     }
 
@@ -1396,6 +2063,11 @@ public class AttendanceService : IAttendanceService
     public async Task<(bool Success, string Message)> RejectExemptionAsync(
         int exemptionId, string currentUserName, string? reason = null)
     {
+        var approver = await _db.Users.AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Username == currentUserName);
+        if (!IsExemptionManagerRole(approver?.Role))
+            return (false, "ليس لديك صلاحية رفض الاستثناءات.");
+
         var exemption = await _db.DailyExemptions.FindAsync(exemptionId);
         if (exemption == null)
             return (false, "الاستثناء غير موجود.");
@@ -1421,6 +2093,9 @@ public class AttendanceService : IAttendanceService
     new { Status = ExemptionStatus.Rejected, RejectionReason = reason },
     currentUserName);
 
+        var employeeName = await GetEmployeeNameForExemptionAsync(exemption);
+        await NotifyExemptionDecisionAsync(exemption, employeeName, false, currentUserName, reason);
+
         return (true, "تم رفض الاستثناء.");
     }
 
@@ -1432,13 +2107,15 @@ public class AttendanceService : IAttendanceService
             return (false, "الاستثناء غير موجود.");
 
         // لو معتمد، شيل سجل الحضور المرتبط بيه
-        if (exemption.Status == ExemptionStatus.Approved)
+        var normalizedStatus = ExemptionStatus.InferStatus(exemption.Status, exemption.ApprovedBy);
+        if (normalizedStatus == ExemptionStatus.Approved)
         {
             var relatedAttendance = await _db.Attendances.FirstOrDefaultAsync(a =>
                 a.BiometricCode == exemption.BioEmployeeId &&
                 a.LogDate.Date == exemption.ExemptionDate.Date &&
                 (a.Status == AttendanceStatus.Errand ||
-                 a.Status == AttendanceStatus.Permission));
+                 a.Status == AttendanceStatus.Permission ||
+                 a.Status == AttendanceStatus.EarlyLeave));
 
             if (relatedAttendance != null)
                 _db.Attendances.Remove(relatedAttendance);
@@ -1502,65 +2179,150 @@ public class AttendanceService : IAttendanceService
                 {
                     // انصراف مبكر → نشيل خصم الانصراف
                     existing.EarlyLeaveMinutes = 0;
+                    existing.Status = AttendanceStatus.EarlyLeave;
                 }
                 // إذن مع خصم → نسيب سجل البصمة زي هو
+            }
+            else
+            {
+                ApplyExemptionToAttendanceRecord(existing, isErrand, isPermission, isEarlyLeave, isDeducted, startTime, endTime);
             }
         }
         else
         {
             // مفيش سجل حضور → نعمل سجل جديد
-            TimeOnly? timeIn = null;
-            TimeOnly? timeOut = null;
-            decimal? totalHours = null;
-            string status;
-
-            if (isErrand)
-            {
-                // مأمورية → حاضر (مفيش خصم)
-                timeIn = startTime;
-                timeOut = endTime;
-                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
-                status = AttendanceStatus.Errand;
-            }
-            else if (isPermission && !isDeducted)
-            {
-                // إذن بدون خصم → حاضر
-                timeIn = startTime;
-                timeOut = endTime;
-                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
-                status = AttendanceStatus.Permission;
-            }
-            else if (isPermission && isDeducted)
-            {
-                // إذن مع خصم → غائب
-                status = AttendanceStatus.Permission;
-            }
-            else if (isEarlyLeave)
-            {
-                // انصراف مبكر → حاضر (تسجيل)
-                timeIn = startTime;
-                timeOut = endTime;
-                totalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
-                status = AttendanceStatus.EarlyLeave;
-            }
-            else
-            {
-                // أي سبب تاني → يُخصم (غائب)
-                status = AttendanceStatus.Permission;
-            }
-
-            _db.Attendances.Add(new Attendance
+            var attendance = new Attendance
             {
                 BiometricCode = exemption.BioEmployeeId,
                 LogDate = date,
-                TimeIn = timeIn,
-                TimeOut = timeOut,
-                TotalHours = totalHours,
                 LateMinutes = 0,
-                EarlyLeaveMinutes = 0,
-                Status = status
-            });
+                EarlyLeaveMinutes = 0
+            };
+
+            ApplyExemptionToAttendanceRecord(attendance, isErrand, isPermission, isEarlyLeave, isDeducted, startTime, endTime);
+            _db.Attendances.Add(attendance);
         }
+    }
+
+    private static void ApplyExemptionToAttendanceRecord(
+        Attendance attendance,
+        bool isErrand,
+        bool isPermission,
+        bool isEarlyLeave,
+        bool isDeducted,
+        TimeOnly startTime,
+        TimeOnly endTime)
+    {
+        attendance.LateMinutes = 0;
+        attendance.EarlyLeaveMinutes = 0;
+        attendance.PenaltyHours = 0;
+
+        if (isErrand)
+        {
+            attendance.TimeIn = startTime;
+            attendance.TimeOut = endTime;
+            attendance.TotalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
+            attendance.Status = AttendanceStatus.Errand;
+        }
+        else if (isPermission && !isDeducted)
+        {
+            attendance.TimeIn = startTime;
+            attendance.TimeOut = endTime;
+            attendance.TotalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
+            attendance.Status = AttendanceStatus.Permission;
+        }
+        else if (isPermission && isDeducted)
+        {
+            attendance.TimeIn = null;
+            attendance.TimeOut = null;
+            attendance.TotalHours = null;
+            attendance.Status = AttendanceStatus.Permission;
+        }
+        else if (isEarlyLeave)
+        {
+            attendance.TimeIn = startTime;
+            attendance.TimeOut = endTime;
+            attendance.TotalHours = (decimal)(endTime.ToTimeSpan() - startTime.ToTimeSpan()).TotalHours;
+            attendance.Status = AttendanceStatus.EarlyLeave;
+        }
+        else
+        {
+            attendance.TimeIn = null;
+            attendance.TimeOut = null;
+            attendance.TotalHours = null;
+            attendance.Status = AttendanceStatus.Permission;
+        }
+    }
+
+    private static bool IsExemptionManagerRole(string? role)
+    {
+        if (string.IsNullOrWhiteSpace(role)) return false;
+
+        return role == SystemRoles.Admin
+            || role == SystemRoles.AccountManager
+            || role == SystemRoles.HrManager
+            || role == "HRManager";
+    }
+
+    private async Task<string> GetEmployeeNameForExemptionAsync(DailyExemption exemption)
+    {
+        var employeeName = await _db.Employees.AsNoTracking()
+            .Where(e => (exemption.EmployeeId.HasValue && e.EmployeeId == exemption.EmployeeId.Value)
+                     || (e.BioEmployeeId.HasValue && e.BioEmployeeId.Value == exemption.BioEmployeeId))
+            .Select(e => e.FullName)
+            .FirstOrDefaultAsync();
+
+        return string.IsNullOrWhiteSpace(employeeName)
+            ? $"كود: {exemption.BioEmployeeId}"
+            : employeeName!;
+    }
+
+    private async Task NotifyExemptionManagersAsync(string title, string message, string actor, int exemptionId)
+    {
+        var roles = new[] { SystemRoles.Admin, SystemRoles.AccountManager, SystemRoles.HrManager }
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Distinct();
+
+        foreach (var role in roles)
+        {
+            await _notify.NotifyRoleAsync(title, message, role, actor,
+                "frmDailyExemptions", "DailyExemptions", exemptionId);
+        }
+    }
+
+    private async Task NotifyPendingExemptionAsync(DailyExemption exemption, string employeeName, string actor)
+    {
+        var title = "📝 استثناء جديد قيد الاعتماد";
+        var message = $"تم تسجيل استثناء جديد للموظف {employeeName} بتاريخ {exemption.ExemptionDate:yyyy/MM/dd} " +
+                      $"بسبب ({exemption.ReasonCode}) وهو الآن قيد الاعتماد.";
+
+        await NotifyExemptionManagersAsync(title, message, actor, exemption.ExemptionId);
+    }
+
+    private async Task NotifyAutoApprovedExemptionAsync(DailyExemption exemption, string employeeName, string actor)
+    {
+        var title = "✅ تم اعتماد استثناء مباشرة";
+        var message = $"تم تسجيل واعتماد استثناء للموظف {employeeName} بتاريخ {exemption.ExemptionDate:yyyy/MM/dd} " +
+                      $"بسبب ({exemption.ReasonCode}) بواسطة {actor}.";
+
+        await NotifyExemptionManagersAsync(title, message, actor, exemption.ExemptionId);
+    }
+
+    private async Task NotifyExemptionDecisionAsync(DailyExemption exemption, string employeeName, bool isApproved, string actor, string? reason = null)
+    {
+        if (string.IsNullOrWhiteSpace(exemption.CreatedBy))
+            return;
+
+        var title = isApproved ? "✅ تم اعتماد الاستثناء" : "❌ تم رفض الاستثناء";
+        var message = isApproved
+            ? $"تم اعتماد الاستثناء الخاص بالموظف {employeeName} بتاريخ {exemption.ExemptionDate:yyyy/MM/dd} " +
+              $"بسبب ({exemption.ReasonCode}) بواسطة {actor}."
+            : $"تم رفض الاستثناء الخاص بالموظف {employeeName} بتاريخ {exemption.ExemptionDate:yyyy/MM/dd} " +
+              $"بسبب ({exemption.ReasonCode}) بواسطة {actor}." +
+              (!string.IsNullOrWhiteSpace(reason) ? $" سبب الرفض: {reason}" : string.Empty);
+
+        await _notify.AddAsync(title, message, exemption.CreatedBy, actor,
+            "frmDailyExemptions", "DailyExemptions", exemption.ExemptionId);
     }
 
 }

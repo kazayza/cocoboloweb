@@ -344,6 +344,7 @@ public static class SystemRoles
     public const string SalesManager = "SalesManager";
     public const string Sales = "Sales";
     public const string AccountManager = "AccountManager";
+    public const string HrManager = "HrManager";
     public const string Account = "Account";
 }
 // === قائمة الرسوم ===
