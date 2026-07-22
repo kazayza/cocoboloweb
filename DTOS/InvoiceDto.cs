@@ -106,8 +106,10 @@ public class InvoiceItemDto
     public string PricingTier { get; set; } = PricingTiers.Premium;
 
     // الأسعار المتاحة من المنتج
+    public decimal? SalePriceCClass { get; set; }
     public decimal? SalePricePremium { get; set; }
     public decimal? SalePriceElite { get; set; }
+    public decimal? PurchasePriceCClass { get; set; }
     public decimal? PurchasePricePremium { get; set; }
     public decimal? PurchasePriceElite { get; set; }
     public int? Period { get; set; }
@@ -221,8 +223,10 @@ public class ProductLookupDto
     public string ProductName { get; set; } = "";
     public string? ProductDescription { get; set; }
     public string? ImagePath { get; set; }
+    public decimal? SuggestedSalePriceCClass { get; set; }
     public decimal? SuggestedSalePrice { get; set; }
     public decimal? SuggestedSalePriceElite { get; set; }
+    public decimal? PurchasePriceCClass { get; set; }
     public decimal? PurchasePrice { get; set; }
     public decimal? PurchasePriceElite { get; set; }
     public int AvailableStock { get; set; }
@@ -317,13 +321,38 @@ public static class AdvanceChargeTypes
 
 public static class PricingTiers
 {
+    public const string CClass = "CClass";
     public const string Premium = "Premium";
     public const string Elite = "Elite";
 
     public static readonly Dictionary<string, string> All = new()
     {
+        { CClass, "ستاندرد" },
         { Premium, "بريميوم" },
         { Elite, "إيليت" }
+    };
+
+    public static readonly Dictionary<string, int> Order = new()
+    {
+        { CClass, 1 },
+        { Premium, 2 },
+        { Elite, 3 }
+    };
+}
+
+public static class QuotationPricingModes
+{
+    public const string CClass = PricingTiers.CClass;
+    public const string Premium = PricingTiers.Premium;
+    public const string Elite = PricingTiers.Elite;
+    public const string Mixed = "Mixed";
+
+    public static readonly Dictionary<string, string> All = new()
+    {
+        { CClass, "ستاندرد" },
+        { Premium, "بريميوم" },
+        { Elite, "إيليت" },
+        { Mixed, "مختلط" }
     };
 }
 

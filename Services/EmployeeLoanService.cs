@@ -41,8 +41,22 @@ public class EmployeeLoanService : IEmployeeLoanService
             var s = filter.SearchText.Trim();
             query = query.Where(x =>
                 x.e.FullName.Contains(s) ||
-                (x.e.Department != null && x.e.Department.Contains(s)));
+                (x.e.Department != null && x.e.Department.Contains(s)) ||
+                (x.e.JobTitle != null && x.e.JobTitle.Contains(s)));
         }
+
+        if (!string.IsNullOrWhiteSpace(filter.Month))
+        {
+            var month = filter.Month.Trim();
+            query = query.Where(x => x.l.StartDeductionMonth == month
+                || _db.LoanInstallments.Any(i => i.LoanId == x.l.LoanId && i.DeductionMonth == month));
+        }
+
+        if (filter.MinLoanAmount.HasValue)
+            query = query.Where(x => x.l.LoanAmount >= filter.MinLoanAmount.Value);
+
+        if (filter.MaxLoanAmount.HasValue)
+            query = query.Where(x => x.l.LoanAmount <= filter.MaxLoanAmount.Value);
 
         var totalCount = await query.CountAsync();
 
@@ -174,6 +188,7 @@ public class EmployeeLoanService : IEmployeeLoanService
             {
                 InstallmentId     = i.InstallmentId,
                 LoanId            = i.LoanId,
+                EmployeeId        = i.EmployeeId,
                 InstallmentNumber = i.InstallmentNumber,
                 DeductionMonth    = i.DeductionMonth,
                 Amount            = i.Amount,
@@ -341,23 +356,52 @@ public class EmployeeLoanService : IEmployeeLoanService
             .Include(l => l.Installments)
             .FirstOrDefaultAsync(l => l.LoanId == loanId);
 
-        if (loan is null)            return (false, "السلفة غير موجودة");
+        if (loan is null)             return (false, "السلفة غير موجودة");
         if (loan.Status != "Active") return (false, "لا يمكن إلغاء سلفة غير نشطة");
 
         var hasDeducted = loan.Installments.Any(i => i.Status == "Deducted");
         if (hasDeducted)
             return (false, "لا يمكن إلغاء سلفة تم خصم أقساط منها");
 
-        loan.Status        = "Cancelled";
-        loan.LastUpdatedAt = DateTime.Now;
+        using var tx = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            if (loan.CashBoxId.HasValue && loan.LoanAmount > 0)
+            {
+                _db.CashboxTransactions.Add(new CashboxTransaction
+                {
+                    CashBoxId = loan.CashBoxId.Value,
+                    TransactionType = "قبض",
+                    ReferenceType = "LoanCancel",
+                    ReferenceId = loan.LoanId,
+                    Amount = loan.LoanAmount,
+                    TransactionDate = DateTime.Now,
+                    Notes = $"عكس صرف السلفة رقم {loan.LoanId} بعد الإلغاء",
+                    CreatedBy = userName,
+                    CreatedAt = DateTime.Now
+                });
+            }
 
-        foreach (var inst in loan.Installments.Where(i => i.Status == "Pending"))
-            inst.Status = "Skipped";
+            loan.Status = "Cancelled";
+            loan.LastUpdatedAt = DateTime.Now;
+            loan.RemainingAmount = 0;
 
-        await _db.SaveChangesAsync();
-        await _audit.LogAsync("EmployeeLoans", "Cancel", loanId.ToString(), null, new { loanId }, userName);
+            foreach (var inst in loan.Installments.Where(i => i.Status == "Pending"))
+                inst.Status = "Skipped";
 
-        return (true, "تم إلغاء السلفة");
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            await _audit.LogAsync("EmployeeLoans", "Cancel", loanId.ToString(), null,
+                new { loanId, ReverseCashMovement = loan.CashBoxId.HasValue, loan.LoanAmount }, userName);
+
+            return (true, "تم إلغاء السلفة وعكس الأثر المالي بنجاح");
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return (false, $"حدث خطأ أثناء إلغاء السلفة: {ex.Message}");
+        }
     }
 
     // ============================================================
@@ -374,6 +418,9 @@ public class EmployeeLoanService : IEmployeeLoanService
             {
                 InstallmentId     = i.InstallmentId,
                 LoanId            = i.LoanId,
+                EmployeeId        = i.EmployeeId,
+                EmployeeName      = e.FullName,
+                Department        = e.Department,
                 InstallmentNumber = i.InstallmentNumber,
                 DeductionMonth    = i.DeductionMonth,
                 Amount            = i.Amount,
@@ -398,6 +445,7 @@ public class EmployeeLoanService : IEmployeeLoanService
             {
                 InstallmentId     = i.InstallmentId,
                 LoanId            = i.LoanId,
+                EmployeeId        = i.EmployeeId,
                 InstallmentNumber = i.InstallmentNumber,
                 DeductionMonth    = i.DeductionMonth,
                 Amount            = i.Amount,
@@ -484,6 +532,128 @@ public class EmployeeLoanService : IEmployeeLoanService
         return (true, "تم تأجيل القسط للشهر القادم");
     }
 
+    public async Task<(bool Success, string Message)> SplitInstallmentAsync(
+        int installmentId, decimal amountToKeepThisMonth, string reason, string userName)
+    {
+        var inst = await _db.LoanInstallments
+            .Include(i => i.Loan)
+            .FirstOrDefaultAsync(i => i.InstallmentId == installmentId);
+
+        if (inst is null)
+            return (false, "القسط غير موجود");
+
+        if (inst.Status != "Pending")
+            return (false, "يمكن تعديل أو تجزئة القسط فقط وهو في حالة لم يُخصم بعد");
+
+        if (amountToKeepThisMonth <= 0)
+            return (false, "قيمة الخصم في هذا الشهر يجب أن تكون أكبر من صفر");
+
+        if (amountToKeepThisMonth >= inst.Amount)
+            return (false, "استخدم القسط الحالي كما هو أو التأجيل الكامل؛ التجزئة تتطلب مبلغًا أقل من قيمة القسط");
+
+        if (!DateTime.TryParseExact(inst.DeductionMonth + "-01", "yyyy-MM-dd",
+            null, System.Globalization.DateTimeStyles.None, out var currentMonthDate))
+            return (false, "شهر القسط الحالي غير صحيح");
+
+        var remainingAmount = inst.Amount - amountToKeepThisMonth;
+        var originalAmount = inst.Amount;
+
+        var lastInstallment = await _db.LoanInstallments
+            .Where(i => i.LoanId == inst.LoanId)
+            .OrderByDescending(i => i.InstallmentNumber)
+            .FirstOrDefaultAsync();
+
+        var nextInstallmentNumber = (lastInstallment?.InstallmentNumber ?? inst.InstallmentNumber) + 1;
+        var nextMonth = currentMonthDate.AddMonths(1).ToString("yyyy-MM");
+
+        inst.Amount = amountToKeepThisMonth;
+        inst.Notes = string.Join(" | ", new[]
+        {
+            inst.Notes,
+            $"تعديل جزئي: أصل القسط {originalAmount:N2} جـ، المستحق هذا الشهر {amountToKeepThisMonth:N2} جـ، المتبقي {remainingAmount:N2} جـ مرحّل إلى {nextMonth}",
+            string.IsNullOrWhiteSpace(reason) ? null : $"السبب: {reason}",
+            $"بواسطة: {userName} - {DateTime.Now:yyyy-MM-dd HH:mm}"
+        }.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+        _db.LoanInstallments.Add(new LoanInstallment
+        {
+            LoanId = inst.LoanId,
+            EmployeeId = inst.EmployeeId,
+            InstallmentNumber = nextInstallmentNumber,
+            DeductionMonth = nextMonth,
+            Amount = remainingAmount,
+            Status = "Pending",
+            Notes = $"متبقي مرحّل من قسط شهر {inst.DeductionMonth} بقيمة {remainingAmount:N2} جـ" +
+                    (!string.IsNullOrWhiteSpace(reason) ? $" - {reason}" : string.Empty),
+            CreatedBy = userName,
+            CreatedAt = DateTime.Now
+        });
+
+        inst.Loan.TotalInstallments++;
+        inst.Loan.LastUpdatedAt = DateTime.Now;
+
+        await _db.SaveChangesAsync();
+        return (true, $"تم تجزئة القسط: {amountToKeepThisMonth:N2} جـ لهذا الشهر، وترحيل {remainingAmount:N2} جـ للشهر القادم");
+    }
+
+    public async Task<EmployeeLoanStatementDto?> GetEmployeeStatementAsync(int employeeId)
+    {
+        var employee = await _db.Employees.AsNoTracking()
+            .Where(e => e.EmployeeId == employeeId)
+            .Select(e => new { e.EmployeeId, e.FullName, e.Department, e.JobTitle })
+            .FirstOrDefaultAsync();
+
+        if (employee is null)
+            return null;
+
+        var loansResult = await GetLoansAsync(new LoanFilterDto
+        {
+            EmployeeId = employeeId,
+            PageNumber = 1,
+            PageSize = 200
+        });
+
+        var installments = await _db.LoanInstallments.AsNoTracking()
+            .Where(i => i.EmployeeId == employeeId)
+            .OrderByDescending(i => i.DeductionMonth)
+            .ThenBy(i => i.InstallmentNumber)
+            .Select(i => new InstallmentListDto
+            {
+                InstallmentId = i.InstallmentId,
+                LoanId = i.LoanId,
+                EmployeeId = i.EmployeeId,
+                EmployeeName = employee.FullName,
+                Department = employee.Department,
+                InstallmentNumber = i.InstallmentNumber,
+                DeductionMonth = i.DeductionMonth,
+                Amount = i.Amount,
+                Status = i.Status,
+                DeductionDate = i.DeductionDate,
+                Notes = i.Notes,
+                PayrollMonth = _db.Payrolls.Where(p => p.PayrollId == i.PayrollId).Select(p => p.PayrollMonth).FirstOrDefault()
+            })
+            .ToListAsync();
+
+        var loans = loansResult.Items.OrderByDescending(x => x.LoanDate).ToList();
+        var currentMonth = DateTime.Today.ToString("yyyy-MM");
+
+        return new EmployeeLoanStatementDto
+        {
+            EmployeeId = employee.EmployeeId,
+            EmployeeName = employee.FullName,
+            Department = employee.Department,
+            JobTitle = employee.JobTitle,
+            ActiveLoansCount = loans.Count(x => x.Status == "Active"),
+            TotalLoanAmount = loans.Sum(x => x.LoanAmount),
+            TotalPaidAmount = loans.Sum(x => x.PaidAmount),
+            TotalRemainingAmount = loans.Sum(x => x.RemainingAmount),
+            CurrentMonthDue = installments.Where(x => x.DeductionMonth == currentMonth && x.Status == "Pending").Sum(x => x.Amount),
+            PendingInstallmentsCount = installments.Count(x => x.Status == "Pending"),
+            Loans = loans,
+            Installments = installments
+        };
+    }
+
     // ============================================================
     // إحصائيات
     // ============================================================
@@ -510,13 +680,27 @@ public class EmployeeLoanService : IEmployeeLoanService
                      && l.LastUpdatedAt.Value.Year  == DateTime.Today.Year)
             .CountAsync();
 
+        var totalLoanAmount = await _db.EmployeeLoans.AsNoTracking()
+            .Where(l => l.Status == "Active")
+            .SumAsync(l => (decimal?)l.LoanAmount) ?? 0;
+
+        var avgLoanAmount = activeLoans.Any()
+            ? Math.Round(totalLoanAmount / activeLoans.Count, 2)
+            : 0;
+
+        var pendingInstallmentsCount = await _db.LoanInstallments.AsNoTracking()
+            .CountAsync(i => i.Status == "Pending");
+
         return new LoanStatsDto
         {
-            ActiveLoansCount     = activeLoans.Count,
-            TotalRemainingAmount = activeLoans.Sum(l => l.RemainingAmount),
-            ThisMonthDeductions  = thisMonthDeductions,
-            CompletedThisMonth   = completedThisMonth,
-            EmployeesWithLoans   = activeLoans.Select(l => l.EmployeeId).Distinct().Count()
+            ActiveLoansCount        = activeLoans.Count,
+            TotalRemainingAmount    = activeLoans.Sum(l => l.RemainingAmount),
+            ThisMonthDeductions     = thisMonthDeductions,
+            CompletedThisMonth      = completedThisMonth,
+            EmployeesWithLoans      = activeLoans.Select(l => l.EmployeeId).Distinct().Count(),
+            TotalLoanAmount         = totalLoanAmount,
+            AverageLoanAmount       = avgLoanAmount,
+            PendingInstallmentsCount = pendingInstallmentsCount
         };
     }
 
@@ -526,8 +710,7 @@ public class EmployeeLoanService : IEmployeeLoanService
     public async Task<List<EmployeeLookupDto>> GetEmployeesLookupAsync(string? search = null)
     {
         var query = _db.Employees.AsNoTracking()
-            // ✅ لا تفلتر بالـ Status خليه يجيب كل الموظفين النشطين
-            .Where(e => e.Status != "Terminated" && e.Status != "منتهي");
+            .Where(e => e.Status == EmployeeStatuses.Active || e.Status == "Active");
 
         if (!string.IsNullOrWhiteSpace(search))
         {

@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.JSInterop;
 using MudBlazor;
+using System.Text.Json;
 
 namespace COCOBOLOERPNEW.Components.Pages.HR.Shifts;
 
@@ -45,7 +46,9 @@ public partial class ShiftsList : ComponentBase
     
     private List<EmployeeShiftListDto> _shifts = new();
     private HashSet<EmployeeShiftListDto> _selectedShifts = new();
+    private const string FilterStorageKey = "hr_shifts_list_filter_state";
     private EmployeeShiftFilterDto _filter = new();
+    private bool _didInitialLoad;
     
     #endregion
 
@@ -123,15 +126,26 @@ public partial class ShiftsList : ComponentBase
     protected override async Task OnInitializedAsync()
     {
         await LoadPermissions();
-        
-        if (_hasViewPermission)
+
+        if (!_hasViewPermission)
         {
-            await LoadData();
-            await LoadStatistics();
+            _isLoadingData = false;
+            _isLoadingStats = false;
+            return;
         }
-        
-        _isLoadingData = false;
-        _isLoadingStats = false;
+
+        ApplyDefaultCurrentMonthRange();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || !_hasViewPermission || _didInitialLoad)
+            return;
+
+        _didInitialLoad = true;
+
+        await RestoreFilterStateAsync();
+        await LoadPageAsync();
     }
 
     private async Task LoadPermissions()
@@ -170,6 +184,87 @@ public partial class ShiftsList : ComponentBase
     #endregion
 
     #region Data Loading
+
+    private void ApplyDefaultCurrentMonthRange()
+    {
+        var today = DateTime.Today;
+        _filter.EffectiveFrom = new DateTime(today.Year, today.Month, 1);
+        _filter.EffectiveTo = new DateTime(today.Year, today.Month, DateTime.DaysInMonth(today.Year, today.Month));
+        _filter.PageSize = _filter.PageSize <= 0 ? 25 : _filter.PageSize;
+        _filter.PageNumber = 1;
+        _currentPage = 1;
+    }
+
+    private async Task LoadPageAsync()
+    {
+        _isLoadingData = true;
+        _isLoadingStats = true;
+        StateHasChanged();
+
+        await LoadData();
+        await LoadStatistics();
+
+        _isLoadingData = false;
+        _isLoadingStats = false;
+        StateHasChanged();
+    }
+
+    private async Task RestoreFilterStateAsync()
+    {
+        if (!_canSeeAllShifts)
+            return;
+
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("localStorage.getItem", FilterStorageKey);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            var saved = JsonSerializer.Deserialize<ShiftFilterState>(json);
+            if (saved is null)
+                return;
+
+            _filter.SearchText = saved.SearchText;
+            _filter.ShiftType = saved.ShiftType;
+            _filter.EffectiveFrom = saved.EffectiveFrom;
+            _filter.EffectiveTo = saved.EffectiveTo;
+            _filter.ActiveOnly = saved.ActiveOnly;
+            _filter.PageSize = saved.PageSize > 0 ? saved.PageSize : 25;
+            _filter.PageNumber = saved.PageNumber > 0 ? saved.PageNumber : 1;
+            _currentPage = _filter.PageNumber;
+        }
+        catch
+        {
+            ApplyDefaultCurrentMonthRange();
+        }
+    }
+
+    private async Task SaveFilterStateAsync()
+    {
+        if (!_canSeeAllShifts)
+            return;
+
+        try
+        {
+            var state = new ShiftFilterState
+            {
+                SearchText = _filter.SearchText,
+                ShiftType = _filter.ShiftType,
+                EffectiveFrom = _filter.EffectiveFrom,
+                EffectiveTo = _filter.EffectiveTo,
+                ActiveOnly = _filter.ActiveOnly,
+                PageSize = _filter.PageSize,
+                PageNumber = _currentPage
+            };
+
+            var json = JsonSerializer.Serialize(state);
+            await JS.InvokeVoidAsync("localStorage.setItem", FilterStorageKey, json);
+        }
+        catch
+        {
+            // ignore browser storage issues
+        }
+    }
 
     private async Task LoadData()
     {
@@ -224,24 +319,30 @@ public partial class ShiftsList : ComponentBase
      private async Task ApplyFilter()
     {
         _currentPage = 1;
+        _filter.PageNumber = 1;
         _isLoadingData = true;
         StateHasChanged();
-        
+
         await LoadData();
-        
+        await SaveFilterStateAsync();
+
         _isLoadingData = false;
         StateHasChanged();
     }
 
     private async Task ResetFilters()
     {
-        _filter = new EmployeeShiftFilterDto { PageSize = _filter.PageSize };
+        var currentPageSize = _filter.PageSize > 0 ? _filter.PageSize : 25;
+        _filter = new EmployeeShiftFilterDto { PageSize = currentPageSize };
+        ApplyDefaultCurrentMonthRange();
+        _filter.PageSize = currentPageSize;
         _currentPage = 1;
         _isLoadingData = true;
         StateHasChanged();
-        
+
         await LoadData();
-        
+        await SaveFilterStateAsync();
+
         _isLoadingData = false;
         StateHasChanged();
     }
@@ -254,6 +355,7 @@ public partial class ShiftsList : ComponentBase
 
         await LoadData();
         await LoadStatistics();
+        await SaveFilterStateAsync();
 
         _isLoadingData = false;
         _isLoadingStats = false;
@@ -267,12 +369,15 @@ public partial class ShiftsList : ComponentBase
     private async Task OnPageChanged(int page)
     {
         _currentPage = page;
+        _filter.PageNumber = page;
         _isLoadingData = true;
         StateHasChanged();
-        
+
         await LoadData();
-        
+        await SaveFilterStateAsync();
+
         _isLoadingData = false;
+        StateHasChanged();
     }
 
     private async Task OnPageSizeChanged(int pageSize)
@@ -334,6 +439,7 @@ public partial class ShiftsList : ComponentBase
             
             await LoadData();
             await LoadStatistics();
+            await SaveFilterStateAsync();
         }
         else
         {
@@ -391,6 +497,7 @@ public partial class ShiftsList : ComponentBase
         {
             await LoadData();
             await LoadStatistics();
+            await SaveFilterStateAsync();
         }
     }
 
@@ -401,4 +508,15 @@ public partial class ShiftsList : ComponentBase
     }
 
     #endregion
+
+    private sealed class ShiftFilterState
+    {
+        public string? SearchText { get; set; }
+        public string? ShiftType { get; set; }
+        public DateTime? EffectiveFrom { get; set; }
+        public DateTime? EffectiveTo { get; set; }
+        public bool? ActiveOnly { get; set; }
+        public int PageSize { get; set; }
+        public int PageNumber { get; set; }
+    }
 }

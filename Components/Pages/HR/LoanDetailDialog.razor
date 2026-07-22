@@ -137,6 +137,11 @@
                     <MudTd>
                         @if (context.Status == "Pending" && loan.Status == "Active")
                         {
+                            <MudIconButton Icon="@Icons.Material.Filled.ContentCut"
+                                           Size="Size.Small"
+                                           Color="Color.Info"
+                                           Title="تجزئة القسط وترحيل جزء"
+                                           OnClick="@(() => OpenSplitDialog(context))" />
                             <MudIconButton Icon="@Icons.Material.Filled.SkipNext"
                                            Size="Size.Small"
                                            Color="Color.Warning"
@@ -158,6 +163,43 @@
     </DialogActions>
 </MudDialog>
 
+<MudDialog @bind-Visible="_splitDialogOpen">
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-3">تجزئة القسط وترحيل جزء</MudText>
+
+        @if (_splitInstallment is not null)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                قيمة القسط الحالية: <b>@_splitInstallment.Amount.ToString("N2") جـ</b> — أدخل القيمة المطلوب خصمها في هذا الشهر، وسيتم ترحيل الباقي للشهر القادم.
+            </MudAlert>
+
+            <MudNumericField T="decimal"
+                             @bind-Value="_splitCurrentAmount"
+                             Label="القيمة المطلوب خصمها هذا الشهر"
+                             Variant="Variant.Outlined"
+                             Margin="Margin.Dense"
+                             Min="0.01m"
+                             Max="@(_splitInstallment.Amount - 0.01m)"
+                             FullWidth />
+
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2 mb-2">
+                المتبقي الذي سيتم ترحيله: <b>@GetSplitRemainingDisplay()</b>
+            </MudText>
+
+            <MudTextField T="string"
+                          @bind-Value="_splitReason"
+                          Label="سبب التجزئة / الملاحظة"
+                          Variant="Variant.Outlined"
+                          Lines="3"
+                          FullWidth />
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick='@(() => _splitDialogOpen = false)'>إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="SubmitSplitAsync">حفظ</MudButton>
+    </DialogActions>
+</MudDialog>
+
 @code {
     [CascadingParameter] public IMudDialogInstance MudDialog { get; set; } = null!;
     [Parameter]          public int               LoanId     { get; set; }
@@ -166,6 +208,10 @@
     private LoanDetailDto? _detail;
     private bool           _loading     = true;
     private string         _currentUser = "system";
+    private bool _splitDialogOpen;
+    private InstallmentListDto? _splitInstallment;
+    private decimal _splitCurrentAmount;
+    private string? _splitReason;
 
     protected override async Task OnInitializedAsync()
     {
@@ -191,6 +237,14 @@
             _loading = false;
             StateHasChanged();
         }
+    }
+
+    private void OpenSplitDialog(InstallmentListDto installment)
+    {
+        _splitInstallment = installment;
+        _splitCurrentAmount = installment.Amount;
+        _splitReason = null;
+        _splitDialogOpen = true;
     }
 
      private async Task SkipInstallmentAsync(InstallmentListDto installment)
@@ -224,6 +278,39 @@
                 await OnUpdated.InvokeAsync();
             }
         }
+    }
+
+    private async Task SubmitSplitAsync()
+    {
+        if (_splitInstallment is null)
+            return;
+
+        if (_splitCurrentAmount <= 0 || _splitCurrentAmount >= _splitInstallment.Amount)
+        {
+            Snackbar.Add("أدخل قيمة أقل من مبلغ القسط الحالي وأكبر من صفر", Severity.Warning);
+            return;
+        }
+
+        var result = await LoanService.SplitInstallmentAsync(
+            _splitInstallment.InstallmentId,
+            _splitCurrentAmount,
+            _splitReason ?? string.Empty,
+            _currentUser);
+
+        Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+        if (result.Success)
+        {
+            _splitDialogOpen = false;
+            await LoadDetailAsync();
+            await OnUpdated.InvokeAsync();
+        }
+    }
+
+    private string GetSplitRemainingDisplay()
+    {
+        if (_splitInstallment is null) return "—";
+        var remaining = _splitInstallment.Amount - _splitCurrentAmount;
+        return remaining <= 0 ? "—" : remaining.ToString("N2") + " جـ";
     }
 
     private void Close() => MudDialog.Close();

@@ -2,6 +2,7 @@
 
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Models
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.JSInterop
@@ -19,7 +20,7 @@
 @inject IJSRuntime JS
 
 
-<PageTitle>تفاصيل Lead V2 — CRM</PageTitle>
+<PageTitle>تفاصيل Lead — CRM</PageTitle>
 
 @if (_isLoading)
 {
@@ -780,8 +781,20 @@ else
         <div dir="rtl" style="display:flex;flex-direction:column;gap:1rem;">
 
             <MudAlert Severity="Severity.Info" Dense="true">
-                سيتم إنشاء عميل + فرصة بيع على مرحلة <strong>مهتم</strong>.
+                سيتم إنشاء عميل + فرصة بيع على مرحلة <strong>مهتم</strong>، وسيتم إسناد الفرصة مباشرةً للموظف الذي ستختاره هنا.
             </MudAlert>
+
+            <MudSelect T="int?"
+                       Label="الموظف المسؤول عن الفرصة *"
+                       Variant="MudVariant.Outlined"
+                       @bind-Value="_convertEmployeeId"
+                       Dense="true"
+                       Clearable="false">
+                @foreach (var emp in _assignableEmployees)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)emp.EmployeeId)">@emp.FullName (@(emp.Department ?? "—"))</MudSelectItem>
+                }
+            </MudSelect>
 
             <MudNumericField T="decimal"
                              Label="قيمة الفرصة المتوقعة"
@@ -1307,6 +1320,7 @@ else
     private int? _convertEmployeeId;
     private decimal _convertExpectedValue = 0;
     private string? _convertNotes;
+    private List<Employee> _assignableEmployees = new();
     private List<LeadInteractionDto> _leadInteractions = new();
     private List<InteractionListDto> _opportunityInteractions = new();
 
@@ -1336,6 +1350,7 @@ else
             _currentUserName = user.Identity?.Name ?? "system";
             _canEdit = LeadsCrmPermissions.CanEdit(user);
 
+            await LoadAssignableEmployeesAsync();
             await LoadLeadAsync();
         }
         catch (Exception ex)
@@ -1345,6 +1360,18 @@ else
         finally
         {
             _isLoading = false;
+        }
+    }
+
+    private async Task LoadAssignableEmployeesAsync()
+    {
+        try
+        {
+            _assignableEmployees = await LeadsService.GetAssignableEmployeesAsync();
+        }
+        catch
+        {
+            _assignableEmployees = new();
         }
     }
 
@@ -1494,12 +1521,27 @@ else
         _convertExpectedValue = 0;
         _convertNotes = _lead.Notes;
 
+        if (_convertEmployeeId.HasValue && !_assignableEmployees.Any(e => e.EmployeeId == _convertEmployeeId.Value))
+            _convertEmployeeId = null;
+
         _showConvertDialog = true;
     }
 
     private async Task ConvertLeadAsync()
     {
         if (_lead == null || _isConverting) return;
+
+        if (!_convertEmployeeId.HasValue)
+        {
+            Snackbar.Add("يجب اختيار الموظف الذي ستُسند إليه الفرصة قبل التحويل", Severity.Warning);
+            return;
+        }
+
+        if (!_assignableEmployees.Any(e => e.EmployeeId == _convertEmployeeId.Value))
+        {
+            Snackbar.Add("الموظف المختار غير متاح حاليًا للإسناد", Severity.Warning);
+            return;
+        }
 
         _isConverting = true;
 

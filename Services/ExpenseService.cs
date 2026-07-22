@@ -23,27 +23,41 @@ public class ExpenseService : IExpenseService
     {
         var query = _db.Expenses.AsNoTracking().AsQueryable();
 
+        // ⭐ فلتر المجموعة الرئيسية مستقل ويشمل كل المستويات التابعة لها
+        if (filter.ParentGroupId.HasValue)
+        {
+            var allowedGroupIds = await GetExpenseGroupDescendantIdsAsync(filter.ParentGroupId.Value);
+            allowedGroupIds.Add(filter.ParentGroupId.Value);
+
+            query = query.Where(e => allowedGroupIds.Contains(e.ExpenseGroupId));
+        }
+
+        // ⭐ فلتر النوع المباشر مستقل عن اختيار المجموعة الرئيسية
+        if (filter.ExpenseGroupId.HasValue)
+            query = query.Where(e => e.ExpenseGroupId == filter.ExpenseGroupId.Value);
+
+        // ⭐ بحث نصي يشمل: اسم المصروف + الملاحظات + المستفيد + نوع المصروف + المجموعة/المسار الكامل
         if (!string.IsNullOrWhiteSpace(filter.SearchText))
         {
             var s = filter.SearchText.Trim();
+
+            var groupMap = await _db.ExpenseGroups.AsNoTracking()
+                .Select(g => new { g.ExpenseGroupId, g.ExpenseGroupName, g.ParentGroupId })
+                .ToDictionaryAsync(
+                    g => g.ExpenseGroupId,
+                    g => (Name: g.ExpenseGroupName, ParentId: g.ParentGroupId));
+
+            var matchingGroupIds = groupMap
+                .Where(g => (BuildGroupPathFromDict(g.Key, groupMap) ?? g.Value.Name)
+                    .Contains(s, StringComparison.OrdinalIgnoreCase))
+                .Select(g => g.Key)
+                .ToHashSet();
+
             query = query.Where(e => e.ExpenseName.Contains(s)
                 || (e.Notes != null && e.Notes.Contains(s))
-                || (e.Torecipient != null && e.Torecipient.Contains(s)));
+                || (e.Torecipient != null && e.Torecipient.Contains(s))
+                || matchingGroupIds.Contains(e.ExpenseGroupId));
         }
-
-        // ⭐ فلتر المجموعة الرئيسية (يجيب كل الأنواع اللي تحتها)
-        if (filter.ParentGroupId.HasValue)
-        {
-            var subGroupIds = _db.ExpenseGroups
-                .Where(g => g.ParentGroupId == filter.ParentGroupId.Value)
-                .Select(g => g.ExpenseGroupId).ToList();
-            
-            query = query.Where(e => subGroupIds.Contains(e.ExpenseGroupId) || e.ExpenseGroupId == filter.ParentGroupId.Value);
-        }
-
-        // ⭐ فلتر النوع المباشر
-        if (filter.ExpenseGroupId.HasValue)
-            query = query.Where(e => e.ExpenseGroupId == filter.ExpenseGroupId.Value);
             
         if (filter.CashBoxId.HasValue)
             query = query.Where(e => e.CashBoxId == filter.CashBoxId.Value);
@@ -750,6 +764,37 @@ public class ExpenseService : IExpenseService
         parent.Children = all.Where(x => x.ParentGroupId == parent.ExpenseGroupId).ToList();
         foreach (var child in parent.Children)
             BuildChildren(child, all);
+    }
+
+    private async Task<HashSet<int>> GetExpenseGroupDescendantIdsAsync(int parentGroupId)
+    {
+        var allGroups = await _db.ExpenseGroups.AsNoTracking()
+            .Select(g => new { g.ExpenseGroupId, g.ParentGroupId })
+            .ToListAsync();
+
+        var childrenLookup = allGroups
+            .Where(g => g.ParentGroupId.HasValue)
+            .GroupBy(g => g.ParentGroupId!.Value)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.ExpenseGroupId).ToList());
+
+        var result = new HashSet<int>();
+        var stack = new Stack<int>();
+        stack.Push(parentGroupId);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (!childrenLookup.TryGetValue(current, out var children))
+                continue;
+
+            foreach (var childId in children)
+            {
+                if (result.Add(childId))
+                    stack.Push(childId);
+            }
+        }
+
+        return result;
     }
 
     public async Task<ExpenseGroupDto?> GetExpenseGroupByIdAsync(int id)

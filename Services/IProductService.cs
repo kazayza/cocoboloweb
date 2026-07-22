@@ -6,12 +6,14 @@ public interface IProductService
     
     Task FactorySetCostAsync(
         int productId,
+        decimal? cClassCost,
         decimal? premiumCost,
         decimal? eliteCost,
         string currentUsername);
 
     Task RequestSalePriceChangeAsync(
         int productId,
+        decimal? newCClassSalePrice,
         decimal newPremiumSalePrice,
         decimal? newEliteSalePrice,
         string currentUsername);
@@ -30,9 +32,10 @@ public interface IProductService
         string currentUsername);
 
     Task ApproveCostChangeAsync(
-        int productId, 
-        decimal? newPremiumCost, 
-        decimal? newEliteCost, 
+        int productId,
+        decimal? newCClassCost,
+        decimal? newPremiumCost,
+        decimal? newEliteCost,
         string currentUsername);
     // ============================
 // ✅ دوال مدة التصنيع وملاحظات التصنيع

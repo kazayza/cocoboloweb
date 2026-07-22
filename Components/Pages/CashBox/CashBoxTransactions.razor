@@ -1,10 +1,12 @@
 @page "/cashbox/transactions"
+@implements IDisposable
 
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
 @using System.Globalization
 @using ClosedXML.Excel 
 @using System.IO
+@using System.Text.Json
 
 @inject ICashBoxService CashBoxService
 @inject NavigationManager Navigation
@@ -128,7 +130,7 @@ else
     <!-- ⭐ FILTER BAR                                                           -->
     <!-- ═══════════════════════════════════════════════════════════════════════ -->
     <div class="filter-panel">
-        <div class="fp-header" @onclick="() => _filterExpanded = !_filterExpanded">
+        <div class="fp-header" @onclick="ToggleFilterPanelAsync">
             <div class="fp-header-right">
                 <div class="fp-icon-box"><MudIcon Icon="@Icons.Material.Filled.FilterList" Size="Size.Small" /></div>
                 <span class="fp-title">بحث وتصفية</span>
@@ -553,11 +555,16 @@ else
     [SupplyParameterFromQuery(Name = "cashBoxId")]
     public int? PreCashBoxId { get; set; }
 
+    private const string FilterStorageKey = "cashbox_transactions_filter_state";
+
     private bool _isLoading = true;
     private bool _isTableLoading = false;
     private bool _filterExpanded = true;
+    private bool _didInitialLoad = false;
+    private bool _disposed = false;
     private string _searchDisplay = "";
 
+    private readonly System.Threading.SemaphoreSlim _loadLock = new(1, 1);
     private CashBoxTransactionFilterDto _filter = new();
     private PagedResult<CashBoxTransactionDto> _pagedResult = new();
     private List<CashBoxListDto> _boxes = new();
@@ -576,29 +583,142 @@ else
 
         _canAdd = user.HasClaim("Permission", "frm_CashBoxManual:Add") || user.IsInRole("Admin");
         _boxes = await CashBoxService.GetCashBoxesAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _didInitialLoad)
+            return;
+
+        _didInitialLoad = true;
+        await RestoreFilterStateAsync();
 
         if (PreCashBoxId.HasValue)
             _filter.CashBoxId = PreCashBoxId;
 
+        _dateFrom = _filter.DateFrom;
+        _dateTo = _filter.DateTo;
+        _searchDisplay = _filter.SearchText ?? string.Empty;
+
         await LoadData();
         _isLoading = false;
+        StateHasChanged();
     }
 
-        private async Task LoadData()
+    private async Task LoadData()
     {
-        _isTableLoading = true;
-        StateHasChanged();
-        
-        // 1. جلب البيانات المعروضة في الجدول للصفحة الحالية
-        _pagedResult = await CashBoxService.GetTransactionsAsync(_filter);
-        
-        // 2. جلب إجمالي المبالغ من الداتابيز لكل الصفحات (الحل الخاص بنا)
-        var totals = await CashBoxService.GetTransactionsTotalsAsync(_filter);
-        _totalIn = totals.TotalIn;
-        _totalOut = totals.TotalOut;
-        
-        _isTableLoading = false;
-        StateHasChanged();
+        if (_disposed)
+            return;
+
+        var lockTaken = false;
+        try
+        {
+            await _loadLock.WaitAsync();
+            lockTaken = true;
+
+            if (_disposed)
+                return;
+
+            _isTableLoading = true;
+            await InvokeAsync(StateHasChanged);
+
+            var filterSnapshot = CloneFilter(_filter);
+            var result = await CashBoxService.GetTransactionsAsync(filterSnapshot);
+            var totals = await CashBoxService.GetTransactionsTotalsAsync(filterSnapshot);
+
+            if (_disposed)
+                return;
+
+            _pagedResult = result;
+            _totalIn = totals.TotalIn;
+            _totalOut = totals.TotalOut;
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            if (!_disposed)
+                Snackbar.Add($"خطأ أثناء تحميل حركات الخزينة: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            if (!_disposed)
+            {
+                _isTableLoading = false;
+                await InvokeAsync(StateHasChanged);
+            }
+
+            if (lockTaken)
+                _loadLock.Release();
+        }
+    }
+
+    private async Task RestoreFilterStateAsync()
+    {
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("localStorage.getItem", FilterStorageKey);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            var saved = JsonSerializer.Deserialize<CashBoxTransactionFilterState>(json);
+            if (saved is null)
+                return;
+
+            _filter = new CashBoxTransactionFilterDto
+            {
+                SearchText = saved.SearchText,
+                CashBoxId = saved.CashBoxId,
+                TransactionType = saved.TransactionType,
+                ReferenceType = saved.ReferenceType,
+                DateFrom = saved.DateFrom,
+                DateTo = saved.DateTo,
+                AmountFrom = saved.AmountFrom,
+                AmountTo = saved.AmountTo,
+                PageNumber = saved.PageNumber > 0 ? saved.PageNumber : 1,
+                PageSize = saved.PageSize > 0 ? saved.PageSize : 25,
+                SortBy = string.IsNullOrWhiteSpace(saved.SortBy) ? "TransactionDate" : saved.SortBy,
+                SortDescending = saved.SortDescending
+            };
+
+            _filterExpanded = saved.FilterExpanded;
+        }
+        catch
+        {
+            _filter = new CashBoxTransactionFilterDto();
+        }
+    }
+
+    private async Task SaveFilterStateAsync()
+    {
+        try
+        {
+            var state = new CashBoxTransactionFilterState
+            {
+                SearchText = _filter.SearchText,
+                CashBoxId = _filter.CashBoxId,
+                TransactionType = _filter.TransactionType,
+                ReferenceType = _filter.ReferenceType,
+                DateFrom = _filter.DateFrom,
+                DateTo = _filter.DateTo,
+                AmountFrom = _filter.AmountFrom,
+                AmountTo = _filter.AmountTo,
+                PageNumber = _filter.PageNumber,
+                PageSize = _filter.PageSize,
+                SortBy = _filter.SortBy,
+                SortDescending = _filter.SortDescending,
+                FilterExpanded = _filterExpanded
+            };
+
+            var json = JsonSerializer.Serialize(state);
+            await JS.InvokeVoidAsync("localStorage.setItem", FilterStorageKey, json);
+        }
+        catch
+        {
+            // ignore browser storage errors
+        }
     }
 
     // Search with Arabic normalize + debounce
@@ -614,7 +734,13 @@ else
         _searchTimer.Elapsed += async (_, _) =>
         {
             _searchTimer?.Stop();
-            await InvokeAsync(async () => { _filter.PageNumber = 1; await LoadData(); StateHasChanged(); });
+            await InvokeAsync(async () =>
+            {
+                _filter.PageNumber = 1;
+                await SaveFilterStateAsync();
+                await LoadData();
+                StateHasChanged();
+            });
         };
         _searchTimer.AutoReset = false;
         _searchTimer.Start();
@@ -625,6 +751,7 @@ else
         _searchDisplay = "";
         _filter.SearchText = "";
         _filter.PageNumber = 1;
+        await SaveFilterStateAsync();
         await LoadData();
     }
 
@@ -638,23 +765,53 @@ else
     private async Task OnFilterChange()
     {
         _filter.PageNumber = 1;
+        await SaveFilterStateAsync();
         await LoadData();
     }
 
     private async Task OnPageChanged(int p)
     {
         _filter.PageNumber = p;
+        await SaveFilterStateAsync();
         await LoadData();
     }
 
     private async Task ResetFilters()
     {
         _searchDisplay = "";
-        _filter = new();
-        _dateFrom = null; _dateTo = null;
+        _filter = new CashBoxTransactionFilterDto();
+        _dateFrom = null;
+        _dateTo = null;
         if (PreCashBoxId.HasValue) _filter.CashBoxId = PreCashBoxId;
+        await SaveFilterStateAsync();
         await LoadData();
     }
+
+    private async Task ToggleFilterPanelAsync()
+    {
+        _filterExpanded = !_filterExpanded;
+        await SaveFilterStateAsync();
+    }
+
+    private CashBoxTransactionFilterDto CloneFilter(CashBoxTransactionFilterDto source)
+    {
+        return new CashBoxTransactionFilterDto
+        {
+            SearchText = source.SearchText,
+            CashBoxId = source.CashBoxId,
+            TransactionType = source.TransactionType,
+            ReferenceType = source.ReferenceType,
+            DateFrom = source.DateFrom,
+            DateTo = source.DateTo,
+            AmountFrom = source.AmountFrom,
+            AmountTo = source.AmountTo,
+            PageNumber = source.PageNumber,
+            PageSize = source.PageSize,
+            SortBy = source.SortBy,
+            SortDescending = source.SortDescending
+        };
+    }
+
     private bool _isExporting = false;
 
 private async Task ExportToExcelAsync()
@@ -756,5 +913,37 @@ private async Task ExportToExcelAsync()
     }
 }
 
+    public void Dispose()
+    {
+        _disposed = true;
+
+        try
+        {
+            _searchTimer?.Stop();
+            _searchTimer?.Dispose();
+            _loadLock.Dispose();
+        }
+        catch
+        {
+        }
+    }
+
     private string FormatMoney(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+
+    private sealed class CashBoxTransactionFilterState
+    {
+        public string? SearchText { get; set; }
+        public int? CashBoxId { get; set; }
+        public string? TransactionType { get; set; }
+        public string? ReferenceType { get; set; }
+        public DateTime? DateFrom { get; set; }
+        public DateTime? DateTo { get; set; }
+        public decimal? AmountFrom { get; set; }
+        public decimal? AmountTo { get; set; }
+        public int PageNumber { get; set; }
+        public int PageSize { get; set; }
+        public string? SortBy { get; set; }
+        public bool SortDescending { get; set; }
+        public bool FilterExpanded { get; set; } = true;
+    }
 }

@@ -1,0 +1,1781 @@
+@page "/crm/leads/intelligence"
+
+@using global::COCOBOLOERPNEW.DTOs
+@using global::COCOBOLOERPNEW.Models
+@using global::COCOBOLOERPNEW.Services
+@using ApexCharts
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using System.Globalization
+@using MudColor = MudBlazor.Color
+@using MudSize = MudBlazor.Size
+@using MudVariant = MudBlazor.Variant
+
+@attribute [Authorize]
+
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+
+<PageTitle>Lead Intelligence 360</PageTitle>
+
+@if (_unauthorized)
+{
+    <div class="l360-empty-page" dir="rtl">
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+            غير مصرح لك بالوصول إلى شاشة التحليل المتقدم للـ Leads.
+        </MudAlert>
+    </div>
+}
+else if (_isLoading)
+{
+    <div class="l360-loading" dir="rtl">
+        <MudProgressCircular Color="MudColor.Primary" Size="MudSize.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تجهيز التحليل التجاري المتقدم...</MudText>
+    </div>
+}
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="l360-empty-page" dir="rtl">
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+            حدث خطأ أثناء تحميل الشاشة:
+            <br />
+            @_loadError
+        </MudAlert>
+        <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" Class="ma-4" OnClick="LoadDataAsync">
+            إعادة المحاولة
+        </MudButton>
+    </div>
+}
+else
+{
+<div class="l360-page" dir="rtl">
+
+    <div class="l360-hero">
+        <div class="l360-hero-bg"></div>
+        <div class="l360-hero-grid"></div>
+
+        <div class="l360-hero-body">
+            <div class="l360-hero-top">
+                <div class="l360-title-wrap">
+                    <div class="l360-title-icon">
+                        <MudIcon Icon="@Icons.Material.Rounded.AutoGraph" Style="font-size:1.5rem" />
+                    </div>
+                    <div>
+                        <h1>Lead Intelligence 360</h1>
+                        <p>ربط احترافي بين الـ Leads والـ CRM وعروض الأسعار والفواتير في شاشة واحدة</p>
+                    </div>
+                </div>
+
+                <div class="l360-hero-actions">
+                    <button class="hero-btn" @onclick="GoToClassicDashboard">
+                        <MudIcon Icon="@Icons.Material.Rounded.Dashboard" Size="MudSize.Small" />
+                        لوحة Leads الأساسية
+                    </button>
+                    <button class="hero-btn hero-btn-ghost" @onclick="GoBack">
+                        <MudIcon Icon="@Icons.Material.Rounded.ArrowBack" Size="MudSize.Small" />
+                        رجوع
+                    </button>
+                </div>
+            </div>
+
+            <div class="l360-period-row">
+                @foreach (var p in _periods)
+                {
+                    <button class="period-chip @(_selectedPeriod == p.Key ? "on" : "")"
+                            @onclick="@(async () => await SelectPeriodAsync(p.Key))">
+                        @p.Value
+                    </button>
+                }
+
+                @if (_selectedPeriod == "custom")
+                {
+                    <MudDatePicker Label="من" Variant="MudVariant.Outlined" @bind-Date="_filter.DateFrom" Dense="true" Class="period-date" />
+                    <MudDatePicker Label="إلى" Variant="MudVariant.Outlined" @bind-Date="_filter.DateTo" Dense="true" Class="period-date" />
+                    <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" OnClick="ApplyCustomPeriodAsync" Size="MudSize.Small">تطبيق</MudButton>
+                }
+            </div>
+
+            <div class="l360-quick-filters">
+                <div class="qf-group">
+                    <span class="qf-label">المنصة:</span>
+                    <button class="qf-btn @(_filter.Platform == null ? "on" : "")" @onclick="@(async () => await SetPlatformAsync(null))">الكل</button>
+                    <button class="qf-btn @(_filter.Platform == "fb" ? "on" : "")" @onclick="@(async () => await SetPlatformAsync("fb"))">Facebook</button>
+                    <button class="qf-btn @(_filter.Platform == "ig" ? "on" : "")" @onclick="@(async () => await SetPlatformAsync("ig"))">Instagram</button>
+                </div>
+
+                <div class="qf-group qf-group-select">
+                    <span class="qf-label">الموظف:</span>
+                    <MudSelect T="int?" Value="_filter.EmployeeId"
+                               ValueChanged="@(async (int? v) => { _filter.EmployeeId = v; await LoadDataAsync(); })"
+                               Dense="true" Clearable="true" Placeholder="الكل" Class="qf-select">
+                        @foreach (var emp in _employees)
+                        {
+                            <MudSelectItem Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </div>
+
+                <button class="adv-toggle" @onclick="@(() => _showAdvanced = !_showAdvanced)">
+                    <MudIcon Icon="@(_showAdvanced ? Icons.Material.Rounded.ExpandLess : Icons.Material.Rounded.ExpandMore)" Size="MudSize.Small" />
+                    فلاتر متقدمة
+                </button>
+            </div>
+
+            @if (_showAdvanced)
+            {
+                <div class="advanced-panel">
+                    <div class="advanced-head">
+                        <h3>الفلاتر المتقدمة</h3>
+                        <p>اضبط المدينة، نوع المشروع، مرحلته، والحملة لربط رحلة الـ Lead بالكامل.</p>
+                    </div>
+
+                    <div class="advanced-grid">
+                        <MudSelect T="string" Label="المدينة" Variant="MudVariant.Outlined" @bind-Value="_filter.City" Dense="true" Class="adv-item" Clearable="true" Placeholder="الكل">
+                            @foreach (var c in _availableCities)
+                            {
+                                <MudSelectItem Value="@c">@c</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudSelect T="string" Label="نوع المشروع" Variant="MudVariant.Outlined" @bind-Value="_filter.ProjectType" Dense="true" Class="adv-item" Clearable="true" Placeholder="الكل">
+                            @foreach (var p in _availableProjectTypes)
+                            {
+                                <MudSelectItem Value="@p">@p</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudSelect T="string" Label="مرحلة المشروع" Variant="MudVariant.Outlined" @bind-Value="_filter.ProjectStage" Dense="true" Class="adv-item" Clearable="true" Placeholder="الكل">
+                            @foreach (var s in _availableProjectStages)
+                            {
+                                <MudSelectItem Value="@s">@s</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudSelect T="string" Label="الحملة" Variant="MudVariant.Outlined" @bind-Value="_filter.CampaignName" Dense="true" Class="adv-item" Clearable="true" Placeholder="الكل">
+                            @foreach (var c in _availableCampaigns)
+                            {
+                                <MudSelectItem Value="@c">@c</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </div>
+
+                    <div class="advanced-actions">
+                        <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" OnClick="LoadDataAsync" StartIcon="@Icons.Material.Rounded.FilterAlt">تطبيق التحليل</MudButton>
+                        <MudButton Variant="MudVariant.Outlined" Color="MudColor.Error" OnClick="ResetFiltersAsync" StartIcon="@Icons.Material.Rounded.FilterAltOff">مسح الكل</MudButton>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="phase-strip">
+        <div class="phase-step active">
+            <span class="phase-no">1</span>
+            <div>
+                <strong>مرحلة الـ Lead</strong>
+                <small>الجودة والرفض والتحويل الأولي</small>
+            </div>
+        </div>
+        <div class="phase-arrow">←</div>
+        <div class="phase-step active">
+            <span class="phase-no">2</span>
+            <div>
+                <strong>مرحلة الـ CRM والعروض</strong>
+                <small>الفرصة، عرض السعر، والرفض بعد العرض</small>
+            </div>
+        </div>
+        <div class="phase-arrow">←</div>
+        <div class="phase-step active">
+            <span class="phase-no">3</span>
+            <div>
+                <strong>مرحلة الفاتورة والإيراد</strong>
+                <small>الفاتورة الفعلية والقيمة النهائية</small>
+            </div>
+        </div>
+    </div>
+
+    <section class="phase-card">
+        <div class="phase-header">
+            <div>
+                <h2>المرحلة الأولى: جودة الـ Leads والتحويل الأولي</h2>
+                <p>منشأ الرحلة: كم Lead دخل، كم تم رفضه قبل التحويل، وكم تم تحويله فعليًا إلى فرصة.</p>
+            </div>
+        </div>
+
+        <div class="kpi-grid">
+            @RenderKpiCard("إجمالي Leads", _totalLeads.ToString("N0"), "#2563eb", "#dbeafe", null)
+            @RenderKpiCard("مرفوض قبل التحويل", _rejectedLeadsBeforeConversion.ToString("N0"), "#dc2626", "#fee2e2", null)
+            @RenderKpiCard("مكرر", _duplicateLeads.ToString("N0"), "#d97706", "#fef3c7", null)
+            @RenderKpiCard("تم التحويل إلى فرص", _convertedLeads.ToString("N0"), "#7c3aed", "#ede9fe", GetDeltaText(_convertedLeads, _prevConvertedLeads))
+            @RenderKpiCard("معدل التحويل إلى فرص", _leadToOpportunityRate.ToString("F1") + "%", "#0f766e", "#ccfbf1", GetDeltaText(_leadToOpportunityRate, _prevLeadToOpportunityRate))
+            @RenderKpiCard("متوسط أيام التحويل", _avgConversionDays.ToString("F1"), "#475569", "#e2e8f0", GetDeltaTextInverse(_avgConversionDays, _prevAvgConversionDays))
+        </div>
+
+        <div class="chart-card">
+            <div class="chart-title-wrap">
+                <h3>الاتجاه الشهري للـ Leads</h3>
+                <p>إجمالي الـ Leads مقابل المرفوض قبل التحويل والمحول إلى فرصة</p>
+            </div>
+            @if (_phase1Points.Any())
+            {
+                <div class="chart-shell" dir="ltr">
+                    <ApexChart TItem="Phase1Point" Options="_phase1ChartOptions" Height="320">
+                        <ApexPointSeries TItem="Phase1Point" Items="@_phase1Points" Name="Leads" SeriesType="SeriesType.Bar" XValue="x => x.Month" YValue="x => x.Leads" />
+                        <ApexPointSeries TItem="Phase1Point" Items="@_phase1Points" Name="مرفوض قبل التحويل" SeriesType="SeriesType.Bar" XValue="x => x.Month" YValue="x => x.RejectedBeforeConversion" />
+                        <ApexPointSeries TItem="Phase1Point" Items="@_phase1Points" Name="تم التحويل" SeriesType="SeriesType.Line" XValue="x => x.Month" YValue="x => x.Converted" />
+                    </ApexChart>
+                </div>
+            }
+            else
+            {
+                <div class="empty-box">لا توجد بيانات للرسم البياني</div>
+            }
+        </div>
+    </section>
+
+    <section class="phase-card">
+        <div class="phase-header">
+            <div>
+                <h2>المرحلة الثانية: الفرص وعروض الأسعار</h2>
+                <p>ما الذي حصل بعد دخول الـ Lead إلى CRM؟ هل خرج له عرض؟ هل رُفض العرض؟ وهل الفرصة ما زالت مفتوحة أم خسرناها؟</p>
+            </div>
+        </div>
+
+        <div class="kpi-grid">
+            @RenderKpiCard("Leads خرج لها عرض سعر", _quotedLeads.ToString("N0"), "#b45309", "#ffedd5", GetDeltaText(_quotedLeads, _prevQuotedLeads))
+            @RenderKpiCard("معدل التحويل إلى عروض", _opportunityToQuotationRate.ToString("F1") + "%", "#7c3aed", "#ede9fe", GetDeltaText(_opportunityToQuotationRate, _prevOpportunityToQuotationRate))
+            @RenderKpiCard("مرفوض بعد العرض", _rejectedAfterQuoteCount.ToString("N0"), "#dc2626", "#fee2e2", GetDeltaText(_rejectedAfterQuoteCount, _prevRejectedAfterQuoteCount))
+            @RenderKpiCard("خسارة بعد التحويل", _lostAfterConversionCount.ToString("N0"), "#ef4444", "#fee2e2", GetDeltaText(_lostAfterConversionCount, _prevLostAfterConversionCount))
+            @RenderKpiCard("فرص مفتوحة", _openOpportunityCount.ToString("N0"), "#0ea5e9", "#e0f2fe", GetDeltaText(_openOpportunityCount, _prevOpenOpportunityCount))
+            @RenderKpiCard("إجمالي قيمة العروض", FormatMoney(_quotationValue), "#8b5cf6", "#ede9fe", GetDeltaText(_quotationValue, _prevQuotationValue))
+        </div>
+
+        <div class="two-col-grid">
+            <div class="chart-card">
+                <div class="chart-title-wrap">
+                    <h3>الاتجاه الشهري للعروض والرفض والخسارة</h3>
+                    <p>عدد الـ Leads التي خرج منها عرض، وما رفضه العميل، وما انتهى إلى خسارة بعد التحويل</p>
+                </div>
+                @if (_phase2Points.Any())
+                {
+                    <div class="chart-shell" dir="ltr">
+                        <ApexChart TItem="Phase2Point" Options="_phase2ChartOptions" Height="320">
+                            <ApexPointSeries TItem="Phase2Point" Items="@_phase2Points" Name="عروض أسعار" SeriesType="SeriesType.Bar" XValue="x => x.Month" YValue="x => x.Quoted" />
+                            <ApexPointSeries TItem="Phase2Point" Items="@_phase2Points" Name="مرفوض بعد العرض" SeriesType="SeriesType.Bar" XValue="x => x.Month" YValue="x => x.RejectedAfterQuote" />
+                            <ApexPointSeries TItem="Phase2Point" Items="@_phase2Points" Name="خسارة بعد التحويل" SeriesType="SeriesType.Line" XValue="x => x.Month" YValue="x => x.LostAfterConversion" />
+                        </ApexChart>
+                    </div>
+                }
+                else
+                {
+                    <div class="empty-box">لا توجد بيانات للرسم البياني</div>
+                }
+            </div>
+
+            <div class="table-card">
+                <div class="chart-title-wrap">
+                    <h3>أقوى الحملات تجاريًا</h3>
+                    <p>من الـ Lead إلى العرض ثم الفاتورة</p>
+                </div>
+                <MudTable Items="@_campaignRows" Hover="true" Dense="true" Elevation="0" RowsPerPage="8" Breakpoint="Breakpoint.Sm" Class="premium-table">
+                    <HeaderContent>
+                        <MudTh>الحملة</MudTh>
+                        <MudTh>المنصة</MudTh>
+                        <MudTh>Leads</MudTh>
+                        <MudTh>عروض</MudTh>
+                        <MudTh>فواتير</MudTh>
+                        <MudTh>قيمة الفواتير</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="الحملة">@context.CampaignName</MudTd>
+                        <MudTd DataLabel="المنصة">@context.PlatformDisplay</MudTd>
+                        <MudTd DataLabel="Leads"><bdi>@context.TotalLeads</bdi></MudTd>
+                        <MudTd DataLabel="عروض"><bdi>@context.QuotedLeads</bdi></MudTd>
+                        <MudTd DataLabel="فواتير"><bdi>@context.InvoicedLeads</bdi></MudTd>
+                        <MudTd DataLabel="قيمة الفواتير">@FormatMoney(context.InvoiceValue)</MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <div class="empty-box small">لا توجد بيانات للحملات</div>
+                    </NoRecordsContent>
+                </MudTable>
+            </div>
+        </div>
+    </section>
+
+    <section class="phase-card">
+        <div class="phase-header">
+            <div>
+                <h2>المرحلة الثالثة: الفواتير والإيراد</h2>
+                <p>هنا نرى الـ Leads التي وصلت فعليًا إلى فاتورة بيع، وما القيمة الفعلية المحققة، وهل هناك فجوة عن المتوقع؟</p>
+            </div>
+        </div>
+
+        <div class="kpi-grid">
+            @RenderKpiCard("Leads وصلت لفاتورة", _invoicedLeads.ToString("N0"), "#059669", "#d1fae5", GetDeltaText(_invoicedLeads, _prevInvoicedLeads))
+            @RenderKpiCard("معدل التحويل إلى فواتير", _quotationToInvoiceRate.ToString("F1") + "%", "#0f766e", "#ccfbf1", GetDeltaText(_quotationToInvoiceRate, _prevQuotationToInvoiceRate))
+            @RenderKpiCard("إجمالي قيمة الفواتير", FormatMoney(_invoiceValue), "#16a34a", "#dcfce7", GetDeltaText(_invoiceValue, _prevInvoiceValue))
+            @RenderKpiCard("فرص رابحة", _wonLeadCount.ToString("N0"), "#15803d", "#dcfce7", GetDeltaText(_wonLeadCount, _prevWonLeadCount))
+            @RenderKpiCard("القيمة المتوقعة للصفقات الرابحة", FormatMoney(_wonExpectedValue), "#7c3aed", "#ede9fe", GetDeltaText(_wonExpectedValue, _prevWonExpectedValue))
+            @RenderKpiCard("الفرق بين المتوقع والفاتورة", FormatMoney(_invoiceValue - _wonExpectedValue), "#475569", "#e2e8f0", null)
+        </div>
+
+        <div class="two-col-grid">
+            <div class="chart-card">
+                <div class="chart-title-wrap">
+                    <h3>الاتجاه الشهري للعروض والفواتير بالقيمة</h3>
+                    <p>قيمة عروض الأسعار مقابل قيمة الفواتير الفعلية الخارجة من الـ Leads</p>
+                </div>
+                @if (_phase3Points.Any())
+                {
+                    <div class="chart-shell" dir="ltr">
+                        <ApexChart TItem="Phase3Point" Options="_phase3ChartOptions" Height="320">
+                            <ApexPointSeries TItem="Phase3Point" Items="@_phase3Points" Name="قيمة عروض الأسعار" SeriesType="SeriesType.Bar" XValue="x => x.Month" YValue="x => x.QuotationValue" />
+                            <ApexPointSeries TItem="Phase3Point" Items="@_phase3Points" Name="قيمة الفواتير" SeriesType="SeriesType.Bar" XValue="x => x.Month" YValue="x => x.InvoiceValue" />
+                            <ApexPointSeries TItem="Phase3Point" Items="@_phase3Points" Name="عدد الفواتير" SeriesType="SeriesType.Line" XValue="x => x.Month" YValue="x => x.InvoicedCount" />
+                        </ApexChart>
+                    </div>
+                }
+                else
+                {
+                    <div class="empty-box">لا توجد بيانات للرسم البياني</div>
+                }
+            </div>
+
+            <div class="table-card">
+                <div class="chart-title-wrap">
+                    <h3>أفضل الموظفين من الـ Lead إلى الإيراد</h3>
+                    <p>عدد الـ Leads والعروض والفواتير وقيمة الفواتير لكل موظف</p>
+                </div>
+                <MudTable Items="@_employeeRows" Hover="true" Dense="true" Elevation="0" RowsPerPage="8" Breakpoint="Breakpoint.Sm" Class="premium-table">
+                    <HeaderContent>
+                        <MudTh>الموظف</MudTh>
+                        <MudTh>Leads</MudTh>
+                        <MudTh>عروض</MudTh>
+                        <MudTh>فواتير</MudTh>
+                        <MudTh>خسارة</MudTh>
+                        <MudTh>قيمة الفواتير</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="الموظف">@context.EmployeeName</MudTd>
+                        <MudTd DataLabel="Leads"><bdi>@context.TotalLeads</bdi></MudTd>
+                        <MudTd DataLabel="عروض"><bdi>@context.QuotedLeads</bdi></MudTd>
+                        <MudTd DataLabel="فواتير"><bdi>@context.InvoicedLeads</bdi></MudTd>
+                        <MudTd DataLabel="خسارة"><bdi>@context.LostLeads</bdi></MudTd>
+                        <MudTd DataLabel="قيمة الفواتير">@FormatMoney(context.InvoiceValue)</MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <div class="empty-box small">لا توجد بيانات للموظفين</div>
+                    </NoRecordsContent>
+                </MudTable>
+            </div>
+        </div>
+    </section>
+
+    <section class="phase-card">
+        <div class="phase-header">
+            <div>
+                <h2>جدول الربط الكامل لرحلة الـ Lead</h2>
+                <p>تفصيل مباشر يوضح العميل، الفرصة، حالة العرض، الفاتورة، والقيم الحالية طبقًا للربط الموجود الآن في النظام.</p>
+            </div>
+        </div>
+
+        <MudTable Items="@_journeyRows" Hover="true" Dense="true" Elevation="0" RowsPerPage="15" Breakpoint="Breakpoint.Sm" Class="premium-table">
+            <HeaderContent>
+                <MudTh>العميل</MudTh>
+                <MudTh>التاريخ</MudTh>
+                <MudTh>الحالة</MudTh>
+                <MudTh>المرحلة</MudTh>
+                <MudTh>العرض</MudTh>
+                <MudTh>الفاتورة</MudTh>
+                <MudTh>قيمة العرض</MudTh>
+                <MudTh>قيمة الفاتورة</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="العميل">@context.ClientName</MudTd>
+                <MudTd DataLabel="التاريخ"><bdi>@context.CreatedAt.ToString("yyyy/MM/dd")</bdi></MudTd>
+                <MudTd DataLabel="الحالة">@context.Status</MudTd>
+                <MudTd DataLabel="المرحلة">
+                    <span class="stage-pill" style="@($"background:{(string.IsNullOrWhiteSpace(context.StageColor) ? "#64748b" : context.StageColor)};color:#fff;")">@context.StageName</span>
+                </MudTd>
+                <MudTd DataLabel="العرض">@(context.QuotationReference ?? "—")</MudTd>
+                <MudTd DataLabel="الفاتورة">@(context.InvoiceReference ?? "—")</MudTd>
+                <MudTd DataLabel="قيمة العرض">@FormatMoney(context.QuotationValue)</MudTd>
+                <MudTd DataLabel="قيمة الفاتورة">@FormatMoney(context.InvoiceValue)</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <div class="empty-box">لا توجد حالات مطابقة للفلاتر الحالية</div>
+            </NoRecordsContent>
+        </MudTable>
+    </section>
+
+    <section class="journey-note">
+        <div class="note-icon">ℹ️</div>
+        <div>
+            <h4>ملاحظة تشغيلية مهمة</h4>
+            <p>
+                هذا التحليل يعتمد حاليًا على الربط المتاح في النظام: <strong>Lead → ConvertedOpportunityId → Opportunity.QuotationId / TransactionId</strong>.
+                لذلك فهو دقيق جدًا مع الفرص التي لها عرض رئيسي وفاتورة رئيسية واحدة. وعند تفعيل الربط المباشر لاحقًا بين الفرص وكل من عروض الأسعار والفواتير، ستصبح القراءة أدق في حالات تعدد العروض أو تعدد الفواتير.
+            </p>
+        </div>
+    </section>
+
+</div>
+}
+
+@code {
+    private readonly CultureInfo _arCulture = new("ar-EG");
+
+    private bool _isLoading = true;
+    private bool _unauthorized;
+    private string? _loadError;
+    private bool _showAdvanced;
+    private string _selectedPeriod = "month";
+
+    private LeadsDashboardFilterDto _filter = new();
+    private List<Employee> _employees = new();
+    private List<string> _availableCities = new();
+    private List<string> _availableProjectTypes = new();
+    private List<string> _availableProjectStages = new();
+    private List<string> _availableCampaigns = new();
+
+    private int _totalLeads;
+    private int _rejectedLeadsBeforeConversion;
+    private int _duplicateLeads;
+    private int _convertedLeads;
+    private int _quotedLeads;
+    private int _rejectedAfterQuoteCount;
+    private int _lostAfterConversionCount;
+    private int _openOpportunityCount;
+    private int _wonLeadCount;
+    private int _invoicedLeads;
+
+    private double _leadToOpportunityRate;
+    private double _opportunityToQuotationRate;
+    private double _quotationToInvoiceRate;
+    private double _avgConversionDays;
+
+    private int _prevConvertedLeads;
+    private int _prevQuotedLeads;
+    private int _prevRejectedAfterQuoteCount;
+    private int _prevLostAfterConversionCount;
+    private int _prevOpenOpportunityCount;
+    private int _prevWonLeadCount;
+    private int _prevInvoicedLeads;
+    private double _prevLeadToOpportunityRate;
+    private double _prevOpportunityToQuotationRate;
+    private double _prevQuotationToInvoiceRate;
+    private double _prevAvgConversionDays;
+
+    private decimal _quotationValue;
+    private decimal _invoiceValue;
+    private decimal _wonExpectedValue;
+    private decimal _prevQuotationValue;
+    private decimal _prevInvoiceValue;
+    private decimal _prevWonExpectedValue;
+
+    private List<LeadJourneyRow> _currentRows = new();
+    private List<LeadJourneyRow> _journeyRows = new();
+    private List<Phase1Point> _phase1Points = new();
+    private List<Phase2Point> _phase2Points = new();
+    private List<Phase3Point> _phase3Points = new();
+    private List<CampaignJourneyRow> _campaignRows = new();
+    private List<EmployeeJourneyRow> _employeeRows = new();
+
+    private readonly Dictionary<string, string> _periods = new()
+    {
+        { "today", "اليوم" },
+        { "week", "هذا الأسبوع" },
+        { "month", "هذا الشهر" },
+        { "quarter", "ربع سنوي" },
+        { "year", "هذه السنة" },
+        { "all", "الكل" },
+        { "custom", "مخصص" }
+    };
+
+    private ApexChartOptions<Phase1Point> _phase1ChartOptions = new();
+    private ApexChartOptions<Phase2Point> _phase2ChartOptions = new();
+    private ApexChartOptions<Phase3Point> _phase3ChartOptions = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            if (!LeadsCrmPermissions.CanViewDashboard(auth.User))
+            {
+                _unauthorized = true;
+                return;
+            }
+
+            InitChartOptions();
+            await LoadLookupOptionsAsync();
+            await SelectPeriodAsync("month");
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.GetBaseException().Message;
+            Snackbar.Add("تعذّر تحميل شاشة Lead Intelligence 360: " + _loadError, Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void InitChartOptions()
+    {
+        const string font = "Helvetica Neue, Arial, sans-serif";
+
+        _phase1ChartOptions = new ApexChartOptions<Phase1Point>
+        {
+            Chart = MakeChart(font),
+            Colors = new List<string> { "#2563eb", "#dc2626", "#7c3aed" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke { Curve = Curve.Smooth, Width = new List<double> { 0, 0, 3 } },
+            PlotOptions = new PlotOptions { Bar = new PlotOptionsBar { BorderRadius = 6, ColumnWidth = "48%" } },
+            Legend = MakeLegend(),
+            Grid = MakeGrid(),
+            Tooltip = new Tooltip { Shared = true, Intersect = false, Theme = Mode.Dark }
+        };
+
+        _phase2ChartOptions = new ApexChartOptions<Phase2Point>
+        {
+            Chart = MakeChart(font),
+            Colors = new List<string> { "#f59e0b", "#dc2626", "#ef4444" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke { Curve = Curve.Smooth, Width = new List<double> { 0, 0, 3 } },
+            PlotOptions = new PlotOptions { Bar = new PlotOptionsBar { BorderRadius = 6, ColumnWidth = "48%" } },
+            Legend = MakeLegend(),
+            Grid = MakeGrid(),
+            Tooltip = new Tooltip { Shared = true, Intersect = false, Theme = Mode.Dark }
+        };
+
+        _phase3ChartOptions = new ApexChartOptions<Phase3Point>
+        {
+            Chart = MakeChart(font),
+            Colors = new List<string> { "#8b5cf6", "#10b981", "#0f766e" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke { Curve = Curve.Smooth, Width = new List<double> { 0, 0, 3 } },
+            PlotOptions = new PlotOptions { Bar = new PlotOptionsBar { BorderRadius = 6, ColumnWidth = "48%" } },
+            Legend = MakeLegend(),
+            Grid = MakeGrid(),
+            Tooltip = new Tooltip { Shared = true, Intersect = false, Theme = Mode.Dark },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis
+                {
+                    Labels = new YAxisLabels
+                    {
+                        Formatter = @"function(val) { return Number(val).toLocaleString('en-US'); }"
+                    }
+                }
+            }
+        };
+    }
+
+    private async Task LoadLookupOptionsAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        _employees = await db.Employees
+            .AsNoTracking()
+            .Where(e => e.Status == "نشط")
+            .OrderBy(e => e.FullName)
+            .Select(e => new Employee { EmployeeId = e.EmployeeId, FullName = e.FullName })
+            .ToListAsync();
+
+        var baseLeadQuery = db.LeadsCRMs.AsNoTracking().AsQueryable();
+
+        _availableCities = await baseLeadQuery
+            .Where(l => l.City != null && l.City != "")
+            .Select(l => l.City!)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToListAsync();
+
+        _availableProjectTypes = await baseLeadQuery
+            .Where(l => l.ProjectType != null && l.ProjectType != "")
+            .Select(l => l.ProjectType!)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToListAsync();
+
+        _availableProjectStages = await baseLeadQuery
+            .Where(l => l.ProjectStage != null && l.ProjectStage != "")
+            .Select(l => l.ProjectStage!)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToListAsync();
+
+        _availableCampaigns = await baseLeadQuery
+            .Where(l => l.CampaignName != null && l.CampaignName != "")
+            .Select(l => l.CampaignName!)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToListAsync();
+    }
+
+    private async Task LoadDataAsync()
+    {
+        _isLoading = true;
+        _loadError = null;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var current = await LoadSnapshotAsync(_filter);
+            var previous = await LoadSnapshotAsync(_filter.GetPreviousPeriod());
+
+            _currentRows = current;
+            _journeyRows = current
+                .OrderByDescending(x => x.IsInvoiced)
+                .ThenByDescending(x => x.InvoiceValue)
+                .ThenByDescending(x => x.QuotationValue)
+                .ThenByDescending(x => x.CreatedAt)
+                .ToList();
+
+            ComputeCurrentMetrics(current);
+            ComputePreviousMetrics(previous);
+            BuildPhaseCharts(current);
+            BuildCampaignRows(current);
+            BuildEmployeeRows(current);
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.GetBaseException().Message;
+            Snackbar.Add("تعذّر تحميل بيانات التحليل المتقدم: " + _loadError, Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task<List<LeadJourneyRow>> LoadSnapshotAsync(LeadsDashboardFilterDto filter)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var leadQuery = ApplyLeadFilter(db.LeadsCRMs.AsNoTracking(), filter);
+
+        var leads = await leadQuery
+            .Select(l => new LeadSourceRow
+            {
+                LeadId = l.LeadId,
+                FullName = l.FullName,
+                Phone = l.Phone,
+                CampaignName = l.CampaignName,
+                Platform = l.Platform,
+                City = l.City,
+                ProjectType = l.ProjectType,
+                ProjectStage = l.ProjectStage,
+                CreatedAt = l.CreatedAt,
+                ConvertedDate = l.ConvertedDate,
+                LeadStatus = l.LeadStatus,
+                IsDuplicate = l.IsDuplicate,
+                RejectedReason = l.RejectedReason,
+                AssignedEmployeeId = l.AssignedEmployeeId,
+                ConvertedOpportunityId = l.ConvertedOpportunityId
+            })
+            .ToListAsync();
+
+        var oppIds = leads.Where(x => x.ConvertedOpportunityId.HasValue)
+            .Select(x => x.ConvertedOpportunityId!.Value)
+            .Distinct()
+            .ToList();
+
+        var oppMap = new Dictionary<int, OpportunityMiniRow>();
+        var quoteMap = new Dictionary<int, QuotationMiniRow>();
+        var invoiceMap = new Dictionary<int, InvoiceMiniRow>();
+        var employeeMap = new Dictionary<int, string>();
+
+        var employeeIds = leads.Where(x => x.AssignedEmployeeId.HasValue)
+            .Select(x => x.AssignedEmployeeId!.Value)
+            .Distinct()
+            .ToList();
+
+        if (employeeIds.Any())
+        {
+            employeeMap = await db.Employees.AsNoTracking()
+                .Where(e => employeeIds.Contains(e.EmployeeId))
+                .Select(e => new { e.EmployeeId, e.FullName })
+                .ToDictionaryAsync(x => x.EmployeeId, x => x.FullName ?? "—");
+        }
+
+        if (oppIds.Any())
+        {
+            var oppRows = await db.VwSalesOpportunities.AsNoTracking()
+                .Where(o => oppIds.Contains(o.OpportunityId))
+                .Select(o => new OpportunityMiniRow
+                {
+                    OpportunityId = o.OpportunityId,
+                    StageId = o.StageId,
+                    StageName = o.StageNameAr ?? o.StageName ?? "—",
+                    StageColor = o.StageColor ?? "#64748b",
+                    ExpectedValue = o.ExpectedValue ?? 0m,
+                    ClientName = o.ClientName ?? "—",
+                    EmployeeId = o.EmployeeId,
+                    EmployeeName = o.EmployeeName,
+                    QuotationId = o.QuotationId,
+                    TransactionId = o.TransactionId,
+                    LostReasonName = o.LostReasonNameAr ?? o.LostReasonName
+                })
+                .ToListAsync();
+
+            oppMap = oppRows.ToDictionary(x => x.OpportunityId, x => x);
+
+            var quotationIds = oppRows.Where(x => x.QuotationId.HasValue)
+                .Select(x => x.QuotationId!.Value)
+                .Distinct()
+                .ToList();
+
+            if (quotationIds.Any())
+            {
+                var quoteRows = await db.Quotations.AsNoTracking()
+                    .Where(q => quotationIds.Contains(q.QuotationId))
+                    .Select(q => new QuotationMiniRow
+                    {
+                        QuotationId = q.QuotationId,
+                        ReferenceNumber = q.ReferenceNumber,
+                        Status = q.Status,
+                        GrandTotal = q.GrandTotal ?? q.TotalAmount
+                    })
+                    .ToListAsync();
+
+                quoteMap = quoteRows.ToDictionary(x => x.QuotationId, x => x);
+            }
+
+            var invoiceIds = oppRows.Where(x => x.TransactionId.HasValue)
+                .Select(x => x.TransactionId!.Value)
+                .Distinct()
+                .ToList();
+
+            if (invoiceIds.Any())
+            {
+                var invoiceRows = await db.Transactions.AsNoTracking()
+                    .Where(t => invoiceIds.Contains(t.TransactionId) && t.TransactionType == TransactionTypes.Sale)
+                    .Select(t => new InvoiceMiniRow
+                    {
+                        TransactionId = t.TransactionId,
+                        ReferenceNumber = t.ReferenceNumber,
+                        InvoiceStatus = t.InvoiceStatus,
+                        GrandTotal = t.GrandTotal
+                    })
+                    .ToListAsync();
+
+                invoiceMap = invoiceRows.ToDictionary(x => x.TransactionId, x => x);
+            }
+        }
+
+        var rows = new List<LeadJourneyRow>(leads.Count);
+
+        foreach (var lead in leads)
+        {
+            OpportunityMiniRow? opp = null;
+            QuotationMiniRow? quote = null;
+            InvoiceMiniRow? invoice = null;
+
+            if (lead.ConvertedOpportunityId.HasValue)
+            {
+                oppMap.TryGetValue(lead.ConvertedOpportunityId.Value, out opp);
+                if (opp?.QuotationId is int qid)
+                    quoteMap.TryGetValue(qid, out quote);
+                if (opp?.TransactionId is int tid)
+                    invoiceMap.TryGetValue(tid, out invoice);
+            }
+
+            var effectiveEmployeeName = opp?.EmployeeName;
+            if (string.IsNullOrWhiteSpace(effectiveEmployeeName) && lead.AssignedEmployeeId.HasValue && employeeMap.TryGetValue(lead.AssignedEmployeeId.Value, out var empName))
+                effectiveEmployeeName = empName;
+
+            var isPreRejected = !lead.ConvertedOpportunityId.HasValue &&
+                                (!string.IsNullOrWhiteSpace(lead.RejectedReason) || string.Equals(lead.LeadStatus, "مرفوض", StringComparison.OrdinalIgnoreCase));
+            var isConverted = lead.ConvertedOpportunityId.HasValue;
+            var isQuoted = quote is not null;
+            var isInvoiced = invoice is not null;
+            var isRejectedAfterQuote = isQuoted && string.Equals(quote!.Status, "Rejected", StringComparison.OrdinalIgnoreCase);
+            var isLostAfterConversion = opp is not null && (opp.StageId == 4 || opp.StageId == 5);
+            var isOpenOpportunity = opp is not null && !isLostAfterConversion && !isInvoiced && opp.StageId != 3;
+            var isWon = opp is not null && (opp.StageId == 3 || isInvoiced);
+
+            var conversionDays = lead.ConvertedDate.HasValue
+                ? (lead.ConvertedDate.Value.Date - lead.CreatedAt.Date).TotalDays
+                : (double?)null;
+
+            rows.Add(new LeadJourneyRow
+            {
+                LeadId = lead.LeadId,
+                ClientName = !string.IsNullOrWhiteSpace(opp?.ClientName) ? opp!.ClientName : lead.FullName,
+                Phone = lead.Phone,
+                CampaignName = lead.CampaignName,
+                Platform = lead.Platform,
+                City = lead.City,
+                ProjectType = lead.ProjectType,
+                ProjectStage = lead.ProjectStage,
+                CreatedAt = lead.CreatedAt,
+                ConvertedDate = lead.ConvertedDate,
+                LeadStatus = lead.LeadStatus,
+                RejectedReason = lead.RejectedReason,
+                AssignedEmployeeId = lead.AssignedEmployeeId,
+                EmployeeId = opp?.EmployeeId,
+                EmployeeName = effectiveEmployeeName,
+                OpportunityId = opp?.OpportunityId,
+                StageId = opp?.StageId,
+                StageName = opp?.StageName,
+                StageColor = opp?.StageColor,
+                QuotationId = quote?.QuotationId,
+                QuotationReference = quote?.ReferenceNumber,
+                QuotationStatus = quote?.Status,
+                TransactionId = invoice?.TransactionId,
+                InvoiceReference = invoice?.ReferenceNumber,
+                InvoiceStatus = invoice?.InvoiceStatus,
+                IsDuplicate = lead.IsDuplicate,
+                IsPreRejected = isPreRejected,
+                IsConverted = isConverted,
+                IsQuoted = isQuoted,
+                IsRejectedAfterQuote = isRejectedAfterQuote,
+                IsLostAfterConversion = isLostAfterConversion,
+                IsOpenOpportunity = isOpenOpportunity,
+                IsWon = isWon,
+                IsInvoiced = isInvoiced,
+                ConversionDays = conversionDays,
+                ExpectedValue = opp?.ExpectedValue ?? 0m,
+                QuotationValue = quote?.GrandTotal ?? 0m,
+                InvoiceValue = invoice?.GrandTotal ?? 0m,
+                LostReasonName = opp?.LostReasonName
+            });
+        }
+
+        if (filter.EmployeeId.HasValue)
+        {
+            rows = rows
+                .Where(x => x.AssignedEmployeeId == filter.EmployeeId.Value || x.EmployeeId == filter.EmployeeId.Value)
+                .ToList();
+        }
+
+        return rows;
+    }
+
+    private static IQueryable<LeadsCrm> ApplyLeadFilter(IQueryable<LeadsCrm> q, LeadsDashboardFilterDto filter)
+    {
+        if (filter.DateFrom.HasValue)
+            q = q.Where(l => l.CreatedAt >= filter.DateFrom.Value);
+        if (filter.DateTo.HasValue)
+            q = q.Where(l => l.CreatedAt <= filter.DateTo.Value.AddDays(1));
+        if (!string.IsNullOrWhiteSpace(filter.Platform))
+            q = q.Where(l => l.Platform == filter.Platform);
+        if (!string.IsNullOrWhiteSpace(filter.City))
+            q = q.Where(l => l.City == filter.City);
+        if (!string.IsNullOrWhiteSpace(filter.ProjectType))
+            q = q.Where(l => l.ProjectType == filter.ProjectType);
+        if (!string.IsNullOrWhiteSpace(filter.ProjectStage))
+            q = q.Where(l => l.ProjectStage == filter.ProjectStage);
+        if (!string.IsNullOrWhiteSpace(filter.CampaignName))
+            q = q.Where(l => l.CampaignName == filter.CampaignName);
+        return q;
+    }
+
+    private void ComputeCurrentMetrics(List<LeadJourneyRow> rows)
+    {
+        _totalLeads = rows.Count;
+        _rejectedLeadsBeforeConversion = rows.Count(x => x.IsPreRejected);
+        _duplicateLeads = rows.Count(x => x.IsDuplicate);
+        _convertedLeads = rows.Count(x => x.IsConverted);
+        _quotedLeads = rows.Count(x => x.IsQuoted);
+        _rejectedAfterQuoteCount = rows.Count(x => x.IsRejectedAfterQuote);
+        _lostAfterConversionCount = rows.Count(x => x.IsLostAfterConversion);
+        _openOpportunityCount = rows.Count(x => x.IsOpenOpportunity);
+        _wonLeadCount = rows.Count(x => x.IsWon);
+        _invoicedLeads = rows.Count(x => x.IsInvoiced);
+
+        _leadToOpportunityRate = _totalLeads > 0 ? (double)_convertedLeads / _totalLeads * 100d : 0d;
+        _opportunityToQuotationRate = _convertedLeads > 0 ? (double)_quotedLeads / _convertedLeads * 100d : 0d;
+        _quotationToInvoiceRate = _quotedLeads > 0 ? (double)_invoicedLeads / _quotedLeads * 100d : 0d;
+        _avgConversionDays = rows.Where(x => x.ConversionDays.HasValue).Select(x => x.ConversionDays!.Value).DefaultIfEmpty(0).Average();
+
+        _quotationValue = rows.Where(x => x.IsQuoted).Sum(x => x.QuotationValue);
+        _invoiceValue = rows.Where(x => x.IsInvoiced).Sum(x => x.InvoiceValue);
+        _wonExpectedValue = rows.Where(x => x.IsWon).Sum(x => x.ExpectedValue);
+    }
+
+    private void ComputePreviousMetrics(List<LeadJourneyRow> rows)
+    {
+        _prevConvertedLeads = rows.Count(x => x.IsConverted);
+        _prevQuotedLeads = rows.Count(x => x.IsQuoted);
+        _prevRejectedAfterQuoteCount = rows.Count(x => x.IsRejectedAfterQuote);
+        _prevLostAfterConversionCount = rows.Count(x => x.IsLostAfterConversion);
+        _prevOpenOpportunityCount = rows.Count(x => x.IsOpenOpportunity);
+        _prevWonLeadCount = rows.Count(x => x.IsWon);
+        _prevInvoicedLeads = rows.Count(x => x.IsInvoiced);
+
+        var prevTotalLeads = rows.Count;
+        _prevLeadToOpportunityRate = prevTotalLeads > 0 ? (double)_prevConvertedLeads / prevTotalLeads * 100d : 0d;
+        _prevOpportunityToQuotationRate = _prevConvertedLeads > 0 ? (double)_prevQuotedLeads / _prevConvertedLeads * 100d : 0d;
+        _prevQuotationToInvoiceRate = _prevQuotedLeads > 0 ? (double)_prevInvoicedLeads / _prevQuotedLeads * 100d : 0d;
+        _prevAvgConversionDays = rows.Where(x => x.ConversionDays.HasValue).Select(x => x.ConversionDays!.Value).DefaultIfEmpty(0).Average();
+
+        _prevQuotationValue = rows.Where(x => x.IsQuoted).Sum(x => x.QuotationValue);
+        _prevInvoiceValue = rows.Where(x => x.IsInvoiced).Sum(x => x.InvoiceValue);
+        _prevWonExpectedValue = rows.Where(x => x.IsWon).Sum(x => x.ExpectedValue);
+    }
+
+    private void BuildPhaseCharts(List<LeadJourneyRow> rows)
+    {
+        var grouped = rows
+            .GroupBy(x => new DateTime(x.CreatedAt.Year, x.CreatedAt.Month, 1))
+            .OrderBy(x => x.Key)
+            .ToList();
+
+        _phase1Points = grouped.Select(g => new Phase1Point
+        {
+            Month = g.Key.ToString("MMM yyyy", _arCulture),
+            Leads = g.Count(),
+            RejectedBeforeConversion = g.Count(x => x.IsPreRejected),
+            Converted = g.Count(x => x.IsConverted)
+        }).ToList();
+
+        _phase2Points = grouped.Select(g => new Phase2Point
+        {
+            Month = g.Key.ToString("MMM yyyy", _arCulture),
+            Quoted = g.Count(x => x.IsQuoted),
+            RejectedAfterQuote = g.Count(x => x.IsRejectedAfterQuote),
+            LostAfterConversion = g.Count(x => x.IsLostAfterConversion)
+        }).ToList();
+
+        _phase3Points = grouped.Select(g => new Phase3Point
+        {
+            Month = g.Key.ToString("MMM yyyy", _arCulture),
+            InvoicedCount = g.Count(x => x.IsInvoiced),
+            QuotationValue = g.Where(x => x.IsQuoted).Sum(x => x.QuotationValue),
+            InvoiceValue = g.Where(x => x.IsInvoiced).Sum(x => x.InvoiceValue)
+        }).ToList();
+    }
+
+    private void BuildCampaignRows(List<LeadJourneyRow> rows)
+    {
+        _campaignRows = rows
+            .GroupBy(x => new { Campaign = string.IsNullOrWhiteSpace(x.CampaignName) ? "بدون حملة" : x.CampaignName!, Platform = NormalizePlatform(x.Platform) })
+            .Select(g => new CampaignJourneyRow
+            {
+                CampaignName = g.Key.Campaign,
+                Platform = g.Key.Platform,
+                TotalLeads = g.Count(),
+                QuotedLeads = g.Count(x => x.IsQuoted),
+                InvoicedLeads = g.Count(x => x.IsInvoiced),
+                InvoiceValue = g.Where(x => x.IsInvoiced).Sum(x => x.InvoiceValue)
+            })
+            .OrderByDescending(x => x.InvoiceValue)
+            .ThenByDescending(x => x.InvoicedLeads)
+            .Take(10)
+            .ToList();
+    }
+
+    private void BuildEmployeeRows(List<LeadJourneyRow> rows)
+    {
+        _employeeRows = rows
+            .GroupBy(x => string.IsNullOrWhiteSpace(x.EmployeeName) ? "غير محدد" : x.EmployeeName!)
+            .Select(g => new EmployeeJourneyRow
+            {
+                EmployeeName = g.Key,
+                TotalLeads = g.Count(),
+                QuotedLeads = g.Count(x => x.IsQuoted),
+                InvoicedLeads = g.Count(x => x.IsInvoiced),
+                LostLeads = g.Count(x => x.IsLostAfterConversion),
+                InvoiceValue = g.Where(x => x.IsInvoiced).Sum(x => x.InvoiceValue)
+            })
+            .OrderByDescending(x => x.InvoiceValue)
+            .ThenByDescending(x => x.InvoicedLeads)
+            .Take(10)
+            .ToList();
+    }
+
+    private async Task SelectPeriodAsync(string period)
+    {
+        _selectedPeriod = period;
+        var today = DateTime.Today;
+
+        switch (period)
+        {
+            case "today":
+                _filter.DateFrom = today;
+                _filter.DateTo = today;
+                break;
+            case "week":
+                _filter.DateFrom = today.AddDays(-(int)today.DayOfWeek);
+                _filter.DateTo = today;
+                break;
+            case "month":
+                _filter.DateFrom = new DateTime(today.Year, today.Month, 1);
+                _filter.DateTo = today;
+                break;
+            case "quarter":
+                var qMonth = ((today.Month - 1) / 3) * 3 + 1;
+                _filter.DateFrom = new DateTime(today.Year, qMonth, 1);
+                _filter.DateTo = today;
+                break;
+            case "year":
+                _filter.DateFrom = new DateTime(today.Year, 1, 1);
+                _filter.DateTo = today;
+                break;
+            case "all":
+                _filter.DateFrom = null;
+                _filter.DateTo = null;
+                break;
+            case "custom":
+                return;
+        }
+
+        await LoadDataAsync();
+    }
+
+    private async Task ApplyCustomPeriodAsync() => await LoadDataAsync();
+
+    private async Task SetPlatformAsync(string? platform)
+    {
+        _filter.Platform = platform;
+        await LoadDataAsync();
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _filter = new LeadsDashboardFilterDto();
+        _showAdvanced = false;
+        await SelectPeriodAsync("month");
+    }
+
+    private RenderFragment RenderKpiCard(string label, string value, string iconColor, string iconBg, string? delta) => @<div class="kpi-card-modern">
+        <div class="kpi-icon-modern" style="@($"background:{iconBg};color:{iconColor}")">●</div>
+        <div class="kpi-content-modern">
+            <div class="kpi-label-modern">@label</div>
+            <div class="kpi-value-modern"><bdi>@value</bdi></div>
+            @if (!string.IsNullOrWhiteSpace(delta))
+            {
+                <div class="kpi-delta-modern">@delta</div>
+            }
+        </div>
+    </div>;
+
+    private static string NormalizePlatform(string? platform) => platform?.ToLowerInvariant() switch
+    {
+        "fb" => "Facebook",
+        "ig" => "Instagram",
+        _ => "أخرى"
+    };
+
+    private string? GetDeltaText(int current, int previous)
+    {
+        if (previous == 0)
+            return current == 0 ? null : "جديد";
+        var change = ((double)(current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string? GetDeltaText(double current, double previous)
+    {
+        if (Math.Abs(previous) < 0.000001)
+            return Math.Abs(current) < 0.000001 ? null : "جديد";
+        var change = ((current - previous) / previous) * 100d;
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string? GetDeltaText(decimal current, decimal previous)
+    {
+        if (previous == 0m)
+            return current == 0m ? null : "جديد";
+        var change = (double)((current - previous) / previous * 100m);
+        return $"{(change > 0 ? "+" : "")}{change:F1}%";
+    }
+
+    private string? GetDeltaTextInverse(double current, double previous)
+    {
+        if (Math.Abs(previous) < 0.000001)
+            return Math.Abs(current) < 0.000001 ? null : "جديد";
+        var change = ((current - previous) / previous) * 100d;
+        return $"{(change <= 0 ? "↓" : "↑")} {Math.Abs(change):F1}%";
+    }
+
+    private static string FormatMoney(decimal value)
+    {
+        if (value >= 1_000_000m) return $"{(value / 1_000_000m):F1}M ج.م";
+        if (value >= 1_000m) return $"{(value / 1_000m):F1}K ج.م";
+        return $"{value:N0} ج.م";
+    }
+
+    private static Chart MakeChart(string fontFamily) => new()
+    {
+        FontFamily = fontFamily,
+        Background = "transparent",
+        Toolbar = new Toolbar { Show = false }
+    };
+
+    private static Grid MakeGrid() => new()
+    {
+        BorderColor = "rgba(148,163,184,.18)"
+    };
+
+    private static Legend MakeLegend() => new()
+    {
+        Position = LegendPosition.Top,
+        HorizontalAlign = ApexCharts.Align.Right,
+        FontSize = "12px",
+        FontWeight = "600"
+    };
+
+    private void GoBack() => Navigation.NavigateTo("/crm/leads");
+    private void GoToClassicDashboard() => Navigation.NavigateTo("/crm/leads/dashboard");
+
+    private sealed class LeadSourceRow
+    {
+        public int LeadId { get; set; }
+        public string FullName { get; set; } = "";
+        public string Phone { get; set; } = "";
+        public string? CampaignName { get; set; }
+        public string? Platform { get; set; }
+        public string? City { get; set; }
+        public string? ProjectType { get; set; }
+        public string? ProjectStage { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? ConvertedDate { get; set; }
+        public string LeadStatus { get; set; } = "";
+        public bool IsDuplicate { get; set; }
+        public string? RejectedReason { get; set; }
+        public int? AssignedEmployeeId { get; set; }
+        public int? ConvertedOpportunityId { get; set; }
+    }
+
+    private sealed class OpportunityMiniRow
+    {
+        public int OpportunityId { get; set; }
+        public int StageId { get; set; }
+        public string StageName { get; set; } = "—";
+        public string StageColor { get; set; } = "#64748b";
+        public decimal ExpectedValue { get; set; }
+        public string ClientName { get; set; } = "—";
+        public int? EmployeeId { get; set; }
+        public string? EmployeeName { get; set; }
+        public int? QuotationId { get; set; }
+        public int? TransactionId { get; set; }
+        public string? LostReasonName { get; set; }
+    }
+
+    private sealed class QuotationMiniRow
+    {
+        public int QuotationId { get; set; }
+        public string? ReferenceNumber { get; set; }
+        public string? Status { get; set; }
+        public decimal GrandTotal { get; set; }
+    }
+
+    private sealed class InvoiceMiniRow
+    {
+        public int TransactionId { get; set; }
+        public string? ReferenceNumber { get; set; }
+        public string? InvoiceStatus { get; set; }
+        public decimal GrandTotal { get; set; }
+    }
+
+    private sealed class LeadJourneyRow
+    {
+        public int LeadId { get; set; }
+        public string ClientName { get; set; } = "";
+        public string? Phone { get; set; }
+        public string? CampaignName { get; set; }
+        public string? Platform { get; set; }
+        public string? City { get; set; }
+        public string? ProjectType { get; set; }
+        public string? ProjectStage { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? ConvertedDate { get; set; }
+        public string? LeadStatus { get; set; }
+        public string? RejectedReason { get; set; }
+        public int? AssignedEmployeeId { get; set; }
+        public int? EmployeeId { get; set; }
+        public string? EmployeeName { get; set; }
+        public int? OpportunityId { get; set; }
+        public int? StageId { get; set; }
+        public string? StageName { get; set; }
+        public string? StageColor { get; set; }
+        public int? QuotationId { get; set; }
+        public string? QuotationReference { get; set; }
+        public string? QuotationStatus { get; set; }
+        public int? TransactionId { get; set; }
+        public string? InvoiceReference { get; set; }
+        public string? InvoiceStatus { get; set; }
+        public bool IsDuplicate { get; set; }
+        public bool IsPreRejected { get; set; }
+        public bool IsConverted { get; set; }
+        public bool IsQuoted { get; set; }
+        public bool IsRejectedAfterQuote { get; set; }
+        public bool IsLostAfterConversion { get; set; }
+        public bool IsOpenOpportunity { get; set; }
+        public bool IsWon { get; set; }
+        public bool IsInvoiced { get; set; }
+        public double? ConversionDays { get; set; }
+        public decimal ExpectedValue { get; set; }
+        public decimal QuotationValue { get; set; }
+        public decimal InvoiceValue { get; set; }
+        public string? LostReasonName { get; set; }
+        public string Status => IsInvoiced ? "تم التحويل لفاتورة" :
+                                IsWon ? "تم البيع" :
+                                IsRejectedAfterQuote ? "مرفوضة بعد عرض" :
+                                IsLostAfterConversion ? "خسارة بعد التحويل" :
+                                IsQuoted ? "تم عمل عرض سعر" :
+                                IsOpenOpportunity ? "قيد التنفيذ" :
+                                IsConverted ? "تم التحويل" :
+                                IsPreRejected ? "مرفوض قبل التحويل" : "Lead جديد";
+    }
+
+    private sealed class Phase1Point
+    {
+        public string Month { get; set; } = "";
+        public decimal Leads { get; set; }
+        public decimal RejectedBeforeConversion { get; set; }
+        public decimal Converted { get; set; }
+    }
+
+    private sealed class Phase2Point
+    {
+        public string Month { get; set; } = "";
+        public decimal Quoted { get; set; }
+        public decimal RejectedAfterQuote { get; set; }
+        public decimal LostAfterConversion { get; set; }
+    }
+
+    private sealed class Phase3Point
+    {
+        public string Month { get; set; } = "";
+        public decimal InvoicedCount { get; set; }
+        public decimal QuotationValue { get; set; }
+        public decimal InvoiceValue { get; set; }
+    }
+
+    private sealed class CampaignJourneyRow
+    {
+        public string CampaignName { get; set; } = "بدون حملة";
+        public string Platform { get; set; } = "أخرى";
+        public string PlatformDisplay => Platform;
+        public int TotalLeads { get; set; }
+        public int QuotedLeads { get; set; }
+        public int InvoicedLeads { get; set; }
+        public decimal InvoiceValue { get; set; }
+    }
+
+    private sealed class EmployeeJourneyRow
+    {
+        public string EmployeeName { get; set; } = "غير محدد";
+        public int TotalLeads { get; set; }
+        public int QuotedLeads { get; set; }
+        public int InvoicedLeads { get; set; }
+        public int LostLeads { get; set; }
+        public decimal InvoiceValue { get; set; }
+    }
+}
+
+<style>
+    .l360-page {
+        max-width: 1600px;
+        margin: 0 auto;
+        padding: 1rem 1rem 3rem;
+    }
+
+    .l360-loading,
+    .l360-empty-page {
+        min-height: 60vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+    }
+
+    .l360-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 24px;
+        background: linear-gradient(135deg, #0f172a 0%, #312e81 45%, #4f46e5 100%);
+        margin-bottom: 1rem;
+        box-shadow: 0 18px 40px rgba(15,23,42,.18);
+    }
+
+    .l360-hero-bg {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at top right, rgba(255,255,255,.18), transparent 35%), radial-gradient(circle at bottom left, rgba(255,255,255,.12), transparent 28%);
+    }
+
+    .l360-hero-grid {
+        position: absolute;
+        inset: 0;
+        background-image: linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px);
+        background-size: 28px 28px;
+        opacity: .25;
+    }
+
+    .l360-hero-body {
+        position: relative;
+        z-index: 2;
+        padding: 1.5rem;
+        color: #fff;
+    }
+
+    .l360-hero-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .l360-title-wrap {
+        display: flex;
+        align-items: center;
+        gap: .9rem;
+    }
+
+    .l360-title-icon {
+        width: 52px;
+        height: 52px;
+        border-radius: 16px;
+        background: rgba(255,255,255,.12);
+        border: 1px solid rgba(255,255,255,.22);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        backdrop-filter: blur(12px);
+    }
+
+    .l360-title-wrap h1 {
+        margin: 0;
+        font-size: 1.6rem;
+        font-weight: 900;
+    }
+
+    .l360-title-wrap p {
+        margin: .25rem 0 0;
+        color: rgba(255,255,255,.82);
+        font-size: .9rem;
+    }
+
+    .l360-hero-actions {
+        display: flex;
+        gap: .5rem;
+        flex-wrap: wrap;
+    }
+
+    .hero-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: .45rem;
+        padding: .65rem 1rem;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,.25);
+        background: rgba(255,255,255,.12);
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all .2s ease;
+        backdrop-filter: blur(8px);
+    }
+
+    .hero-btn:hover {
+        background: rgba(255,255,255,.2);
+        transform: translateY(-1px);
+    }
+
+    .hero-btn-ghost {
+        background: rgba(255,255,255,.06);
+    }
+
+    .l360-period-row {
+        display: flex;
+        align-items: center;
+        gap: .4rem;
+        margin-top: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .period-chip {
+        padding: .45rem .9rem;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,.2);
+        background: rgba(255,255,255,.06);
+        color: rgba(255,255,255,.8);
+        font-size: .82rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all .15s ease;
+    }
+
+    .period-chip.on {
+        background: rgba(255,255,255,.22);
+        color: #fff;
+        border-color: rgba(255,255,255,.38);
+    }
+
+    .period-date {
+        width: 145px;
+    }
+
+    .l360-quick-filters {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin-top: .9rem;
+    }
+
+    .qf-group {
+        display: flex;
+        align-items: center;
+        gap: .35rem;
+        flex-wrap: wrap;
+    }
+
+    .qf-label {
+        font-size: .82rem;
+        font-weight: 700;
+        color: rgba(255,255,255,.86);
+    }
+
+    .qf-btn,
+    .adv-toggle {
+        padding: .4rem .8rem;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08);
+        color: rgba(255,255,255,.8);
+        font-size: .78rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all .15s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: .3rem;
+    }
+
+    .qf-btn.on {
+        background: rgba(255,255,255,.22);
+        color: #fff;
+        border-color: rgba(255,255,255,.38);
+    }
+
+    .qf-select {
+        width: 170px;
+    }
+
+    .advanced-panel {
+        margin-top: 1rem;
+        padding: 1rem;
+        border-radius: 18px;
+        background: rgba(255,255,255,.08);
+        border: 1px solid rgba(255,255,255,.14);
+        backdrop-filter: blur(10px);
+    }
+
+    .advanced-head h3 {
+        margin: 0 0 .25rem;
+        color: #fff;
+        font-size: 1rem;
+        font-weight: 800;
+    }
+
+    .advanced-head p {
+        margin: 0;
+        color: rgba(255,255,255,.84);
+        font-size: .83rem;
+    }
+
+    .advanced-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(180px, 1fr));
+        gap: .75rem;
+        margin-top: 1rem;
+    }
+
+    .adv-item {
+        background: rgba(255,255,255,.14);
+        border-radius: 12px;
+    }
+
+    .advanced-actions {
+        display: flex;
+        gap: .6rem;
+        margin-top: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .phase-strip {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr auto 1fr;
+        gap: .5rem;
+        align-items: center;
+        margin: 1rem 0;
+    }
+
+    .phase-step {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        padding: .9rem 1rem;
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+        box-shadow: 0 2px 10px rgba(0,0,0,.04);
+    }
+
+    .phase-step.active {
+        border-color: rgba(99,102,241,.2);
+        background: linear-gradient(135deg, rgba(99,102,241,.06), rgba(255,255,255,.95));
+    }
+
+    .phase-no {
+        width: 34px;
+        height: 34px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: .9rem;
+        font-weight: 800;
+        flex-shrink: 0;
+    }
+
+    .phase-step strong {
+        display: block;
+        color: var(--mud-palette-text-primary);
+        font-size: .92rem;
+    }
+
+    .phase-step small {
+        color: var(--mud-palette-text-secondary);
+        font-size: .75rem;
+    }
+
+    .phase-arrow {
+        color: #94a3b8;
+        font-size: 1.4rem;
+        font-weight: 900;
+    }
+
+    .phase-card,
+    .table-card,
+    .chart-card,
+    .journey-note {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 20px;
+        box-shadow: 0 4px 18px rgba(0,0,0,.05);
+    }
+
+    .phase-card {
+        padding: 1.15rem;
+        margin-bottom: 1rem;
+    }
+
+    .phase-header h2 {
+        margin: 0 0 .2rem;
+        font-size: 1.15rem;
+        font-weight: 900;
+        color: var(--mud-palette-text-primary);
+    }
+
+    .phase-header p {
+        margin: 0 0 1rem;
+        color: var(--mud-palette-text-secondary);
+        font-size: .84rem;
+        line-height: 1.7;
+    }
+
+    .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+
+    .kpi-card-modern {
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 16px;
+        padding: .9rem 1rem;
+        display: flex;
+        gap: .8rem;
+        align-items: flex-start;
+        background: linear-gradient(180deg, rgba(255,255,255,.95), rgba(248,250,252,.95));
+    }
+
+    .kpi-icon-modern {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-size: 1rem;
+        font-weight: 900;
+    }
+
+    .kpi-label-modern {
+        font-size: .76rem;
+        color: var(--mud-palette-text-secondary);
+        margin-bottom: .2rem;
+    }
+
+    .kpi-value-modern {
+        font-size: 1.1rem;
+        font-weight: 900;
+        color: var(--mud-palette-text-primary);
+        line-height: 1.25;
+    }
+
+    .kpi-delta-modern {
+        margin-top: .25rem;
+        font-size: .72rem;
+        font-weight: 700;
+        color: #64748b;
+    }
+
+    .two-col-grid {
+        display: grid;
+        grid-template-columns: 1.1fr .9fr;
+        gap: 1rem;
+    }
+
+    .chart-card,
+    .table-card {
+        padding: 1rem;
+    }
+
+    .chart-title-wrap h3 {
+        margin: 0 0 .2rem;
+        font-size: 1rem;
+        font-weight: 800;
+        color: var(--mud-palette-text-primary);
+    }
+
+    .chart-title-wrap p {
+        margin: 0 0 .8rem;
+        font-size: .8rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .chart-shell {
+        direction: ltr;
+        text-align: left;
+        width: 100%;
+        overflow: hidden;
+    }
+
+    .chart-shell .apexcharts-canvas,
+    .chart-shell .apexcharts-svg,
+    .chart-shell .apexcharts-graphical,
+    .chart-shell .apexcharts-inner {
+        direction: ltr !important;
+    }
+
+    .chart-shell .apexcharts-tooltip {
+        direction: rtl;
+        text-align: right;
+    }
+
+    .empty-box {
+        min-height: 180px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--mud-palette-text-secondary);
+        text-align: center;
+    }
+
+    .empty-box.small {
+        min-height: 120px;
+    }
+
+    .premium-table {
+        background: transparent;
+    }
+
+    .stage-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: .3rem .7rem;
+        font-size: .72rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .journey-note {
+        display: flex;
+        gap: .85rem;
+        align-items: flex-start;
+        padding: 1rem;
+    }
+
+    .note-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 14px;
+        background: rgba(99,102,241,.12);
+        color: #4f46e5;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-size: 1rem;
+    }
+
+    .journey-note h4 {
+        margin: 0 0 .3rem;
+        color: var(--mud-palette-text-primary);
+        font-size: .95rem;
+        font-weight: 800;
+    }
+
+    .journey-note p {
+        margin: 0;
+        color: var(--mud-palette-text-secondary);
+        line-height: 1.7;
+        font-size: .82rem;
+    }
+
+    @@media (max-width: 1200px) {
+        .advanced-grid,
+        .two-col-grid,
+        .phase-strip {
+            grid-template-columns: 1fr;
+        }
+
+        .phase-arrow {
+            display: none;
+        }
+    }
+
+    @@media (max-width: 800px) {
+        .l360-page {
+            padding: .75rem .75rem 2rem;
+        }
+
+        .l360-hero-body {
+            padding: 1rem;
+        }
+
+        .l360-hero-top,
+        .l360-quick-filters {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .qf-group-select,
+        .qf-select,
+        .period-date {
+            width: 100%;
+        }
+    }
+</style>

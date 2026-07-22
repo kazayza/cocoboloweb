@@ -8,6 +8,7 @@ namespace COCOBOLOERPNEW.DTOs;
 public class PayrollListDto
 {
     public int       PayrollID          { get; set; }
+    public int?      PayrollRunId       { get; set; }
     public int       EmployeeID         { get; set; }
     public string    EmployeeName       { get; set; } = "";
     public string?   Department         { get; set; }
@@ -35,17 +36,21 @@ public class PayrollListDto
     public int       AbsenceDays        { get; set; }
     public int       LateMinutesTotal   { get; set; }
     public bool      IsManualAttendance { get; set; }
+    public string    AttendanceSource   => IsManualAttendance ? "يدوي" : "بصمة";
     public string    LateDisplay        =>
         LateMinutesTotal > 0 ? $"{LateMinutesTotal / 60}س {LateMinutesTotal % 60}د" : "—";
 
     // الحالة
-    public string    PaymentStatus      { get; set; } = "غير مدفوع";
+    public string    PaymentStatus      { get; set; } = PayrollPaymentStatuses.Unpaid;
     public string    StatusColor        => PaymentStatus switch
     {
-        "مدفوع"     => "#10b981",
-        "غير مدفوع" => "#f59e0b",
-        "ملغي"      => "#ef4444",
-        _           => "#94a3b8"
+        PayrollPaymentStatuses.Paid          => "#10b981",
+        PayrollPaymentStatuses.PendingReview => "#f59e0b",
+        PayrollPaymentStatuses.Approved      => "#3b82f6",
+        PayrollPaymentStatuses.Rejected      => "#ef4444",
+        PayrollPaymentStatuses.Unpaid        => "#94a3b8",
+        PayrollPaymentStatuses.Cancelled     => "#64748b",
+        _                                    => "#94a3b8"
     };
     public DateTime? PaymentDate        { get; set; }
     public string?   CreatedBy          { get; set; }
@@ -70,9 +75,15 @@ public class PayrollCalculationDto
         LateMinutesTotal > 0 ? $"{LateMinutesTotal / 60}س {LateMinutesTotal % 60}د" : "لا يوجد";
 
     // خصومات تلقائية (محسوبة من الكود)
-    public decimal  AbsenceDeduction    { get; set; }
-    public decimal  LateDeduction       { get; set; }
-    public decimal  LoanDeduction       { get; set; }
+    public decimal  AutoAbsenceDeduction { get; set; }
+    public decimal  AutoLateDeduction    { get; set; }
+    public decimal  AbsenceDeduction     { get; set; }
+    public decimal  LateDeduction        { get; set; }
+    public decimal  LoanDeduction        { get; set; }
+    public string?  AbsenceOverrideReason { get; set; }
+    public string?  LateOverrideReason    { get; set; }
+    public bool     HasAbsenceOverride    => AbsenceDeduction != AutoAbsenceDeduction;
+    public bool     HasLateOverride       => LateDeduction != AutoLateDeduction;
 
     // بنود السلف التفصيلية (للعرض)
     public List<PayrollDetailDto> LoanItems   { get; set; } = new();
@@ -87,6 +98,7 @@ public class PayrollCalculationDto
     public decimal TotalDeductions      => AbsenceDeduction + LateDeduction + LoanDeduction + TotalPenalties;
     public decimal GrossSalary          => BasicSalary + TotalBonusInPayroll;
     public decimal NetSalary            => GrossSalary - TotalDeductions;
+    public bool HasManualOverrides      => HasAbsenceOverride || HasLateOverride;
 
     // مكافآت خارج الراتب (منفصلة)
     public List<PayrollDetailDto> SeparateBonuses { get; set; } = new();
@@ -112,6 +124,7 @@ public class PayrollDetailDto
         "LateDeduction"      => "خصم تأخير",
         "LoanDeduction"      => "خصم سلفة",
         "Penalty"            => "جزاء",
+        "ManualDeduction"    => "خصم يدوي",
         "Bonus"              => "مكافأة",
         "Commission"         => "عمولة",
         "BonusSeparate"      => "مكافأة (منفصلة)",
@@ -207,17 +220,23 @@ public class PayrollRunDto
     public string    Status          { get; set; } = "Draft";
     public string    StatusAr        => Status switch
     {
-        "Draft"     => "مسودة",
-        "Completed" => "مكتمل",
-        "Cancelled" => "ملغي",
-        _           => Status
+        "Draft"         => "مسودة",
+        "PendingReview" => "قيد المراجعة",
+        "Approved"      => "معتمد",
+        "Rejected"      => "مرفوض",
+        "Completed"     => "مكتمل",
+        "Cancelled"     => "ملغي",
+        _                => Status
     };
     public string    StatusColor     => Status switch
     {
-        "Draft"     => "#f59e0b",
-        "Completed" => "#10b981",
-        "Cancelled" => "#ef4444",
-        _           => "#94a3b8"
+        "Draft"         => "#f59e0b",
+        "PendingReview" => "#f59e0b",
+        "Approved"      => "#3b82f6",
+        "Rejected"      => "#ef4444",
+        "Completed"     => "#10b981",
+        "Cancelled"     => "#64748b",
+        _                => "#94a3b8"
     };
     public int       TotalEmployees  { get; set; }
     public decimal   TotalGross      { get; set; }
@@ -239,17 +258,123 @@ public class PayrollStatsDto
     public decimal TotalSeparateBonuses { get; set; }
     public int     PaidCount            { get; set; }
     public int     PendingCount         { get; set; }
+    public int     ReviewCount          { get; set; }
+    public int     ApprovedCount        { get; set; }
     public decimal AverageNetSalary     { get; set; }
+}
+
+public class OffPayrollPaymentFormDto
+{
+    public int      PayrollID     { get; set; }
+    public int?     EmployeeID    { get; set; }
+    public string   EmployeeName  { get; set; } = "";
+    public string?  Department    { get; set; }
+    public DateTime PaymentDate   { get; set; } = DateTime.Today;
+    public string   PaymentMonth  => PaymentDate.ToString("yyyy-MM");
+    public string   PaymentType   { get; set; } = "BonusSeparate";
+    public string   PaymentTypeAr => PaymentType switch
+    {
+        "BonusSeparate"      => "مكافأة منفصلة",
+        "CommissionSeparate" => "عمولة منفصلة",
+        _                     => "دفعة خارج الراتب"
+    };
+    public decimal  Amount       { get; set; }
+    public string   Description  { get; set; } = "";
+    public string?  Reason       { get; set; }
+}
+
+public class OffPayrollPaymentListDto
+{
+    public int       PayrollID      { get; set; }
+    public int       EmployeeID     { get; set; }
+    public string    EmployeeName   { get; set; } = "";
+    public string?   Department     { get; set; }
+    public string    PayrollMonth   { get; set; } = "";
+    public string    PaymentType    { get; set; } = "BonusSeparate";
+    public string    PaymentTypeAr  => PaymentType switch
+    {
+        "BonusSeparate"      => "مكافأة منفصلة",
+        "CommissionSeparate" => "عمولة منفصلة",
+        _                     => "دفعة خارج الراتب"
+    };
+    public string    Description    { get; set; } = "";
+    public decimal   Amount         { get; set; }
+    public string    PaymentStatus  { get; set; } = PayrollPaymentStatuses.PendingReview;
+    public string    StatusColor    => PaymentStatus switch
+    {
+        PayrollPaymentStatuses.Paid          => "#10b981",
+        PayrollPaymentStatuses.PendingReview => "#f59e0b",
+        PayrollPaymentStatuses.Approved      => "#3b82f6",
+        PayrollPaymentStatuses.Rejected      => "#ef4444",
+        PayrollPaymentStatuses.Unpaid        => "#94a3b8",
+        PayrollPaymentStatuses.Cancelled     => "#64748b",
+        _                                    => "#94a3b8"
+    };
+    public DateTime? RequestedAt    { get; set; }
+    public DateTime? PaidAt         { get; set; }
+    public string?   CreatedBy      { get; set; }
+    public string?   Notes          { get; set; }
+}
+
+public class OffPayrollPaymentStatsDto
+{
+    public decimal TotalAmount   { get; set; }
+    public int     ReviewCount   { get; set; }
+    public int     ApprovedCount { get; set; }
+    public int     PaidCount     { get; set; }
+    public int     RejectedCount { get; set; }
+    public int     CancelledCount { get; set; }
+}
+
+public class OffPayrollPaymentFilterDto
+{
+    public string? Month         { get; set; }
+    public int?    EmployeeID    { get; set; }
+    public string? PaymentType   { get; set; }
+    public string? PaymentStatus { get; set; }
+    public string? SearchText    { get; set; }
+}
+
+public static class PayrollPaymentStatuses
+{
+    public const string PendingReview = "قيد المراجعة";
+    public const string Approved      = "معتمد";
+    public const string Rejected      = "مرفوض";
+    public const string Unpaid        = "غير مدفوع";
+    public const string Paid          = "مدفوع";
+    public const string Cancelled     = "ملغي";
 }
 
 // ── فلاتر ────────────────────────────────────────────────────
 public class PayrollFilterDto
 {
+    // شهر واحد
     public string? PayrollMonth   { get; set; }
+
+    // فترة شهرية (yyyy-MM)
+    public string? MonthFrom      { get; set; }
+    public string? MonthTo        { get; set; }
+
+    // فلاتر رئيسية
+    public int?    PayrollRunId   { get; set; }
     public int?    EmployeeID     { get; set; }
     public string? Department     { get; set; }
+    public string? JobTitle       { get; set; }
     public string? PaymentStatus  { get; set; }
     public string? SearchText     { get; set; }
+
+    // فلاتر متقدمة
+    public bool?   HasLoans         { get; set; }
+    public bool?   HasAbsence       { get; set; }
+    public bool?   HasLate          { get; set; }
+    public string? AttendanceSource { get; set; } // Manual | Biometric
+    public int?    MinLateMinutes   { get; set; }
+    public int?    MaxLateMinutes   { get; set; }
+    public decimal? MinNetSalary    { get; set; }
+    public decimal? MaxNetSalary    { get; set; }
+    public decimal? MinDeductions   { get; set; }
+    public decimal? MaxDeductions   { get; set; }
+
     public int     PageNumber     { get; set; } = 1;
     public int     PageSize       { get; set; } = 20;
 }

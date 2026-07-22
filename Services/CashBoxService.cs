@@ -7,11 +7,13 @@ namespace COCOBOLOERPNEW.Services;
 public class CashBoxService : ICashBoxService
 {
     private readonly db24804Context _db;
+    private readonly IDbContextFactory<db24804Context> _dbFactory;
     private readonly IAuditService _audit;
 
-    public CashBoxService(db24804Context db, IAuditService audit)
+    public CashBoxService(db24804Context db, IDbContextFactory<db24804Context> dbFactory, IAuditService audit)
     {
         _db = db;
+        _dbFactory = dbFactory;
         _audit = audit;
     }
 
@@ -211,53 +213,29 @@ public class CashBoxService : ICashBoxService
     public async Task<PagedResult<CashBoxTransactionDto>> GetTransactionsAsync(
         CashBoxTransactionFilterDto filter)
     {
-        var query = _db.CashboxTransactions.AsNoTracking().AsQueryable();
+        await using var db = await _dbFactory.CreateDbContextAsync();
 
-        if (filter.CashBoxId.HasValue)
-            query = query.Where(t => t.CashBoxId == filter.CashBoxId.Value);
-
-        if (!string.IsNullOrWhiteSpace(filter.TransactionType) && filter.TransactionType != "All")
-            query = query.Where(t => t.TransactionType == filter.TransactionType);
-
-        if (!string.IsNullOrWhiteSpace(filter.ReferenceType))
-            query = query.Where(t => t.ReferenceType == filter.ReferenceType);
-
-        if (filter.DateFrom.HasValue)
-            query = query.Where(t => t.TransactionDate >= filter.DateFrom.Value.Date);
-        if (filter.DateTo.HasValue)
-            query = query.Where(t => t.TransactionDate <= filter.DateTo.Value.Date.AddDays(1).AddTicks(-1));
-
-        if (filter.AmountFrom.HasValue)
-            query = query.Where(t => t.Amount >= filter.AmountFrom.Value);
-        if (filter.AmountTo.HasValue)
-            query = query.Where(t => t.Amount <= filter.AmountTo.Value);
-
-        if (!string.IsNullOrWhiteSpace(filter.SearchText))
-        {
-            var s = filter.SearchText.Trim();
-            query = query.Where(t =>
-                (t.Notes != null && t.Notes.Contains(s)) ||
-                (t.CreatedBy != null && t.CreatedBy.Contains(s))
-            );
-        }
-
+        var query = ApplyTransactionFilters(db, filter);
         var totalCount = await query.CountAsync();
 
-        query = filter.SortDescending
+        var orderedQuery = filter.SortDescending
             ? query.OrderByDescending(t => t.TransactionDate).ThenByDescending(t => t.CashboxTransactionId)
             : query.OrderBy(t => t.TransactionDate).ThenBy(t => t.CashboxTransactionId);
 
-        var raw = await query
+        var pageQuery = orderedQuery
             .Skip((filter.PageNumber - 1) * filter.PageSize)
-            .Take(filter.PageSize)
-            .Select(t => new
+            .Take(filter.PageSize);
+
+        var rawItems = await (
+            from t in pageQuery
+            join c in db.CashBoxes.AsNoTracking() on t.CashBoxId equals c.CashBoxId into cashBoxes
+            from c in cashBoxes.DefaultIfEmpty()
+            select new
             {
                 t.CashboxTransactionId,
                 t.CashBoxId,
-                CashBoxName = _db.CashBoxes.Where(c => c.CashBoxId == t.CashBoxId)
-                    .Select(c => c.CashBoxName).FirstOrDefault() ?? "",
-                CashBoxColor = _db.CashBoxes.Where(c => c.CashBoxId == t.CashBoxId)
-                    .Select(c => c.Color).FirstOrDefault(),
+                CashBoxName = c != null ? c.CashBoxName : string.Empty,
+                CashBoxColor = c != null ? c.Color : null,
                 t.TransactionDate,
                 t.TransactionType,
                 t.Amount,
@@ -270,33 +248,26 @@ public class CashBoxService : ICashBoxService
             })
             .ToListAsync();
 
-        var items = new List<CashBoxTransactionDto>();
-        foreach (var t in raw)
+        var items = rawItems.Select(t => new CashBoxTransactionDto
         {
-            var dto = new CashBoxTransactionDto
-            {
-                CashboxTransactionId = t.CashboxTransactionId,
-                CashBoxId = t.CashBoxId,
-                CashBoxName = t.CashBoxName,
-                CashBoxColor = t.CashBoxColor,
-                TransactionDate = t.TransactionDate,
-                TransactionType = t.TransactionType,
-                Amount = t.Amount,
-                Notes = t.Notes,
-                CreatedBy = t.CreatedBy,
-                CreatedAt = t.CreatedAt,
-                PaymentId = t.PaymentId,
-                ReferenceId = t.ReferenceId,
-                ReferenceType = t.ReferenceType,
-                ReferenceTypeAr = CashBoxRefTypes.All.GetValueOrDefault(t.ReferenceType ?? "", t.ReferenceType ?? "-"),
-                ReferenceColor = CashBoxRefTypes.Colors.GetValueOrDefault(t.ReferenceType ?? "", "#94a3b8")
-            };
+            CashboxTransactionId = t.CashboxTransactionId,
+            CashBoxId = t.CashBoxId,
+            CashBoxName = t.CashBoxName,
+            CashBoxColor = t.CashBoxColor,
+            TransactionDate = t.TransactionDate,
+            TransactionType = t.TransactionType,
+            Amount = t.Amount,
+            Notes = t.Notes,
+            CreatedBy = t.CreatedBy,
+            CreatedAt = t.CreatedAt,
+            PaymentId = t.PaymentId,
+            ReferenceId = t.ReferenceId,
+            ReferenceType = t.ReferenceType,
+            ReferenceTypeAr = CashBoxRefTypes.All.GetValueOrDefault(t.ReferenceType ?? string.Empty, t.ReferenceType ?? "-"),
+            ReferenceColor = CashBoxRefTypes.Colors.GetValueOrDefault(t.ReferenceType ?? string.Empty, "#94a3b8")
+        }).ToList();
 
-            (dto.SourceTitle, dto.SourceUrl, dto.PartyName, dto.PersonalAccountName) =
-                await GetSourceInfoAsync(t.ReferenceType, t.ReferenceId, t.PaymentId);
-
-            items.Add(dto);
-        }
+        await EnrichTransactionsSourceInfoAsync(db, items);
 
         return new PagedResult<CashBoxTransactionDto>
         {
@@ -305,6 +276,213 @@ public class CashBoxService : ICashBoxService
             PageNumber = filter.PageNumber,
             PageSize = filter.PageSize
         };
+    }
+
+    private static IQueryable<CashboxTransaction> ApplyTransactionFilters(db24804Context db, CashBoxTransactionFilterDto filter)
+    {
+        var query = db.CashboxTransactions.AsNoTracking().AsQueryable();
+
+        if (filter.CashBoxId.HasValue)
+            query = query.Where(t => t.CashBoxId == filter.CashBoxId.Value);
+
+        if (!string.IsNullOrWhiteSpace(filter.TransactionType) && filter.TransactionType != "All")
+            query = query.Where(t => t.TransactionType == filter.TransactionType);
+
+        if (!string.IsNullOrWhiteSpace(filter.ReferenceType))
+            query = query.Where(t => t.ReferenceType == filter.ReferenceType);
+
+        if (filter.DateFrom.HasValue)
+            query = query.Where(t => t.TransactionDate >= filter.DateFrom.Value.Date);
+
+        if (filter.DateTo.HasValue)
+            query = query.Where(t => t.TransactionDate <= filter.DateTo.Value.Date.AddDays(1).AddTicks(-1));
+
+        if (filter.AmountFrom.HasValue)
+            query = query.Where(t => t.Amount >= filter.AmountFrom.Value);
+
+        if (filter.AmountTo.HasValue)
+            query = query.Where(t => t.Amount <= filter.AmountTo.Value);
+
+        if (!string.IsNullOrWhiteSpace(filter.SearchText))
+        {
+            var s = filter.SearchText.Trim();
+            query = query.Where(t =>
+                (t.Notes != null && t.Notes.Contains(s)) ||
+                (t.CreatedBy != null && t.CreatedBy.Contains(s))
+            );
+        }
+
+        return query;
+    }
+
+    private static async Task EnrichTransactionsSourceInfoAsync(db24804Context db, List<CashBoxTransactionDto> items)
+    {
+        if (!items.Any())
+            return;
+
+        var invoiceIds = items
+            .Where(x => (x.ReferenceType == CashBoxRefTypes.SaleInvoice || x.ReferenceType == CashBoxRefTypes.PurchaseInvoice) && x.ReferenceId.HasValue)
+            .Select(x => x.ReferenceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var invoices = invoiceIds.Count == 0
+            ? new Dictionary<int, (string? ReferenceNumber, int PartyId)>()
+            : (await db.Transactions.AsNoTracking()
+                .Where(t => invoiceIds.Contains(t.TransactionId))
+                .Select(t => new { t.TransactionId, t.ReferenceNumber, t.PartyId })
+                .ToListAsync())
+                .ToDictionary(x => x.TransactionId, x => (x.ReferenceNumber, x.PartyId));
+
+        var partyIds = invoices.Values
+            .Select(x => x.PartyId)
+            .Distinct()
+            .ToList();
+
+        var parties = partyIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await db.Parties.AsNoTracking()
+                .Where(p => partyIds.Contains(p.PartyId))
+                .ToDictionaryAsync(p => p.PartyId, p => p.PartyName);
+
+        var expenseIds = items
+            .Where(x => x.ReferenceType == CashBoxRefTypes.Expense && x.ReferenceId.HasValue)
+            .Select(x => x.ReferenceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var expenses = expenseIds.Count == 0
+            ? new Dictionary<int, (string ExpenseName, string? Recipient, int? AdvanceParentExpenseId)>()
+            : (await db.Expenses.AsNoTracking()
+                .Where(e => expenseIds.Contains(e.ExpenseId))
+                .Select(e => new { e.ExpenseId, e.ExpenseName, Recipient = e.Torecipient, e.AdvanceParentExpenseId })
+                .ToListAsync())
+                .ToDictionary(x => x.ExpenseId, x => (x.ExpenseName, x.Recipient, x.AdvanceParentExpenseId));
+
+        var payrollIds = items
+            .Where(x => (x.ReferenceType == CashBoxRefTypes.Payroll || x.ReferenceType == CashBoxRefTypes.BonusSeparate || x.ReferenceType == CashBoxRefTypes.CommissionSeparate) && x.ReferenceId.HasValue)
+            .Select(x => x.ReferenceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var payrolls = payrollIds.Count == 0
+            ? new Dictionary<int, (string FullName, string? Notes)>()
+            : (await db.Payrolls.AsNoTracking()
+                .Where(p => payrollIds.Contains(p.PayrollId))
+                .Join(db.Employees.AsNoTracking(), p => p.EmployeeId, e => e.EmployeeId,
+                    (p, e) => new { p.PayrollId, e.FullName, p.Notes })
+                .ToListAsync())
+                .ToDictionary(x => x.PayrollId, x => (x.FullName, x.Notes));
+
+        var personalAccountIds = items
+            .Where(x => x.ReferenceType == CashBoxRefTypes.Loan && x.ReferenceId.HasValue)
+            .Select(x => x.ReferenceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var personalAccounts = personalAccountIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await db.PersonalAccounts.AsNoTracking()
+                .Where(p => personalAccountIds.Contains(p.PersonalAccountId))
+                .ToDictionaryAsync(p => p.PersonalAccountId, p => p.AccountName);
+
+        var transferCashBoxIds = items
+            .Where(x => (x.ReferenceType == CashBoxRefTypes.TransferIn || x.ReferenceType == CashBoxRefTypes.TransferOut) && x.ReferenceId.HasValue)
+            .Select(x => x.ReferenceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var transferCashBoxes = transferCashBoxIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await db.CashBoxes.AsNoTracking()
+                .Where(c => transferCashBoxIds.Contains(c.CashBoxId))
+                .ToDictionaryAsync(c => c.CashBoxId, c => c.CashBoxName);
+
+        foreach (var item in items)
+        {
+            switch (item.ReferenceType)
+            {
+                case CashBoxRefTypes.SaleInvoice:
+                    if (item.ReferenceId.HasValue && invoices.TryGetValue(item.ReferenceId.Value, out var saleInvoice))
+                    {
+                        item.SourceTitle = $"فاتورة {saleInvoice.ReferenceNumber}";
+                        item.SourceUrl = $"/sales/invoices/{item.ReferenceId.Value}";
+                        if (parties.TryGetValue(saleInvoice.PartyId, out var partyName))
+                            item.PartyName = partyName;
+                    }
+                    break;
+
+                case CashBoxRefTypes.PurchaseInvoice:
+                    if (item.ReferenceId.HasValue && invoices.TryGetValue(item.ReferenceId.Value, out var purchaseInvoice))
+                    {
+                        item.SourceTitle = $"فاتورة شراء {purchaseInvoice.ReferenceNumber}";
+                        item.SourceUrl = $"/sales/invoices/{item.ReferenceId.Value}";
+                    }
+                    break;
+
+                case CashBoxRefTypes.Expense:
+                    if (item.ReferenceId.HasValue && expenses.TryGetValue(item.ReferenceId.Value, out var expense))
+                    {
+                        var targetId = expense.AdvanceParentExpenseId ?? item.ReferenceId.Value;
+                        item.SourceTitle = $"مصروف: {expense.ExpenseName}";
+                        item.SourceUrl = $"/expenses/{targetId}/edit";
+                        item.PartyName = expense.Recipient;
+                    }
+                    break;
+
+                case CashBoxRefTypes.Loan:
+                    if (item.ReferenceId.HasValue && personalAccounts.TryGetValue(item.ReferenceId.Value, out var accountName))
+                    {
+                        item.SourceTitle = $"حساب: {accountName}";
+                        item.SourceUrl = $"/cashbox/personal-accounts/{item.ReferenceId.Value}/statement";
+                        item.PersonalAccountName = accountName;
+                    }
+                    break;
+
+                case CashBoxRefTypes.TransferIn:
+                case CashBoxRefTypes.TransferOut:
+                    if (item.ReferenceId.HasValue && transferCashBoxes.TryGetValue(item.ReferenceId.Value, out var cashBoxName))
+                    {
+                        item.SourceTitle = $"تحويل ↔ {cashBoxName}";
+                        item.SourceUrl = $"/cashbox/transactions?cashBoxId={item.ReferenceId.Value}";
+                    }
+                    break;
+
+                case CashBoxRefTypes.Payroll:
+                case CashBoxRefTypes.BonusSeparate:
+                case CashBoxRefTypes.CommissionSeparate:
+                    if (item.ReferenceId.HasValue && payrolls.TryGetValue(item.ReferenceId.Value, out var payroll))
+                    {
+                        var isOffPayroll = payroll.Notes != null && payroll.Notes.Contains("[OFFPAYROLL]");
+                        item.SourceTitle = item.ReferenceType == CashBoxRefTypes.Payroll
+                            ? $"راتب {payroll.FullName}"
+                            : $"دفعة منفصلة {payroll.FullName}";
+                        item.SourceUrl = isOffPayroll ? "/hr/payroll/bonuses" : "/hr/payroll";
+                        item.PartyName = payroll.FullName;
+                    }
+                    break;
+
+                case CashBoxRefTypes.AdvanceCharge:
+                    item.SourceTitle = "رسوم معاينة";
+                    item.SourceUrl = "/additional-charges";
+                    break;
+
+                case CashBoxRefTypes.OpeningBalance:
+                    item.SourceTitle = "رصيد افتتاحي";
+                    item.SourceUrl = "/cashbox/manage";
+                    break;
+
+                case CashBoxRefTypes.ManualReceipt:
+                    item.SourceTitle = "سند قبض يدوي";
+                    item.SourceUrl = "/cashbox/transactions";
+                    break;
+
+                case CashBoxRefTypes.ManualPayment:
+                    item.SourceTitle = "سند صرف يدوي";
+                    item.SourceUrl = "/cashbox/transactions";
+                    break;
+            }
+        }
     }
 
     public async Task<CashBoxTransactionDto?> GetTransactionByIdAsync(int id)
@@ -435,6 +613,29 @@ private async Task<(string? Title, string? Url, string? PartyName, string? Perso
                         return ($"تحويل ↔ {box.CashBoxName}",
                                 $"/cashbox/transactions?cashBoxId={refId.Value}",
                                 null, null);
+                }
+                break;
+
+            case CashBoxRefTypes.Payroll:
+            case CashBoxRefTypes.BonusSeparate:
+            case CashBoxRefTypes.CommissionSeparate:
+                if (refId.HasValue)
+                {
+                    var payroll = await _db.Payrolls.AsNoTracking()
+                        .Where(p => p.PayrollId == refId.Value)
+                        .Join(_db.Employees.AsNoTracking(), p => p.EmployeeId, e => e.EmployeeId,
+                            (p, e) => new { p.PayrollId, p.PayrollMonth, e.FullName, p.Notes })
+                        .FirstOrDefaultAsync();
+
+                    if (payroll != null)
+                    {
+                        var isOffPayroll = payroll.Notes != null && payroll.Notes.Contains("[OFFPAYROLL]");
+                        var title = refType == CashBoxRefTypes.Payroll
+                            ? $"راتب {payroll.FullName}"
+                            : $"دفعة منفصلة {payroll.FullName}";
+                        var url = isOffPayroll ? "/hr/payroll/bonuses" : "/hr/payroll";
+                        return (title, url, payroll.FullName, null);
+                    }
                 }
                 break;
 
@@ -759,22 +960,19 @@ private async Task<(string? Title, string? Url, string? PartyName, string? Perso
         return result.OrderByDescending(r => r.IsActive)
                      .ThenByDescending(r => r.CurrentBalance).ToList();
     }
-        public async Task<(decimal TotalIn, decimal TotalOut)> GetTransactionsTotalsAsync(CashBoxTransactionFilterDto filter)
+
+    public async Task<(decimal TotalIn, decimal TotalOut)> GetTransactionsTotalsAsync(CashBoxTransactionFilterDto filter)
     {
-        var query = _db.CashboxTransactions.AsNoTracking().AsQueryable();
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var query = ApplyTransactionFilters(db, filter);
 
-        // 1. تطبيق نفس الفلاتر (خزينة، تاريخ، نوع الحركة، الخ)
-        if (filter.CashBoxId.HasValue)
-            query = query.Where(t => t.CashBoxId == filter.CashBoxId.Value);
+        var totalIn = await query
+            .Where(t => t.TransactionType == "قبض")
+            .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
-        if (filter.DateFrom.HasValue)
-            query = query.Where(t => t.TransactionDate >= filter.DateFrom.Value.Date);
-            
-        // ... (باقي الفلاتر)
-
-        // 2. حساب المجموع الكلي مباشرة من قاعدة البيانات
-        var totalIn = await query.Where(t => t.TransactionType == "قبض").SumAsync(t => (decimal?)t.Amount) ?? 0;
-        var totalOut = await query.Where(t => t.TransactionType == "صرف").SumAsync(t => (decimal?)t.Amount) ?? 0;
+        var totalOut = await query
+            .Where(t => t.TransactionType == "صرف")
+            .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         return (totalIn, totalOut);
     }

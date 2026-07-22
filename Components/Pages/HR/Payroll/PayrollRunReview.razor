@@ -1,0 +1,484 @@
+@page "/hr/payroll/run/{RunId:int}"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+@inject IPayrollService PayrollService
+@inject ICashBoxService CashBoxService
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>مراجعة كشف الرواتب</PageTitle>
+
+@if (_loading)
+{
+    <MudPaper Class="pa-8 rounded-xl text-center">
+        <MudProgressCircular Indeterminate Color="Color.Primary" />
+        <MudText Class="mt-3">جاري تحميل كشف الراتب...</MudText>
+    </MudPaper>
+}
+else if (_run is null)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined">
+        لم يتم العثور على كشف الرواتب المطلوب.
+    </MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-4 mb-4 rounded-xl" Style="background:linear-gradient(135deg,#0f172a,#1e3a8a);color:white;">
+        <div class="d-flex align-center justify-space-between flex-wrap gap-3">
+            <div>
+                <MudText Typo="Typo.h5"><b>مراجعة كشف الرواتب</b></MudText>
+                <MudText Typo="Typo.body2" Style="opacity:.85;">
+                    الكشف رقم #@_run.RunID • @_run.MonthDisplay • الحالة: @_run.StatusAr
+                </MudText>
+            </div>
+
+            <div class="d-flex gap-2 flex-wrap">
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.List" OnClick='@(() => Nav.NavigateTo("/hr/payroll"))'>سجل الرواتب</MudButton>
+                <MudChip T="string" Size="Size.Medium" Style="@($"background:{_run.StatusColor};color:white")">@_run.StatusAr</MudChip>
+            </div>
+        </div>
+    </MudPaper>
+
+    <MudGrid Class="mb-4">
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="pa-3 rounded-xl text-center h-100" Style="border:1px solid rgba(59,130,246,.2)">
+                <MudText Typo="Typo.caption">عدد الموظفين</MudText>
+                <MudText Typo="Typo.h5" Color="Color.Primary"><b>@_run.TotalEmployees</b></MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="pa-3 rounded-xl text-center h-100" Style="border:1px solid rgba(16,185,129,.2)">
+                <MudText Typo="Typo.caption">إجمالي المستحقات</MudText>
+                <MudText Typo="Typo.h6" Color="Color.Success"><b>@_run.TotalGross.ToString("N0")</b> جـ</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="pa-3 rounded-xl text-center h-100" Style="border:1px solid rgba(239,68,68,.2)">
+                <MudText Typo="Typo.caption">إجمالي الخصومات</MudText>
+                <MudText Typo="Typo.h6" Color="Color.Error"><b>@_run.TotalDeductions.ToString("N0")</b> جـ</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="pa-3 rounded-xl text-center h-100" Style="border:1px solid rgba(245,158,11,.2)">
+                <MudText Typo="Typo.caption">صافي كشف الراتب</MudText>
+                <MudText Typo="Typo.h5" Color="Color.Warning"><b>@_run.TotalNet.ToString("N0")</b> جـ</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @if (_run.Status == "PendingReview")
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-4">
+            هذا الكشف بانتظار مراجعة الحسابات. يمكنك اعتماد أو رفض كل راتب من الجدول التالي.
+        </MudAlert>
+    }
+
+    <MudPaper Class="pa-3 mb-3 rounded-xl d-flex align-center gap-3 flex-wrap">
+        <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined">قيد المراجعة: @_payrolls.Count(x => x.PaymentStatus == PayrollPaymentStatuses.PendingReview)</MudChip>
+        <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined">معتمد: @_payrolls.Count(x => x.PaymentStatus == PayrollPaymentStatuses.Approved)</MudChip>
+        <MudChip T="string" Color="Color.Success" Variant="Variant.Outlined">مدفوع: @_payrolls.Count(x => x.PaymentStatus == PayrollPaymentStatuses.Paid)</MudChip>
+        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined">المحدد: @SelectedCount</MudChip>
+
+        <MudSpacer />
+
+        @if (_canReview)
+        {
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.DoneAll"
+                       Disabled="!CanBatchApprove || _batchWorking"
+                       OnClick="ApproveSelectedAsync">
+                @(_batchWorking ? "جاري التنفيذ..." : $"اعتماد جماعي ({SelectedPendingCount})")
+            </MudButton>
+        }
+
+        @if (_canPay)
+        {
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Success"
+                       StartIcon="@Icons.Material.Filled.Payments"
+                       Disabled="!CanBatchPay || _batchWorking"
+                       OnClick="OpenBatchPayDialog">
+                @(_batchWorking ? "جاري التنفيذ..." : $"صرف جماعي ({SelectedPayableCount})")
+            </MudButton>
+        }
+    </MudPaper>
+
+    <MudPaper Class="rounded-xl overflow-hidden">
+        <MudTable Items="_payrolls" Dense Hover Striped Elevation="0">
+            <HeaderContent>
+                <MudTh Style="width:56px;">
+                    <MudCheckBox T="bool" Value="_allEligibleSelected" ValueChanged="ToggleAllEligible" />
+                </MudTh>
+                <MudTh>الموظف</MudTh>
+                <MudTh>الشهر</MudTh>
+                <MudTh>الراتب الأساسي</MudTh>
+                <MudTh>الخصومات</MudTh>
+                <MudTh>الصافي</MudTh>
+                <MudTh>الحالة</MudTh>
+                <MudTh>إجراءات</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    <MudCheckBox T="bool"
+                                 Value="@IsSelected(context.PayrollID)"
+                                 ValueChanged="@(v => ToggleSelection(context.PayrollID, v))"
+                                 Disabled="@(!CanSelect(context))" />
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2"><b>@context.EmployeeName</b></MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.Department ?? "—")</MudText>
+                </MudTd>
+                <MudTd>@context.PayrollMonth</MudTd>
+                <MudTd>@context.BasicSalary.ToString("N2") جـ</MudTd>
+                <MudTd>@context.TotalDeductions.ToString("N2") جـ</MudTd>
+                <MudTd><b>@context.NetSalary.ToString("N2") جـ</b></MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Style="@($"background:{context.StatusColor};color:white")">@context.PaymentStatus</MudChip>
+                </MudTd>
+                <MudTd>
+                    <MudIconButton Icon="@Icons.Material.Filled.ReceiptLong" Size="Size.Small" Color="Color.Primary" Title="قسيمة الراتب" OnClick='@(() => OpenPayslipAsync(context.PayrollID))' />
+                    @if (context.PaymentStatus == PayrollPaymentStatuses.PendingReview && _canReview)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Color="Color.Success" Title="اعتماد" OnClick='@(() => ApproveAsync(context))' />
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" Color="Color.Error" Title="رفض" OnClick='@(() => OpenRejectDialog(context))' />
+                    }
+                    @if ((context.PaymentStatus == PayrollPaymentStatuses.Approved || context.PaymentStatus == PayrollPaymentStatuses.Unpaid) && _canPay)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Payment" Size="Size.Small" Color="Color.Success" Title="صرف" OnClick='@(() => OpenPayDialog(context))' />
+                    }
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Class="pa-4" Color="Color.Secondary" Align="Align.Center">لا توجد رواتب داخل هذا الشكف.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudPaper>
+}
+
+<MudDialog @bind-Visible="_payDialogOpen">
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-3">@(_batchPayMode ? "صرف جماعي من هذا الكشف" : "صرف راتب من هذا الكشف")</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+            @if (_batchPayMode)
+            {
+                <span>سيتم صرف @SelectedPayableCount راتب من هذا الكشف باستخدام الخزينة المختارة.</span>
+            }
+            else
+            {
+                <span>سيتم صرف الراتب المحدد باستخدام الخزينة المختارة.</span>
+            }
+        </MudText>
+        <MudSelect T="int?" @bind-Value="_selectedPayCashBoxId" Label="الخزينة" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth>
+            @foreach (var cb in _cashBoxes)
+            {
+                <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName (@cb.CurrentBalance.ToString("N0") جـ)</MudSelectItem>
+            }
+        </MudSelect>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick='@(() => _payDialogOpen = false)'>إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="SubmitPayAsync">صرف</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<MudDialog @bind-Visible="_rejectDialogOpen">
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-3">رفض راتب من الكشف</MudText>
+        <MudTextField T="string" @bind-Value="_rejectReason" Label="سبب الرفض" Variant="Variant.Outlined" Lines="3" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick='@(() => _rejectDialogOpen = false)'>إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="SubmitRejectAsync">رفض</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter] public int RunId { get; set; }
+
+    private PayrollRunDto? _run;
+    private List<PayrollListDto> _payrolls = new();
+    private List<CashBoxListDto> _cashBoxes = new();
+    private bool _loading = true;
+    private string _currentUser = "system";
+    private bool _canReview;
+    private bool _canPay;
+    private bool _payDialogOpen;
+    private bool _batchPayMode;
+    private bool _batchWorking;
+    private bool _allEligibleSelected;
+    private readonly HashSet<int> _selectedPayrollIds = new();
+    private int _payPayrollId;
+    private int? _selectedPayCashBoxId;
+    private bool _rejectDialogOpen;
+    private int _rejectPayrollId;
+    private string? _rejectReason;
+
+    private int SelectedCount => _selectedPayrollIds.Count;
+    private int SelectedPendingCount => _payrolls.Count(x => _selectedPayrollIds.Contains(x.PayrollID) && x.PaymentStatus == PayrollPaymentStatuses.PendingReview);
+    private int SelectedPayableCount => _payrolls.Count(x => _selectedPayrollIds.Contains(x.PayrollID) && (x.PaymentStatus == PayrollPaymentStatuses.Approved || x.PaymentStatus == PayrollPaymentStatuses.Unpaid));
+    private bool CanBatchApprove => SelectedPendingCount > 0;
+    private bool CanBatchPay => SelectedPayableCount > 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _currentUser = user.Identity?.Name ?? "system";
+
+        var canView = user.IsInRole("Admin")
+                      || user.IsInRole("HrManager")
+                      || user.IsInRole("HRManager")
+                      || user.IsInRole("AccountManager")
+                      || user.IsInRole("Accountant")
+                      || user.IsInRole("AccountsManager")
+                      || user.HasClaim("Permission", "frm_Payroll:View");
+
+        _canReview = user.IsInRole("Admin") || user.IsInRole("AccountManager");
+        _canPay = user.IsInRole("Admin") || user.IsInRole("AccountManager");
+
+        if (!canView)
+        {
+            Nav.NavigateTo("/access-denied");
+            return;
+        }
+
+        _cashBoxes = await CashBoxService.GetCashBoxesAsync(activeOnly: true);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var runs = await PayrollService.GetRunsAsync();
+            _run = runs.FirstOrDefault(x => x.RunID == RunId);
+
+            var payrollResult = await PayrollService.GetPayrollsAsync(new PayrollFilterDto
+            {
+                PayrollRunId = RunId,
+                PageNumber = 1,
+                PageSize = 500
+            });
+            _payrolls = payrollResult.Items;
+            SyncSelectionState();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ في تحميل الكشف: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OpenPayslipAsync(int payrollId)
+    {
+        var parameters = new DialogParameters
+        {
+            [nameof(PayslipDialog.PayrollId)] = payrollId,
+            [nameof(PayslipDialog.CurrentUser)] = _currentUser
+        };
+
+        await DialogService.ShowAsync<PayslipDialog>(
+            "قسيمة الراتب",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true });
+    }
+
+    private async Task ApproveAsync(PayrollListDto payroll)
+    {
+        var (ok, msg) = await PayrollService.ApprovePayrollAsync(payroll.PayrollID, _currentUser);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadAsync();
+    }
+
+    private void OpenRejectDialog(PayrollListDto payroll)
+    {
+        _rejectPayrollId = payroll.PayrollID;
+        _rejectReason = null;
+        _rejectDialogOpen = true;
+    }
+
+    private async Task SubmitRejectAsync()
+    {
+        var (ok, msg) = await PayrollService.RejectPayrollAsync(_rejectPayrollId, _currentUser, _rejectReason);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+        {
+            _rejectDialogOpen = false;
+            await LoadAsync();
+        }
+    }
+
+    private void OpenPayDialog(PayrollListDto payroll)
+    {
+        _batchPayMode = false;
+        _payPayrollId = payroll.PayrollID;
+        _selectedPayCashBoxId = _cashBoxes.FirstOrDefault(c => c.IsDefault)?.CashBoxId ?? _cashBoxes.FirstOrDefault()?.CashBoxId;
+        _payDialogOpen = true;
+    }
+
+    private void OpenBatchPayDialog()
+    {
+        if (!CanBatchPay)
+        {
+            Snackbar.Add("اختر رواتب معتمدة أو غير مدفوعة أولاً", Severity.Warning);
+            return;
+        }
+
+        _batchPayMode = true;
+        _selectedPayCashBoxId = _cashBoxes.FirstOrDefault(c => c.IsDefault)?.CashBoxId ?? _cashBoxes.FirstOrDefault()?.CashBoxId;
+        _payDialogOpen = true;
+    }
+
+    private async Task ApproveSelectedAsync()
+    {
+        if (!CanBatchApprove)
+        {
+            Snackbar.Add("لا توجد رواتب محددة قابلة للاعتماد", Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Message, $"سيتم اعتماد {SelectedPendingCount} راتب من هذا الكشف. هل تريد المتابعة؟" },
+            { x => x.YesText, "اعتماد جماعي" },
+            { x => x.CancelText, "إلغاء" }
+        };
+
+        var dialog = await DialogService.ShowAsync<MudMessageBox>("تأكيد الاعتماد", parameters, new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+        if ((await dialog.Result) is { Canceled: true }) return;
+
+        _batchWorking = true;
+        StateHasChanged();
+
+        try
+        {
+            var targets = _payrolls
+                .Where(x => _selectedPayrollIds.Contains(x.PayrollID) && x.PaymentStatus == PayrollPaymentStatuses.PendingReview)
+                .ToList();
+
+            var okCount = 0;
+            var failCount = 0;
+            var messages = new List<string>();
+
+            foreach (var payroll in targets)
+            {
+                var (ok, msg) = await PayrollService.ApprovePayrollAsync(payroll.PayrollID, _currentUser);
+                if (ok) okCount++; else { failCount++; messages.Add(msg); }
+            }
+
+            Snackbar.Add($"تم اعتماد {okCount} راتب" + (failCount > 0 ? $" • فشل {failCount}" : string.Empty), failCount == 0 ? Severity.Success : Severity.Warning);
+            if (messages.Any())
+                Snackbar.Add(messages.First(), Severity.Warning);
+
+            await LoadAsync();
+        }
+        finally
+        {
+            _batchWorking = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SubmitPayAsync()
+    {
+        if (!_selectedPayCashBoxId.HasValue)
+        {
+            Snackbar.Add("يرجى اختيار الخزينة", Severity.Warning);
+            return;
+        }
+
+        _batchWorking = true;
+        StateHasChanged();
+
+        try
+        {
+            if (_batchPayMode)
+            {
+                var targets = _payrolls
+                    .Where(x => _selectedPayrollIds.Contains(x.PayrollID) && (x.PaymentStatus == PayrollPaymentStatuses.Approved || x.PaymentStatus == PayrollPaymentStatuses.Unpaid))
+                    .ToList();
+
+                var okCount = 0;
+                var failCount = 0;
+                var messages = new List<string>();
+
+                foreach (var payroll in targets)
+                {
+                    var (ok, msg) = await PayrollService.PayOneAsync(payroll.PayrollID, _selectedPayCashBoxId.Value, _currentUser);
+                    if (ok) okCount++; else { failCount++; messages.Add(msg); }
+                }
+
+                Snackbar.Add($"تم صرف {okCount} راتب" + (failCount > 0 ? $" • فشل {failCount}" : string.Empty), failCount == 0 ? Severity.Success : Severity.Warning);
+                if (messages.Any())
+                    Snackbar.Add(messages.First(), Severity.Warning);
+            }
+            else
+            {
+                var (ok, msg) = await PayrollService.PayOneAsync(_payPayrollId, _selectedPayCashBoxId.Value, _currentUser);
+                Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            }
+
+            _payDialogOpen = false;
+            await LoadAsync();
+        }
+        finally
+        {
+            _batchWorking = false;
+            StateHasChanged();
+        }
+    }
+
+    private bool CanSelect(PayrollListDto payroll)
+        => payroll.PaymentStatus != PayrollPaymentStatuses.Paid && payroll.PaymentStatus != PayrollPaymentStatuses.Cancelled && payroll.PaymentStatus != PayrollPaymentStatuses.Rejected;
+
+    private bool IsSelected(int payrollId) => _selectedPayrollIds.Contains(payrollId);
+
+    private void ToggleSelection(int payrollId, bool selected)
+    {
+        if (selected)
+            _selectedPayrollIds.Add(payrollId);
+        else
+            _selectedPayrollIds.Remove(payrollId);
+
+        SyncSelectionState();
+        StateHasChanged();
+    }
+
+    private void ToggleAllEligible(bool selected)
+    {
+        _allEligibleSelected = selected;
+
+        foreach (var payroll in _payrolls.Where(CanSelect))
+        {
+            if (selected)
+                _selectedPayrollIds.Add(payroll.PayrollID);
+            else
+                _selectedPayrollIds.Remove(payroll.PayrollID);
+        }
+
+        SyncSelectionState();
+        StateHasChanged();
+    }
+
+    private void SyncSelectionState()
+    {
+        _selectedPayrollIds.RemoveWhere(id => !_payrolls.Any(p => p.PayrollID == id && CanSelect(p)));
+        var eligibleIds = _payrolls.Where(CanSelect).Select(x => x.PayrollID).ToList();
+        _allEligibleSelected = eligibleIds.Any() && eligibleIds.All(id => _selectedPayrollIds.Contains(id));
+    }
+}

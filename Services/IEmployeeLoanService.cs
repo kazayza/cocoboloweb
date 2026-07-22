@@ -18,9 +18,13 @@ public interface IEmployeeLoanService
     Task<List<InstallmentListDto>>  GetMonthInstallmentsAsync(string month); // الأقساط المستحقة في شهر
     Task<(bool Success, string Message)> DeductInstallmentAsync(int installmentId, int payrollDetailId, string userName);
     Task<(bool Success, string Message)> SkipInstallmentAsync(int installmentId, string reason, string userName);
+    Task<(bool Success, string Message)> SplitInstallmentAsync(int installmentId, decimal amountToKeepThisMonth, string reason, string userName);
+
+    // ── كشف الحساب ───────────────────────────────────────────
+    Task<EmployeeLoanStatementDto?> GetEmployeeStatementAsync(int employeeId);
 
     // ── مساعد للـ Payroll ───────────────────────────────────
     Task<List<InstallmentListDto>>  GetEmployeeInstallmentsForMonth(int employeeId, string month);
     Task<List<EmployeeLookupDto>> GetEmployeesLookupAsync(string? search = null);
-Task<List<CashBoxLookupDto>>  GetCashBoxesLookupAsync();
+    Task<List<CashBoxLookupDto>>  GetCashBoxesLookupAsync();
 }

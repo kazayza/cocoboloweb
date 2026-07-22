@@ -4,6 +4,7 @@
 @using COCOBOLOERPNEW.Services
 @using Microsoft.AspNetCore.Components
 @using System.Net.Http.Json
+@using System.Text.Json
 
 @inject IQuotationService QuotationService
 @inject NavigationManager Navigation
@@ -259,8 +260,8 @@ else
 
 <MudTd>
     <MudChip T="string" Size="Size.Small"
-             Color="@(context.PricingType == PricingTiers.Elite ? Color.Warning : Color.Info)">
-        @PricingTiers.All.GetValueOrDefault(context.PricingType ?? "Premium", "بريميوم")
+             Color="@GetPricingModeColor(context.PricingType)">
+        @GetPricingModeText(context.PricingType)
     </MudChip>
 </MudTd>
 
@@ -385,7 +386,7 @@ Title="طباعة" />
                             {
                                 <MudIconButton Icon="@Icons.Material.Filled.SwapHoriz"
                                                Size="Size.Small" Color="Color.Success"
-                                               OnClick="() => OpenConvertDialog(context)"
+                                               OnClick="() => OpenConvertDialogAsync(context)"
                                                Title="تحويل لفاتورة" />
                             }
                             @if (context.InvoiceId == null && _canDelete)
@@ -428,6 +429,20 @@ Title="طباعة" />
             <strong>العميل:</strong> @(_selected?.PartyName)<br />
             <strong>الإجمالي:</strong> @FormatMoney(_selected?.GrandTotal ?? 0) ج
         </MudAlert>
+
+        <MudAlert Severity="Severity.Warning" Class="mb-3" Icon="@Icons.Material.Filled.Event">
+            <div><strong>تنبيه مهم بخصوص التواريخ:</strong></div>
+            <div>تاريخ صلاحية عرض السعر <strong>@(_convertQuotationValidUntil?.ToString("yyyy/MM/dd") ?? "غير محدد")</strong> لن يتم نسخه إلى الفاتورة.</div>
+            <div>سيتم احتساب تاريخ الفاتورة من التاريخ الذي تختاره أدناه، ثم تحديد تاريخ التسليم/الاستحقاق على أساس <strong>أكبر مدة تصنيع</strong> بين الأصناف.</div>
+            <div>أكبر مدة تصنيع حالية: <strong>@_convertMaxPeriodDays يوم</strong></div>
+            <div>تاريخ التسليم/الاستحقاق المتوقع: <strong>@(_convertCalculatedDueDate?.ToString("yyyy/MM/dd") ?? "-")</strong></div>
+        </MudAlert>
+
+        <MudDatePicker Date="_convertInvoiceDate"
+                       DateChanged="OnConvertInvoiceDateChanged"
+                       Label="تاريخ الفاتورة"
+                       Variant="Variant.Outlined"
+                       Class="mb-3" />
 
         <MudText Typo="Typo.body2" Class="mb-2">
             هل تريد تسجيل دفعة فورية مع إنشاء الفاتورة؟
@@ -758,6 +773,8 @@ private const string QuickFilterExpired = "expired";
 private const string QuickFilterCustom = "custom";
 
 private string _activeQuickFilter = QuickFilterAll;
+private const string FilterStorageKey = "quotations_list_filter_state";
+private bool _didInitialLoad = false;
 
     [Parameter]
     [SupplyParameterFromQuery(Name = "status")]
@@ -775,6 +792,10 @@ private string _activeQuickFilter = QuickFilterAll;
     private decimal _convertPaidAmount = 0;
     private string _convertPaymentMethod = PaymentMethods.Cash;
     private int? _convertCashBoxId;
+    private DateTime? _convertInvoiceDate = DateTime.Today;
+    private DateTime? _convertCalculatedDueDate;
+    private DateTime? _convertQuotationValidUntil;
+    private int _convertMaxPeriodDays;
     private List<Models.CashBox> _cashBoxes = new();
     private List<EmployeeListDto> _employees = new();
 
@@ -801,19 +822,39 @@ private string _activeQuickFilter = QuickFilterAll;
         {
             _cashBoxes = await InvoiceService.GetCashBoxesAsync() ?? new();
             _employees = await EmployeeService.SearchEmployeesAsync("", 200);
-            ApplyQueryFilters();
-            await LoadData();
-            _stats = await QuotationService.GetStatsAsync();
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"تعذّر تحميل البيانات: {ex.Message}", Severity.Error);
+            Snackbar.Add($"تعذّر تحميل البيانات الأساسية: {ex.Message}", Severity.Error);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _didInitialLoad || !_canView)
+            return;
+
+        _didInitialLoad = true;
+
+        try
+        {
+            await RestoreFilterStateAsync();
+            ApplyQueryFilters();
+            _dateFrom = _filter.DateFrom;
+            _dateTo = _filter.DateTo;
+            SyncActiveQuickFilter();
+            await LoadData();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر تحميل شاشة عروض الأسعار: {ex.Message}", Severity.Error);
         }
         finally
         {
             _isLoading = false;
+            StateHasChanged();
         }
-}
+    }
 
     private void ApplyQueryFilters()
     {
@@ -890,6 +931,19 @@ private async Task ApplyStatsQuickFilter(string quickFilter)
         try
         {
             _pagedResult = await QuotationService.GetQuotationsAsync(_filter);
+
+            if (_pagedResult.TotalPages > 0 && _filter.PageNumber > _pagedResult.TotalPages)
+            {
+                _filter.PageNumber = _pagedResult.TotalPages;
+                _pagedResult = await QuotationService.GetQuotationsAsync(_filter);
+            }
+            else if (_pagedResult.TotalPages == 0)
+            {
+                _filter.PageNumber = 1;
+            }
+
+            await RefreshStats();
+            await SaveFilterStateAsync();
         }
         catch (Exception ex)
         {
@@ -902,14 +956,102 @@ private async Task ApplyStatsQuickFilter(string quickFilter)
     {
         try
         {
-            _stats = await QuotationService.GetStatsAsync(_filter.DateFrom, _filter.DateTo);
+            _stats = await QuotationService.GetStatsAsync(CloneFilter(_filter));
         }
-        catch { /* لا نوقف التطبيق لو الإحصائيات فشلت */ }
+        catch
+        {
+            _stats = new QuotationStatsDto();
+        }
+    }
+
+    private async Task RestoreFilterStateAsync()
+    {
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("localStorage.getItem", FilterStorageKey);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            var saved = JsonSerializer.Deserialize<QuotationFilterState>(json);
+            if (saved is null)
+                return;
+
+            _filter = new QuotationFilterDto
+            {
+                SearchText = saved.SearchText,
+                PartyId = saved.PartyId,
+                EmpId = saved.EmpId,
+                DateFrom = saved.DateFrom,
+                DateTo = saved.DateTo,
+                Status = saved.Status,
+                IsConverted = saved.IsConverted,
+                IsExpired = saved.IsExpired,
+                PendingOnly = saved.PendingOnly,
+                PageNumber = saved.PageNumber > 0 ? saved.PageNumber : 1,
+                PageSize = saved.PageSize > 0 ? saved.PageSize : 25,
+                SortBy = string.IsNullOrWhiteSpace(saved.SortBy) ? "QuotationDate" : saved.SortBy,
+                SortDescending = saved.SortDescending
+            };
+        }
+        catch
+        {
+            _filter = new QuotationFilterDto();
+        }
+    }
+
+    private async Task SaveFilterStateAsync()
+    {
+        try
+        {
+            var state = new QuotationFilterState
+            {
+                SearchText = _filter.SearchText,
+                PartyId = _filter.PartyId,
+                EmpId = _filter.EmpId,
+                DateFrom = _filter.DateFrom,
+                DateTo = _filter.DateTo,
+                Status = _filter.Status,
+                IsConverted = _filter.IsConverted,
+                IsExpired = _filter.IsExpired,
+                PendingOnly = _filter.PendingOnly,
+                PageNumber = _filter.PageNumber,
+                PageSize = _filter.PageSize,
+                SortBy = _filter.SortBy,
+                SortDescending = _filter.SortDescending
+            };
+
+            var json = JsonSerializer.Serialize(state);
+            await JS.InvokeVoidAsync("localStorage.setItem", FilterStorageKey, json);
+        }
+        catch
+        {
+        }
+    }
+
+    private QuotationFilterDto CloneFilter(QuotationFilterDto source)
+    {
+        return new QuotationFilterDto
+        {
+            SearchText = source.SearchText,
+            PartyId = source.PartyId,
+            EmpId = source.EmpId,
+            DateFrom = source.DateFrom,
+            DateTo = source.DateTo,
+            Status = source.Status,
+            IsConverted = source.IsConverted,
+            IsExpired = source.IsExpired,
+            PendingOnly = source.PendingOnly,
+            PageNumber = source.PageNumber,
+            PageSize = source.PageSize,
+            SortBy = source.SortBy,
+            SortDescending = source.SortDescending
+        };
     }
 
     private async Task OnSearchChanged()
     {
         _filter.PageNumber = 1;
+        SyncActiveQuickFilter();
         await LoadData();
     }
 
@@ -918,7 +1060,6 @@ private async Task ApplyStatsQuickFilter(string quickFilter)
     _filter.PageNumber = 1;
     SyncActiveQuickFilter();
     await LoadData();
-    await RefreshStats();
 }
 private void SyncActiveQuickFilter()
 {
@@ -983,7 +1124,6 @@ private void SyncActiveQuickFilter()
     _activeQuickFilter = QuickFilterAll;
 
     await LoadData();
-    await RefreshStats();
 }
 
     private void GoToAdd() => Navigation.NavigateTo("/quotations/new");
@@ -992,18 +1132,55 @@ private void SyncActiveQuickFilter()
     // ============================================================
     // Convert
     // ============================================================
-    private void OpenConvertDialog(QuotationListDto q)
+    private async Task OpenConvertDialogAsync(QuotationListDto q)
     {
         if (q.InvoiceId != null)
         {
             Snackbar.Add("هذا العرض تم تحويله لفاتورة من قبل.", Severity.Warning);
             return;
         }
+
         _selected = q;
         _convertPaidAmount = 0;
         _convertPaymentMethod = PaymentMethods.Cash;
         _convertCashBoxId = _cashBoxes.FirstOrDefault()?.CashBoxId;
+        _convertInvoiceDate = DateTime.Today;
+        _convertQuotationValidUntil = q.ValidUntil;
+        _convertMaxPeriodDays = 0;
+
+        try
+        {
+            var quotation = await QuotationService.GetQuotationForEditAsync(q.QuotationId);
+            if (quotation != null)
+            {
+                _convertQuotationValidUntil = quotation.ValidUntil;
+                _convertMaxPeriodDays = quotation.Items
+                    .Where(i => i.Period.HasValue)
+                    .Select(i => i.Period!.Value)
+                    .DefaultIfEmpty(0)
+                    .Max();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"تعذّر تحميل بيانات التواريخ قبل التحويل: {ex.Message}", Severity.Warning);
+        }
+
+        RecalculateConvertDatesPreview();
         _showConvertDialog = true;
+    }
+
+    private Task OnConvertInvoiceDateChanged(DateTime? date)
+    {
+        _convertInvoiceDate = date ?? DateTime.Today;
+        RecalculateConvertDatesPreview();
+        return Task.CompletedTask;
+    }
+
+    private void RecalculateConvertDatesPreview()
+    {
+        var invoiceDate = (_convertInvoiceDate ?? DateTime.Today).Date;
+        _convertCalculatedDueDate = invoiceDate.AddDays(_convertMaxPeriodDays);
     }
 
     private async Task ExecuteConvert()
@@ -1034,7 +1211,7 @@ private void SyncActiveQuickFilter()
         {
             var (ok, msg, invId) = await QuotationService.ConvertToInvoiceAsync(
                 _selected.QuotationId, _convertPaidAmount,
-                _convertCashBoxId, _convertPaymentMethod, _currentUserName!);
+                _convertCashBoxId, _convertPaymentMethod, _currentUserName!, _convertInvoiceDate);
 
             Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
 
@@ -1042,7 +1219,6 @@ private void SyncActiveQuickFilter()
             {
                 _showConvertDialog = false;
                 await LoadData();
-                await RefreshStats();
                 Navigation.NavigateTo($"/sales/invoices/{invId.Value}");
             }
         }
@@ -1159,7 +1335,6 @@ private async Task DownloadFile(string fileName, string contentType, byte[] byte
             {
                 _showDeleteDialog = false;
                 await LoadData();
-                await RefreshStats();
             }
         }
         catch (Exception ex)
@@ -1170,6 +1345,20 @@ private async Task DownloadFile(string fileName, string contentType, byte[] byte
         {
             _isDeleting = false;
         }
+    }
+
+    private string GetPricingModeText(string? pricingType)
+        => QuotationPricingModes.All.GetValueOrDefault(pricingType ?? PricingTiers.Premium, "بريميوم");
+
+    private Color GetPricingModeColor(string? pricingType)
+    {
+        return pricingType switch
+        {
+            var t when t == PricingTiers.CClass => Color.Secondary,
+            var t when t == PricingTiers.Elite => Color.Warning,
+            var t when t == QuotationPricingModes.Mixed => Color.Primary,
+            _ => Color.Info
+        };
     }
 
     private string FormatMoney(decimal v) => $"{v:N2} ج";
@@ -1188,4 +1377,21 @@ private async Task DownloadFile(string fileName, string contentType, byte[] byte
 
     return $"{value:N0} ج";
 }
+
+    private sealed class QuotationFilterState
+    {
+        public string? SearchText { get; set; }
+        public int? PartyId { get; set; }
+        public int? EmpId { get; set; }
+        public DateTime? DateFrom { get; set; }
+        public DateTime? DateTo { get; set; }
+        public string? Status { get; set; }
+        public bool? IsConverted { get; set; }
+        public bool? IsExpired { get; set; }
+        public bool? PendingOnly { get; set; }
+        public int PageNumber { get; set; }
+        public int PageSize { get; set; }
+        public string? SortBy { get; set; }
+        public bool SortDescending { get; set; }
+    }
 }

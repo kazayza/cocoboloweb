@@ -10,6 +10,7 @@ public class ProductListDto
     public int? PricingStatusId { get; set; }
     public string? PricingType { get; set; }
     public decimal? SuggestedSalePrice { get; set; }
+    public decimal? SuggestedSalePriceCClass { get; set; }
     public decimal? SuggestedSalePriceElite { get; set; }
     public string? PdfPath { get; set; }
     public bool HasOldPdf { get; set; } = false;

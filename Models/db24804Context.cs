@@ -1381,9 +1381,13 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .HasDefaultValueSql("(getdate())")
                 .HasColumnType("datetime");
             entity.Property(e => e.ChangedBy).HasMaxLength(100);
+            entity.Property(e => e.CClassMargin).HasColumnType("decimal(8, 2)");
             entity.Property(e => e.EliteMargin).HasColumnType("decimal(8, 2)");
             entity.Property(e => e.IsActive).HasDefaultValue(true);
             entity.Property(e => e.PremiumMargin).HasColumnType("decimal(8, 2)");
+            entity.Property(e => e.PreviousCClass)
+                .HasDefaultValue(0m)
+                .HasColumnType("decimal(8, 2)");
             entity.Property(e => e.PreviousElite)
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(8, 2)");
@@ -1418,6 +1422,9 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.PurchasePriceElite)
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(18, 2)");
+            entity.Property(e => e.PurchasePriceCClass)
+                .HasDefaultValue(0m)
+                .HasColumnType("decimal(18, 2)");
             entity.Property(e => e.Qty)
                 .HasDefaultValue(1)
                 .HasColumnName("QTY");
@@ -1425,6 +1432,9 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(18, 2)");
             entity.Property(e => e.SuggestedSalePriceElite)
+                .HasDefaultValue(0m)
+                .HasColumnType("decimal(18, 2)");
+            entity.Property(e => e.SuggestedSalePriceCClass)
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(18, 2)");
 
@@ -1561,6 +1571,9 @@ modelBuilder.Entity<PartyContact>(entity =>
 
             entity.Property(e => e.QuotationDetailId).HasColumnName("QuotationDetailID");
             entity.Property(e => e.Notes).HasMaxLength(255);
+            entity.Property(e => e.PricingTier)
+                .HasMaxLength(50)
+                .HasDefaultValue("Premium");
             entity.Property(e => e.ProductId).HasColumnName("ProductID");
             entity.Property(e => e.Quantity).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.QuotationId).HasColumnName("QuotationID");
@@ -1881,6 +1894,9 @@ modelBuilder.Entity<PartyContact>(entity =>
 
             entity.Property(e => e.DetailId).HasColumnName("DetailID");
             entity.Property(e => e.Notes).HasMaxLength(255);
+            entity.Property(e => e.PricingTier)
+                .HasMaxLength(50)
+                .HasDefaultValue("Premium");
             entity.Property(e => e.ProductId).HasColumnName("ProductID");
             entity.Property(e => e.Quantity).HasColumnType("decimal(18, 3)");
             entity.Property(e => e.TotalAmount)

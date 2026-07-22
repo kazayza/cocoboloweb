@@ -1,0 +1,649 @@
+@page "/hr/payroll/bonuses"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Web
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+@inject IPayrollService PayrollService
+@inject IEmployeeService EmployeeService
+@inject ICashBoxService CashBoxService
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>دفعات خارج الراتب</PageTitle>
+
+<MudPaper Class="pa-4 mb-4 rounded-xl d-flex align-center gap-3 flex-wrap">
+    <div>
+        <MudText Typo="Typo.h5"> حوافز ومكافآت خارج الراتب</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary">
+            شاشة مستقلة لطلب واعتماد وصرف أي مكافأة أو حافز في منتصف الشهر بعيدًا عن كشف الراتب الشهري.
+        </MudText>
+    </div>
+
+    <MudSpacer />
+
+    <MudButton Variant="Variant.Outlined"
+               Color="Color.Default"
+               StartIcon="@Icons.Material.Filled.ReceiptLong"
+               OnClick='@(() => Nav.NavigateTo("/hr/payroll"))'>
+        سجل الرواتب
+    </MudButton>
+
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.AttachMoney"
+               OnClick='@(() => Nav.NavigateTo("/hr/payroll/processor"))'>
+        معالجة مرتبات
+    </MudButton>
+</MudPaper>
+
+<MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-4">
+    استخدم هذه الشاشة عندما تريد صرف مكافأة أو حافز أو عمولة  مستقلة لا تدخل ضمن صافي المرتب الشهري.
+    الفلو هنا: <b>تسجيل الطلب</b> ← <b>إرسال للمراجعة</b> ← <b>اعتماد</b> ← <b>صرف من الخزينة</b>.
+</MudAlert>
+
+<MudGrid Class="mb-4">
+    <MudItem xs="12" md="5">
+        <MudPaper Class="pa-4 rounded-xl h-100" Style="border:1px solid rgba(59,130,246,.18)">
+            <div class="d-flex align-center gap-2 mb-3">
+                <MudIcon Icon="@Icons.Material.Filled.PostAdd" Color="Color.Primary" />
+                <MudText Typo="Typo.h6">طلب حافز - عمولة - مكافأه جديدة</MudText>
+            </div>
+
+            <MudGrid>
+                <MudItem xs="12">
+                    <MudAutocomplete T="EmployeeListDto"
+                                     Label="الموظف *"
+                                     @bind-Value="_selectedEmployee"
+                                     SearchFunc="SearchEmployeesAsync"
+                                     ToStringFunc="EmployeeToString"
+                                     Variant="Variant.Outlined"
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.Person"
+                                     ResetValueOnEmptyText="true"
+                                     CoerceValue="true"
+                                     Margin="Margin.Dense">
+                        <ItemTemplate Context="emp">
+                            <div class="pa-1">
+                                <MudText Typo="Typo.body2"><b>@emp.FullName</b></MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @(emp.Department ?? "بدون قسم")
+                                </MudText>
+                            </div>
+                        </ItemTemplate>
+                    </MudAutocomplete>
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudDatePicker @bind-Date="_paymentDate"
+                                   Label="تاريخ الدفعة"
+                                   Variant="Variant.Outlined"
+                                   DateFormat="dd/MM/yyyy"
+                                   Margin="Margin.Dense" />
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string"
+                               @bind-Value="_formModel.PaymentType"
+                               Label="نوع الدفعة"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense">
+                        <MudSelectItem T="string" Value="@("BonusSeparate")">مكافأة منفصلة</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("CommissionSeparate")">عمولة منفصلة</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudNumericField T="decimal"
+                                     @bind-Value="_formModel.Amount"
+                                     Label="المبلغ *"
+                                     Variant="Variant.Outlined"
+                                     Margin="Margin.Dense"
+                                     Min="0"
+                                     Adornment="Adornment.End"
+                                     AdornmentText="جـ" />
+                </MudItem>
+
+                <MudItem xs="12" sm="6">
+                    <MudTextField T="string"
+                                  Value="@GetMonthDisplay()"
+                                  Label="الشهر المرجعي"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  ReadOnly="true" />
+                </MudItem>
+
+                <MudItem xs="12">
+                    <MudTextField T="string"
+                                  @bind-Value="_formModel.Description"
+                                  Label="وصف الدفعة *"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Placeholder="مثال: مكافأة أداء / صرف حافز خاص / عمولة عملية معينة" />
+                </MudItem>
+
+                <MudItem xs="12">
+                    <MudTextField T="string"
+                                  @bind-Value="_formModel.Reason"
+                                  Label="سبب أو مبرر الطلب"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Lines="3" />
+                </MudItem>
+
+                @if (_selectedEmployee is not null || _formModel.Amount > 0)
+                {
+                    <MudItem xs="12">
+                        <MudPaper Class="pa-3 rounded-xl" Style="background:#f8fafc;border:1px solid #dbeafe;">
+                            <MudText Typo="Typo.subtitle2" Color="Color.Info" Class="mb-1">ملخص سريع</MudText>
+                            <MudText Typo="Typo.body2">الموظف: <b>@(_selectedEmployee?.FullName ?? "—")</b></MudText>
+                            <MudText Typo="Typo.body2">النوع: <b>@PaymentTypeAr(_formModel.PaymentType)</b></MudText>
+                            <MudText Typo="Typo.body2">المبلغ: <b>@_formModel.Amount.ToString("N2") جـ</b></MudText>
+                            <MudText Typo="Typo.body2">الشهر المرجعي: <b>@GetMonthDisplay()</b></MudText>
+                        </MudPaper>
+                    </MudItem>
+                }
+
+                <MudItem xs="12">
+                    <div class="d-flex gap-2 flex-wrap">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Send"
+                                   OnClick="SaveAsync"
+                                   Disabled="_saving">
+                            @(_saving ? "جاري الحفظ..." : "حفظ وإرسال للمراجعة")
+                        </MudButton>
+
+                        <MudButton Variant="Variant.Text"
+                                   Color="Color.Default"
+                                   StartIcon="@Icons.Material.Filled.RestartAlt"
+                                   OnClick="ResetForm">
+                            تفريغ النموذج
+                        </MudButton>
+                    </div>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" md="7">
+        @if (_stats is not null)
+        {
+            <MudGrid>
+                <MudItem xs="12" sm="6" md="4">
+                    <MudPaper Class="pa-4 rounded-xl h-100" Style="background:linear-gradient(135deg,#0ea5e9,#0284c7);color:white">
+                        <MudText Typo="Typo.caption" Style="opacity:.85">إجمالي الطلبات</MudText>
+                        <MudText Typo="Typo.h5"><b>@_stats.TotalAmount.ToString("N0")</b> جـ</MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="4">
+                    <MudPaper Class="pa-4 rounded-xl h-100" Style="background:linear-gradient(135deg,#f59e0b,#d97706);color:white">
+                        <MudText Typo="Typo.caption" Style="opacity:.85">قيد المراجعة</MudText>
+                        <MudText Typo="Typo.h4"><b>@_stats.ReviewCount</b></MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="4">
+                    <MudPaper Class="pa-4 rounded-xl h-100" Style="background:linear-gradient(135deg,#3b82f6,#2563eb);color:white">
+                        <MudText Typo="Typo.caption" Style="opacity:.85">معتمد</MudText>
+                        <MudText Typo="Typo.h4"><b>@_stats.ApprovedCount</b></MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="4">
+                    <MudPaper Class="pa-4 rounded-xl h-100" Style="background:linear-gradient(135deg,#10b981,#059669);color:white">
+                        <MudText Typo="Typo.caption" Style="opacity:.85">مدفوع</MudText>
+                        <MudText Typo="Typo.h4"><b>@_stats.PaidCount</b></MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="4">
+                    <MudPaper Class="pa-4 rounded-xl h-100" Style="background:linear-gradient(135deg,#ef4444,#dc2626);color:white">
+                        <MudText Typo="Typo.caption" Style="opacity:.85">مرفوض</MudText>
+                        <MudText Typo="Typo.h4"><b>@_stats.RejectedCount</b></MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="4">
+                    <MudPaper Class="pa-4 rounded-xl h-100" Style="background:linear-gradient(135deg,#64748b,#475569);color:white">
+                        <MudText Typo="Typo.caption" Style="opacity:.85">ملغي</MudText>
+                        <MudText Typo="Typo.h4"><b>@_stats.CancelledCount</b></MudText>
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+        }
+    </MudItem>
+</MudGrid>
+
+<div class="sticky-filter-shell">
+    <MudPaper Class="pa-3 mb-3 rounded-xl d-flex align-center gap-3 flex-wrap">
+        <MudTextField @bind-Value="_filter.SearchText"
+                      Placeholder="بحث بالموظف أو الوصف"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Style="min-width:220px"
+                      Clearable="true"
+                      OnKeyUp="OnSearchKeyUp" />
+
+        <MudTextField @bind-Value="_filter.Month"
+                      Placeholder="الشهر 2026-07"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Style="max-width:150px"
+                      OnKeyUp="OnSearchKeyUp" />
+
+        <MudSelect T="string"
+                   @bind-Value="_filter.PaymentStatus"
+                   Label="الحالة"
+                   Variant="Variant.Outlined"
+                   Margin="Margin.Dense"
+                   Style="min-width:160px"
+                   Clearable="true">
+            <MudSelectItem T="string" Value="@PayrollPaymentStatuses.PendingReview">قيد المراجعة</MudSelectItem>
+            <MudSelectItem T="string" Value="@PayrollPaymentStatuses.Approved">معتمد</MudSelectItem>
+            <MudSelectItem T="string" Value="@PayrollPaymentStatuses.Paid">مدفوع</MudSelectItem>
+            <MudSelectItem T="string" Value="@PayrollPaymentStatuses.Rejected">مرفوض</MudSelectItem>
+            <MudSelectItem T="string" Value="@PayrollPaymentStatuses.Cancelled">ملغي</MudSelectItem>
+        </MudSelect>
+
+        <MudSelect T="string"
+                   @bind-Value="_filter.PaymentType"
+                   Label="النوع"
+                   Variant="Variant.Outlined"
+                   Margin="Margin.Dense"
+                   Style="min-width:160px"
+                   Clearable="true">
+            <MudSelectItem T="string" Value="@("BonusSeparate")">مكافأة منفصلة</MudSelectItem>
+            <MudSelectItem T="string" Value="@("CommissionSeparate")">عمولة منفصلة</MudSelectItem>
+        </MudSelect>
+
+        <MudButton Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.Search"
+                   OnClick="LoadAsync">
+            تحديث
+        </MudButton>
+    </MudPaper>
+</div>
+
+<MudPaper Class="rounded-xl overflow-hidden">
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate Color="Color.Primary" />
+    }
+
+    <MudTable Items="_items" Dense Hover Striped Elevation="0">
+        <HeaderContent>
+            <MudTh>الموظف</MudTh>
+            <MudTh>الفترة</MudTh>
+            <MudTh>النوع / الوصف</MudTh>
+            <MudTh>المبلغ</MudTh>
+            <MudTh>الحالة</MudTh>
+            <MudTh>إجراءات</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>
+                <MudText Typo="Typo.body2"><b>@context.EmployeeName</b></MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.Department ?? "—")</MudText>
+            </MudTd>
+
+            <MudTd>
+                <MudText Typo="Typo.body2">@FormatMonth(context.PayrollMonth)</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    تم الطلب @((context.RequestedAt ?? DateTime.Now).ToString("dd/MM/yyyy"))
+                </MudText>
+            </MudTd>
+
+            <MudTd>
+                <MudText Typo="Typo.body2"><b>@context.PaymentTypeAr</b></MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Description</MudText>
+            </MudTd>
+
+            <MudTd>
+                <MudText Typo="Typo.body2"><b>@context.Amount.ToString("N2") جـ</b></MudText>
+            </MudTd>
+
+            <MudTd>
+                <MudChip T="string" Size="Size.Small" Style="@($"background:{context.StatusColor};color:white")">
+                    @context.PaymentStatus
+                </MudChip>
+                @if (context.PaidAt.HasValue)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@context.PaidAt.Value.ToString("dd/MM/yyyy HH:mm")</MudText>
+                }
+            </MudTd>
+
+            <MudTd>
+                @if (context.PaymentStatus == PayrollPaymentStatuses.PendingReview && _canReview)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.CheckCircle"
+                                   Color="Color.Success"
+                                   Size="Size.Small"
+                                   Title="اعتماد"
+                                   OnClick="@(() => ApproveAsync(context))" />
+                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                   Color="Color.Error"
+                                   Size="Size.Small"
+                                   Title="رفض"
+                                   OnClick="@(() => OpenRejectDialog(context))" />
+                }
+
+                @if ((context.PaymentStatus == PayrollPaymentStatuses.Approved || context.PaymentStatus == PayrollPaymentStatuses.Unpaid) && _canPay)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Payment"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   Title="صرف"
+                                   OnClick="@(() => OpenPayDialog(context))" />
+                }
+
+                @if (context.PaymentStatus != PayrollPaymentStatuses.Paid)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Cancel"
+                                   Color="Color.Default"
+                                   Size="Size.Small"
+                                   Title="إلغاء"
+                                   OnClick="@(() => CancelAsync(context))" />
+                }
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Class="pa-4" Color="Color.Secondary" Align="Align.Center">
+                لا توجد دفعات خارج الراتب مطابقة للفلاتر الحالية
+            </MudText>
+        </NoRecordsContent>
+    </MudTable>
+</MudPaper>
+
+<MudDialog @bind-Visible="_payDialogOpen">
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-3">صرف دفعة خارج الراتب</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+            سيتم صرف الدفعة من الخزينة المختارة وتسجيلها كحركة مستقلة.
+        </MudText>
+        <MudSelect T="int?"
+                   @bind-Value="_selectedPayCashBoxId"
+                   Label="الخزينة"
+                   Variant="Variant.Outlined"
+                   Margin="Margin.Dense"
+                   FullWidth>
+            @foreach (var cb in _cashBoxes)
+            {
+                <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName (@cb.CurrentBalance.ToString("N0") جـ)</MudSelectItem>
+            }
+        </MudSelect>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick='@(() => _payDialogOpen = false)'>إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="SubmitPayAsync">صرف</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<MudDialog @bind-Visible="_rejectDialogOpen">
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-3">رفض دفعة خارج الراتب</MudText>
+        <MudTextField T="string" @bind-Value="_rejectReason" Label="سبب الرفض" Variant="Variant.Outlined" Lines="3" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick='@(() => _rejectDialogOpen = false)'>إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="SubmitRejectAsync">رفض</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private OffPayrollPaymentFormDto _formModel = new()
+    {
+        PaymentDate = DateTime.Today,
+        PaymentType = "BonusSeparate"
+    };
+
+    private EmployeeListDto? _selectedEmployee;
+    private DateTime? _paymentDate = DateTime.Today;
+    private bool _saving;
+    private bool _loading;
+    private string _currentUser = "system";
+    private bool _canReview;
+    private bool _canPay;
+
+    private OffPayrollPaymentFilterDto _filter = new()
+    {
+        Month = DateTime.Today.ToString("yyyy-MM")
+    };
+
+    private List<OffPayrollPaymentListDto> _items = new();
+    private OffPayrollPaymentStatsDto? _stats;
+    private List<CashBoxListDto> _cashBoxes = new();
+    private bool _payDialogOpen;
+    private int _payPayrollId;
+    private int? _selectedPayCashBoxId;
+    private bool _rejectDialogOpen;
+    private int _rejectPayrollId;
+    private string? _rejectReason;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _currentUser = user.Identity?.Name ?? "system";
+
+        var canView = user.IsInRole("Admin")
+                      || user.IsInRole("HrManager")
+                      || user.IsInRole("HRManager")
+                      || user.IsInRole("AccountManager")
+                      || user.IsInRole("Accountant")
+                      || user.IsInRole("AccountsManager")
+                      || user.HasClaim("Permission", "frm_PayrollPayment:View")
+                      || user.HasClaim("Permission", "frm_Payroll:View");
+
+        _canReview = user.IsInRole("Admin") || user.IsInRole("AccountManager");
+        _canPay = user.IsInRole("Admin") || user.IsInRole("AccountManager");
+
+        if (!canView)
+        {
+            Nav.NavigateTo("/access-denied");
+            return;
+        }
+
+        _cashBoxes = await CashBoxService.GetCashBoxesAsync(activeOnly: true);
+        await LoadAsync();
+    }
+
+    private async Task<IEnumerable<EmployeeListDto>> SearchEmployeesAsync(string? value, CancellationToken ct)
+    {
+        try
+        {
+            return await EmployeeService.SearchEmployeesAsync(value ?? string.Empty, 20);
+        }
+        catch
+        {
+            return Enumerable.Empty<EmployeeListDto>();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+
+        try
+        {
+            _items = await PayrollService.GetOffPayrollPaymentsAsync(_filter);
+            _stats = await PayrollService.GetOffPayrollPaymentStatsAsync(_filter);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ في تحميل الدفعات: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_selectedEmployee is null)
+        {
+            Snackbar.Add("يجب اختيار الموظف", Severity.Warning);
+            return;
+        }
+
+        if (_formModel.Amount <= 0)
+        {
+            Snackbar.Add("أدخل مبلغًا أكبر من صفر", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_formModel.Description))
+        {
+            Snackbar.Add("اكتب وصف الدفعة", Severity.Warning);
+            return;
+        }
+
+        _saving = true;
+        StateHasChanged();
+
+        try
+        {
+            _formModel.EmployeeID = _selectedEmployee.EmployeeId;
+            _formModel.EmployeeName = _selectedEmployee.FullName;
+            _formModel.Department = _selectedEmployee.Department;
+            _formModel.PaymentDate = _paymentDate ?? DateTime.Today;
+
+            var (ok, msg, _) = await PayrollService.SaveOffPayrollPaymentAsync(_formModel, _currentUser);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+            if (ok)
+            {
+                ResetForm();
+                await LoadAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ResetForm()
+    {
+        _selectedEmployee = null;
+        _paymentDate = DateTime.Today;
+        _formModel = new OffPayrollPaymentFormDto
+        {
+            PaymentDate = DateTime.Today,
+            PaymentType = "BonusSeparate"
+        };
+        StateHasChanged();
+    }
+
+    private async Task ApproveAsync(OffPayrollPaymentListDto item)
+    {
+        var (ok, msg) = await PayrollService.ApprovePayrollAsync(item.PayrollID, _currentUser);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+            await LoadAsync();
+    }
+
+    private void OpenRejectDialog(OffPayrollPaymentListDto item)
+    {
+        _rejectPayrollId = item.PayrollID;
+        _rejectReason = null;
+        _rejectDialogOpen = true;
+    }
+
+    private async Task SubmitRejectAsync()
+    {
+        var (ok, msg) = await PayrollService.RejectPayrollAsync(_rejectPayrollId, _currentUser, _rejectReason);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+        {
+            _rejectDialogOpen = false;
+            await LoadAsync();
+        }
+    }
+
+    private void OpenPayDialog(OffPayrollPaymentListDto item)
+    {
+        _payPayrollId = item.PayrollID;
+        _selectedPayCashBoxId = _cashBoxes.FirstOrDefault(c => c.IsDefault)?.CashBoxId ?? _cashBoxes.FirstOrDefault()?.CashBoxId;
+        _payDialogOpen = true;
+    }
+
+    private async Task SubmitPayAsync()
+    {
+        if (!_selectedPayCashBoxId.HasValue)
+        {
+            Snackbar.Add("يرجى اختيار الخزينة", Severity.Warning);
+            return;
+        }
+
+        var (ok, msg) = await PayrollService.PayOneAsync(_payPayrollId, _selectedPayCashBoxId.Value, _currentUser);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+        {
+            _payDialogOpen = false;
+            await LoadAsync();
+        }
+    }
+
+    private async Task CancelAsync(OffPayrollPaymentListDto item)
+    {
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Message, $"هل تريد إلغاء الدفعة الخاصة بـ {item.EmployeeName}؟" },
+            { x => x.YesText, "إلغاء الدفعة" },
+            { x => x.CancelText, "تراجع" }
+        };
+
+        var dialog = await DialogService.ShowAsync<MudMessageBox>(
+            "تأكيد الإلغاء",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+
+        if ((await dialog.Result) is { Canceled: true })
+            return;
+
+        var (ok, msg) = await PayrollService.CancelAsync(item.PayrollID, _currentUser);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+            await LoadAsync();
+    }
+
+    private async Task OnSearchKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await LoadAsync();
+    }
+
+    private static string EmployeeToString(EmployeeListDto? employee) => employee?.FullName ?? string.Empty;
+
+    private string GetMonthDisplay()
+    {
+        var value = (_paymentDate ?? DateTime.Today).ToString("yyyy-MM");
+        return value;
+    }
+
+    private static string PaymentTypeAr(string paymentType) => paymentType switch
+    {
+        "CommissionSeparate" => "عمولة منفصلة",
+        _ => "مكافأة منفصلة"
+    };
+
+    private static string FormatMonth(string? month) =>
+        string.IsNullOrWhiteSpace(month)
+            ? "—"
+            : DateTime.TryParseExact(month + "-01", "yyyy-MM-dd", null,
+                System.Globalization.DateTimeStyles.None, out var date)
+                ? date.ToString("MMMM yyyy", new System.Globalization.CultureInfo("ar-EG"))
+                : month;
+}

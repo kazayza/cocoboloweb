@@ -531,7 +531,7 @@ public async Task<(bool Success, string? Error, byte[]? Excel, string FileName)>
             ws.Cell(row, 4).Value = q.PartyName;
             ws.Cell(row, 5).Value = q.PartyPhone ?? "";
             ws.Cell(row, 6).Value = q.EmpName ?? "";
-            ws.Cell(row, 7).Value = q.PricingType == "Elite" ? "إيليت" : "بريميم";
+            ws.Cell(row, 7).Value = QuotationPricingModes.All.GetValueOrDefault(q.PricingType ?? PricingTiers.Premium, "بريميوم");
             ws.Cell(row, 8).Value = q.TotalAmount;
             ws.Cell(row, 9).Value = q.DiscountAmount ?? 0;
             ws.Cell(row, 10).Value = q.GrandTotal;
@@ -792,7 +792,7 @@ public async Task<(bool Success, string? Error, byte[]? Pdf, string FileName)>
                         table.Cell().Element(Cell).Text(q.PartyName).FontSize(8);
                         table.Cell().Element(Cell).AlignCenter().Text(q.PartyPhone ?? "-").FontSize(8);
                         table.Cell().Element(Cell).Text(q.EmpName ?? "-").FontSize(8);
-                        table.Cell().Element(Cell).AlignCenter().Text(q.PricingType == "Elite" ? "إيليت" : "بريميم").FontSize(8);
+                        table.Cell().Element(Cell).AlignCenter().Text(QuotationPricingModes.All.GetValueOrDefault(q.PricingType ?? PricingTiers.Premium, "بريميوم")).FontSize(8);
                         table.Cell().Element(Cell).AlignCenter().Text(q.TotalAmount.ToString("N2")).FontSize(8);
                         table.Cell().Element(Cell).AlignCenter().Text(q.GrandTotal.ToString("N2")).Bold().FontSize(8);
                         table.Cell().Element(Cell).AlignCenter().Text(GetStatusText(q.Status)).FontSize(8);

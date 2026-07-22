@@ -73,6 +73,9 @@ public class InstallmentListDto
 {
     public int       InstallmentId     { get; set; }
     public int       LoanId            { get; set; }
+    public int       EmployeeId        { get; set; }
+    public string    EmployeeName      { get; set; } = "";
+    public string?   Department        { get; set; }
     public int       InstallmentNumber { get; set; }
     public string    DeductionMonth    { get; set; } = "";
 
@@ -106,12 +109,14 @@ public class InstallmentListDto
 
 public class LoanFilterDto
 {
-    public int?    EmployeeId  { get; set; }
-    public string? Status      { get; set; }
-    public string? SearchText  { get; set; }
-    public string? Month       { get; set; }
-    public int     PageNumber  { get; set; } = 1;
-    public int     PageSize    { get; set; } = 20;
+    public int?    EmployeeId     { get; set; }
+    public string? Status         { get; set; }
+    public string? SearchText     { get; set; }
+    public string? Month          { get; set; }
+    public decimal? MinLoanAmount { get; set; }
+    public decimal? MaxLoanAmount { get; set; }
+    public int     PageNumber     { get; set; } = 1;
+    public int     PageSize       { get; set; } = 20;
 }
 
 public class LoanStatsDto
@@ -121,6 +126,9 @@ public class LoanStatsDto
     public decimal ThisMonthDeductions  { get; set; }
     public int     CompletedThisMonth   { get; set; }
     public int     EmployeesWithLoans   { get; set; }
+    public decimal TotalLoanAmount      { get; set; }
+    public decimal AverageLoanAmount    { get; set; }
+    public int     PendingInstallmentsCount { get; set; }
 }
 
 public class EmployeeLookupDto
@@ -140,6 +148,22 @@ public class CashBoxLookupDto
     public decimal CurrentBalance { get; set; }
     public bool    IsDefault      { get; set; }
     public string  DisplayText    => $"{CashBoxName} ({CurrentBalance:N2} جـ)";
+}
+
+public class EmployeeLoanStatementDto
+{
+    public int EmployeeId { get; set; }
+    public string EmployeeName { get; set; } = "";
+    public string? Department { get; set; }
+    public string? JobTitle { get; set; }
+    public int ActiveLoansCount { get; set; }
+    public decimal TotalLoanAmount { get; set; }
+    public decimal TotalPaidAmount { get; set; }
+    public decimal TotalRemainingAmount { get; set; }
+    public decimal CurrentMonthDue { get; set; }
+    public int PendingInstallmentsCount { get; set; }
+    public List<LoanListDto> Loans { get; set; } = new();
+    public List<InstallmentListDto> Installments { get; set; } = new();
 }
 
 // ============================================================

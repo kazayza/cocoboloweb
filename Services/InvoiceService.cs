@@ -238,14 +238,21 @@ public class InvoiceService : IInvoiceService
                                Quantity = d.Quantity,
                                UnitPrice = d.UnitPrice,
                                Notes = d.Notes,
-                               PricingTier = d.Notes != null && d.Notes.Contains("[Elite]")
-                                   ? PricingTiers.Elite : PricingTiers.Premium,
+                               PricingTier = d.PricingTier,
+                               SalePriceCClass = p.SuggestedSalePriceCClass,
                                SalePricePremium = p.SuggestedSalePrice,
                                SalePriceElite = p.SuggestedSalePriceElite,
+                               PurchasePriceCClass = p.PurchasePriceCClass,
                                PurchasePricePremium = p.PurchasePrice,
                                PurchasePriceElite = p.PurchasePriceElite,
                                Period = p.Period
                            }).ToListAsync();
+
+        foreach (var item in items)
+        {
+            if (string.IsNullOrWhiteSpace(item.PricingTier))
+                item.PricingTier = ExtractPricingTierFromNotes(item.Notes);
+        }
 
         var charges = await _db.AdditionalCharges
             .AsNoTracking()
@@ -524,9 +531,8 @@ public class InvoiceService : IInvoiceService
             // أصناف المرآة (يزود المخزون)
             foreach (var item in dto.Items)
             {
-                var purchasePrice = item.PricingTier == PricingTiers.Elite
-                    ? (item.PurchasePriceElite ?? item.PurchasePricePremium ?? 0)
-                    : (item.PurchasePricePremium ?? 0);
+                var effectiveTier = NormalizePricingTier(item.PricingTier);
+                var purchasePrice = GetPurchasePriceByTier(item, effectiveTier);
 
                 var purchaseDetail = new TransactionDetail
                 {
@@ -535,7 +541,8 @@ public class InvoiceService : IInvoiceService
                     Quantity = item.Quantity,
                     UnitPrice = purchasePrice,
                     TotalAmount = Math.Round(item.Quantity * purchasePrice, 2),
-                    Notes = $"[{item.PricingTier}] - مقابل بيع {dto.ReferenceNumber}"
+                    PricingTier = effectiveTier,
+                    Notes = $"[{effectiveTier}] - مقابل بيع {dto.ReferenceNumber}"
                 };
                 _db.TransactionDetails.Add(purchaseDetail);
                 mirrorTotal += purchaseDetail.TotalAmount ?? 0;
@@ -552,6 +559,8 @@ public class InvoiceService : IInvoiceService
             // أصناف فاتورة البيع (يخصم المخزون)
             foreach (var item in dto.Items)
             {
+                var effectiveTier = NormalizePricingTier(item.PricingTier);
+
                 var detail = new TransactionDetail
                 {
                     TransactionId = saleTransaction.TransactionId,
@@ -559,9 +568,10 @@ public class InvoiceService : IInvoiceService
                     Quantity = item.Quantity,
                     UnitPrice = item.UnitPrice,
                     TotalAmount = item.TotalAmount,
+                    PricingTier = effectiveTier,
                     Notes = string.IsNullOrEmpty(item.Notes)
-                        ? $"[{item.PricingTier}]"
-                        : $"[{item.PricingTier}] {item.Notes}"
+                        ? $"[{effectiveTier}]"
+                        : $"[{effectiveTier}] {item.Notes}"
                 };
                 _db.TransactionDetails.Add(detail);
                 
@@ -1148,8 +1158,10 @@ public class InvoiceService : IInvoiceService
                 ProductName = p.ProductName,
                 ProductDescription = p.ProductDescription,
                 ImagePath = null,
+                SuggestedSalePriceCClass = p.SuggestedSalePriceCClass,
                 SuggestedSalePrice = p.SuggestedSalePrice,
                 SuggestedSalePriceElite = p.SuggestedSalePriceElite,
+                PurchasePriceCClass = p.PurchasePriceCClass,
                 PurchasePrice = p.PurchasePrice,
                 PurchasePriceElite = p.PurchasePriceElite,
                 AvailableStock = _db.StockLevels
@@ -1325,6 +1337,41 @@ await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, actor,
         }
     }
 
+    private static string NormalizePricingTier(string? tier)
+    {
+        if (string.Equals(tier, PricingTiers.CClass, StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.CClass;
+
+        if (string.Equals(tier, PricingTiers.Elite, StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.Elite;
+
+        return PricingTiers.Premium;
+    }
+
+    private static string ExtractPricingTierFromNotes(string? notes)
+    {
+        if (string.IsNullOrWhiteSpace(notes))
+            return PricingTiers.Premium;
+
+        if (notes.StartsWith($"[{PricingTiers.CClass}]", StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.CClass;
+
+        if (notes.StartsWith($"[{PricingTiers.Elite}]", StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.Elite;
+
+        return PricingTiers.Premium;
+    }
+
+    private static decimal GetPurchasePriceByTier(InvoiceItemDto item, string tier)
+    {
+        return tier switch
+        {
+            var t when t == PricingTiers.CClass => item.PurchasePriceCClass ?? 0m,
+            var t when t == PricingTiers.Elite => item.PurchasePriceElite ?? item.PurchasePricePremium ?? 0m,
+            _ => item.PurchasePricePremium ?? 0m
+        };
+    }
+
     private (bool IsValid, string Message) ValidateInvoice(InvoiceFormDto dto)
     {
         if (dto.PartyId == null || dto.PartyId == 0)
@@ -1347,12 +1394,27 @@ await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, actor,
     {
         dto.TotalAmount = Math.Round(dto.Items.Sum(i => i.TotalAmount), 2);
 
-        if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0)
+        // ✅ الأولوية لقيمة الخصم الفعلية لو موجودة
+        // لأن إعادة اشتقاق الخصم من نسبة مقربة قد يغيّر الرقم الأصلي.
+        if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
+        {
+            if (dto.DiscountAmount.Value > dto.TotalAmount)
+                dto.DiscountAmount = dto.TotalAmount;
+
+            dto.DiscountPercentage = dto.TotalAmount > 0
+                ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100m, 2)
+                : 0;
+        }
+        else if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0)
         {
             dto.DiscountAmount = Math.Round(
                 dto.TotalAmount * (dto.DiscountPercentage.Value / 100m), 2);
         }
-        dto.DiscountAmount ??= 0;
+        else
+        {
+            dto.DiscountAmount = 0;
+            dto.DiscountPercentage = 0;
+        }
 
         dto.NetTotalAmount = dto.TotalAmount - (dto.DiscountAmount ?? 0);
         dto.TotalChargesAmount = Math.Round(dto.Charges.Sum(c => c.ChargeAmount), 2);

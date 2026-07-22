@@ -20,7 +20,12 @@ public interface IPayrollService
                           int cashBoxId, string user);
 
     Task<(bool Ok, string Msg)> PayOneAsync(int payrollId, int cashBoxId, string user);
+    Task<(bool Ok, string Msg)> ApprovePayrollAsync(int payrollId, string user);
+    Task<(bool Ok, string Msg)> RejectPayrollAsync(int payrollId, string user, string? reason = null);
     Task<(bool Ok, string Msg)> CancelAsync(int payrollId, string user);
+    Task<List<OffPayrollPaymentListDto>> GetOffPayrollPaymentsAsync(OffPayrollPaymentFilterDto filter);
+    Task<OffPayrollPaymentStatsDto> GetOffPayrollPaymentStatsAsync(OffPayrollPaymentFilterDto filter);
+    Task<(bool Ok, string Msg, int? PayrollId)> SaveOffPayrollPaymentAsync(OffPayrollPaymentFormDto dto, string user);
 
     // ── الحضور اليدوي ────────────────────────────────────────
     Task<List<ManualAttendanceDto>>     GetManualAttendanceAsync(string month);
@@ -30,4 +35,5 @@ public interface IPayrollService
 
     // ── Export ───────────────────────────────────────────────
     Task<byte[]> ExportMonthExcelAsync(string month);
+    Task<byte[]> ExportPayrollsExcelAsync(PayrollFilterDto filter);
 }

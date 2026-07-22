@@ -27,7 +27,11 @@ public partial class Product
 
     public decimal? PurchasePriceElite { get; set; }
 
+    public decimal? PurchasePriceCClass { get; set; }
+
     public decimal? SuggestedSalePriceElite { get; set; }
+
+    public decimal? SuggestedSalePriceCClass { get; set; }
 
     public string? PricingType { get; set; }
 

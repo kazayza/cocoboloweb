@@ -9,11 +9,15 @@ public partial class PricingMargin
 
     public decimal PremiumMargin { get; set; }
 
+    public decimal CClassMargin { get; set; }
+
     public decimal EliteMargin { get; set; }
 
     public bool IsActive { get; set; }
 
     public decimal? PreviousPremium { get; set; }
+
+    public decimal? PreviousCClass { get; set; }
 
     public decimal? PreviousElite { get; set; }
 

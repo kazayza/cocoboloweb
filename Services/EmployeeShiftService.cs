@@ -31,14 +31,26 @@ public class EmployeeShiftService : IEmployeeShiftService
         if (filter.EmployeeId.HasValue)
             query = query.Where(s => s.EmployeeId == filter.EmployeeId.Value);
 
-        if (filter.EffectiveFrom.HasValue)
-            query = query.Where(s => s.EffectiveFrom >= filter.EffectiveFrom.Value.Date);
-
-        if (filter.EffectiveTo.HasValue)
-            query = query.Where(s => s.EffectiveTo == null || s.EffectiveTo.Value <= filter.EffectiveTo.Value.Date);
+        if (filter.EffectiveFrom.HasValue && filter.EffectiveTo.HasValue)
+        {
+            var from = filter.EffectiveFrom.Value.Date;
+            var to = filter.EffectiveTo.Value.Date;
+            query = query.Where(s => s.EffectiveFrom.Date <= to
+                                  && (!s.EffectiveTo.HasValue || s.EffectiveTo.Value.Date >= from));
+        }
+        else if (filter.EffectiveFrom.HasValue)
+        {
+            var from = filter.EffectiveFrom.Value.Date;
+            query = query.Where(s => !s.EffectiveTo.HasValue || s.EffectiveTo.Value.Date >= from);
+        }
+        else if (filter.EffectiveTo.HasValue)
+        {
+            var to = filter.EffectiveTo.Value.Date;
+            query = query.Where(s => s.EffectiveFrom.Date <= to);
+        }
 
         if (filter.ActiveOnly == true)
-            query = query.Where(s => s.EffectiveTo == null || s.EffectiveTo.Value >= DateTime.Today);
+            query = query.Where(s => s.EffectiveFrom <= DateTime.Today && (s.EffectiveTo == null || s.EffectiveTo.Value >= DateTime.Today));
 
         if (!string.IsNullOrWhiteSpace(filter.SearchText))
 {
@@ -291,6 +303,8 @@ public class EmployeeShiftService : IEmployeeShiftService
             shift.EndTime = dto.EndTime;
             shift.EffectiveFrom = dto.EffectiveFrom;
             shift.EffectiveTo = dto.EffectiveTo;
+            shift.OffDay1 = dto.OffDay1;
+            shift.OffDay2 = dto.OffDay2;
             if (dto.BiometricCode.HasValue)
                 shift.BiometricCode = dto.BiometricCode;
 

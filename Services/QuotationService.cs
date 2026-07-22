@@ -26,6 +26,7 @@ namespace COCOBOLOERPNEW.Services;
 public class QuotationService : IQuotationService
 {
     private readonly db24804Context _db;
+    private readonly IDbContextFactory<db24804Context> _dbFactory;
     private readonly IAuditService _audit;
     private readonly NotificationService _notify;
     private readonly IInvoiceService _invoiceService;
@@ -43,12 +44,17 @@ public class QuotationService : IQuotationService
     };
 
     public QuotationService(
-        db24804Context db, IAuditService audit, NotificationService notify,
+        db24804Context db, IDbContextFactory<db24804Context> dbFactory, IAuditService audit, NotificationService notify,
         IInvoiceService invoiceService, IHttpContextAccessor httpContext,
         ILogger<QuotationService> logger)
     {
-        _db = db; _audit = audit; _notify = notify;
-        _invoiceService = invoiceService; _httpContext = httpContext; _logger = logger;
+        _db = db;
+        _dbFactory = dbFactory;
+        _audit = audit;
+        _notify = notify;
+        _invoiceService = invoiceService;
+        _httpContext = httpContext;
+        _logger = logger;
     }
 
     private ClaimsPrincipal? CurrentUser => _httpContext.HttpContext?.User;
@@ -80,76 +86,12 @@ public class QuotationService : IQuotationService
         var step = "Step 1: Build base query";
         try
         {
-            var baseQuery = _db.Quotations.AsNoTracking().AsQueryable();
+            await using var db = await _dbFactory.CreateDbContextAsync();
 
-            // البحث
-            if (!string.IsNullOrWhiteSpace(filter.SearchText))
-            {
-                step = "Step 1.1: Search parties";
-                var s = filter.SearchText.Trim();
-
-                var prefiltered = await _db.Parties.AsNoTracking()
-                    .Where(p => EF.Functions.Like(p.PartyName ?? "", $"%{s}%")
-                             || EF.Functions.Like(p.Phone ?? "", $"%{s}%"))
-                    .Select(p => new { p.PartyId, p.PartyName, p.Phone })
-                    .Take(500)
-                    .ToListAsync();
-
-                var matchingPartyIds = prefiltered
-                    .Where(p => (p.PartyName ?? "").ContainsArabic(s) ||
-                                (p.Phone ?? "").ContainsArabic(s))
-                    .Select(p => p.PartyId)
-                    .ToList();
-
-                baseQuery = baseQuery.Where(q =>
-                    matchingPartyIds.Contains(q.PartyId) ||
-                    (q.Notes != null && q.Notes.Contains(s)));
-            }
-
-            // الفلاتر
-            if (filter.PartyId.HasValue)
-                baseQuery = baseQuery.Where(q => q.PartyId == filter.PartyId.Value);
-            if (filter.EmpId.HasValue)
-                baseQuery = baseQuery.Where(q => q.EmpId == filter.EmpId.Value);
-
-            if (filter.DateFrom.HasValue)
-                baseQuery = baseQuery.Where(q => q.QuotationDate >= filter.DateFrom.Value.Date);
-
-            if (filter.DateTo.HasValue)
-            {
-                var endOfDay = filter.DateTo.Value.Date.AddDays(1).AddTicks(-1);
-                baseQuery = baseQuery.Where(q => q.QuotationDate <= endOfDay);
-            }
-
-            if (filter.PendingOnly == true)
-{
-    baseQuery = baseQuery.Where(q =>
-        q.InvoiceId == null &&
-        (
-            string.IsNullOrEmpty(q.Status) ||
-            q.Status == QuotationStatuses.Draft ||
-            q.Status == QuotationStatuses.Sent
-        ));
-}
-else if (!string.IsNullOrWhiteSpace(filter.Status))
-{
-    baseQuery = baseQuery.Where(q => q.Status == filter.Status);
-}
-
-if (filter.IsConverted.HasValue)
-{
-    baseQuery = filter.IsConverted.Value
-        ? baseQuery.Where(q => q.InvoiceId != null)
-        : baseQuery.Where(q => q.InvoiceId == null);
-}
-
-            if (filter.IsExpired.GetValueOrDefault())
-            {
-                var today = DateTime.Today;
-                baseQuery = baseQuery.Where(q => q.ValidUntil.HasValue
-                                              && q.ValidUntil.Value < today
-                                              && q.InvoiceId == null);
-            }
+            var baseQuery = await ApplyQuotationFiltersAsync(
+                db,
+                db.Quotations.AsNoTracking().AsQueryable(),
+                filter);
 
             step = "Step 2: Count total";
             var totalCount = await baseQuery.CountAsync();
@@ -215,7 +157,7 @@ if (filter.IsConverted.HasValue)
             var partiesDict = new Dictionary<int, (string Name, string? Phone)>();
             if (partyIds.Any())
             {
-                var partyRows = await _db.Parties.AsNoTracking()
+                var partyRows = await db.Parties.AsNoTracking()
                     .Where(p => partyIds.Contains(p.PartyId))
                     .Select(p => new { p.PartyId, Name = p.PartyName, p.Phone })
                     .ToListAsync();
@@ -227,7 +169,7 @@ if (filter.IsConverted.HasValue)
             var warehousesDict = new Dictionary<int, string>();
             if (warehouseIds.Any())
             {
-                var whRows = await _db.Warehouses.AsNoTracking()
+                var whRows = await db.Warehouses.AsNoTracking()
                     .Where(w => warehouseIds.Contains(w.WarehouseId))
                     .Select(w => new { w.WarehouseId, Name = w.WarehouseName })
                     .ToListAsync();
@@ -239,7 +181,7 @@ if (filter.IsConverted.HasValue)
             var empsDict = new Dictionary<int, string>();
             if (empIds.Any())
             {
-                var empRows = await _db.Employees.AsNoTracking()
+                var empRows = await db.Employees.AsNoTracking()
                     .Where(e => empIds.Contains(e.EmployeeId))
                     .Select(e => new { e.EmployeeId, Name = e.FullName })
                     .ToListAsync();
@@ -251,7 +193,7 @@ if (filter.IsConverted.HasValue)
             var invoicesDict = new Dictionary<int, string>();
             if (invoiceIds.Any())
             {
-                var invRows = await _db.Transactions.AsNoTracking()
+                var invRows = await db.Transactions.AsNoTracking()
                     .Where(t => invoiceIds.Contains(t.TransactionId))
                     .Select(t => new { t.TransactionId, Ref = t.ReferenceNumber })
                     .ToListAsync();
@@ -263,7 +205,7 @@ if (filter.IsConverted.HasValue)
             var itemsCountDict = new Dictionary<int, int>();
             if (quoteIds.Any())
             {
-                var counts = await _db.QuotationDetails.AsNoTracking()
+                var counts = await db.QuotationDetails.AsNoTracking()
                     .Where(d => quoteIds.Contains(d.QuotationId))
                     .GroupBy(d => d.QuotationId)
                     .Select(g => new { Id = g.Key, Cnt = g.Count() })
@@ -280,14 +222,15 @@ var costDict = new Dictionary<int, decimal>();
 if (canViewCost && quoteIds.Any())
 {
     // 1) هات تفاصيل عروض الأسعار
-    var costDetailRows = await _db.QuotationDetails.AsNoTracking()
+    var costDetailRows = await db.QuotationDetails.AsNoTracking()
         .Where(d => quoteIds.Contains(d.QuotationId))
         .Select(d => new
         {
             d.QuotationId,
             d.ProductId,
             d.Quantity,
-            d.Notes
+            d.Notes,
+            d.PricingTier
         })
         .ToListAsync();
 
@@ -297,15 +240,16 @@ if (canViewCost && quoteIds.Any())
         .ToList();
 
     // 2) هات تكلفة المنتجات الحالية من جدول Products
-    var productCostsDict = new Dictionary<int, (decimal? PremiumCost, decimal? EliteCost)>();
+    var productCostsDict = new Dictionary<int, (decimal? CClassCost, decimal? PremiumCost, decimal? EliteCost)>();
 
     if (costProductIds.Any())
     {
-        var productCosts = await _db.Products.AsNoTracking()
+        var productCosts = await db.Products.AsNoTracking()
             .Where(p => costProductIds.Contains(p.ProductId))
             .Select(p => new
             {
                 p.ProductId,
+                p.PurchasePriceCClass,
                 p.PurchasePrice,
                 p.PurchasePriceElite
             })
@@ -313,7 +257,7 @@ if (canViewCost && quoteIds.Any())
 
         foreach (var p in productCosts)
         {
-            productCostsDict[p.ProductId] = (p.PurchasePrice, p.PurchasePriceElite);
+            productCostsDict[p.ProductId] = (p.PurchasePriceCClass, p.PurchasePrice, p.PurchasePriceElite);
         }
     }
 
@@ -327,11 +271,16 @@ if (canViewCost && quoteIds.Any())
                 if (!productCostsDict.TryGetValue(d.ProductId, out var productCost))
                     return 0m;
 
-                var tier = ExtractTier(d.Notes);
+                var tier = string.IsNullOrWhiteSpace(d.PricingTier)
+                    ? ExtractTier(d.Notes)
+                    : d.PricingTier;
 
-                var unitCost = tier == PricingTiers.Elite
-                    ? (productCost.EliteCost ?? productCost.PremiumCost ?? 0m)
-                    : (productCost.PremiumCost ?? 0m);
+                var unitCost = tier switch
+                {
+                    var t when t == PricingTiers.CClass => productCost.CClassCost ?? 0m,
+                    var t when t == PricingTiers.Elite => productCost.EliteCost ?? productCost.PremiumCost ?? 0m,
+                    _ => productCost.PremiumCost ?? 0m
+                };
 
                 return Math.Round(d.Quantity * unitCost, 2);
             })
@@ -403,6 +352,81 @@ if (canViewCost && quoteIds.Any())
         }
     }
 
+    private async Task<IQueryable<Quotation>> ApplyQuotationFiltersAsync(
+        db24804Context db,
+        IQueryable<Quotation> baseQuery,
+        QuotationFilterDto filter)
+    {
+        if (!string.IsNullOrWhiteSpace(filter.SearchText))
+        {
+            var s = filter.SearchText.Trim();
+
+            var prefiltered = await db.Parties.AsNoTracking()
+                .Where(p => EF.Functions.Like(p.PartyName ?? "", $"%{s}%")
+                         || EF.Functions.Like(p.Phone ?? "", $"%{s}%"))
+                .Select(p => new { p.PartyId, p.PartyName, p.Phone })
+                .Take(500)
+                .ToListAsync();
+
+            var matchingPartyIds = prefiltered
+                .Where(p => (p.PartyName ?? "").ContainsArabic(s)
+                         || (p.Phone ?? "").ContainsArabic(s))
+                .Select(p => p.PartyId)
+                .ToList();
+
+            baseQuery = baseQuery.Where(q =>
+                matchingPartyIds.Contains(q.PartyId) ||
+                (q.Notes != null && q.Notes.Contains(s)));
+        }
+
+        if (filter.PartyId.HasValue)
+            baseQuery = baseQuery.Where(q => q.PartyId == filter.PartyId.Value);
+
+        if (filter.EmpId.HasValue)
+            baseQuery = baseQuery.Where(q => q.EmpId == filter.EmpId.Value);
+
+        if (filter.DateFrom.HasValue)
+            baseQuery = baseQuery.Where(q => q.QuotationDate >= filter.DateFrom.Value.Date);
+
+        if (filter.DateTo.HasValue)
+        {
+            var endOfDay = filter.DateTo.Value.Date.AddDays(1).AddTicks(-1);
+            baseQuery = baseQuery.Where(q => q.QuotationDate <= endOfDay);
+        }
+
+        if (filter.PendingOnly == true)
+        {
+            baseQuery = baseQuery.Where(q =>
+                q.InvoiceId == null &&
+                (
+                    string.IsNullOrEmpty(q.Status) ||
+                    q.Status == QuotationStatuses.Draft ||
+                    q.Status == QuotationStatuses.Sent
+                ));
+        }
+        else if (!string.IsNullOrWhiteSpace(filter.Status))
+        {
+            baseQuery = baseQuery.Where(q => q.Status == filter.Status);
+        }
+
+        if (filter.IsConverted.HasValue)
+        {
+            baseQuery = filter.IsConverted.Value
+                ? baseQuery.Where(q => q.InvoiceId != null)
+                : baseQuery.Where(q => q.InvoiceId == null);
+        }
+
+        if (filter.IsExpired.GetValueOrDefault())
+        {
+            var today = DateTime.Today;
+            baseQuery = baseQuery.Where(q => q.ValidUntil.HasValue
+                                          && q.ValidUntil.Value < today
+                                          && q.InvoiceId == null);
+        }
+
+        return baseQuery;
+    }
+
     // ============================================================
     //  جلب عرض السعر للتعديل (نفس الطريقة - بدون JOINs)
     // ============================================================
@@ -465,12 +489,13 @@ if (canViewCost && quoteIds.Any())
                 PrId = (int?)d.ProductId,
                 Qty = (decimal?)d.Quantity,
                 Price = (decimal?)d.UnitPrice,
-                d.Notes
+                d.Notes,
+                d.PricingTier
             })
             .ToListAsync();
 
         var productIds = detailRows.Where(d => d.PrId.HasValue).Select(d => d.PrId!.Value).Distinct().ToList();
-        var productsDict = new Dictionary<int, (string? Name, string? Desc, decimal? Sale, decimal? SaleE, decimal? Purch, decimal? PurchE, int? Period)>();
+        var productsDict = new Dictionary<int, (string? Name, string? Desc, decimal? SaleC, decimal? SaleP, decimal? SaleE, decimal? PurchC, decimal? PurchP, decimal? PurchE, int? Period)>();
         if (productIds.Any())
         {
             var prods = await _db.Products.AsNoTracking()
@@ -480,8 +505,10 @@ if (canViewCost && quoteIds.Any())
                     p.ProductId,
                     p.ProductName,
                     p.ProductDescription,
+                    p.SuggestedSalePriceCClass,
                     p.SuggestedSalePrice,
                     p.SuggestedSalePriceElite,
+                    p.PurchasePriceCClass,
                     p.PurchasePrice,
                     p.PurchasePriceElite,
                     p.Period
@@ -489,13 +516,14 @@ if (canViewCost && quoteIds.Any())
                 .ToListAsync();
             foreach (var p in prods)
                 productsDict[p.ProductId] = (p.ProductName, p.ProductDescription,
-                    p.SuggestedSalePrice, p.SuggestedSalePriceElite,
-                    p.PurchasePrice, p.PurchasePriceElite, p.Period);
+                    p.SuggestedSalePriceCClass, p.SuggestedSalePrice, p.SuggestedSalePriceElite,
+                    p.PurchasePriceCClass, p.PurchasePrice, p.PurchasePriceElite, p.Period);
         }
 
         var items = detailRows.Select(d =>
         {
             productsDict.TryGetValue(d.PrId ?? 0, out var p);
+            var effectiveTier = NormalizePricingTier(d.PricingTier, d.Notes);
             return new QuotationItemDto
             {
                 QuotationDetailId = d.DId ?? 0,
@@ -505,10 +533,12 @@ if (canViewCost && quoteIds.Any())
                 Quantity = d.Qty ?? 0,
                 UnitPrice = d.Price ?? 0,
                 Notes = StripTierTag(d.Notes),
-                PricingTier = ExtractTier(d.Notes),
-                SalePricePremium = p.Sale,
+                PricingTier = effectiveTier,
+                SalePriceCClass = p.SaleC,
+                SalePricePremium = p.SaleP,
                 SalePriceElite = p.SaleE,
-                PurchasePricePremium = p.Purch,
+                PurchasePriceCClass = p.PurchC,
+                PurchasePricePremium = p.PurchP,
                 PurchasePriceElite = p.PurchE,
                 Period = p.Period
             };
@@ -543,7 +573,7 @@ if (canViewCost && quoteIds.Any())
             WarehouseId = rawData.WarehouseId,
             EmpId = rawData.EmpId,
             EmpName = empName,
-            PricingType = rawData.PricingType ?? PricingTiers.Premium,
+            PricingType = ResolveQuotationPricingType(items.Select(i => i.PricingTier), rawData.PricingType),
             TotalAmount = total,
             DiscountAmount = rawData.DiscountAmount,
             DiscountPercentage = discountPct,
@@ -604,22 +634,29 @@ if (canViewCost && quoteIds.Any())
     }
 
     // ============================================================
-    //  الإحصائيات (نفس الفكرة - بدون JOINs)
+    //  الإحصائيات (تحترم الفلاتر الحالية بالكامل)
     // ============================================================
     public async Task<QuotationStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null)
+    {
+        return await GetStatsAsync(new QuotationFilterDto
+        {
+            DateFrom = from,
+            DateTo = to
+        });
+    }
+
+    public async Task<QuotationStatsDto> GetStatsAsync(QuotationFilterDto filter)
     {
         if (!HasPermission("View")) return new QuotationStatsDto();
 
         try
         {
-            var query = _db.Quotations.AsNoTracking().AsQueryable();
+            await using var db = await _dbFactory.CreateDbContextAsync();
 
-            if (from.HasValue) query = query.Where(q => q.QuotationDate >= from.Value.Date);
-            if (to.HasValue)
-            {
-                var endOfDay = to.Value.Date.AddDays(1).AddTicks(-1);
-                query = query.Where(q => q.QuotationDate <= endOfDay);
-            }
+            var query = await ApplyQuotationFiltersAsync(
+                db,
+                db.Quotations.AsNoTracking().AsQueryable(),
+                filter);
 
             var today = DateTime.Today;
 
@@ -682,6 +719,9 @@ if (canViewCost && quoteIds.Any())
     var validation = ValidateQuotation(dto);
     if (!validation.IsValid) return (false, validation.Message, null);
 
+    var discountValidation = ValidateDiscountPermission(dto);
+    if (!discountValidation.IsValid) return (false, discountValidation.Message, null);
+
     await using var tx = await _db.Database.BeginTransactionAsync();
     try
     {
@@ -693,6 +733,8 @@ if (canViewCost && quoteIds.Any())
         // ✅ توليد الرقم وحفظه في قاعدة البيانات بدلاً من الـ DTO
         var refNumber = await GenerateNextQuotationNumberAsync();
 
+        var quotationPricingType = ResolveQuotationPricingType(dto.Items.Select(i => i.PricingTier), dto.PricingType);
+
         var quotation = new Quotation
         {
             ReferenceNumber = refNumber, // تأكد من إضافة هذا الحقل في موديل Quotation
@@ -701,7 +743,7 @@ if (canViewCost && quoteIds.Any())
             PartyId = dto.PartyId!.Value,
             WarehouseId = dto.WarehouseId,
             EmpId = dto.EmpId,
-            PricingType = dto.PricingType,
+            PricingType = quotationPricingType,
             TotalAmount = dto.TotalAmount,
             DiscountAmount = dto.DiscountAmount ?? 0,
             GrandTotal = dto.GrandTotal,
@@ -716,6 +758,8 @@ if (canViewCost && quoteIds.Any())
 
         foreach (var item in dto.Items)
         {
+            var effectiveTier = NormalizePricingTier(item.PricingTier, item.Notes);
+
             _db.QuotationDetails.Add(new QuotationDetail
             {
                 QuotationId = quotation.QuotationId,
@@ -723,7 +767,8 @@ if (canViewCost && quoteIds.Any())
                 Quantity = item.Quantity,
                 UnitPrice = item.UnitPrice,
                 TotalAmount = item.TotalAmount,
-                Notes = BuildDetailNotes(item.PricingTier, item.Notes)
+                PricingTier = effectiveTier,
+                Notes = BuildDetailNotes(effectiveTier, item.Notes)
             });
         }
 
@@ -764,17 +809,23 @@ if (canViewCost && quoteIds.Any())
         var validation = ValidateQuotation(dto);
         if (!validation.IsValid) return (false, validation.Message);
 
+        var existingDiscountAmount = quotation.DiscountAmount ?? 0m;
+        var discountValidation = ValidateDiscountPermission(dto, existingDiscountAmount);
+        if (!discountValidation.IsValid) return (false, discountValidation.Message);
+
         await using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
-            CalculateTotals(dto);
+            CalculateTotals(dto, existingDiscountAmount);
+
+            var quotationPricingType = ResolveQuotationPricingType(dto.Items.Select(i => i.PricingTier), dto.PricingType);
 
             quotation.QuotationDate = dto.QuotationDate;
             quotation.ValidUntil = dto.ValidUntil;
             quotation.PartyId = dto.PartyId!.Value;
             quotation.WarehouseId = dto.WarehouseId;
             quotation.EmpId = dto.EmpId;
-            quotation.PricingType = dto.PricingType;
+            quotation.PricingType = quotationPricingType;
             quotation.TotalAmount = dto.TotalAmount;
             quotation.DiscountAmount = dto.DiscountAmount ?? 0;
             quotation.GrandTotal = dto.GrandTotal;
@@ -798,14 +849,19 @@ if (canViewCost && quoteIds.Any())
                     var row = existing.FirstOrDefault(d => d.QuotationDetailId == item.QuotationDetailId);
                     if (row != null)
                     {
+                        var existingRowTier = NormalizePricingTier(item.PricingTier, item.Notes);
+
                         row.ProductId = item.ProductId;
                         row.Quantity = item.Quantity;
                         row.UnitPrice = item.UnitPrice;
                         row.TotalAmount = item.TotalAmount;
-                        row.Notes = BuildDetailNotes(item.PricingTier, item.Notes);
+                        row.PricingTier = existingRowTier;
+                        row.Notes = BuildDetailNotes(existingRowTier, item.Notes);
                         continue;
                     }
                 }
+
+                var effectiveTier = NormalizePricingTier(item.PricingTier, item.Notes);
 
                 _db.QuotationDetails.Add(new QuotationDetail
                 {
@@ -814,7 +870,8 @@ if (canViewCost && quoteIds.Any())
                     Quantity = item.Quantity,
                     UnitPrice = item.UnitPrice,
                     TotalAmount = item.TotalAmount,
-                    Notes = BuildDetailNotes(item.PricingTier, item.Notes)
+                    PricingTier = effectiveTier,
+                    Notes = BuildDetailNotes(effectiveTier, item.Notes)
                 });
             }
 
@@ -940,7 +997,7 @@ if (canViewCost && quoteIds.Any())
 // ============================================================
 public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
     int quotationId, decimal initialPaidAmount, int? cashBoxId,
-    string paymentMethod, string currentUserName)
+    string paymentMethod, string currentUserName, DateTime? invoiceDate = null)
 {
     if (!HasPermission("Edit"))
         return (false, "ليس لديك صلاحية تحويل عرض السعر لفاتورة.", null);
@@ -962,7 +1019,7 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
         // جلب الأصناف مع بيانات المنتج
         var dRows = await _db.QuotationDetails.AsNoTracking()
             .Where(d => d.QuotationId == quotationId)
-            .Select(d => new { d.ProductId, d.Quantity, d.UnitPrice, d.Notes })
+            .Select(d => new { d.ProductId, d.Quantity, d.UnitPrice, d.Notes, d.PricingTier })
             .ToListAsync();
 
         if (!dRows.Any())
@@ -976,8 +1033,10 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
                 p.ProductId,
                 p.ProductName,
                 p.ProductDescription,
+                p.SuggestedSalePriceCClass,
                 p.SuggestedSalePrice,
                 p.SuggestedSalePriceElite,
+                p.PurchasePriceCClass,
                 p.PurchasePrice,
                 p.PurchasePriceElite,
                 p.Period
@@ -999,21 +1058,28 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
         if (!warehouseId.HasValue)
             return (false, "يرجى اختيار المخزن قبل التحويل.", null);
 
+        var invoiceDateValue = invoiceDate?.Date ?? DateTime.Today;
+        var maxProductionDays = dRows
+            .Select(d => prodDict.TryGetValue(d.ProductId, out var p) ? (p?.Period ?? 0) : 0)
+            .DefaultIfEmpty(0)
+            .Max();
+        var calculatedDueDate = invoiceDateValue.AddDays(maxProductionDays);
+
         // جهّز بيانات الفاتورة
         var invoiceForm = new InvoiceFormDto
         {
-            TransactionDate = DateTime.Now,
+            TransactionDate = invoiceDateValue,
             PartyId = quotation.PartyId,
             WarehouseId = warehouseId,
             EmpId = quotation.EmpId,
-            DueDate = quotation.ValidUntil,
+            DueDate = calculatedDueDate,
             Notes = $"تحويل من عرض السعر QT-{quotation.QuotationDate.Year}-{quotation.QuotationId:D5}" +
                     (string.IsNullOrEmpty(quotation.Notes) ? "" : $"\n{quotation.Notes}"),
 
+            // ✅ عند التحويل نحافظ على قيمة الخصم كما أُدخلت في عرض السعر
+            // ولا نعيد اشتقاقها من نسبة حتى لا يحدث فرق بسبب التقريب.
             DiscountAmount = quotation.DiscountAmount,
-            DiscountPercentage = quotation.DiscountAmount.HasValue && quotation.TotalAmount > 0
-                ? Math.Round((quotation.DiscountAmount.Value / quotation.TotalAmount) * 100, 2)
-                : null,
+            DiscountPercentage = null,
 
             PaidAmount = initialPaidAmount,
             CashBoxId = cashBoxId,
@@ -1022,6 +1088,10 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
             Items = dRows.Select(d =>
             {
                 prodDict.TryGetValue(d.ProductId, out var p);
+                var effectiveTier = string.IsNullOrWhiteSpace(d.PricingTier)
+                    ? ExtractTier(d.Notes)
+                    : d.PricingTier;
+
                 return new InvoiceItemDto
                 {
                     ProductId = d.ProductId,
@@ -1030,9 +1100,11 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
                     Quantity = d.Quantity,
                     UnitPrice = d.UnitPrice,
                     Notes = StripTierTag(d.Notes),
-                    PricingTier = ExtractTier(d.Notes),
+                    PricingTier = effectiveTier,
+                    SalePriceCClass = p?.SuggestedSalePriceCClass,
                     SalePricePremium = p?.SuggestedSalePrice,
                     SalePriceElite = p?.SuggestedSalePriceElite,
+                    PurchasePriceCClass = p?.PurchasePriceCClass,
                     PurchasePricePremium = p?.PurchasePrice,
                     PurchasePriceElite = p?.PurchasePriceElite,
                     Period = p?.Period
@@ -1113,7 +1185,7 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
         .Select(p => new { p.PartyName, p.Phone })
         .FirstOrDefaultAsync();
 
-    var detailRows = await _db.QuotationDetails.AsNoTracking()
+        var detailRows = await _db.QuotationDetails.AsNoTracking()
         .Where(d => d.QuotationId == qid)
         .Select(d => new
         {
@@ -1121,22 +1193,33 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
             PrId = (int?)d.ProductId,
             Qty = (decimal?)d.Quantity,
             Price = (decimal?)d.UnitPrice,
-            d.Notes
+            d.Notes,
+            d.PricingTier
         })
         .ToListAsync();
 
     var productIds = detailRows.Where(d => d.PrId.HasValue)
         .Select(d => d.PrId!.Value).Distinct().ToList();
 
-    var productsDict = new Dictionary<int, (string? Name, string? Desc)>();
+    var productsDict = new Dictionary<int, (string? Name, string? Desc, decimal? SaleC, decimal? SaleP, decimal? SaleE, decimal? PurchC, decimal? PurchP, decimal? PurchE, int? Period)>();
     if (productIds.Any())
     {
         var prods = await _db.Products.AsNoTracking()
             .Where(p => productIds.Contains(p.ProductId))
-            .Select(p => new { p.ProductId, p.ProductName, p.ProductDescription })
+            .Select(p => new {
+                p.ProductId,
+                p.ProductName,
+                p.ProductDescription,
+                p.SuggestedSalePriceCClass,
+                p.SuggestedSalePrice,
+                p.SuggestedSalePriceElite,
+                p.PurchasePriceCClass,
+                p.PurchasePrice,
+                p.PurchasePriceElite,
+                p.Period })
             .ToListAsync();
         foreach (var p in prods)
-            productsDict[p.ProductId] = (p.ProductName, p.ProductDescription);
+            productsDict[p.ProductId] = (p.ProductName, p.ProductDescription, p.SuggestedSalePriceCClass, p.SuggestedSalePrice, p.SuggestedSalePriceElite, p.PurchasePriceCClass, p.PurchasePrice, p.PurchasePriceElite, p.Period);
     }
 
     var items = detailRows.Select(d =>
@@ -1151,7 +1234,14 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
             Quantity = d.Qty ?? 0,
             UnitPrice = d.Price ?? 0,
             Notes = StripTierTag(d.Notes),
-            PricingTier = ExtractTier(d.Notes)
+            PricingTier = NormalizePricingTier(d.PricingTier, d.Notes),
+            SalePriceCClass = p.SaleC,
+            SalePricePremium = p.SaleP,
+            SalePriceElite = p.SaleE,
+            PurchasePriceCClass = p.PurchC,
+            PurchasePricePremium = p.PurchP,
+            PurchasePriceElite = p.PurchE,
+            Period = p.Period
         };
     }).ToList();
 
@@ -1170,7 +1260,7 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
         PartyPhone = party?.Phone,
         WarehouseId = rawData.WarehouseId,
         EmpId = rawData.EmpId,
-        PricingType = rawData.PricingType ?? PricingTiers.Premium,
+        PricingType = ResolveQuotationPricingType(items.Select(i => i.PricingTier), rawData.PricingType),
         TotalAmount = total,
         DiscountAmount = rawData.DiscountAmount,
         DiscountPercentage = discountPct,
@@ -1224,48 +1314,169 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
         return (true, "");
     }
 
-    private static void CalculateTotals(QuotationFormDto dto)
-{
-    // ⭐ احسب الحد الأدنى (مجموع الأسعار الأساسية)
-var baseTotal = Math.Round(dto.Items.Sum(i => 
-    i.Quantity * (i.SalePricePremium ?? 0)), 2);
-var maxDiscount = Math.Max(0, dto.TotalAmount - baseTotal);
+    private const decimal SalesManagerDiscountLimitPercent = 10m;
 
-    // ⭐ الأولوية للـ DiscountAmount لو موجود (لأنه هو اللي اتسجل)
-    // النسبة بتتحسب من القيمة، مش العكس
-    if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
+    private static decimal GetBaseSalePrice(QuotationItemDto item)
     {
-        // لو القيمة أكبر من الإجمالي، قللها
-        if (dto.DiscountAmount.Value > maxDiscount)
-    dto.DiscountAmount = maxDiscount;
-        
-        // احسب النسبة من القيمة (للعرض فقط)
-        dto.DiscountPercentage = dto.TotalAmount > 0
-            ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100, 2)
-            : 0;
-    }
-    else if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0)
-    {
-        // لو فيه نسبة بدون قيمة، احسب القيمة وقربها لأقرب 100 ج
-        var rawAmount = dto.TotalAmount * (dto.DiscountPercentage.Value / 100m);
-        dto.DiscountAmount = Math.Round(rawAmount / 100m, 0) * 100m;
-        
-        // لو القيمة أكبر من الإجمالي، قللها
-        if (dto.DiscountAmount > maxDiscount)
-    dto.DiscountAmount = maxDiscount;
-    }
-    else
-    {
-        dto.DiscountAmount = 0;
+        var tier = NormalizePricingTier(item.PricingTier, item.Notes);
+        return tier switch
+        {
+            var t when t == PricingTiers.CClass => item.SalePriceCClass ?? 0m,
+            var t when t == PricingTiers.Elite => item.SalePriceElite ?? item.SalePricePremium ?? 0m,
+            _ => item.SalePricePremium ?? 0m
+        };
     }
 
-    dto.NetTotalAmount = dto.TotalAmount - (dto.DiscountAmount ?? 0);
-    dto.GrandTotal = dto.NetTotalAmount ?? 0;
-}
+    private static decimal GetBaseTotal(QuotationFormDto dto)
+    {
+        return Math.Round(dto.Items.Sum(i => i.Quantity * GetBaseSalePrice(i)), 2);
+    }
+
+    private static decimal ResolveRequestedDiscountAmount(QuotationFormDto dto)
+    {
+        dto.TotalAmount = Math.Round(dto.Items.Sum(i => i.TotalAmount), 2);
+
+        if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
+            return Math.Round(dto.DiscountAmount.Value, 0);
+
+        if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0 && dto.TotalAmount > 0)
+        {
+            var rawAmount = dto.TotalAmount * (dto.DiscountPercentage.Value / 100m);
+            return Math.Round(rawAmount / 100m, 0) * 100m;
+        }
+
+        return 0m;
+    }
+
+    private static decimal GetIncreaseDiscountCap(QuotationFormDto dto)
+    {
+        return Math.Max(0, Math.Round(dto.TotalAmount - GetBaseTotal(dto), 2));
+    }
+
+    private decimal GetSalesManagerDiscountCap(QuotationFormDto dto)
+    {
+        return Math.Round(GetBaseTotal(dto) * (SalesManagerDiscountLimitPercent / 100m), 2);
+    }
+
+    private decimal GetRoleBaseDiscountCap(QuotationFormDto dto)
+    {
+        if (CurrentUser?.IsInRole(SystemRoles.Admin) == true || CurrentUser?.IsInRole(SystemRoles.AccountManager) == true)
+            return GetBaseTotal(dto);
+
+        if (CurrentUser?.IsInRole(SystemRoles.SalesManager) == true)
+            return GetSalesManagerDiscountCap(dto);
+
+        return 0m;
+    }
+
+    private decimal GetRoleDiscountCap(QuotationFormDto dto, decimal existingDiscountAmount = 0m)
+    {
+        var preservedDiscount = Math.Min(Math.Max(existingDiscountAmount, 0m), dto.TotalAmount);
+        var calculatedRoleCap = Math.Min(dto.TotalAmount, GetIncreaseDiscountCap(dto) + GetRoleBaseDiscountCap(dto));
+        return Math.Max(preservedDiscount, calculatedRoleCap);
+    }
+
+    private (bool IsValid, string Message) ValidateDiscountPermission(QuotationFormDto dto, decimal existingDiscountAmount = 0m)
+    {
+        var requestedDiscount = ResolveRequestedDiscountAmount(dto);
+        if (requestedDiscount <= 0)
+            return (true, "");
+
+        if (requestedDiscount > dto.TotalAmount)
+            return (false, $"لا يمكن أن يتجاوز الخصم إجمالي عرض السعر الحالي ({dto.TotalAmount:N2} ج).");
+
+        var increaseCap = GetIncreaseDiscountCap(dto);
+        var preservedDiscount = Math.Min(Math.Max(existingDiscountAmount, 0m), dto.TotalAmount);
+
+        if (requestedDiscount <= increaseCap || requestedDiscount <= preservedDiscount)
+            return (true, "");
+
+        if (CurrentUser?.IsInRole(SystemRoles.Admin) == true || CurrentUser?.IsInRole(SystemRoles.AccountManager) == true)
+            return (true, "");
+
+        var salesManagerTotalCap = Math.Min(dto.TotalAmount, increaseCap + GetSalesManagerDiscountCap(dto));
+
+        if (CurrentUser?.IsInRole(SystemRoles.SalesManager) == true)
+        {
+            var allowed = Math.Max(preservedDiscount, salesManagerTotalCap);
+            return requestedDiscount > allowed
+                ? (false, $"هذا الخصم من صلاحية مدير الحسابات أو الأدمن. حد مدير المبيعات = الزيادة الحالية + {SalesManagerDiscountLimitPercent:N0}% من السعر الأساسي، بإجمالي {salesManagerTotalCap:N2} ج.")
+                : (true, "");
+        }
+
+        return requestedDiscount <= salesManagerTotalCap
+            ? (false, $"هذا الخصم من صلاحية مدير المبيعات. البائع يخصم فقط من الزيادة الحالية ({increaseCap:N2} ج)، وحد مدير المبيعات الإجمالي هو {salesManagerTotalCap:N2} ج.")
+            : (false, "هذا الخصم من صلاحية مدير الحسابات أو الأدمن.");
+    }
+
+    private void CalculateTotals(QuotationFormDto dto, decimal existingDiscountAmount = 0m)
+    {
+        dto.TotalAmount = Math.Round(dto.Items.Sum(i => i.TotalAmount), 2);
+
+        var maxDiscount = GetRoleDiscountCap(dto, existingDiscountAmount);
+
+        if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
+        {
+            dto.DiscountAmount = Math.Min(Math.Round(dto.DiscountAmount.Value, 0), maxDiscount);
+            dto.DiscountPercentage = dto.TotalAmount > 0
+                ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100, 2)
+                : 0;
+        }
+        else if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0)
+        {
+            var rawAmount = dto.TotalAmount * (dto.DiscountPercentage.Value / 100m);
+            dto.DiscountAmount = Math.Min(Math.Round(rawAmount / 100m, 0) * 100m, maxDiscount);
+            dto.DiscountPercentage = dto.TotalAmount > 0
+                ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100, 2)
+                : 0;
+        }
+        else
+        {
+            dto.DiscountAmount = 0;
+            dto.DiscountPercentage = 0;
+        }
+
+        dto.NetTotalAmount = dto.TotalAmount - (dto.DiscountAmount ?? 0);
+        dto.GrandTotal = dto.NetTotalAmount ?? 0;
+    }
+
+    private static string NormalizePricingTier(string? tier, string? notes = null)
+    {
+        if (string.Equals(tier, PricingTiers.CClass, StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.CClass;
+
+        if (string.Equals(tier, PricingTiers.Elite, StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.Elite;
+
+        if (string.Equals(tier, PricingTiers.Premium, StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.Premium;
+
+        return ExtractTier(notes);
+    }
+
+    private static string ResolveQuotationPricingType(IEnumerable<string?> tiers, string? fallback = null)
+    {
+        var normalized = tiers
+            .Select(t => NormalizePricingTier(t))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (normalized.Count == 0)
+        {
+            if (string.Equals(fallback, QuotationPricingModes.Mixed, StringComparison.OrdinalIgnoreCase))
+                return QuotationPricingModes.Mixed;
+
+            return NormalizePricingTier(fallback);
+        }
+
+        return normalized.Count == 1
+            ? normalized[0]
+            : QuotationPricingModes.Mixed;
+    }
 
     private static string BuildDetailNotes(string? tier, string? userNotes)
     {
-        var safeTier = string.IsNullOrWhiteSpace(tier) ? PricingTiers.Premium : tier;
+        var safeTier = NormalizePricingTier(tier, userNotes);
         return string.IsNullOrWhiteSpace(userNotes)
             ? $"[{safeTier}]"
             : $"[{safeTier}] {userNotes.Trim()}";
@@ -1274,7 +1485,9 @@ var maxDiscount = Math.Max(0, dto.TotalAmount - baseTotal);
     private static string ExtractTier(string? notes)
     {
         if (string.IsNullOrWhiteSpace(notes)) return PricingTiers.Premium;
-        if (notes.StartsWith($"[{PricingTiers.Elite}]", StringComparison.Ordinal))
+        if (notes.StartsWith($"[{PricingTiers.CClass}]", StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.CClass;
+        if (notes.StartsWith($"[{PricingTiers.Elite}]", StringComparison.OrdinalIgnoreCase))
             return PricingTiers.Elite;
         return PricingTiers.Premium;
     }

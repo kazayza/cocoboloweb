@@ -548,7 +548,6 @@ private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string
 {
     try
     {
-        // نجيب اليوزر المرتبط بالموظف
         var user = await _db.Users
             .AsNoTracking()
             .Where(u => u.EmployeeId == employeeId && u.IsActive == true)
@@ -590,13 +589,43 @@ private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string
     }
     catch (Exception ex)
     {
-        // لا نوقف التحديث لو الإشعار فشل
         _logger.LogWarning(
             ex,
             "Failed to send lead assignment notification. LeadId={LeadId}, EmployeeId={EmployeeId}",
             lead.LeadId,
             employeeId);
     }
+}
+
+private async Task NotifyOpportunityAssignedFromLeadConversionAsync(LeadsCrm lead, int opportunityId, int employeeId, string actor)
+{
+    var user = await _db.Users
+        .AsNoTracking()
+        .Where(u => u.EmployeeId == employeeId && u.IsActive == true)
+        .Select(u => new { u.Username, u.FullName })
+        .FirstOrDefaultAsync();
+
+    if (user == null || string.IsNullOrWhiteSpace(user.Username))
+    {
+        _logger.LogWarning(
+            "Opportunity {OpportunityId} created from Lead {LeadId}, but no active user is linked to employee {EmployeeId}.",
+            opportunityId,
+            lead.LeadId,
+            employeeId);
+        return;
+    }
+
+    var title = "🎯 تم تحويل Lead إلى فرصة بيع لك";
+    var message = $"تم تحويل Lead العميل {lead.FullName} إلى فرصة بيع رقم #{opportunityId} وتم إسنادها لك. برجاء البدء في المتابعة.";
+
+    await _notify.AddAsync(
+        title: title,
+        message: message,
+        recipientUser: user.Username,
+        createdBy: actor,
+        formName: "crm/opportunities",
+        relatedTable: "SalesOpportunities",
+        relatedId: opportunityId);
 }
 
     // ═══════════════════════════════════════════════════════════
@@ -610,6 +639,15 @@ private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string
 
         if (lead.IsConverted)
             return (false, "الـ Lead ده اتحول لعميل قبل كده", 0, 0);
+
+        if (!dto.EmployeeId.HasValue || dto.EmployeeId.Value <= 0)
+            return (false, "يجب اختيار الموظف الذي ستُسند إليه الفرصة قبل التحويل", 0, 0);
+
+        var assignee = await _db.Employees.AsNoTracking()
+            .FirstOrDefaultAsync(e => e.EmployeeId == dto.EmployeeId.Value
+                                   && (e.Status == "نشط" || e.Status == "Active"));
+        if (assignee == null)
+            return (false, "الموظف المختار غير موجود أو غير نشط", 0, 0);
 
         if (string.IsNullOrWhiteSpace(lead.FullName) || string.IsNullOrWhiteSpace(lead.Phone))
             return (false, "بيانات الـ Lead ناقصة (الاسم أو الموبايل)", 0, 0);
@@ -730,6 +768,7 @@ if (initialStageId == 0)
             lead.ConvertedOpportunityId = opportunity.OpportunityId;
             lead.ConvertedDate = now;
             lead.ConvertedBy = userName;
+            lead.AssignedEmployeeId = dto.EmployeeId;
             lead.LeadStatus = "محول";
             lead.LastContactDate = now;
             _db.LeadInteractions.Add(new LeadInteraction
@@ -752,6 +791,16 @@ if (initialStageId == 0)
 
             await _audit.LogAsync("LeadsCRM", "Convert",
                 lead.LeadId.ToString(), null, dto, userName);
+
+            try
+            {
+                await NotifyOpportunityAssignedFromLeadConversionAsync(lead, opportunity.OpportunityId, dto.EmployeeId.Value, userName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to send conversion assignment notification. LeadId={LeadId}, OpportunityId={OpportunityId}, EmployeeId={EmployeeId}",
+                    lead.LeadId, opportunity.OpportunityId, dto.EmployeeId.Value);
+            }
 
             return (true, "تم تحويل Lead لعميل بنجاح", party.PartyId, opportunity.OpportunityId);
         }

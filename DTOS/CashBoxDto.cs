@@ -238,6 +238,8 @@ public static class CashBoxRefTypes
     public const string PurchaseInvoice = "PurchaseInvoice";
     public const string Expense = "Expense";
     public const string Payroll = "Payroll";
+    public const string BonusSeparate = "BonusSeparate";
+    public const string CommissionSeparate = "CommissionSeparate";
     public const string Loan = "Loan";
     public const string TransferIn = "TransferIn";
     public const string TransferOut = "TransferOut";
@@ -252,6 +254,8 @@ public static class CashBoxRefTypes
         { PurchaseInvoice,  "فاتورة مشتريات" },
         { Expense,          "مصروف" },
         { Payroll,          "راتب" },
+        { BonusSeparate,    "مكافأة منفصلة" },
+        { CommissionSeparate, "عمولة منفصلة" },
         { Loan,             "قرض" },
         { TransferIn,       "تحويل وارد" },
         { TransferOut,      "تحويل صادر" },
@@ -267,6 +271,8 @@ public static class CashBoxRefTypes
         { PurchaseInvoice,  "#ef4444" },
         { Expense,          "#f59e0b" },
         { Payroll,          "#8b5cf6" },
+        { BonusSeparate,    "#0ea5e9" },
+        { CommissionSeparate, "#06b6d4" },
         { Loan,             "#3b82f6" },
         { TransferIn,       "#06b6d4" },
         { TransferOut,      "#06b6d4" },
@@ -282,6 +288,8 @@ public static class CashBoxRefTypes
         { PurchaseInvoice,  "ShoppingCart" },
         { Expense,          "MoneyOff" },
         { Payroll,          "Payments" },
+        { BonusSeparate,    "CardGiftcard" },
+        { CommissionSeparate, "PriceCheck" },
         { Loan,             "AccountBalance" },
         { TransferIn,       "CallReceived" },
         { TransferOut,      "CallMade" },

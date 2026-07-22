@@ -23,7 +23,7 @@ public class QuotationListDto
     public decimal? TotalCost { get; set; }
     public decimal? GrossProfit => TotalCost.HasValue ? GrandTotal - TotalCost.Value : null;
     public decimal? ProfitMarginPercentage =>
-    TotalCost.HasValue && GrandTotal > 0
+    TotalCost.HasValue && TotalCost.Value > 0
         ? Math.Round(((GrandTotal - TotalCost.Value) / TotalCost.Value) * 100m, 2)
         : null;
     public string Status { get; set; } = QuotationStatuses.Draft;
@@ -111,9 +111,11 @@ public class QuotationItemDto
 
     public string PricingTier { get; set; } = PricingTiers.Premium;
 
-    // أسعار البيع والشراء للباقتين (للمرآة)
+    // أسعار البيع والشراء لكل الباقات (للمرآة)
+    public decimal? SalePriceCClass { get; set; }
     public decimal? SalePricePremium { get; set; }
     public decimal? SalePriceElite { get; set; }
+    public decimal? PurchasePriceCClass { get; set; }
     public decimal? PurchasePricePremium { get; set; }
     public decimal? PurchasePriceElite { get; set; }
     public int? Period { get; set; }

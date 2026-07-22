@@ -10,6 +10,7 @@ public interface IQuotationService
     Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId);
     Task<QuotationPrintDto?> GetQuotationForPrintAsync(int quotationId);
     Task<QuotationStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null);
+    Task<QuotationStatsDto> GetStatsAsync(QuotationFilterDto filter);
     Task<string> GenerateNextQuotationNumberAsync();
     Task<bool> SaveRejectionReasonAsync(int quotationId, string reason);
 
@@ -29,7 +30,7 @@ public interface IQuotationService
     // التحويل لفاتورة (مع المرآة)
     Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
         int quotationId, decimal initialPaidAmount, int? cashBoxId,
-        string paymentMethod, string currentUserName);
+        string paymentMethod, string currentUserName, DateTime? invoiceDate = null);
     
     Task<(string? Reason, DateTime? RejectedAt, string? RejectedBy)> 
     GetRejectionDetailsAsync(int quotationId);

@@ -29,6 +29,7 @@ public class ProductService : IProductService
                         CustomerName = customer != null ? customer.PartyName : null,
                         p.PricingType,
                         p.PricingStatusId,
+                        p.SuggestedSalePriceCClass,
                         p.SuggestedSalePrice,
                         p.SuggestedSalePriceElite,
                         p.PdfPath,
@@ -68,7 +69,10 @@ public class ProductService : IProductService
         var products = rawProducts.Select(p =>
         {
             DateTime? pricedAt = factoryPricedDates.TryGetValue(p.ProductId, out var dt) ? dt : null;
-            if (!pricedAt.HasValue && (p.PricingStatusId == 3 || (p.SuggestedSalePrice.HasValue && p.SuggestedSalePrice.Value > 0)))
+            if (!pricedAt.HasValue && (p.PricingStatusId == 3 ||
+                (p.SuggestedSalePriceCClass.HasValue && p.SuggestedSalePriceCClass.Value > 0) ||
+                (p.SuggestedSalePrice.HasValue && p.SuggestedSalePrice.Value > 0) ||
+                (p.SuggestedSalePriceElite.HasValue && p.SuggestedSalePriceElite.Value > 0)))
             {
                 pricedAt = p.CreatedAt;
             }
@@ -110,6 +114,7 @@ public class ProductService : IProductService
                 CustomerName = p.CustomerName,
                 PricingType = p.PricingType,
                 PricingStatusId = p.PricingStatusId,
+                SuggestedSalePriceCClass = p.SuggestedSalePriceCClass,
                 SuggestedSalePrice = p.SuggestedSalePrice,
                 SuggestedSalePriceElite = p.SuggestedSalePriceElite,
                 PdfPath = p.PdfPath,
@@ -128,6 +133,7 @@ public class ProductService : IProductService
 
     public async Task FactorySetCostAsync(
         int ProductId,
+        decimal? cClassCost,
         decimal? premiumCost,
         decimal? eliteCost,
         string currentUsername)
@@ -147,6 +153,30 @@ public class ProductService : IProductService
 
         if (margin == null)
             throw new Exception("لا توجد نسب ربح مفعلة");
+
+        // ✅ C Class
+        if (cClassCost.HasValue)
+        {
+            var oldPriceCClass = product.SuggestedSalePriceCClass;
+
+            product.PurchasePriceCClass = cClassCost.Value;
+
+            var newSaleCClass = cClassCost.Value +
+                                (cClassCost.Value * margin.CClassMargin / 100);
+
+            product.SuggestedSalePriceCClass = newSaleCClass;
+
+            _context.PriceHistories.Add(new PriceHistory
+            {
+                ProductId = product.ProductId,
+                PriceType = "CClass",
+                OldPrice = oldPriceCClass,
+                NewPrice = newSaleCClass,
+                ChangedBy = currentUsername,
+                ChangedAt = DateTime.Now,
+                ChangeReason = "تسعير من المصنع"
+            });
+        }
 
         // ✅ Premium
         if (premiumCost.HasValue)
@@ -217,6 +247,7 @@ public class ProductService : IProductService
     }
     public async Task RequestSalePriceChangeAsync(
     int ProductId,
+    decimal? newCClassSalePrice,
     decimal newPremiumSalePrice,
     decimal? newEliteSalePrice,
     string currentUsername)
@@ -231,6 +262,22 @@ public class ProductService : IProductService
 
     if (product.PricingStatusId != 3) // لازم يكون Priced
         throw new Exception("لا يمكن طلب تعديل في هذه الحالة");
+
+    // ✅ تسجيل طلب تعديل C Class (لو موجود)
+    if (newCClassSalePrice.HasValue)
+    {
+        _context.PriceChangeRequests.Add(new PriceChangeRequest
+        {
+            ProductId = product.ProductId,
+            PriceType = "CClass",
+            CurrentPrice = product.SuggestedSalePriceCClass ?? 0,
+            RequestedPrice = newCClassSalePrice.Value,
+            Reason = "طلب تعديل من البائع",
+            Status = "Pending",
+            RequestedBy = currentUsername,
+            RequestedAt = DateTime.Now
+        });
+    }
 
     // ✅ تسجيل طلب تعديل Premium
     _context.PriceChangeRequests.Add(new PriceChangeRequest
@@ -304,7 +351,24 @@ public async Task ApproveSalePriceChangeAsync(
 
     foreach (var request in pendingRequests)
     {
-        if (request.PriceType == "Premium")
+        if (request.PriceType == "CClass")
+        {
+            var oldPriceCClass = product.SuggestedSalePriceCClass;
+
+            product.SuggestedSalePriceCClass = request.RequestedPrice;
+
+            _context.PriceHistories.Add(new PriceHistory
+            {
+                ProductId = product.ProductId,
+                PriceType = "CClass",
+                OldPrice = oldPriceCClass,
+                NewPrice = request.RequestedPrice,
+                ChangedBy = currentUsername,
+                ChangedAt = DateTime.Now,
+                ChangeReason = "موافقة مدير المبيعات على تعديل السعر"
+            });
+        }
+        else if (request.PriceType == "Premium")
         {
             var oldPrice = product.SuggestedSalePrice;
 
@@ -449,6 +513,7 @@ public async Task RequestCostChangeAsync(
 }
 public async Task ApproveCostChangeAsync(
     int ProductId,
+    decimal? newCClassCost,
     decimal? newPremiumCost,
     decimal? newEliteCost,
     string currentUsername)
@@ -471,6 +536,30 @@ public async Task ApproveCostChangeAsync(
 
     if (margin == null)
         throw new Exception("لا توجد نسب ربح مفعلة");
+
+    // ✅ C Class
+    if (newCClassCost.HasValue)
+    {
+        var oldSaleCClass = product.SuggestedSalePriceCClass;
+
+        product.PurchasePriceCClass = newCClassCost.Value;
+
+        var newSaleCClass = newCClassCost.Value +
+                           (newCClassCost.Value * margin.CClassMargin / 100);
+
+        product.SuggestedSalePriceCClass = newSaleCClass;
+
+        _context.PriceHistories.Add(new PriceHistory
+        {
+            ProductId = product.ProductId,
+            PriceType = "CClass",
+            OldPrice = oldSaleCClass,
+            NewPrice = newSaleCClass,
+            ChangedBy = currentUsername,
+            ChangedAt = DateTime.Now,
+            ChangeReason = "تعديل تكلفة بواسطة المصنع"
+        });
+    }
 
     // ✅ Premium
     if (newPremiumCost.HasValue)

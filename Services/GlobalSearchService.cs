@@ -35,9 +35,11 @@ public class GlobalSearchService
         if (string.IsNullOrWhiteSpace(query) || query.Trim().Length < 2)
             return new();
 
-        var q     = query.Trim();
-        var perms = userPermissions.ToHashSet();
-        var all   = new List<SearchResult>();
+        var q      = query.Trim();
+        var qLower = q.ToLowerInvariant();
+        var qDigits = new string(q.Where(char.IsDigit).ToArray());
+        var perms  = userPermissions.ToHashSet();
+        var all    = new List<SearchResult>();
 
         // ── 1. المنتجات ──────────────────────────────────────────
         // صلاحية: frm_ProductList:View
@@ -102,7 +104,110 @@ public class GlobalSearchService
             }));
         }
 
-        // ── 3. فواتير المبيعات ───────────────────────────────────
+        // ── 3. الليدز CRM ───────────────────────────────────────
+        // صلاحية: frm_LeadsCRM:View
+        // البحث في: اسم العميل + التليفون + الحملة + المنصة + رقم الليد
+        if (perms.Contains(LeadsCrmPermissions.PermView))
+        {
+            var leads = await _db.LeadsCRMs
+                .AsNoTracking()
+                .Where(l =>
+                    l.LeadId.ToString() == q ||
+                    (l.FullName != null && l.FullName.ToLower().Contains(qLower)) ||
+                    (l.CampaignName != null && l.CampaignName.ToLower().Contains(qLower)) ||
+                    (l.Platform != null && l.Platform.ToLower().Contains(qLower)) ||
+                    (l.City != null && l.City.ToLower().Contains(qLower)) ||
+                    (l.Area != null && l.Area.ToLower().Contains(qLower)) ||
+                    (!string.IsNullOrEmpty(qDigits) && (
+                        ((l.Phone ?? "").Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "")).Contains(qDigits) ||
+                        ((l.Phone2 ?? "").Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "")).Contains(qDigits)
+                    ))
+                )
+                .OrderByDescending(l => l.LeadId)
+                .Take(maxPerCategory)
+                .Select(l => new
+                {
+                    l.LeadId,
+                    l.FullName,
+                    l.Phone,
+                    l.Phone2,
+                    l.CampaignName,
+                    l.Platform,
+                    l.City,
+                    l.LeadStatus,
+                    l.IsConverted
+                })
+                .ToListAsync();
+
+            all.AddRange(leads.Select(l => new SearchResult
+            {
+                Title      = l.FullName,
+                SubTitle   = $"Lead #{l.LeadId}" +
+                             (!string.IsNullOrWhiteSpace(l.Phone) ? $" | {l.Phone}" : "") +
+                             (!string.IsNullOrWhiteSpace(l.City) ? $" | {l.City}" : "") +
+                             (!string.IsNullOrWhiteSpace(l.Platform) ? $" | {l.Platform}" : "") +
+                             (!string.IsNullOrWhiteSpace(l.LeadStatus) ? $" | {l.LeadStatus}" : "") +
+                             (l.IsConverted ? " | تم التحويل" : ""),
+                CategoryAr = "الليدز",
+                Icon       = Icons.Material.Rounded.ContactPhone,
+                Color      = "#ec4899",
+                Url        = $"/crm/leads/{l.LeadId}"
+            }));
+        }
+
+        // ── 4. فرص البيع / مراحل البيع ──────────────────────────
+        // صلاحية: frmNewInteraction:View
+        // البحث في: اسم العميل + التليفون + المرحلة + المنتج + الموقع + رقم الفرصة
+        if (perms.Contains("frmNewInteraction:View"))
+        {
+            var opportunities = await _db.VwSalesOpportunities
+                .AsNoTracking()
+                .Where(o =>
+                    o.OpportunityId.ToString() == q ||
+                    (o.ClientName != null && o.ClientName.ToLower().Contains(qLower)) ||
+                    (o.StageName != null && o.StageName.ToLower().Contains(qLower)) ||
+                    (o.StageNameAr != null && o.StageNameAr.Contains(q)) ||
+                    (o.InterestedProduct != null && o.InterestedProduct.ToLower().Contains(qLower)) ||
+                    (o.Location != null && o.Location.ToLower().Contains(qLower)) ||
+                    (o.EmployeeName != null && o.EmployeeName.ToLower().Contains(qLower)) ||
+                    (!string.IsNullOrEmpty(qDigits) && (
+                        ((o.Phone1 ?? "").Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "")).Contains(qDigits) ||
+                        ((o.Phone2 ?? "").Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "")).Contains(qDigits)
+                    ))
+                )
+                .OrderByDescending(o => o.OpportunityId)
+                .Take(maxPerCategory)
+                .Select(o => new
+                {
+                    o.OpportunityId,
+                    o.ClientName,
+                    o.Phone1,
+                    o.Phone2,
+                    o.StageName,
+                    o.StageNameAr,
+                    o.InterestedProduct,
+                    o.Location,
+                    o.ExpectedValue,
+                    o.EmployeeName
+                })
+                .ToListAsync();
+
+            all.AddRange(opportunities.Select(o => new SearchResult
+            {
+                Title      = o.ClientName ?? "فرصة بيع",
+                SubTitle   = $"فرصة #{o.OpportunityId}" +
+                             (!string.IsNullOrWhiteSpace(o.Phone1) ? $" | {o.Phone1}" : "") +
+                             (!string.IsNullOrWhiteSpace(o.StageNameAr) ? $" | {o.StageNameAr}" : !string.IsNullOrWhiteSpace(o.StageName) ? $" | {o.StageName}" : "") +
+                             (!string.IsNullOrWhiteSpace(o.InterestedProduct) ? $" | {o.InterestedProduct}" : "") +
+                             (o.ExpectedValue.HasValue ? $" | {o.ExpectedValue.Value:N0} ج.م" : ""),
+                CategoryAr = "فرص البيع",
+                Icon       = Icons.Material.Rounded.TrackChanges,
+                Color      = "#14b8a6",
+                Url        = $"/crm/opportunities/{o.OpportunityId}"
+            }));
+        }
+
+        // ── 5. فواتير المبيعات ───────────────────────────────────
         // صلاحية: frm_PartiesInvoices:View
         // البحث في: اسم العميل + رقم الفاتورة + ReferenceNumber
         if (perms.Contains("frm_PartiesInvoices:View"))
