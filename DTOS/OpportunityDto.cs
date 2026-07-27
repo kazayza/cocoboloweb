@@ -110,6 +110,21 @@ public class OpportunityStatsDto
 // ═══════════════════════════════════════════════════════════════
 // DTO للحفظ
 // ═══════════════════════════════════════════════════════════════
+public class OpportunityLookupDto
+{
+    public int OpportunityId { get; set; }
+    public string ClientName { get; set; } = "";
+    public string? StageNameAr { get; set; }
+    public string? StageColor { get; set; }
+    public decimal? ExpectedValue { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public int? EmployeeId { get; set; }
+    public string? EmployeeName { get; set; }
+    public int? QuotationId { get; set; }
+    public int? TransactionId { get; set; }
+    public bool IsActive { get; set; }
+}
+
 public class OpportunityFormDto
 {
     public int OpportunityId { get; set; }

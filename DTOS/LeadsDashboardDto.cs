@@ -16,6 +16,14 @@ public class LeadsDashboardDataDto
     public List<FunnelItemDto> FunnelData { get; set; } = new();
     public List<SalesByPeriodDto> SalesByPeriod { get; set; } = new();
     public List<ValueComparisonDto> ValueComparison { get; set; } = new();
+    public OpportunityClosureMetricsDto OpportunityClosureMetrics { get; set; } = new();
+    public List<ChartItemDto> ConvertedLeadOutcomeDistribution { get; set; } = new();
+    public List<ChartItemDto> QuotationStatusDistribution { get; set; } = new();
+    public List<QuotationStatusSummaryDto> QuotationStatusSummary { get; set; } = new();
+    public List<ChartItemDto> QuotationPackageDistribution { get; set; } = new();
+    public List<QuotationPackageMetricDto> QuotationPackageMetrics { get; set; } = new();
+    public ShowroomVisitMetricsDto ShowroomVisitMetrics { get; set; } = new();
+    public List<ChartItemDto> ShowroomVisitOriginDistribution { get; set; } = new();
     public List<CampaignPerformanceDto> TopCampaigns { get; set; } = new();
     public List<ProjectTypeSummaryDto> ProjectSummary { get; set; } = new();
     public List<RecentConvertedDto> RecentConverted { get; set; } = new();
@@ -37,10 +45,12 @@ public class LeadsDashboardKpisDto
     public decimal ConversionRate { get; set; }
     public double AvgConversionDays { get; set; }
     public int ConvertedCount { get; set; }
-    public int ClosedDealCount { get; set; }       // ← أضف ده
+    public int LeadOriginOpportunitiesCount { get; set; }
+    public int LeadOriginLostCount { get; set; }
+    public int ClosedDealCount { get; set; }
     public decimal ClosedDealValue { get; set; }
     public decimal ClosedDealExpectedValue { get; set; }
-    public decimal ValueVariance { get; set; }      // الفرق (المتوقع - الفعلي)
+    public decimal ValueVariance { get; set; }
     public decimal DuplicateRate { get; set; }
     public decimal RejectionRate { get; set; }
 
@@ -136,6 +146,43 @@ public class ValueComparisonDto
     public string Period { get; set; } = "";       // "يناير 2026"
     public decimal ExpectedValue { get; set; }      // القيمة المتوقعة
     public decimal ActualValue { get; set; }        // القيمة الفعلية
+}
+
+public class OpportunityClosureMetricsDto
+{
+    public int ClosedCount { get; set; }
+    public decimal ClosureRate { get; set; }
+    public double AvgDaysToClose { get; set; }
+    public int? MinDaysToClose { get; set; }
+    public int? MaxDaysToClose { get; set; }
+}
+
+public class QuotationStatusSummaryDto
+{
+    public string StatusKey { get; set; } = "";
+    public string StatusName { get; set; } = "";
+    public int Count { get; set; }
+    public decimal Percent { get; set; }
+    public string Color { get; set; } = "#6366f1";
+}
+
+public class QuotationPackageMetricDto
+{
+    public string PackageKey { get; set; } = "";
+    public string PackageName { get; set; } = "";
+    public int Count { get; set; }
+    public decimal TotalValue { get; set; }
+    public int RejectedCount { get; set; }
+    public string Color { get; set; } = "#6366f1";
+}
+
+public class ShowroomVisitMetricsDto
+{
+    public int TotalVisits { get; set; }
+    public int UniqueVisitors { get; set; }
+    public int LeadOriginVisits { get; set; }
+    public int DirectVisits { get; set; }
+    public int RepeatVisitors { get; set; }
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -24,6 +24,8 @@ public partial class Quotation
 
     public int? InvoiceId { get; set; }
 
+    public int? OpportunityId { get; set; }
+
     public string? Notes { get; set; }
 
     public string Status { get; set; } = "Draft";  // ⭐ جديد

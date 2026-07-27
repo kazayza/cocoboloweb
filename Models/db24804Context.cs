@@ -1543,6 +1543,7 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(18, 2)");
             entity.Property(e => e.InvoiceId).HasColumnName("InvoiceID");
+            entity.Property(e => e.OpportunityId).HasColumnName("OpportunityID");
             entity.Property(e => e.Notes).HasMaxLength(500);
             entity.Property(e => e.PartyId).HasColumnName("PartyID");
             entity.Property(e => e.PricingType)
@@ -1563,6 +1564,7 @@ modelBuilder.Entity<PartyContact>(entity =>
         .HasDefaultValue(null);
 
     entity.HasIndex(e => e.Status);
+    entity.HasIndex(e => e.OpportunityId, "IX_Quotations_OpportunityID");
         });
 
         modelBuilder.Entity<QuotationDetail>(entity =>
@@ -1872,6 +1874,7 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .HasDefaultValue(0m)
                 .HasColumnType("decimal(18, 2)");
             entity.Property(e => e.Notes).HasMaxLength(255);
+            entity.Property(e => e.OpportunityId).HasColumnName("OpportunityID");
             entity.Property(e => e.PaidAmount).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.PartyId).HasColumnName("PartyID");
             entity.Property(e => e.PaymentMethod).HasMaxLength(20);
@@ -1886,6 +1889,7 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .HasMaxLength(20)
                 .IsUnicode(false);
             entity.Property(e => e.WarehouseId).HasColumnName("WarehouseID");
+            entity.HasIndex(e => e.OpportunityId, "IX_Transactions_OpportunityID");
         });
 
         modelBuilder.Entity<TransactionDetail>(entity =>

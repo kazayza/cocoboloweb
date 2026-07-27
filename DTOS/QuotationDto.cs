@@ -13,6 +13,7 @@ public class QuotationListDto
     public string? PartyPhone { get; set; }
     public int? WarehouseId { get; set; }
     public string? WarehouseName { get; set; }
+    public int? OpportunityId { get; set; }
     public int? EmpId { get; set; }
     public string? EmpName { get; set; }
     public string? PricingType { get; set; }
@@ -61,6 +62,7 @@ public class QuotationFormDto
     public string? PartyName { get; set; }
     public string? PartyPhone { get; set; }
     public int? WarehouseId { get; set; }
+    public int? OpportunityId { get; set; }
     public int? EmpId { get; set; }
     public string? EmpName { get; set; }
 
@@ -147,6 +149,7 @@ public class QuotationFilterDto
 public class QuotationStatsDto
 {
     public int TotalCount { get; set; }
+    public int DistinctCustomersCount { get; set; }
     public decimal TotalValue { get; set; }
     public int DraftCount { get; set; }
     public int SentCount { get; set; }
@@ -178,6 +181,23 @@ public class QuotationPrintDto
     public string? CustomerEmail { get; set; }
     public string? CustomerPhone { get; set; }
     public string? CustomerCity { get; set; }
+}
+
+public class QuotationDiscountRequestDto
+{
+    public int? QuotationId { get; set; }
+    public string? ReferenceNumber { get; set; }
+    public int? PartyId { get; set; }
+    public string? PartyName { get; set; }
+    public int? EmpId { get; set; }
+    public string? EmpName { get; set; }
+    public decimal TotalAmount { get; set; }
+    public decimal GrandTotal { get; set; }
+    public decimal CurrentDiscountAmount { get; set; }
+    public decimal CurrentDiscountPercentage { get; set; }
+    public decimal? RequestedDiscountAmount { get; set; }
+    public decimal? RequestedDiscountPercentage { get; set; }
+    public string? Reason { get; set; }
 }
 
 // ============================

@@ -479,6 +479,65 @@ if (f.DateTo.HasValue)
     };
 }
 
+    public async Task<List<OpportunityLookupDto>> GetOpportunitiesByPartyAsync(int partyId)
+    {
+        if (partyId <= 0) return new();
+
+        return await _db.SalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.PartyId == partyId && o.IsActive)
+            .OrderByDescending(o => o.CreatedAt)
+            .Select(o => new OpportunityLookupDto
+            {
+                OpportunityId = o.OpportunityId,
+                ClientName = o.Party.PartyName ?? "",
+                StageNameAr = o.Stage.StageNameAr ?? o.Stage.StageName,
+                StageColor = o.Stage.StageColor,
+                ExpectedValue = o.ExpectedValue,
+                CreatedAt = o.CreatedAt,
+                EmployeeId = o.EmployeeId,
+                EmployeeName = o.Employee != null ? o.Employee.FullName : null,
+                QuotationId = o.QuotationId,
+                TransactionId = o.TransactionId,
+                IsActive = o.IsActive
+            })
+            .ToListAsync();
+    }
+
+    public async Task<PartySearchDto?> GetPartyByIdAsync(int partyId)
+    {
+        if (partyId <= 0) return null;
+
+        var party = await _db.Parties
+            .AsNoTracking()
+            .Where(p => p.PartyId == partyId && p.IsActive == true)
+            .Select(p => new PartySearchDto
+            {
+                PartyId = p.PartyId,
+                PartyName = p.PartyName ?? "",
+                Phone = p.Phone,
+                Phone2 = p.Phone2
+            })
+            .FirstOrDefaultAsync();
+
+        if (party == null) return null;
+
+        var lastOpp = await _db.SalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.PartyId == partyId && o.IsActive)
+            .OrderByDescending(o => o.CreatedAt)
+            .Select(o => new { StageName = o.Stage.StageNameAr, o.LastContactDate })
+            .FirstOrDefaultAsync();
+
+        if (lastOpp != null)
+        {
+            party.LastStageName = lastOpp.StageName;
+            party.LastContactDate = lastOpp.LastContactDate;
+        }
+
+        return party;
+    }
+
     public async Task<List<PartySearchDto>> SearchPartiesAsync(string searchText)
     {
         if (string.IsNullOrWhiteSpace(searchText) || searchText.Trim().Length < 2)

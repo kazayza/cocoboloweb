@@ -104,10 +104,24 @@ public class LeadsCrmService : ILeadsCrmService
             .Take(filter.PageSize)
             .ToListAsync();
 
-        // الخطوة 2: جيب أسماء الموظفين لوحدها (بدل N+1)
+        // الخطوة 2: جيب أصحاب الفرص المرتبطة بالـ Leads المتحولة
+        var opportunityIds = leads
+            .Where(l => l.ConvertedOpportunityId.HasValue)
+            .Select(l => l.ConvertedOpportunityId!.Value)
+            .Distinct()
+            .ToList();
+
+        var opportunityEmployeeMap = opportunityIds.Count > 0
+            ? await _db.SalesOpportunities.AsNoTracking()
+                .Where(o => opportunityIds.Contains(o.OpportunityId) && o.EmployeeId.HasValue)
+                .ToDictionaryAsync(o => o.OpportunityId, o => o.EmployeeId)
+            : new Dictionary<int, int?>();
+
+        // الخطوة 3: جيب أسماء الموظفين لوحدها (بدل N+1)
         var employeeIds = leads
             .Where(l => l.AssignedEmployeeId.HasValue)
             .Select(l => l.AssignedEmployeeId!.Value)
+            .Concat(opportunityEmployeeMap.Values.Where(v => v.HasValue).Select(v => v!.Value))
             .Distinct()
             .ToList();
 
@@ -119,7 +133,7 @@ public class LeadsCrmService : ILeadsCrmService
                 .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName);
         }
 
-        // الخطوة 3: ادمجهم في الذاكرة
+        // الخطوة 4: ادمجهم في الذاكرة
         var items = leads.Select(l => new LeadsCrmListDto
         {
             LeadId = l.LeadId,
@@ -141,11 +155,21 @@ public class LeadsCrmService : ILeadsCrmService
             LeadStatus = l.LeadStatus,
             FormLanguage = l.FormLanguage,
             IsConverted = l.IsConverted,
+            ConvertedOpportunityId = l.ConvertedOpportunityId,
             IsDuplicate = l.IsDuplicate,
             AssignedEmployeeId = l.AssignedEmployeeId,
             AssignedEmployeeName = l.AssignedEmployeeId.HasValue
                 && employeeNames.TryGetValue(l.AssignedEmployeeId.Value, out var name)
                 ? name : null,
+            OpportunityEmployeeId = l.ConvertedOpportunityId.HasValue
+                && opportunityEmployeeMap.TryGetValue(l.ConvertedOpportunityId.Value, out var oppEmpId)
+                ? oppEmpId
+                : null,
+            OpportunityEmployeeName = l.ConvertedOpportunityId.HasValue
+                && opportunityEmployeeMap.TryGetValue(l.ConvertedOpportunityId.Value, out var oppEmpNameId)
+                && oppEmpNameId.HasValue
+                && employeeNames.TryGetValue(oppEmpNameId.Value, out var oppEmpName)
+                ? oppEmpName : null,
             Feedback = l.Feedback,
             SheetTabName = l.SheetTabName,
             LeadDate = l.LeadDate,
@@ -179,6 +203,24 @@ public class LeadsCrmService : ILeadsCrmService
                 .Where(e => e.EmployeeId == lead.AssignedEmployeeId.Value)
                 .Select(e => e.FullName)
                 .FirstOrDefaultAsync();
+        }
+
+        int? opportunityEmployeeId = null;
+        string? opportunityEmployeeName = null;
+        if (lead.ConvertedOpportunityId.HasValue)
+        {
+            opportunityEmployeeId = await _db.SalesOpportunities.AsNoTracking()
+                .Where(o => o.OpportunityId == lead.ConvertedOpportunityId.Value)
+                .Select(o => o.EmployeeId)
+                .FirstOrDefaultAsync();
+
+            if (opportunityEmployeeId.HasValue)
+            {
+                opportunityEmployeeName = await _db.Employees.AsNoTracking()
+                    .Where(e => e.EmployeeId == opportunityEmployeeId.Value)
+                    .Select(e => e.FullName)
+                    .FirstOrDefaultAsync();
+            }
         }
 
         return new LeadsCrmDetailDto
@@ -226,6 +268,8 @@ public class LeadsCrmService : ILeadsCrmService
             Notes = lead.Notes,
             AssignedEmployeeId = lead.AssignedEmployeeId,
             AssignedEmployeeName = assignedName,
+            OpportunityEmployeeId = opportunityEmployeeId,
+            OpportunityEmployeeName = opportunityEmployeeName,
             Feedback = lead.Feedback,
             RejectedReason = lead.RejectedReason,
             LastContactDate = lead.LastContactDate,
@@ -768,7 +812,6 @@ if (initialStageId == 0)
             lead.ConvertedOpportunityId = opportunity.OpportunityId;
             lead.ConvertedDate = now;
             lead.ConvertedBy = userName;
-            lead.AssignedEmployeeId = dto.EmployeeId;
             lead.LeadStatus = "محول";
             lead.LastContactDate = now;
             _db.LeadInteractions.Add(new LeadInteraction
@@ -916,7 +959,6 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
 
     try
     {
-        // ─── CrmDataScoping: صلاحيات الوصول ───
         var crmAccessFrom = _httpContext.GetCrmAccessFrom();
         if (crmAccessFrom.HasValue)
         {
@@ -924,7 +966,6 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
                 filter.DateFrom = crmAccessFrom.Value;
         }
 
-        // ─── QUERY 1: تحميل كل Leads الفترة الحالية ───
         var currentQuery = _db.LeadsCRMs.AsNoTracking().AsQueryable();
         currentQuery = ApplyDashboardFilter(currentQuery, filter);
 
@@ -947,7 +988,6 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             l.CreatedAt
         }).ToListAsync();
 
-        // ─── QUERY 2 + 3: بالتوازي — الفترة السابقة + أسماء الموظفين ───
         var prevFilter = filter.GetPreviousPeriod();
         var prevQuery = _db.LeadsCRMs.AsNoTracking().AsQueryable();
         prevQuery = ApplyDashboardFilter(prevQuery, prevFilter);
@@ -973,55 +1013,198 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
                 .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName ?? "")
             : new Dictionary<int, string>();
 
-        // ─── QUERY 4: فرص البيع (باستخدام ActualValue — بدون Join مع Transactions) ───
-        var wonKeywords = new[] { "تم البيع", "بيع", "Closed Deal" };
+        const int closedDealStageId = 3;
         var lostKeywords = new[] { "خسارة", "Lost", "غير مهتم", "Not Interested" };
-
-        var wonStageIds = await _db.SalesStages.AsNoTracking()
-            .Where(s => wonKeywords.Any(k => (s.StageNameAr ?? "").Contains(k) || (s.StageName ?? "").Contains(k)))
-            .Select(s => s.StageId)
-            .ToListAsync();
         var lostStageIds = await _db.SalesStages.AsNoTracking()
             .Where(s => lostKeywords.Any(k => (s.StageNameAr ?? "").Contains(k) || (s.StageName ?? "").Contains(k)))
             .Select(s => s.StageId)
             .ToListAsync();
-        var wonIdSet = wonStageIds.ToHashSet();
         var lostIdSet = lostStageIds.ToHashSet();
 
-        var dateFrom = filter.DateFrom ?? DateTime.Today.AddDays(-30);
-        var dateTo = filter.DateTo ?? DateTime.Today;
+        var trendFrom = filter.DateFrom ?? DateTime.Today.AddDays(-30);
+        var trendTo = filter.DateTo ?? DateTime.Today;
 
-        var closedDeals = await _db.SalesOpportunities.AsNoTracking()
-            .Where(o => o.IsActive
-                && o.CreatedAt >= dateFrom && o.CreatedAt <= dateTo.AddDays(1))
-            .Select(o => new
-            {
-                o.OpportunityId,
-                o.StageId,
-                o.ExpectedValue,
-                o.ActualValue,    // ← العمود الجديد
-                o.EmployeeId,
-                o.CreatedAt
-            })
-            .ToListAsync();
+        var hasLeadOnlyFilters =
+            !string.IsNullOrWhiteSpace(filter.Platform) ||
+            !string.IsNullOrWhiteSpace(filter.City) ||
+            !string.IsNullOrWhiteSpace(filter.ProjectType) ||
+            !string.IsNullOrWhiteSpace(filter.ProjectStage) ||
+            !string.IsNullOrWhiteSpace(filter.CampaignName);
 
-        // الصفقات الرابحة — باستخدام ActualValue
-        var wonDeals = closedDeals.Where(o => wonIdSet.Contains(o.StageId)).ToList();
-        var closedDealCount = wonDeals.Count;
-        var closedDealValue = wonDeals.Sum(o => o.ActualValue ?? o.ExpectedValue ?? 0);
-        var closedDealExpectedValue = wonDeals.Sum(o => o.ExpectedValue ?? 0);
+        var opportunityAnalyticsQuery = _db.SalesOpportunities.AsNoTracking().Where(o => o.IsActive);
+
+        if (filter.EmployeeId.HasValue)
+            opportunityAnalyticsQuery = opportunityAnalyticsQuery.Where(o => o.EmployeeId == filter.EmployeeId.Value);
+
+        if (filter.DateFrom.HasValue)
+            opportunityAnalyticsQuery = opportunityAnalyticsQuery.Where(o => o.CreatedAt >= filter.DateFrom.Value.Date);
+
+        if (filter.DateTo.HasValue)
+        {
+            var oppEnd = filter.DateTo.Value.Date.AddDays(1).AddTicks(-1);
+            opportunityAnalyticsQuery = opportunityAnalyticsQuery.Where(o => o.CreatedAt <= oppEnd);
+        }
+
+        if (hasLeadOnlyFilters)
+        {
+            var leadScopedQuery = _db.LeadsCRMs.AsNoTracking().Where(l => l.ConvertedOpportunityId.HasValue);
+
+            if (!string.IsNullOrWhiteSpace(filter.Platform))
+                leadScopedQuery = leadScopedQuery.Where(l => l.Platform == filter.Platform);
+            if (!string.IsNullOrWhiteSpace(filter.City))
+                leadScopedQuery = leadScopedQuery.Where(l => l.City == filter.City);
+            if (!string.IsNullOrWhiteSpace(filter.ProjectType))
+                leadScopedQuery = leadScopedQuery.Where(l => l.ProjectType == filter.ProjectType);
+            if (!string.IsNullOrWhiteSpace(filter.ProjectStage))
+                leadScopedQuery = leadScopedQuery.Where(l => l.ProjectStage == filter.ProjectStage);
+            if (!string.IsNullOrWhiteSpace(filter.CampaignName))
+                leadScopedQuery = leadScopedQuery.Where(l => l.CampaignName == filter.CampaignName);
+
+            var filteredLeadOppIds = await leadScopedQuery
+                .Select(l => l.ConvertedOpportunityId!.Value)
+                .Distinct()
+                .ToListAsync();
+
+            opportunityAnalyticsQuery = filteredLeadOppIds.Any()
+                ? opportunityAnalyticsQuery.Where(o => filteredLeadOppIds.Contains(o.OpportunityId))
+                : opportunityAnalyticsQuery.Where(o => false);
+        }
+
+        var allOppDetails = await opportunityAnalyticsQuery.ToListAsync();
+
+        var allOppIds = allOppDetails
+            .Select(o => o.OpportunityId)
+            .Distinct()
+            .ToList();
+
+        var leadOriginOppIdsInScopeQuery = _db.LeadsCRMs.AsNoTracking()
+            .Where(l => l.ConvertedOpportunityId.HasValue && allOppIds.Contains(l.ConvertedOpportunityId.Value));
+
+        if (hasLeadOnlyFilters)
+        {
+            if (!string.IsNullOrWhiteSpace(filter.Platform))
+                leadOriginOppIdsInScopeQuery = leadOriginOppIdsInScopeQuery.Where(l => l.Platform == filter.Platform);
+            if (!string.IsNullOrWhiteSpace(filter.City))
+                leadOriginOppIdsInScopeQuery = leadOriginOppIdsInScopeQuery.Where(l => l.City == filter.City);
+            if (!string.IsNullOrWhiteSpace(filter.ProjectType))
+                leadOriginOppIdsInScopeQuery = leadOriginOppIdsInScopeQuery.Where(l => l.ProjectType == filter.ProjectType);
+            if (!string.IsNullOrWhiteSpace(filter.ProjectStage))
+                leadOriginOppIdsInScopeQuery = leadOriginOppIdsInScopeQuery.Where(l => l.ProjectStage == filter.ProjectStage);
+            if (!string.IsNullOrWhiteSpace(filter.CampaignName))
+                leadOriginOppIdsInScopeQuery = leadOriginOppIdsInScopeQuery.Where(l => l.CampaignName == filter.CampaignName);
+        }
+
+        var leadOriginOppIdsInScope = (await leadOriginOppIdsInScopeQuery
+            .Select(l => l.ConvertedOpportunityId!.Value)
+            .Distinct()
+            .ToListAsync())
+            .ToHashSet();
+
+        var primaryQuotationIds = allOppDetails
+            .Where(o => o.QuotationId.HasValue)
+            .Select(o => o.QuotationId!.Value)
+            .Distinct()
+            .ToList();
+
+        var primaryTransactionIds = allOppDetails
+            .Where(o => o.TransactionId.HasValue)
+            .Select(o => o.TransactionId!.Value)
+            .Distinct()
+            .ToList();
+
+        var quotations = (allOppIds.Count > 0 || primaryQuotationIds.Count > 0)
+            ? await _db.Quotations.AsNoTracking()
+                .Where(q =>
+                    (q.OpportunityId.HasValue && allOppIds.Contains(q.OpportunityId.Value)) ||
+                    primaryQuotationIds.Contains(q.QuotationId))
+                .ToListAsync()
+            : new List<Quotation>();
+
+        quotations = quotations
+            .GroupBy(q => q.QuotationId)
+            .Select(g => g.First())
+            .ToList();
+
+        var saleTransactions = (allOppIds.Count > 0 || primaryTransactionIds.Count > 0)
+            ? await _db.Transactions.AsNoTracking()
+                .Where(t => t.TransactionType == TransactionTypes.Sale &&
+                    ((t.OpportunityId.HasValue && allOppIds.Contains(t.OpportunityId.Value)) ||
+                     primaryTransactionIds.Contains(t.TransactionId)))
+                .ToListAsync()
+            : new List<Transaction>();
+
+        saleTransactions = saleTransactions
+            .GroupBy(t => t.TransactionId)
+            .Select(g => g.First())
+            .ToList();
+
+        var oppExpectedById = allOppDetails.ToDictionary(o => o.OpportunityId, o => o.ExpectedValue ?? 0m);
+        var oppEmployeeById = allOppDetails.ToDictionary(o => o.OpportunityId, o => o.EmployeeId);
+        var actualValueByOpp = saleTransactions
+            .Where(t => t.OpportunityId.HasValue)
+            .GroupBy(t => t.OpportunityId!.Value)
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.GrandTotal));
+        var firstInvoiceDateByOpp = saleTransactions
+            .Where(t => t.OpportunityId.HasValue)
+            .GroupBy(t => t.OpportunityId!.Value)
+            .ToDictionary(g => g.Key, g => g.Min(x => x.TransactionDate));
+
+        var invoicedOppIds = saleTransactions
+            .Where(t => t.OpportunityId.HasValue)
+            .Select(t => t.OpportunityId!.Value)
+            .Distinct()
+            .ToHashSet();
+
+        var wonDeals = allOppDetails
+            .Where(o => o.StageId == closedDealStageId || invoicedOppIds.Contains(o.OpportunityId) || o.TransactionId.HasValue)
+            .ToList();
+
+        var closedDealCount = wonDeals.Select(o => o.OpportunityId).Distinct().Count();
+        var closedDealValue = wonDeals.Sum(o => actualValueByOpp.TryGetValue(o.OpportunityId, out var oppActual) ? oppActual : (o.ActualValue ?? o.ExpectedValue ?? 0m));
+        var closedDealExpectedValue = wonDeals.Sum(o => o.ExpectedValue ?? 0m);
         var valueVariance = closedDealExpectedValue - closedDealValue;
 
-        // ═══════════════════════════════════════════
-        //  كل الحسابات بعد كده في الذاكرة — صفر استعلامات
-        // ═══════════════════════════════════════════
+        var closeStageIds = new HashSet<int> { closedDealStageId, 4, 5 };
+        var closeInteractionDates = allOppIds.Any()
+            ? await _db.CustomerInteractions.AsNoTracking()
+                .Where(ci => allOppIds.Contains(ci.OpportunityId)
+                             && ci.StageAfterId.HasValue
+                             && closeStageIds.Contains(ci.StageAfterId.Value))
+                .GroupBy(ci => ci.OpportunityId)
+                .Select(g => new { OpportunityId = g.Key, CloseDate = g.Min(x => x.InteractionDate) })
+                .ToDictionaryAsync(x => x.OpportunityId, x => x.CloseDate)
+            : new Dictionary<int, DateTime>();
+
+        var closedOppsForVelocity = allOppDetails
+            .Where(o => closeStageIds.Contains(o.StageId) || actualValueByOpp.ContainsKey(o.OpportunityId) || o.TransactionId.HasValue)
+            .Select(o =>
+            {
+                DateTime closeDate;
+                if (!closeInteractionDates.TryGetValue(o.OpportunityId, out closeDate))
+                {
+                    if (!firstInvoiceDateByOpp.TryGetValue(o.OpportunityId, out closeDate))
+                        closeDate = o.LastUpdatedAt ?? o.CreatedAt;
+                }
+
+                var days = Math.Max(0, (closeDate.Date - o.CreatedAt.Date).Days);
+                return new { o.OpportunityId, Days = days };
+            })
+            .ToList();
+
+        result.OpportunityClosureMetrics = new OpportunityClosureMetricsDto
+        {
+            ClosedCount = closedOppsForVelocity.Count,
+            ClosureRate = allOppDetails.Count == 0 ? 0m : Math.Round((decimal)closedOppsForVelocity.Count / allOppDetails.Count * 100m, 1),
+            AvgDaysToClose = closedOppsForVelocity.Any() ? Math.Round(closedOppsForVelocity.Average(x => x.Days), 1) : 0,
+            MinDaysToClose = closedOppsForVelocity.Any() ? closedOppsForVelocity.Min(x => x.Days) : null,
+            MaxDaysToClose = closedOppsForVelocity.Any() ? closedOppsForVelocity.Max(x => x.Days) : null
+        };
 
         var totalLeads = leads.Count;
         var convertedCount = leads.Count(l => l.LeadStatus == "محول");
         var duplicateCount = leads.Count(l => l.IsDuplicate);
         var rejectedCount = leads.Count(l => l.LeadStatus == "مرفوض");
 
-        // متوسط أيام التحويل
         var convertedWithDate = leads
             .Where(l => l.LeadStatus == "محول" && l.ConvertedDate.HasValue && l.CreatedAt != default)
             .ToList();
@@ -1029,7 +1212,6 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             ? convertedWithDate.Average(l => (l.ConvertedDate!.Value - l.CreatedAt).TotalDays)
             : 0;
 
-        // ─── KPIs الفترة السابقة ───
         var prevTotal = prevLeads.Count;
         var prevConverted = prevLeads.Count(l => l.LeadStatus == "محول");
         var prevDuplicate = prevLeads.Count(l => l.IsDuplicate);
@@ -1042,7 +1224,6 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             ? prevConvertedWithDate.Average(l => (l.ConvertedDate!.Value - l.CreatedAt).TotalDays)
             : 0;
 
-        // حساب التغيير
         var convRate = totalLeads > 0 ? Math.Round((decimal)convertedCount / totalLeads * 100, 1) : 0;
         var prevConvRate = prevTotal > 0 ? Math.Round((decimal)prevConverted / prevTotal * 100, 1) : 0;
         var dupRate = totalLeads > 0 ? Math.Round((decimal)duplicateCount / totalLeads * 100, 1) : 0;
@@ -1056,10 +1237,12 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             ConversionRate = convRate,
             AvgConversionDays = Math.Round(avgDays, 1),
             ConvertedCount = convertedCount,
+            LeadOriginOpportunitiesCount = leadOriginOppIdsInScope.Count,
+            LeadOriginLostCount = allOppDetails.Count(o => leadOriginOppIdsInScope.Contains(o.OpportunityId) && (o.StageId == 4 || o.StageId == 5)),
             ClosedDealCount = closedDealCount,
             ClosedDealValue = closedDealValue,
-            ClosedDealExpectedValue = closedDealExpectedValue,   // ← جديد
-            ValueVariance = valueVariance,                        // ← جديد
+            ClosedDealExpectedValue = closedDealExpectedValue,
+            ValueVariance = valueVariance,
             DuplicateRate = dupRate,
             RejectionRate = rejRate,
             TotalLeadsChange = CalcChange(totalLeads, prevTotal),
@@ -1069,7 +1252,6 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             RejectionRateChange = CalcChange(rejRate, prevRejRate)
         };
 
-        // ─── Status Distribution (Donut) — مع استبدال العرض ───
         var statusColors = new Dictionary<string, string>
         {
             { "جديد", "#3b82f6" },
@@ -1082,17 +1264,31 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
         {
             { "تم التواصل", "تفاوض" }
         };
+        var statusOrder = new[] { "جديد", "تم الإسناد", "تم التواصل", "محول", "مرفوض" };
+        var statusCounts = leads
+            .GroupBy(l => l.LeadStatus ?? "غير محدد")
+            .ToDictionary(g => g.Key, g => g.Count());
 
-        result.StatusDistribution = leads
-            .GroupBy(l => l.LeadStatus)
-            .Select(g => new ChartItemDto
+        result.StatusDistribution = statusOrder
+            .Where(statusCounts.ContainsKey)
+            .Select(k => new ChartItemDto
             {
-                Label = statusDisplayNames.GetValueOrDefault(g.Key ?? "", g.Key ?? "غير محدد"),
-                Value = g.Count(),
-                Color = statusColors.GetValueOrDefault(g.Key ?? "", "#6b7280")
-            }).ToList();
+                Label = statusDisplayNames.GetValueOrDefault(k, k),
+                Value = statusCounts[k],
+                Color = statusColors.GetValueOrDefault(k, "#6b7280")
+            })
+            .ToList();
 
-        // ─── Platform Comparison (Bar) ───
+        result.StatusDistribution.AddRange(
+            statusCounts
+                .Where(x => !statusOrder.Contains(x.Key))
+                .Select(x => new ChartItemDto
+                {
+                    Label = x.Key,
+                    Value = x.Value,
+                    Color = "#6b7280"
+                }));
+
         var platformLabels = new Dictionary<string, string>
         {
             { "fb", "Facebook" },
@@ -1107,10 +1303,6 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
                 Label = platformLabels.GetValueOrDefault(g.Key!, g.Key!),
                 Value = g.Count()
             }).ToList();
-
-        // ─── Daily Trend (Area) ───
-        var trendFrom = filter.DateFrom ?? DateTime.Today.AddDays(-30);
-        var trendTo = filter.DateTo ?? DateTime.Today;
 
         var dailyGroups = leads
             .Where(l => l.CreatedAt.Date >= trendFrom.Date && l.CreatedAt.Date <= trendTo.Date)
@@ -1132,33 +1324,48 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             };
         }).ToList();
 
-        // ─── Budget Distribution (Bar) ───
         result.BudgetDistribution = leads
-            .Where(l => l.Budget != null)
-            .GroupBy(l => l.Budget)
-            .Select(g => new ChartItemDto { Label = g.Key!, Value = g.Count() })
+            .GroupBy(l => MapBudgetCategory(l.Budget))
+            .Select(g => new ChartItemDto { Label = g.Key, Value = g.Count() })
             .OrderByDescending(x => x.Value)
+            .ThenBy(x => x.Label)
             .Take(8)
             .ToList();
 
-        // ─── Top Cities (Horizontal Bar) ───
         result.TopCities = leads
-            .Where(l => l.City != null)
+            .Where(l => !string.IsNullOrWhiteSpace(l.City))
             .GroupBy(l => l.City)
             .Select(g => new ChartItemDto { Label = g.Key!, Value = g.Count() })
             .OrderByDescending(x => x.Value)
             .Take(8)
             .ToList();
 
-        // ─── Employee Performance (باستخدام ActualValue) ───
-        var empSales = wonDeals
-            .Where(o => o.EmployeeId.HasValue)
-            .GroupBy(o => o.EmployeeId!.Value)
+        var empSales = saleTransactions
+            .Select(t => new
+            {
+                EmpId = t.EmpId ?? (t.OpportunityId.HasValue ? oppEmployeeById.GetValueOrDefault(t.OpportunityId.Value) : null),
+                t.GrandTotal,
+                t.OpportunityId
+            })
+            .Where(x => x.EmpId.HasValue)
+            .GroupBy(x => x.EmpId!.Value)
             .ToDictionary(g => g.Key, g => new
             {
-                Count = g.Count(),
-                Value = g.Sum(o => o.ActualValue ?? o.ExpectedValue ?? 0)
+                Count = g.Select(x => x.OpportunityId ?? 0).Where(x => x > 0).Distinct().Count(),
+                Value = g.Sum(x => x.GrandTotal)
             });
+
+        if (empSales.Count == 0)
+        {
+            empSales = wonDeals
+                .Where(o => o.EmployeeId.HasValue)
+                .GroupBy(o => o.EmployeeId!.Value)
+                .ToDictionary(g => g.Key, g => new
+                {
+                    Count = g.Count(),
+                    Value = g.Sum(o => o.ActualValue ?? o.ExpectedValue ?? 0m)
+                });
+        }
 
         result.EmployeePerformance = leads
             .Where(l => l.AssignedEmployeeId.HasValue)
@@ -1178,10 +1385,9 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             .Take(10)
             .ToList();
 
-        // ─── Funnel Data (بدون مؤهل) ───
         var newCount = leads.Count(l => l.LeadStatus == "جديد");
         var contactedCount = leads.Count(l => l.LeadStatus == "تم التواصل");
-        var lostDealCount = closedDeals.Count(o => lostIdSet.Contains(o.StageId));
+        var lostDealCount = allOppDetails.Count(o => lostIdSet.Contains(o.StageId));
 
         result.FunnelData = new List<FunnelItemDto>
         {
@@ -1192,7 +1398,24 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             new() { Stage = "مرفوض/خسارة", Count = rejectedCount + lostDealCount, Percentage = totalLeads > 0 ? Math.Round((decimal)(rejectedCount + lostDealCount) / totalLeads * 100, 1) : 0, Color = "#ef4444" }
         };
 
-        // ─── Sales By Period (باستخدام ActualValue + ExpectedTotalValue) ───
+        var allWonOppIds = wonDeals.Select(o => o.OpportunityId).ToHashSet();
+        var allLostOppIds = allOppDetails
+            .Where(o => o.StageId == 4 || o.StageId == 5)
+            .Select(o => o.OpportunityId)
+            .ToHashSet();
+
+        var opportunityNegotiationCount = allOppDetails
+            .Count(o => !allWonOppIds.Contains(o.OpportunityId) && !allLostOppIds.Contains(o.OpportunityId));
+
+        result.ConvertedLeadOutcomeDistribution = new List<ChartItemDto>
+        {
+            new() { Label = "تفاوض", Value = opportunityNegotiationCount, Color = "#f59e0b" },
+            new() { Label = "تم البيع", Value = allWonOppIds.Count, Color = "#10b981" },
+            new() { Label = "خسارة", Value = allLostOppIds.Count, Color = "#ef4444" }
+        }
+        .Where(x => x.Value > 0)
+        .ToList();
+
         var arMonths = new[] { "", "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر" };
 
         var salesPeriods = wonDeals
@@ -1201,23 +1424,23 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             .Select(g => new SalesByPeriodDto
             {
                 Period = $"{arMonths[g.Key.Month]} {g.Key.Year}",
-                TotalValue = g.Sum(o => o.ActualValue ?? o.ExpectedValue ?? 0),
-                ExpectedTotalValue = g.Sum(o => o.ExpectedValue ?? 0),   // ← جديد
+                TotalValue = g.Sum(o => actualValueByOpp.TryGetValue(o.OpportunityId, out var oppActual) ? oppActual : (o.ActualValue ?? o.ExpectedValue ?? 0m)),
+                ExpectedTotalValue = g.Sum(o => o.ExpectedValue ?? 0m),
                 DealCount = g.Count()
             })
             .ToList();
 
-        // أضيف الشهور اللي مفيهاش بيانات (0)
         {
             var allMonths = new List<SalesByPeriodDto>();
             var m = new DateTime(trendFrom.Year, trendFrom.Month, 1);
             var end = new DateTime(trendTo.Year, trendTo.Month, 1);
             while (m <= end)
             {
-                var existing = salesPeriods.FirstOrDefault(p => p.Period == $"{arMonths[m.Month]} {m.Year}");
+                var period = $"{arMonths[m.Month]} {m.Year}";
+                var existing = salesPeriods.FirstOrDefault(p => p.Period == period);
                 allMonths.Add(existing ?? new SalesByPeriodDto
                 {
-                    Period = $"{arMonths[m.Month]} {m.Year}",
+                    Period = period,
                     TotalValue = 0,
                     ExpectedTotalValue = 0,
                     DealCount = 0
@@ -1227,19 +1450,158 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             result.SalesByPeriod = allMonths;
         }
 
-        // ─── Value Comparison Chart (المتوقع vs الفعلي) ───
-        result.ValueComparison = wonDeals
-            .GroupBy(o => new { o.CreatedAt.Year, o.CreatedAt.Month })
-            .OrderBy(g => g.Key.Year).ThenBy(g => g.Key.Month)
-            .Select(g => new ValueComparisonDto
+        var valueComparisonRows = new List<ValueComparisonDto>();
+        {
+            var m = new DateTime(trendFrom.Year, trendFrom.Month, 1);
+            var end = new DateTime(trendTo.Year, trendTo.Month, 1);
+            while (m <= end)
             {
-                Period = $"{arMonths[g.Key.Month]} {g.Key.Year}",
-                ExpectedValue = g.Sum(o => o.ExpectedValue ?? 0),
-                ActualValue = g.Sum(o => o.ActualValue ?? 0)
+                var monthWonDeals = wonDeals.Where(o => o.CreatedAt.Year == m.Year && o.CreatedAt.Month == m.Month).ToList();
+                var actualValue = monthWonDeals.Sum(o => actualValueByOpp.TryGetValue(o.OpportunityId, out var oppActual) ? oppActual : (o.ActualValue ?? 0m));
+                var expectedValue = monthWonDeals.Sum(o => o.ExpectedValue ?? 0m);
+
+                valueComparisonRows.Add(new ValueComparisonDto
+                {
+                    Period = $"{arMonths[m.Month]} {m.Year}",
+                    ExpectedValue = expectedValue,
+                    ActualValue = actualValue
+                });
+
+                m = m.AddMonths(1);
+            }
+        }
+        result.ValueComparison = valueComparisonRows;
+
+        var packageColors = new Dictionary<string, string>
+        {
+            { PricingTiers.CClass, "#6366f1" },
+            { PricingTiers.Premium, "#0ea5e9" },
+            { PricingTiers.Elite, "#f59e0b" },
+            { QuotationPricingModes.Mixed, "#8b5cf6" }
+        };
+        var packageLabels = new Dictionary<string, string>
+        {
+            { PricingTiers.CClass, QuotationPricingModes.All.GetValueOrDefault(PricingTiers.CClass, "ستاندرد") },
+            { PricingTiers.Premium, QuotationPricingModes.All.GetValueOrDefault(PricingTiers.Premium, "بريميوم") },
+            { PricingTiers.Elite, QuotationPricingModes.All.GetValueOrDefault(PricingTiers.Elite, "إيليت") },
+            { QuotationPricingModes.Mixed, QuotationPricingModes.All.GetValueOrDefault(QuotationPricingModes.Mixed, "مختلط") }
+        };
+        var packageOrder = new[] { PricingTiers.CClass, PricingTiers.Premium, PricingTiers.Elite, QuotationPricingModes.Mixed };
+        var packageMetrics = quotations
+            .GroupBy(q => string.IsNullOrWhiteSpace(q.PricingType) ? PricingTiers.Premium : q.PricingType!)
+            .ToDictionary(
+                g => g.Key,
+                g => new QuotationPackageMetricDto
+                {
+                    PackageKey = g.Key,
+                    PackageName = packageLabels.GetValueOrDefault(g.Key, g.Key),
+                    Count = g.Count(),
+                    TotalValue = g.Sum(x => x.GrandTotal ?? x.TotalAmount),
+                    RejectedCount = g.Count(x => string.Equals(x.Status, QuotationStatuses.Rejected, StringComparison.OrdinalIgnoreCase)),
+                    Color = packageColors.GetValueOrDefault(g.Key, "#94a3b8")
+                });
+
+        result.QuotationPackageMetrics = packageOrder
+            .Where(packageMetrics.ContainsKey)
+            .Select(k => packageMetrics[k])
+            .ToList();
+
+        result.QuotationPackageDistribution = result.QuotationPackageMetrics
+            .Select(x => new ChartItemDto
+            {
+                Label = x.PackageName,
+                Value = x.TotalValue,
+                Color = x.Color
             })
             .ToList();
 
-        // ─── Top Campaigns ───
+        var visitStatusIds = await _db.ContactStatuses.AsNoTracking()
+            .Where(s =>
+                (s.StatusNameAr != null && (s.StatusNameAr.Contains("زيارة") || s.StatusNameAr.Contains("المعرض"))) ||
+                (s.StatusName != null && (s.StatusName.Contains("Visit") || s.StatusName.Contains("Show Room") || s.StatusName.Contains("ShowRoom"))))
+            .Select(s => s.StatusId)
+            .Distinct()
+            .ToListAsync();
+
+        if (visitStatusIds.Any())
+        {
+            var showroomVisits = await _db.CustomerInteractions.AsNoTracking()
+                .Where(ci => allOppIds.Contains(ci.OpportunityId)
+                             && ci.StatusId.HasValue
+                             && visitStatusIds.Contains(ci.StatusId.Value))
+                .Select(ci => new { ci.OpportunityId, ci.PartyId })
+                .ToListAsync();
+
+            result.ShowroomVisitMetrics = new ShowroomVisitMetricsDto
+            {
+                TotalVisits = showroomVisits.Count,
+                UniqueVisitors = showroomVisits.Select(v => v.PartyId).Distinct().Count(),
+                LeadOriginVisits = showroomVisits.Count(v => leadOriginOppIdsInScope.Contains(v.OpportunityId)),
+                DirectVisits = showroomVisits.Count(v => !leadOriginOppIdsInScope.Contains(v.OpportunityId)),
+                RepeatVisitors = showroomVisits.GroupBy(v => v.PartyId).Count(g => g.Count() > 1)
+            };
+
+            result.ShowroomVisitOriginDistribution = new List<ChartItemDto>
+            {
+                new() { Label = "من الليدز", Value = result.ShowroomVisitMetrics.LeadOriginVisits, Color = "#7c3aed" },
+                new() { Label = "مباشر", Value = result.ShowroomVisitMetrics.DirectVisits, Color = "#0ea5e9" }
+            }
+            .Where(x => x.Value > 0)
+            .ToList();
+        }
+
+        var totalQuotations = quotations.Count;
+        var acceptedQuotations = quotations.Count(q => string.Equals(q.Status, QuotationStatuses.Accepted, StringComparison.OrdinalIgnoreCase));
+        var rejectedQuotations = quotations.Count(q => string.Equals(q.Status, QuotationStatuses.Rejected, StringComparison.OrdinalIgnoreCase));
+        var convertedQuotations = quotations.Count(q => string.Equals(q.Status, QuotationStatuses.Converted, StringComparison.OrdinalIgnoreCase) || q.InvoiceId.HasValue);
+        var openQuotations = Math.Max(totalQuotations - acceptedQuotations - rejectedQuotations - convertedQuotations, 0);
+
+        result.QuotationStatusDistribution = new List<ChartItemDto>
+        {
+            new() { Label = "قيد المتابعة", Value = openQuotations, Color = "#3b82f6" },
+            new() { Label = "مقبول", Value = acceptedQuotations, Color = "#10b981" },
+            new() { Label = "مرفوض", Value = rejectedQuotations, Color = "#ef4444" },
+            new() { Label = "تحوّل لفاتورة", Value = convertedQuotations, Color = "#8b5cf6" }
+        }
+        .Where(x => x.Value > 0)
+        .ToList();
+
+        result.QuotationStatusSummary = new List<QuotationStatusSummaryDto>
+        {
+            new()
+            {
+                StatusKey = "total",
+                StatusName = "إجمالي عروض الأسعار",
+                Count = totalQuotations,
+                Percent = totalQuotations > 0 ? 100m : 0m,
+                Color = "#6366f1"
+            },
+            new()
+            {
+                StatusKey = QuotationStatuses.Accepted,
+                StatusName = "مقبول",
+                Count = acceptedQuotations,
+                Percent = totalQuotations > 0 ? Math.Round((decimal)acceptedQuotations / totalQuotations * 100m, 1) : 0m,
+                Color = "#10b981"
+            },
+            new()
+            {
+                StatusKey = QuotationStatuses.Rejected,
+                StatusName = "مرفوض",
+                Count = rejectedQuotations,
+                Percent = totalQuotations > 0 ? Math.Round((decimal)rejectedQuotations / totalQuotations * 100m, 1) : 0m,
+                Color = "#ef4444"
+            },
+            new()
+            {
+                StatusKey = QuotationStatuses.Converted,
+                StatusName = "تحوّل لفاتورة",
+                Count = convertedQuotations,
+                Percent = totalQuotations > 0 ? Math.Round((decimal)convertedQuotations / totalQuotations * 100m, 1) : 0m,
+                Color = "#8b5cf6"
+            }
+        };
+
         result.TopCampaigns = leads
             .Where(l => l.CampaignName != null)
             .GroupBy(l => new { l.CampaignName, l.Platform })
@@ -1256,7 +1618,6 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             .Take(10)
             .ToList();
 
-        // ─── Project Type Summary ───
         result.ProjectSummary = leads
             .Where(l => l.ProjectType != null)
             .GroupBy(l => l.ProjectType)
@@ -1272,7 +1633,6 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             .Take(10)
             .ToList();
 
-        // ─── Recent Converted ───
         result.RecentConverted = leads
             .Where(l => l.LeadStatus == "محول" && l.ConvertedDate.HasValue)
             .OrderByDescending(l => l.ConvertedDate)
@@ -1287,7 +1647,6 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
                 Budget = ""
             }).ToList();
 
-        // ─── Filter dropdown options ───
         result.AvailableCities = leads
             .Where(l => l.City != null).Select(l => l.City!).Distinct().OrderBy(c => c).ToList();
 
@@ -1308,6 +1667,7 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
 
     return result;
 }
+
 
 
         // ═══════════════════════════════════════════════════════════
@@ -1486,6 +1846,37 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
         if (!string.IsNullOrEmpty(lead.NextAction))
             parts.Add($"الاحتياج: {lead.NextAction}");
         return string.Join(" | ", parts);
+    }
+
+    private static string MapBudgetCategory(string? budget)
+    {
+        if (string.IsNullOrWhiteSpace(budget) ||
+            string.Equals(budget.Trim(), "null", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(budget.Trim(), "n/a", StringComparison.OrdinalIgnoreCase) ||
+            budget.Trim() == "-")
+            return "بدون ميزانية";
+
+        var raw = budget.Trim();
+        var normalized = raw.ToLowerInvariant()
+            .Replace("أ", "ا")
+            .Replace("إ", "ا")
+            .Replace("آ", "ا")
+            .Replace("جنيه", "جنيه")
+            .Replace("  ", " ");
+
+        if (normalized.Contains("above egp 1 million") || normalized.Contains("اكثر من مليون"))
+            return "أكثر من مليون جنيه";
+
+        if (normalized.Contains("below 500k") || normalized.Contains("اقل من 500") || normalized.Contains("أقل من 500"))
+            return "أقل من 500 ألف جنيه";
+
+        if (normalized.Contains("500") && normalized.Contains("1 مليون") && !normalized.Contains("700"))
+            return "من 500 ألف لـ 1 مليون جنيه";
+
+        if (normalized.Contains("500") && normalized.Contains("1 million") && !normalized.Contains("700"))
+            return "من 500 ألف لـ 1 مليون جنيه";
+
+        return raw;
     }
 
     private static decimal CalcChange(decimal current, decimal previous)

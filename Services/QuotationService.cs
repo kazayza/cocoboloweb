@@ -43,6 +43,8 @@ public class QuotationService : IQuotationService
         [QuotationStatuses.Converted] = Array.Empty<string>()
     };
 
+    private const int ClosedDealStageId = 3;
+
     public QuotationService(
         db24804Context db, IDbContextFactory<db24804Context> dbFactory, IAuditService audit, NotificationService notify,
         IInvoiceService invoiceService, IHttpContextAccessor httpContext,
@@ -119,6 +121,7 @@ public class QuotationService : IQuotationService
                     QDate = (DateTime?)q.QuotationDate,
                     PId = (int?)q.PartyId,
                     WId = q.WarehouseId,
+                    OId = q.OpportunityId,
                     EId = q.EmpId,
                     PType = q.PricingType,
                     Total = (decimal?)q.TotalAmount,
@@ -312,6 +315,7 @@ if (canViewCost && quoteIds.Any())
                     PartyPhone = partyInfo.Phone,
                     WarehouseId = r.WId,
                     WarehouseName = wname,
+                    OpportunityId = r.OId,
                     EmpId = r.EId,
                     EmpName = ename,
                     PricingType = r.PType ?? PricingTiers.Premium,
@@ -445,6 +449,7 @@ if (canViewCost && quoteIds.Any())
                 PId = (int?)x.PartyId,
                 x.WarehouseId,
                 x.EmpId,
+                x.OpportunityId,
                 x.PricingType,
                 Total = (decimal?)x.TotalAmount,
                 x.DiscountAmount,
@@ -571,6 +576,7 @@ if (canViewCost && quoteIds.Any())
             PartyName = party?.PartyName,
             PartyPhone = party?.Phone,
             WarehouseId = rawData.WarehouseId,
+            OpportunityId = rawData.OpportunityId,
             EmpId = rawData.EmpId,
             EmpName = empName,
             PricingType = ResolveQuotationPricingType(items.Select(i => i.PricingTier), rawData.PricingType),
@@ -663,6 +669,7 @@ if (canViewCost && quoteIds.Any())
             // ✅ نجيب البيانات الخام بـ nullable casts
             var raw = await query.Select(q => new
             {
+                q.PartyId,
                 Total = (decimal?)q.TotalAmount,
                 Grand = q.GrandTotal,
                 Stat = q.Status,
@@ -672,6 +679,7 @@ if (canViewCost && quoteIds.Any())
 
             // ✅ نحسب الإحصائيات في الذاكرة - مفيش أي مشكلة nulls
             var total = raw.Count;
+            var distinctCustomers = raw.Select(x => x.PartyId).Distinct().Count();
             var converted = raw.Count(x => x.InvId != null);
             var totalValue = raw.Sum(x => x.Grand ?? x.Total ?? 0m);
             var convertedValue = raw.Where(x => x.InvId != null).Sum(x => x.Grand ?? x.Total ?? 0m);
@@ -679,6 +687,7 @@ if (canViewCost && quoteIds.Any())
             return new QuotationStatsDto
             {
                 TotalCount = total,
+                DistinctCustomersCount = distinctCustomers,
                 TotalValue = totalValue,
                 DraftCount = raw.Count(x => string.IsNullOrEmpty(x.Stat) || x.Stat == QuotationStatuses.Draft),
                 SentCount = raw.Count(x => x.Stat == QuotationStatuses.Sent),
@@ -742,6 +751,7 @@ if (canViewCost && quoteIds.Any())
             ValidUntil = dto.ValidUntil,
             PartyId = dto.PartyId!.Value,
             WarehouseId = dto.WarehouseId,
+            OpportunityId = dto.OpportunityId,
             EmpId = dto.EmpId,
             PricingType = quotationPricingType,
             TotalAmount = dto.TotalAmount,
@@ -773,6 +783,17 @@ if (canViewCost && quoteIds.Any())
         }
 
         await _db.SaveChangesAsync();
+
+        if (dto.OpportunityId.HasValue)
+        {
+            var opportunity = await _db.SalesOpportunities.FirstOrDefaultAsync(o => o.OpportunityId == dto.OpportunityId.Value);
+            if (opportunity != null && !opportunity.QuotationId.HasValue)
+            {
+                opportunity.QuotationId = quotation.QuotationId;
+                await _db.SaveChangesAsync();
+            }
+        }
+
         await tx.CommitAsync();
 
         await _audit.LogAsync("Quotations", "Insert",
@@ -810,6 +831,8 @@ if (canViewCost && quoteIds.Any())
         if (!validation.IsValid) return (false, validation.Message);
 
         var existingDiscountAmount = quotation.DiscountAmount ?? 0m;
+        var oldTotalAmount = quotation.TotalAmount;
+        var oldOpportunityId = quotation.OpportunityId;
         var discountValidation = ValidateDiscountPermission(dto, existingDiscountAmount);
         if (!discountValidation.IsValid) return (false, discountValidation.Message);
 
@@ -824,6 +847,7 @@ if (canViewCost && quoteIds.Any())
             quotation.ValidUntil = dto.ValidUntil;
             quotation.PartyId = dto.PartyId!.Value;
             quotation.WarehouseId = dto.WarehouseId;
+            quotation.OpportunityId = dto.OpportunityId;
             quotation.EmpId = dto.EmpId;
             quotation.PricingType = quotationPricingType;
             quotation.TotalAmount = dto.TotalAmount;
@@ -876,10 +900,41 @@ if (canViewCost && quoteIds.Any())
             }
 
             await _db.SaveChangesAsync();
+
+            if (oldOpportunityId.HasValue && oldOpportunityId != dto.OpportunityId)
+            {
+                var oldOpportunity = await _db.SalesOpportunities.FirstOrDefaultAsync(o => o.OpportunityId == oldOpportunityId.Value);
+                if (oldOpportunity != null && oldOpportunity.QuotationId == quotation.QuotationId)
+                    oldOpportunity.QuotationId = null;
+            }
+
+            if (dto.OpportunityId.HasValue)
+            {
+                var opportunity = await _db.SalesOpportunities.FirstOrDefaultAsync(o => o.OpportunityId == dto.OpportunityId.Value);
+                if (opportunity != null && !opportunity.QuotationId.HasValue)
+                    opportunity.QuotationId = quotation.QuotationId;
+            }
+
+            await _db.SaveChangesAsync();
             await tx.CommitAsync();
 
             await _audit.LogAsync<object>("Quotations", "Update",
                 quotation.QuotationId.ToString(), null, quotation, currentUserName);
+
+            if (!string.IsNullOrWhiteSpace(quotation.CreatedBy)
+                && !string.Equals(quotation.CreatedBy, currentUserName, StringComparison.OrdinalIgnoreCase)
+                && IsDiscountApprover()
+                && Math.Round(existingDiscountAmount, 2) != Math.Round(quotation.DiscountAmount ?? 0m, 2))
+            {
+                await NotifyDiscountUpdatedToSellerAsync(
+                    quotation,
+                    dto.PartyName,
+                    existingDiscountAmount,
+                    quotation.DiscountAmount ?? 0m,
+                    oldTotalAmount,
+                    quotation.TotalAmount,
+                    currentUserName);
+            }
 
             return (true, "تم تحديث عرض السعر بنجاح.");
         }
@@ -932,6 +987,13 @@ if (canViewCost && quoteIds.Any())
     {
         quotation.AcceptedAt = DateTime.Now;
         quotation.AcceptedBy = currentUserName;
+
+        if (quotation.OpportunityId.HasValue)
+        {
+            var opportunity = await _db.SalesOpportunities.FirstOrDefaultAsync(o => o.OpportunityId == quotation.OpportunityId.Value);
+            if (opportunity != null)
+                opportunity.QuotationId = quotation.QuotationId;
+        }
     }
     else if (newStatus == QuotationStatuses.Rejected)
     {
@@ -972,6 +1034,12 @@ if (canViewCost && quoteIds.Any())
             var details = await _db.QuotationDetails
                 .Where(d => d.QuotationId == quotationId).ToListAsync();
             if (details.Any()) _db.QuotationDetails.RemoveRange(details);
+
+            var linkedOpportunity = await _db.SalesOpportunities
+                .FirstOrDefaultAsync(o => o.QuotationId == quotationId);
+            if (linkedOpportunity != null)
+                linkedOpportunity.QuotationId = null;
+
             _db.Quotations.Remove(quotation);
             await _db.SaveChangesAsync();
             await tx.CommitAsync();
@@ -1058,6 +1126,8 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
         if (!warehouseId.HasValue)
             return (false, "يرجى اختيار المخزن قبل التحويل.", null);
 
+        initialPaidAmount = Math.Round(initialPaidAmount, 0, MidpointRounding.AwayFromZero);
+
         var invoiceDateValue = invoiceDate?.Date ?? DateTime.Today;
         var maxProductionDays = dRows
             .Select(d => prodDict.TryGetValue(d.ProductId, out var p) ? (p?.Period ?? 0) : 0)
@@ -1078,12 +1148,15 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
 
             // ✅ عند التحويل نحافظ على قيمة الخصم كما أُدخلت في عرض السعر
             // ولا نعيد اشتقاقها من نسبة حتى لا يحدث فرق بسبب التقريب.
-            DiscountAmount = quotation.DiscountAmount,
+            DiscountAmount = quotation.DiscountAmount.HasValue
+                ? Math.Round(quotation.DiscountAmount.Value, 0, MidpointRounding.AwayFromZero)
+                : null,
             DiscountPercentage = null,
 
             PaidAmount = initialPaidAmount,
             CashBoxId = cashBoxId,
             PaymentMethod = paymentMethod,
+            OpportunityId = quotation.OpportunityId,
 
             Items = dRows.Select(d =>
             {
@@ -1098,7 +1171,7 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
                     ProductName = p?.ProductName,
                     ProductDescription = p?.ProductDescription,
                     Quantity = d.Quantity,
-                    UnitPrice = d.UnitPrice,
+                    UnitPrice = Math.Round(d.UnitPrice, 0, MidpointRounding.AwayFromZero),
                     Notes = StripTierTag(d.Notes),
                     PricingTier = effectiveTier,
                     SalePriceCClass = p?.SuggestedSalePriceCClass,
@@ -1123,6 +1196,61 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
         // (مفيش transaction هنا - مجرد update واحد)
         quotation.InvoiceId = invoiceId.Value;
         quotation.Status = QuotationStatuses.Converted;
+
+        if (quotation.OpportunityId.HasValue)
+        {
+            var opportunity = await _db.SalesOpportunities.FirstOrDefaultAsync(o => o.OpportunityId == quotation.OpportunityId.Value);
+            if (opportunity != null)
+            {
+                var oldStageId = opportunity.StageId;
+
+                opportunity.QuotationId = quotation.QuotationId;
+                opportunity.TransactionId = invoiceId.Value;
+                opportunity.StageId = ClosedDealStageId;
+                opportunity.ActualValue = Math.Round(invoiceForm.GrandTotal, 0, MidpointRounding.AwayFromZero);
+                opportunity.LastUpdatedBy = currentUserName;
+                opportunity.LastUpdatedAt = DateTime.Now;
+                opportunity.LastContactDate = DateTime.Now;
+                opportunity.NextFollowUpDate = opportunity.NextFollowUpDate.HasValue && opportunity.NextFollowUpDate.Value >= DateTime.Today
+                    ? opportunity.NextFollowUpDate
+                    : DateTime.Today.AddDays(7);
+
+                var openTasks = await _db.CrmTasks
+                    .Where(t => t.OpportunityId == opportunity.OpportunityId
+                             && (t.Status == "Pending" || t.Status == "In Progress"))
+                    .ToListAsync();
+
+                if (openTasks.Any())
+                {
+                    var now = DateTime.Now;
+                    foreach (var task in openTasks)
+                    {
+                        task.Status = "Completed";
+                        task.CompletedDate = now;
+                        task.CompletedBy = currentUserName;
+                        task.CompletionNotes = $"تم الإغلاق تلقائيًا بعد تحويل عرض السعر {quotation.ReferenceNumber ?? quotation.QuotationId.ToString()} إلى فاتورة بيع.";
+                    }
+                }
+
+                _db.CustomerInteractions.Add(new CustomerInteraction
+                {
+                    OpportunityId = opportunity.OpportunityId,
+                    PartyId = opportunity.PartyId,
+                    EmployeeId = opportunity.EmployeeId,
+                    SourceId = opportunity.SourceId,
+                    StatusId = opportunity.StatusId,
+                    InteractionDate = DateTime.Now,
+                    Summary = $"تم تحويل عرض السعر {(quotation.ReferenceNumber ?? $"QT-{quotation.QuotationDate.Year}-{quotation.QuotationId:D5}")} إلى فاتورة بيع {(invoiceForm.ReferenceNumber ?? $"#{invoiceId.Value}")}.",
+                    StageBeforeId = oldStageId,
+                    StageAfterId = ClosedDealStageId,
+                    NextFollowUpDate = opportunity.NextFollowUpDate,
+                    Notes = $"تم تحديث الفرصة تلقائيًا إلى Closed Deal (StageId = {ClosedDealStageId}).",
+                    CreatedBy = currentUserName,
+                    CreatedAt = DateTime.Now
+                });
+            }
+        }
+
         await _db.SaveChangesAsync();
 
         await _audit.LogAsync("Quotations", "ConvertToInvoice",
@@ -1161,6 +1289,7 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
             PartyId = (int?)x.PartyId,
             x.WarehouseId,
             x.EmpId,
+            x.OpportunityId,
             x.PricingType,
             TotalAmount = (decimal?)x.TotalAmount,
             x.DiscountAmount,
@@ -1259,6 +1388,7 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
         PartyName = party?.PartyName,
         PartyPhone = party?.Phone,
         WarehouseId = rawData.WarehouseId,
+        OpportunityId = rawData.OpportunityId,
         EmpId = rawData.EmpId,
         PricingType = ResolveQuotationPricingType(items.Select(i => i.PricingTier), rawData.PricingType),
         TotalAmount = total,
@@ -1294,10 +1424,120 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
                 "quotations", "Quotations", quotation.QuotationId);
             await _notify.NotifyRoleAsync(title, message, SystemRoles.SalesManager, actor,
                 "quotations", "Quotations", quotation.QuotationId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, actor,
+                "quotations", "Quotations", quotation.QuotationId);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to send notification for quotation {Id}", quotation.QuotationId);
+        }
+    }
+
+    public async Task<(bool Success, string Message)> SendDiscountRequestAsync(
+        QuotationDiscountRequestDto dto, string currentUserName)
+    {
+        try
+        {
+            if (dto.PartyId is null or 0)
+                return (false, "يرجى اختيار العميل أولاً قبل إرسال طلب الخصم.");
+
+            var requestedAmount = dto.RequestedDiscountAmount ?? 0m;
+            var requestedPercentage = dto.RequestedDiscountPercentage ?? 0m;
+
+            if (requestedAmount <= 0m && requestedPercentage <= 0m)
+                return (false, "يرجى تحديد قيمة أو نسبة الخصم المطلوبة.");
+
+            if (dto.TotalAmount > 0m && requestedAmount > dto.TotalAmount)
+                return (false, "قيمة الخصم المطلوبة لا يمكن أن تتجاوز إجمالي عرض السعر.");
+
+            var reference = !string.IsNullOrWhiteSpace(dto.ReferenceNumber)
+                ? dto.ReferenceNumber
+                : (dto.QuotationId.HasValue && dto.QuotationId.Value > 0
+                    ? $"QT-{DateTime.Now.Year}-{dto.QuotationId.Value:D5}"
+                    : "مسودة جديدة");
+
+            var partyName = dto.PartyName;
+            if (string.IsNullOrWhiteSpace(partyName) && dto.PartyId.HasValue)
+            {
+                partyName = await _db.Parties.AsNoTracking()
+                    .Where(p => p.PartyId == dto.PartyId.Value)
+                    .Select(p => p.PartyName)
+                    .FirstOrDefaultAsync();
+            }
+
+            var title = "💸 طلب خصم على عرض سعر";
+            var message =
+                $"طلب خصم من البائع {currentUserName}\n" +
+                $"مرجع العرض: {reference}\n" +
+                $"العميل: {partyName ?? "غير محدد"}\n" +
+                $"الموظف: {dto.EmpName ?? "غير محدد"}\n" +
+                $"إجمالي الأصناف: {dto.TotalAmount:N2} ج\n" +
+                $"الإجمالي الحالي: {dto.GrandTotal:N2} ج\n" +
+                $"الخصم الحالي: {dto.CurrentDiscountAmount:N2} ج ({dto.CurrentDiscountPercentage:N2}%)\n" +
+                $"الخصم المطلوب: {requestedAmount:N2} ج ({requestedPercentage:N2}%)\n" +
+                $"السبب: {dto.Reason ?? "بدون سبب"}";
+
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.SalesManager, currentUserName,
+                "quotations", dto.QuotationId.HasValue && dto.QuotationId.Value > 0 ? "Quotations" : null, dto.QuotationId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, currentUserName,
+                "quotations", dto.QuotationId.HasValue && dto.QuotationId.Value > 0 ? "Quotations" : null, dto.QuotationId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.Admin, currentUserName,
+                "quotations", dto.QuotationId.HasValue && dto.QuotationId.Value > 0 ? "Quotations" : null, dto.QuotationId);
+
+            return (true, "تم إرسال طلب الخصم للمراجعة بنجاح.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send discount request notification.");
+            return (false, "تعذّر إرسال طلب الخصم.");
+        }
+    }
+
+    private bool IsDiscountApprover()
+    {
+        var user = CurrentUser;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+        return user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole(SystemRoles.AccountManager)
+            || user.IsInRole(SystemRoles.SalesManager);
+    }
+
+    private async Task NotifyDiscountUpdatedToSellerAsync(
+        Quotation quotation,
+        string? partyName,
+        decimal oldDiscountAmount,
+        decimal newDiscountAmount,
+        decimal oldTotalAmount,
+        decimal newTotalAmount,
+        string actor)
+    {
+        try
+        {
+            var customerName = !string.IsNullOrWhiteSpace(partyName)
+                ? partyName
+                : await _db.Parties.AsNoTracking()
+                    .Where(p => p.PartyId == quotation.PartyId)
+                    .Select(p => p.PartyName)
+                    .FirstOrDefaultAsync() ?? "غير محدد";
+
+            var reference = quotation.ReferenceNumber ?? $"QT-{quotation.QuotationDate.Year}-{quotation.QuotationId:D5}";
+            var oldPercent = oldTotalAmount > 0 ? Math.Round((oldDiscountAmount / oldTotalAmount) * 100m, 2) : 0m;
+            var newPercent = newTotalAmount > 0 ? Math.Round((newDiscountAmount / newTotalAmount) * 100m, 2) : 0m;
+
+            var title = "✅ تم تعديل خصم عرض السعر";
+            var message =
+                $"تم تعديل خصم عرض السعر {reference}\n" +
+                $"العميل: {customerName}\n" +
+                $"بواسطة: {actor}\n" +
+                $"الخصم السابق: {oldDiscountAmount:N2} ج ({oldPercent:N2}%)\n" +
+                $"الخصم الجديد: {newDiscountAmount:N2} ج ({newPercent:N2}%)";
+
+            await _notify.AddAsync(title, message, quotation.CreatedBy!, actor,
+                "quotations", "Quotations", quotation.QuotationId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to notify quotation creator about discount update for {Id}", quotation.QuotationId);
         }
     }
 
@@ -1337,7 +1577,7 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
         dto.TotalAmount = Math.Round(dto.Items.Sum(i => i.TotalAmount), 2);
 
         if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
-            return Math.Round(dto.DiscountAmount.Value, 0);
+            return Math.Round(dto.DiscountAmount.Value / 100m, 0) * 100m;
 
         if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0 && dto.TotalAmount > 0)
         {
@@ -1417,7 +1657,7 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
 
         if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
         {
-            dto.DiscountAmount = Math.Min(Math.Round(dto.DiscountAmount.Value, 0), maxDiscount);
+            dto.DiscountAmount = Math.Min(Math.Round(dto.DiscountAmount.Value / 100m, 0) * 100m, maxDiscount);
             dto.DiscountPercentage = dto.TotalAmount > 0
                 ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100, 2)
                 : 0;

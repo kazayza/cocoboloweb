@@ -56,8 +56,11 @@ public class LeadsCrmListDto
     public string? FormLanguage { get; set; }
     public int? AssignedEmployeeId { get; set; }
     public string? AssignedEmployeeName { get; set; }
+    public int? OpportunityEmployeeId { get; set; }
+    public string? OpportunityEmployeeName { get; set; }
     public string? Feedback { get; set; }
     public bool IsConverted { get; set; }
+    public int? ConvertedOpportunityId { get; set; }
     public bool IsDuplicate { get; set; }
     public string? SheetTabName { get; set; }
 
@@ -121,6 +124,8 @@ public class LeadsCrmDetailDto
     public string? Notes { get; set; }
     public int? AssignedEmployeeId { get; set; }
     public string? AssignedEmployeeName { get; set; }
+    public int? OpportunityEmployeeId { get; set; }
+    public string? OpportunityEmployeeName { get; set; }
     public string? Feedback { get; set; }
     public string? RejectedReason { get; set; }
     public DateTime? LastContactDate { get; set; }

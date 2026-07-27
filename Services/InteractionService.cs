@@ -34,6 +34,10 @@ public class InteractionService : IInteractionService
             query = query.Where(i => i.StageBeforeId == filter.StageBeforeId.Value);
         if (filter.StageAfterId.HasValue)
             query = query.Where(i => i.StageAfterId == filter.StageAfterId.Value);
+        if (filter.StageChangesOnly == true)
+            query = query.Where(i => i.StageBeforeId != i.StageAfterId);
+        if (filter.NoFollowUpOnly == true)
+            query = query.Where(i => !i.NextFollowUpDate.HasValue);
         if (filter.PartyId.HasValue)
             query = query.Where(i => i.PartyId == filter.PartyId.Value);
         if (filter.DateFrom.HasValue)

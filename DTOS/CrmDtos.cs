@@ -134,6 +134,8 @@ public class InteractionFilterDto
     public int? PartyId { get; set; }
     public DateTime? DateFrom { get; set; }
     public DateTime? DateTo { get; set; }
+    public bool? StageChangesOnly { get; set; }
+    public bool? NoFollowUpOnly { get; set; }
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 25;
     public string SortBy { get; set; } = "InteractionDate";

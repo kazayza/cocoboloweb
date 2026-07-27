@@ -21,6 +21,8 @@ public partial class Transaction
 
     public string? ReferenceType { get; set; }
 
+    public int? OpportunityId { get; set; }
+
     public int? EmpId { get; set; }
 
     public DateTime? DueDate { get; set; }

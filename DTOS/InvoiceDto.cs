@@ -49,6 +49,7 @@ public class InvoiceFormDto
     public int? PartyId { get; set; }
     public string? PartyName { get; set; }
     public int? WarehouseId { get; set; }
+    public int? OpportunityId { get; set; }
     public int? EmpId { get; set; }
     public string? EmpName { get; set; }
     public DateTime? DueDate { get; set; }

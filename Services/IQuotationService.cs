@@ -34,7 +34,7 @@ public interface IQuotationService
     
     Task<(string? Reason, DateTime? RejectedAt, string? RejectedBy)> 
     GetRejectionDetailsAsync(int quotationId);
-    
 
-    
+    Task<(bool Success, string Message)> SendDiscountRequestAsync(
+        QuotationDiscountRequestDto dto, string currentUserName);
 }

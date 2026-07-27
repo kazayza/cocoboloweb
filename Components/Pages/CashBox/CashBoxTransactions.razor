@@ -122,6 +122,13 @@ else
                         <span class="txs-label">الصافي</span>
                     </div>
                 </div>
+                <div class="txs-card txs-balance">
+                    <div class="txs-icon-box"><MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" Size="Size.Small" /></div>
+                    <div class="txs-data">
+                        <span class="txs-value @(_actualBalance < 0 ? "txs-neg" : "")">@FormatMoney(_actualBalance)</span>
+                        <span class="txs-label">@_actualBalanceLabel</span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -231,8 +238,9 @@ else
                 <MudTh>الاتجاه</MudTh>
                 <MudTh>المصدر</MudTh>
                 <MudTh>التفاصيل</MudTh>
-                <MudTh>المستخدم</MudTh>
                 <MudTh>المبلغ</MudTh>
+                <MudTh>المستخدم</MudTh>
+                <MudTh>تاريخ الإنشاء</MudTh>
                 <MudTh Style="width:60px;"></MudTh>
             </HeaderContent>
             <RowTemplate>
@@ -305,6 +313,14 @@ else
                     </div>
                 </MudTd>
 
+                <!-- المبلغ -->
+                <MudTd DataLabel="المبلغ">
+                    <div class="td-amount @(context.TransactionType == "قبض" ? "td-amt-in" : "td-amt-out")">
+                        <span class="td-amt-val">@(context.TransactionType == "قبض" ? "+" : "-")@FormatMoney(context.Amount)</span>
+                        <span class="td-amt-curr">ج.م</span>
+                    </div>
+                </MudTd>
+
                 <!-- المستخدم -->
                 <MudTd DataLabel="المستخدم">
                     <div class="td-user">
@@ -315,12 +331,19 @@ else
                     </div>
                 </MudTd>
 
-                <!-- المبلغ -->
-                <MudTd DataLabel="المبلغ">
-                    <div class="td-amount @(context.TransactionType == "قبض" ? "td-amt-in" : "td-amt-out")">
-                        <span class="td-amt-val">@(context.TransactionType == "قبض" ? "+" : "-")@FormatMoney(context.Amount)</span>
-                        <span class="td-amt-curr">ج.م</span>
-                    </div>
+                <!-- تاريخ الإنشاء -->
+                <MudTd DataLabel="تاريخ الإنشاء">
+                    @if (context.CreatedAt.HasValue)
+                    {
+                        <div class="td-date td-date-created">
+                            <span class="td-date-main">@context.CreatedAt.Value.ToString("yyyy/MM/dd")</span>
+                            <span class="td-date-time">@context.CreatedAt.Value.ToString("HH:mm")</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <span class="td-date-time">—</span>
+                    }
                 </MudTd>
 
                 <!-- الإجراءات -->
@@ -435,6 +458,7 @@ else
     .txs-in .txs-icon-box { background:rgba(16,185,129,0.2); color:#10b981; }
     .txs-out .txs-icon-box { background:rgba(239,68,68,0.2); color:#ef4444; }
     .txs-net .txs-icon-box { background:rgba(59,130,246,0.2); color:#3b82f6; }
+    .txs-balance .txs-icon-box { background:rgba(139,92,246,0.2); color:#c4b5fd; }
     .txs-data { flex:1; }
     .txs-value { display:block; font-size:1.3rem; font-weight:900; color:white; line-height:1; }
     .txs-neg { color:#ef4444 !important; }
@@ -483,6 +507,7 @@ else
 
     /* Table cells */
     .td-date { display:flex; flex-direction:column; }
+    .td-date-created { min-width:92px; }
     .td-date-main { font-size:0.88rem; font-weight:600; color:var(--mud-palette-text-primary); }
     .td-date-time { font-size:0.68rem; color:var(--mud-palette-text-secondary); }
 
@@ -570,6 +595,8 @@ else
     private List<CashBoxListDto> _boxes = new();
     private DateTime? _dateFrom, _dateTo;
     private decimal _totalIn = 0, _totalOut = 0;
+    private decimal _actualBalance = 0;
+    private string _actualBalanceLabel = "الرصيد الفعلي";
 
     private bool _canAdd = false;
     private System.Timers.Timer? _searchTimer;
@@ -625,6 +652,7 @@ else
             var filterSnapshot = CloneFilter(_filter);
             var result = await CashBoxService.GetTransactionsAsync(filterSnapshot);
             var totals = await CashBoxService.GetTransactionsTotalsAsync(filterSnapshot);
+            var boxes = await CashBoxService.GetCashBoxesAsync();
 
             if (_disposed)
                 return;
@@ -632,6 +660,8 @@ else
             _pagedResult = result;
             _totalIn = totals.TotalIn;
             _totalOut = totals.TotalOut;
+            _boxes = boxes;
+            UpdateActualBalanceCard();
         }
         catch (ObjectDisposedException)
         {
@@ -810,6 +840,24 @@ else
             SortBy = source.SortBy,
             SortDescending = source.SortDescending
         };
+    }
+
+    private void UpdateActualBalanceCard()
+    {
+        if (_filter.CashBoxId.HasValue)
+        {
+            var selectedBox = _boxes.FirstOrDefault(b => b.CashBoxId == _filter.CashBoxId.Value);
+            _actualBalance = selectedBox?.CurrentBalance ?? 0;
+            _actualBalanceLabel = selectedBox is null
+                ? "الرصيد الفعلي"
+                : $"رصيد {selectedBox.CashBoxName}";
+            return;
+        }
+
+        var activeBoxes = _boxes.Where(b => b.IsActive).ToList();
+        var boxesToSum = activeBoxes.Any() ? activeBoxes : _boxes;
+        _actualBalance = boxesToSum.Sum(b => b.CurrentBalance);
+        _actualBalanceLabel = "إجمالي الأرصدة الفعلية";
     }
 
     private bool _isExporting = false;

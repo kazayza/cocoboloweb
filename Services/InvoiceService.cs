@@ -306,6 +306,7 @@ public class InvoiceService : IInvoiceService
             PartyId = t.PartyId,
             PartyName = partyName,
             WarehouseId = t.WarehouseId,
+            OpportunityId = t.OpportunityId,
             EmpId = t.EmpId,
             EmpName = empName,
             DueDate = t.DueDate,
@@ -481,6 +482,7 @@ public class InvoiceService : IInvoiceService
                 WarehouseId = dto.WarehouseId!.Value,
                 ReferenceNumber = dto.ReferenceNumber,
                 ReferenceType = "Invoice",
+                OpportunityId = dto.OpportunityId,
                 EmpId = dto.EmpId, // ⭐ موظف الفاتورة
                 DueDate = dto.DueDate,
                 TotalAmount = dto.TotalAmount,
@@ -736,6 +738,7 @@ public class InvoiceService : IInvoiceService
     transaction.DueDate = dto.DueDate;
     transaction.IsDelivered = dto.IsDelivered;
     transaction.PaymentMethod = dto.PaymentMethod;
+    transaction.OpportunityId = dto.OpportunityId;
     transaction.EditBy = currentUserName;
     transaction.EditAt = DateTime.Now;
     if (transaction.EditStatus == InvoiceEditStatuses.Approved || transaction.EditStatus == InvoiceEditStatuses.Pending)
