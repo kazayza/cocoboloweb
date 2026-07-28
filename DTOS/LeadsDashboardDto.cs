@@ -45,6 +45,7 @@ public class LeadsDashboardKpisDto
     public decimal ConversionRate { get; set; }
     public double AvgConversionDays { get; set; }
     public int ConvertedCount { get; set; }
+    public int RejectedCount { get; set; }
     public int LeadOriginOpportunitiesCount { get; set; }
     public int LeadOriginLostCount { get; set; }
     public int ClosedDealCount { get; set; }

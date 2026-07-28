@@ -67,7 +67,22 @@ else
                            StartIcon="@Icons.Material.Filled.Close">
                     إلغاء
                 </MudButton>
-                @if (!IsEdit)
+                @if (IsEdit)
+                {
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Warning"
+                               StartIcon="@Icons.Material.Filled.Save"
+                               OnClick="SaveInvoice"
+                               Disabled="@_isSaving"
+                               Class="save-btn">
+                        @if (_isSaving)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                        }
+                        حفظ التعديلات
+                    </MudButton>
+                }
+                else
                 {
                     <MudButton Variant="Variant.Filled"
                                Color="Color.Primary"
@@ -1096,37 +1111,60 @@ else
     // ============================
     private async Task SaveInvoice()
     {
-        if (IsEdit) return;
+        if (_isSaving) return;
 
         RecalculateTotals();
 
-        var advanceTotal = _advances
-            .Where(a => _form.SelectedAdvanceChargeIds.Contains(a.ChargeId))
-            .Sum(a => a.ChargeAmount);
-
-        if (_form.PaidAmount + advanceTotal > _form.GrandTotal)
-        {
-            Snackbar.Add("إجمالي المدفوع أكبر من إجمالي الفاتورة", Severity.Warning);
-            return;
-        }
-
         _isSaving = true;
+        StateHasChanged();
+
         try
         {
-            var (ok, msg, id, _) = await InvoiceService.CreateInvoiceAsync(_form, _currentUserName!);
-            if (ok)
+            if (IsEdit)
             {
-                Snackbar.Add(msg, Severity.Success);
-                Navigation.NavigateTo($"/sales/invoices/{id}");
+                // ==================== وضع التعديل ====================
+                var (ok, msg) = await InvoiceService.UpdateInvoiceAsync(_form, _currentUserName!);
+
+                if (ok)
+                {
+                    Snackbar.Add("تم حفظ التعديلات بنجاح", Severity.Success);
+                    Navigation.NavigateTo($"/sales/invoices/{Id}");
+                }
+                else
+                {
+                    Snackbar.Add(msg, Severity.Error);
+                }
             }
             else
             {
-                Snackbar.Add(msg, Severity.Error);
+                // ==================== وضع الإنشاء ====================
+                var advanceTotal = _advances
+                    .Where(a => _form.SelectedAdvanceChargeIds.Contains(a.ChargeId))
+                    .Sum(a => a.ChargeAmount);
+
+                if (_form.PaidAmount + advanceTotal > _form.GrandTotal)
+                {
+                    Snackbar.Add("إجمالي المدفوع أكبر من إجمالي الفاتورة", Severity.Warning);
+                    return;
+                }
+
+                var (ok, msg, id, _) = await InvoiceService.CreateInvoiceAsync(_form, _currentUserName!);
+
+                if (ok)
+                {
+                    Snackbar.Add(msg, Severity.Success);
+                    Navigation.NavigateTo($"/sales/invoices/{id}");
+                }
+                else
+                {
+                    Snackbar.Add(msg, Severity.Error);
+                }
             }
         }
         finally
         {
             _isSaving = false;
+            StateHasChanged();
         }
     }
 

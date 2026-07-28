@@ -1077,27 +1077,12 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             .Distinct()
             .ToList();
 
-        var leadOriginOppIdsInScopeQuery = _db.LeadsCRMs.AsNoTracking()
-            .Where(l => l.ConvertedOpportunityId.HasValue && allOppIds.Contains(l.ConvertedOpportunityId.Value));
-
-        if (hasLeadOnlyFilters)
-        {
-            if (!string.IsNullOrWhiteSpace(filter.Platform))
-                leadOriginOppIdsInScopeQuery = leadOriginOppIdsInScopeQuery.Where(l => l.Platform == filter.Platform);
-            if (!string.IsNullOrWhiteSpace(filter.City))
-                leadOriginOppIdsInScopeQuery = leadOriginOppIdsInScopeQuery.Where(l => l.City == filter.City);
-            if (!string.IsNullOrWhiteSpace(filter.ProjectType))
-                leadOriginOppIdsInScopeQuery = leadOriginOppIdsInScopeQuery.Where(l => l.ProjectType == filter.ProjectType);
-            if (!string.IsNullOrWhiteSpace(filter.ProjectStage))
-                leadOriginOppIdsInScopeQuery = leadOriginOppIdsInScopeQuery.Where(l => l.ProjectStage == filter.ProjectStage);
-            if (!string.IsNullOrWhiteSpace(filter.CampaignName))
-                leadOriginOppIdsInScopeQuery = leadOriginOppIdsInScopeQuery.Where(l => l.CampaignName == filter.CampaignName);
-        }
-
-        var leadOriginOppIdsInScope = (await leadOriginOppIdsInScopeQuery
+        var leadOriginOppIdsInScope = leads
+            .Where(l => l.LeadStatus == "محول"
+                && l.ConvertedOpportunityId.HasValue
+                && allOppIds.Contains(l.ConvertedOpportunityId.Value))
             .Select(l => l.ConvertedOpportunityId!.Value)
             .Distinct()
-            .ToListAsync())
             .ToHashSet();
 
         var primaryQuotationIds = allOppDetails
@@ -1164,7 +1149,7 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
         var closedDealExpectedValue = wonDeals.Sum(o => o.ExpectedValue ?? 0m);
         var valueVariance = closedDealExpectedValue - closedDealValue;
 
-        var closeStageIds = new HashSet<int> { closedDealStageId, 4, 5 };
+        var closeStageIds = lostIdSet.Concat(new[] { closedDealStageId }).ToHashSet();
         var closeInteractionDates = allOppIds.Any()
             ? await _db.CustomerInteractions.AsNoTracking()
                 .Where(ci => allOppIds.Contains(ci.OpportunityId)
@@ -1237,8 +1222,9 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             ConversionRate = convRate,
             AvgConversionDays = Math.Round(avgDays, 1),
             ConvertedCount = convertedCount,
+            RejectedCount = rejectedCount,
             LeadOriginOpportunitiesCount = leadOriginOppIdsInScope.Count,
-            LeadOriginLostCount = allOppDetails.Count(o => leadOriginOppIdsInScope.Contains(o.OpportunityId) && (o.StageId == 4 || o.StageId == 5)),
+            LeadOriginLostCount = allOppDetails.Count(o => leadOriginOppIdsInScope.Contains(o.OpportunityId) && lostIdSet.Contains(o.StageId)),
             ClosedDealCount = closedDealCount,
             ClosedDealValue = closedDealValue,
             ClosedDealExpectedValue = closedDealExpectedValue,
@@ -1400,18 +1386,82 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
 
         var allWonOppIds = wonDeals.Select(o => o.OpportunityId).ToHashSet();
         var allLostOppIds = allOppDetails
-            .Where(o => o.StageId == 4 || o.StageId == 5)
+            .Where(o => lostIdSet.Contains(o.StageId))
             .Select(o => o.OpportunityId)
             .ToHashSet();
 
-        var opportunityNegotiationCount = allOppDetails
-            .Count(o => !allWonOppIds.Contains(o.OpportunityId) && !allLostOppIds.Contains(o.OpportunityId));
+        var opportunityStageIds = allOppDetails
+            .Select(o => o.StageId)
+            .Distinct()
+            .ToList();
+
+        var opportunityStagesById = opportunityStageIds.Any()
+            ? await _db.SalesStages.AsNoTracking()
+                .Where(s => opportunityStageIds.Contains(s.StageId))
+                .ToDictionaryAsync(s => s.StageId)
+            : new Dictionary<int, SalesStage>();
+
+        var openStageOutcomeById = new Dictionary<int, string>();
+        var openStagesInScope = opportunityStagesById.Values
+            .Where(s => s.StageId != closedDealStageId && !lostIdSet.Contains(s.StageId))
+            .OrderBy(s => s.StageOrder)
+            .ThenBy(s => s.StageId)
+            .ToList();
+
+        foreach (var stage in openStagesInScope)
+        {
+            var explicitLabel = TryMapOpportunityOpenOutcomeLabel(stage);
+            if (!string.IsNullOrWhiteSpace(explicitLabel))
+                openStageOutcomeById[stage.StageId] = explicitLabel!;
+        }
+
+        var unresolvedOpenStages = openStagesInScope
+            .Where(s => !openStageOutcomeById.ContainsKey(s.StageId))
+            .ToList();
+
+        for (var i = 0; i < unresolvedOpenStages.Count; i++)
+            openStageOutcomeById[unresolvedOpenStages[i].StageId] = ResolveFallbackOpportunityOpenOutcomeLabel(i, unresolvedOpenStages.Count);
+
+        var opportunityOutcomeCounts = new Dictionary<string, int>
+        {
+            ["محتمل"] = 0,
+            ["مهتم"] = 0,
+            ["عالي الاهتمام"] = 0,
+            ["تم البيع"] = 0,
+            ["خسارة"] = 0
+        };
+
+        foreach (var opp in allOppDetails)
+        {
+            string bucket;
+
+            if (allWonOppIds.Contains(opp.OpportunityId))
+            {
+                bucket = "تم البيع";
+            }
+            else if (allLostOppIds.Contains(opp.OpportunityId))
+            {
+                bucket = "خسارة";
+            }
+            else if (openStageOutcomeById.TryGetValue(opp.StageId, out var resolvedBucket))
+            {
+                bucket = resolvedBucket;
+            }
+            else
+            {
+                bucket = "مهتم";
+            }
+
+            opportunityOutcomeCounts[bucket] = opportunityOutcomeCounts.GetValueOrDefault(bucket) + 1;
+        }
 
         result.ConvertedLeadOutcomeDistribution = new List<ChartItemDto>
         {
-            new() { Label = "تفاوض", Value = opportunityNegotiationCount, Color = "#f59e0b" },
-            new() { Label = "تم البيع", Value = allWonOppIds.Count, Color = "#10b981" },
-            new() { Label = "خسارة", Value = allLostOppIds.Count, Color = "#ef4444" }
+            new() { Label = "محتمل", Value = opportunityOutcomeCounts.GetValueOrDefault("محتمل"), Color = "#3b82f6" },
+            new() { Label = "مهتم", Value = opportunityOutcomeCounts.GetValueOrDefault("مهتم"), Color = "#f59e0b" },
+            new() { Label = "عالي الاهتمام", Value = opportunityOutcomeCounts.GetValueOrDefault("عالي الاهتمام"), Color = "#8b5cf6" },
+            new() { Label = "تم البيع", Value = opportunityOutcomeCounts.GetValueOrDefault("تم البيع"), Color = "#10b981" },
+            new() { Label = "خسارة", Value = opportunityOutcomeCounts.GetValueOrDefault("خسارة"), Color = "#ef4444" }
         }
         .Where(x => x.Value > 0)
         .ToList();
@@ -1846,6 +1896,51 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
         if (!string.IsNullOrEmpty(lead.NextAction))
             parts.Add($"الاحتياج: {lead.NextAction}");
         return string.Join(" | ", parts);
+    }
+
+    private static string? TryMapOpportunityOpenOutcomeLabel(SalesStage? stage)
+    {
+        if (stage == null)
+            return null;
+
+        var raw = $"{stage.StageNameAr} {stage.StageName}".Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        var normalized = raw.ToLowerInvariant()
+            .Replace("أ", "ا")
+            .Replace("إ", "ا")
+            .Replace("آ", "ا")
+            .Replace("ى", "ي")
+            .Replace("ة", "ه");
+
+        if (normalized.Contains("عالي الاهتمام") || normalized.Contains("عالى الاهتمام") ||
+            (normalized.Contains("high") && normalized.Contains("interest")) ||
+            normalized.Contains("hot") || normalized.Contains("negotiat") || normalized.Contains("تفاوض") ||
+            normalized.Contains("عرض سعر") || normalized.Contains("quotation") || normalized.Contains("proposal"))
+            return "عالي الاهتمام";
+
+        if (normalized.Contains("مهتم") || normalized.Contains("interested") || normalized.Contains("qualified") || normalized.Contains("مؤهل"))
+            return "مهتم";
+
+        if (normalized.Contains("محتمل") || normalized.Contains("potential") || normalized.Contains("new") || normalized.Contains("lead"))
+            return "محتمل";
+
+        return null;
+    }
+
+    private static string ResolveFallbackOpportunityOpenOutcomeLabel(int index, int total)
+    {
+        if (total <= 1)
+            return "مهتم";
+
+        if (index <= 0)
+            return "محتمل";
+
+        if (index >= total - 1)
+            return "عالي الاهتمام";
+
+        return "مهتم";
     }
 
     private static string MapBudgetCategory(string? budget)

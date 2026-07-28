@@ -810,6 +810,10 @@ public class InvoiceService : IInvoiceService
         transaction.EditAt = now;
         transaction.EditBy = currentUserName;
 
+        string actionMessage = approve 
+            ? $"تمت الموافقة على طلب تعديل الفاتورة رقم {transaction.ReferenceNumber}" 
+            : $"تم رفض طلب تعديل الفاتورة رقم {transaction.ReferenceNumber} - السبب: {notes}";
+
         if (approve)
         {
             transaction.EditStatus = InvoiceEditStatuses.Approved;
@@ -817,9 +821,6 @@ public class InvoiceService : IInvoiceService
 
             await _audit.LogAsync("Transactions", "EditApprove",
                 transactionId.ToString(), null, new { ApprovedBy = currentUserName, ApprovedAt = now, Notes = notes }, currentUserName);
-
-            await SendInvoiceNotificationsAsync(transaction, currentUserName,
-                $"تمت الموافقة على طلب تعديل الفاتورة رقم {transaction.ReferenceNumber}");
         }
         else
         {
@@ -828,12 +829,13 @@ public class InvoiceService : IInvoiceService
 
             await _audit.LogAsync("Transactions", "EditReject",
                 transactionId.ToString(), null, new { RejectedBy = currentUserName, RejectedAt = now, Reason = notes }, currentUserName);
-
-            await SendInvoiceNotificationsAsync(transaction, currentUserName,
-                $"تم رفض طلب تعديل الفاتورة رقم {transaction.ReferenceNumber} - السبب: {notes}");
         }
 
         await _db.SaveChangesAsync();
+
+        // ⭐ إشعار للأدمن ومدير الحسابات (لأن NotifyUserAsync غير موجود)
+        await SendInvoiceNotificationsAsync(transaction, currentUserName, actionMessage);
+
         return (true, approve ? "تمت الموافقة على فتح الفاتورة للتعديل." : "تم رفض طلب التعديل.");
     }
 
