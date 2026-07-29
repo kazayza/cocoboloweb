@@ -97,15 +97,15 @@ public partial class AttendanceList : ComponentBase
         var user = authState.User;
 
         _hasViewPermission = user.IsInRole("Admin") || 
-                             user.IsInRole("Accountant") ||
-                             user.IsInRole("AccountsManager") ||
+                             user.IsInRole("Account") ||
+                             user.IsInRole("AccountManager") ||
                              user.IsInRole("HrManager") ||
                              user.IsInRole("HRManager") ||
                              user.HasClaim("Permission", "frm_Attendance:View");
         
         _hasEditPermission = user.IsInRole("Admin") || 
-                             user.IsInRole("Accountant") ||
-                             user.IsInRole("AccountsManager") ||
+                             user.IsInRole("Account") ||
+                             user.IsInRole("AccountManager") ||
                              user.IsInRole("HrManager") ||
                              user.IsInRole("HRManager") ||
                              user.HasClaim("Permission", "frm_Attendance:Edit");
