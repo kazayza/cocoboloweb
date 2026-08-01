@@ -4,6 +4,7 @@
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
 @using System.Globalization
+@using ApexCharts
 
 @inject IFinancialReportsService FinancialService
 @inject NavigationManager Navigation
@@ -11,10 +12,12 @@
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 
+@implements IDisposable
+
 @if (_isLoading)
 {
     <div class="loading-screen">
-        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudProgressCircular Color="MudBlazor.Color.Primary" Size="MudBlazor.Size.Large" Indeterminate="true" />
         <p>جاري تحليل البيانات المالية...</p>
     </div>
 }
@@ -47,18 +50,19 @@ else if (_report != null)
                     <div>
                         <h1>قائمة الدخل + التحليل المالي</h1>
                         <p>
-                            <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="Size.Small" Style="vertical-align:middle;" />
+                            <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="MudBlazor.Size.Small" Style="vertical-align:middle;" />
                             <strong>@_report.PeriodLabel</strong>
                         </p>
                     </div>
                 </div>
                 <div class="header-actions no-print">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                    <MudButton Variant="MudBlazor.Variant.Filled" Color="MudBlazor.Color.Primary"
                                StartIcon="@Icons.Material.Filled.Print"
                                OnClick="Print">
                         طباعة
                     </MudButton>
-                    <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                    <MudButton Variant="MudBlazor.Variant.Filled"
+                               Class="income-back-button"
                                StartIcon="@Icons.Material.Filled.Dashboard"
                                OnClick="@(() => Navigation.NavigateTo("/cashbox/dashboard"))">
                         العودة
@@ -80,19 +84,19 @@ else if (_report != null)
 
             <div class="custom-period">
                 <MudDatePicker Date="_filter.FromDate"
-                               DateChanged="@(d => { _filter.FromDate = d ?? _filter.FromDate; _filter.PeriodType = "Custom"; _ = LoadReport(); })"
-                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               DateChanged="@(async d => { _filter.FromDate = d ?? _filter.FromDate; _filter.PeriodType = "Custom"; await LoadReport(); })"
+                               Variant="MudBlazor.Variant.Outlined" Margin="Margin.Dense"
                                Label="من" Class="date-pick" />
                 <MudDatePicker Date="_filter.ToDate"
-                               DateChanged="@(d => { _filter.ToDate = d ?? _filter.ToDate; _filter.PeriodType = "Custom"; _ = LoadReport(); })"
-                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               DateChanged="@(async d => { _filter.ToDate = d ?? _filter.ToDate; _filter.PeriodType = "Custom"; await LoadReport(); })"
+                               Variant="MudBlazor.Variant.Outlined" Margin="Margin.Dense"
                                Label="إلى" Class="date-pick" />
             </div>
         </div>
 
         @if (_isReloading)
         {
-            <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mb-2" />
+            <MudProgressLinear Color="MudBlazor.Color.Primary" Indeterminate="true" Class="mb-2" />
         }
 
         <!-- ⭐ HERO STATS - الأرقام الرئيسية -->
@@ -102,7 +106,7 @@ else if (_report != null)
                 <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.TrendingUp" /></div>
                 <div class="hero-info">
                     <span class="hero-label">إجمالي الإيرادات</span>
-                    <span class="hero-value">@FormatMoney(_report.NetRevenue)</span>
+                    <span class="hero-value">@FormatMoney(_report.TotalRevenue)</span>
                     <span class="hero-meta">@_report.InvoicesCount فاتورة • متوسط: @FormatMoney(_report.AverageInvoiceValue) ج</span>
                 </div>
             </div>
@@ -294,9 +298,20 @@ else if (_report != null)
                         <td colspan="2">📥 الإيرادات</td>
                     </tr>
                     <tr>
-                        <td>إجمالي المبيعات</td>
-                        <td class="num">@FormatMoney(_report.TotalRevenue) ج</td>
+                        <td>إجمالي الفواتير</td>
+                        <td class="num">@FormatMoney(_report.InvoiceRevenue) ج</td>
                     </tr>
+                    @if (_report.OtherRevenue > 0)
+                    {
+                        <tr class="other-revenue-row">
+                            <td>
+                                <span class="grp-color" style="background:#0ea5e9;"></span>
+                                إيرادات أخرى من الرسوم المكتسبة
+                                <small>(@_report.OtherRevenueCount عملية)</small>
+                            </td>
+                            <td class="num positive">+@FormatMoney(_report.OtherRevenue) ج</td>
+                        </tr>
+                    }
                     <tr class="subtotal">
                         <td><strong>صافي الإيرادات</strong></td>
                         <td class="num"><strong>@FormatMoney(_report.NetRevenue) ج</strong></td>
@@ -321,7 +336,15 @@ else if (_report != null)
                     <tr class="section-header-row">
                         <td colspan="2">💸 المصروفات التشغيلية</td>
                     </tr>
-                    @foreach (var grp in _report.ExpensesByGroup)
+                    <tr class="salary-row">
+                        <td>
+                            <span class="grp-color" style="background:#7c3aed;"></span>
+                            أجور ورواتب
+                            <small>(استحقاق الفترة)</small>
+                        </td>
+                        <td class="num negative">-@FormatMoney(_report.PayrollExpense) ج</td>
+                    </tr>
+                    @foreach (var grp in _report.ExpensesByGroup.Where(x => x.GroupId != -1))
                     {
                         <tr>
                             <td>
@@ -348,6 +371,24 @@ else if (_report != null)
             </table>
         </div>
 
+        <!-- ⭐ EMPLOYEE LOANS ANALYSIS - خارج صافي الربح -->
+        <div class="loans-analysis-card">
+            <div class="loans-analysis-header">
+                <div>
+                    <h3 class="section-title"><MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" /> سلف الموظفين</h3>
+                    <p>السلف ليست مصروفاً؛ هي رصيد مستحق على الموظفين ولا تؤثر على صافي الربح.</p>
+                </div>
+                <span class="loans-note-badge">خارج قائمة الدخل</span>
+            </div>
+            <div class="loans-kpis">
+                <div><span>السلف المصروفة خلال الفترة</span><strong>@FormatMoney(_report.EmployeeLoans.LoansDisbursed) ج</strong></div>
+                <div><span>أقساط الفترة</span><strong>@FormatMoney(_report.EmployeeLoans.InstallmentsDue) ج</strong></div>
+                <div><span>المخصوم من الرواتب</span><strong>@FormatMoney(_report.EmployeeLoans.InstallmentsDeducted) ج</strong></div>
+                <div><span>الرصيد القائم</span><strong>@FormatMoney(_report.EmployeeLoans.OutstandingBalance) ج</strong></div>
+                <div><span>موظفون لديهم سلف</span><strong><bdi>@_report.EmployeeLoans.EmployeesWithLoansCount</bdi></strong></div>
+            </div>
+        </div>
+
         <!-- ⭐ COMPARISONS -->
         @if (_report.PreviousPeriod != null || _report.PreviousYear != null)
         {
@@ -369,76 +410,37 @@ else if (_report != null)
             </div>
         }
 
-        <!-- ⭐ MONTHLY TREND CHART -->
+        <!-- ⭐ MONTHLY TREND CHART — ApexCharts -->
         @if (_report.MonthlyTrend.Any())
         {
             <div class="trend-card">
                 <h3 class="section-title">
                     <MudIcon Icon="@Icons.Material.Filled.ShowChart" />
-                    ترند آخر 12 شهر
+                    الترند المالي - آخر 12 شهر
                 </h3>
-                <div class="trend-chart-wrap">
-                    <svg viewBox="0 0 1000 300" class="trend-chart" preserveAspectRatio="xMidYMid meet">
-                        @{
-                            var maxRev = _report.MonthlyTrend.Max(m => Math.Max(m.Revenue, m.Expenses));
-                            if (maxRev == 0) maxRev = 1;
-                            var barWidth = 1000.0 / _report.MonthlyTrend.Count / 3.5;
-                            var gap = 1000.0 / _report.MonthlyTrend.Count;
-                        }
-                        <!-- Grid -->
-                        @for (int i = 0; i <= 4; i++)
-                        {
-                            var y = 30 + (200 * i / 4.0);
-                            <line x1="0" y1="@y" x2="1000" y2="@y" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="3,3" />
-                        }
-
-                        @for (int i = 0; i < _report.MonthlyTrend.Count; i++)
-                        {
-                            var m = _report.MonthlyTrend[i];
-                            var x = i * gap + gap / 5;
-                            var revH = (double)m.Revenue / (double)maxRev * 200;
-                            var expH = (double)m.Expenses / (double)maxRev * 200;
-                            var profitH = Math.Abs((double)m.NetProfit) / (double)maxRev * 200;
-
-                            <!-- Revenue -->
-                            <rect x="@(x.ToString("F1", CultureInfo.InvariantCulture))" 
-                                  y="@((230 - revH).ToString("F1", CultureInfo.InvariantCulture))" 
-                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
-                                  height="@(revH.ToString("F1", CultureInfo.InvariantCulture))" 
-                                  fill="#10b981" rx="2">
-                                <title>@m.MonthLabel - إيرادات: @FormatMoney(m.Revenue)</title>
-                            </rect>
-                            <!-- Expenses -->
-                            <rect x="@((x + barWidth + 1).ToString("F1", CultureInfo.InvariantCulture))" 
-                                  y="@((230 - expH).ToString("F1", CultureInfo.InvariantCulture))" 
-                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
-                                  height="@(expH.ToString("F1", CultureInfo.InvariantCulture))" 
-                                  fill="#ef4444" rx="2">
-                                <title>@m.MonthLabel - مصروفات: @FormatMoney(m.Expenses)</title>
-                            </rect>
-                            <!-- Profit -->
-                            <rect x="@((x + 2*barWidth + 2).ToString("F1", CultureInfo.InvariantCulture))" 
-                                  y="@((230 - profitH).ToString("F1", CultureInfo.InvariantCulture))" 
-                                  width="@(barWidth.ToString("F1", CultureInfo.InvariantCulture))" 
-                                  height="@(profitH.ToString("F1", CultureInfo.InvariantCulture))" 
-                                  fill="@(m.NetProfit >= 0 ? "#3b82f6" : "#dc2626")" rx="2">
-                                <title>@m.MonthLabel - ربح: @FormatMoney(m.NetProfit)</title>
-                            </rect>
-
-                            <!-- Month label -->
-                            <svg:text x="@((x + barWidth * 1.5).ToString("F1", CultureInfo.InvariantCulture))" 
-          y="255" 
-          text-anchor="middle" font-size="10" fill="#6b7280">
-    @m.Month.ToString("MM/yy")
-</svg:text>
-                        }
-                        <line x1="0" y1="230" x2="1000" y2="230" stroke="#374151" stroke-width="1.5" />
-                    </svg>
-                </div>
-                <div class="chart-legend">
-                    <span><span class="dot" style="background:#10b981;"></span> إيرادات</span>
-                    <span><span class="dot" style="background:#ef4444;"></span> مصروفات</span>
-                    <span><span class="dot" style="background:#3b82f6;"></span> صافي ربح</span>
+                <div class="income-apex-chart" dir="ltr">
+                    <ApexChart TItem="MonthlyTrendDto"
+                               Options="_incomeTrendOptions"
+                               Height="340">
+                        <ApexPointSeries TItem="MonthlyTrendDto"
+                                         Items="_report.MonthlyTrend"
+                                         Name="الإيرادات"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="@(x => x.ChartMonthLabel)"
+                                         YValue="@(x => x.Revenue)" />
+                        <ApexPointSeries TItem="MonthlyTrendDto"
+                                         Items="_report.MonthlyTrend"
+                                         Name="المصروفات"
+                                         SeriesType="SeriesType.Bar"
+                                         XValue="@(x => x.ChartMonthLabel)"
+                                         YValue="@(x => x.Expenses)" />
+                        <ApexPointSeries TItem="MonthlyTrendDto"
+                                         Items="_report.MonthlyTrend"
+                                         Name="صافي الربح"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="@(x => x.ChartMonthLabel)"
+                                         YValue="@(x => x.NetProfit)" />
+                    </ApexChart>
                 </div>
             </div>
         }
@@ -592,6 +594,19 @@ else if (_report != null)
     .header-info h1 { color: white; font-size: 1.75rem; font-weight: 800; margin: 0; }
     .header-info p { color: rgba(255,255,255,0.85); margin: 0.4rem 0 0; }
     .header-actions { display: flex; gap: 0.5rem; }
+    .income-back-button {
+        background: #d4af37 !important;
+        color: #132238 !important;
+        border: 1px solid #f0cc63 !important;
+        font-weight: 800 !important;
+        box-shadow: 0 3px 10px rgba(0,0,0,.16);
+    }
+    .income-back-button:hover {
+        background: #f0cc63 !important;
+        color: #0f1d36 !important;
+        box-shadow: 0 5px 14px rgba(212,175,55,.3);
+    }
+    .income-back-button .mud-icon-root { color: #132238 !important; }
 
     /* ═══════ FILTERS ═══════ */
     .filters-bar {
@@ -665,10 +680,46 @@ else if (_report != null)
 
     .hero-icon ::deep .mud-icon-root { font-size: 28px !important; color: white !important; }
 
-    .hero-info { flex: 1; min-width: 0; }
-    .hero-label { display: block; font-size: 0.85rem; color: var(--mud-palette-text-secondary); font-weight: 600; }
-    .hero-value { display: block; font-size: 1.5rem; font-weight: 900; color: var(--mud-palette-text-primary); margin-top: 0.25rem; }
-    .hero-value-big { display: block; font-size: 1.85rem; font-weight: 900; margin-top: 0.25rem; }
+    .hero-info {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        container-type: inline-size;
+    }
+    .hero-label {
+        display: block;
+        font-size: clamp(.68rem, 5.5cqw, .85rem);
+        color: var(--mud-palette-text-secondary);
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .hero-value,
+    .hero-value-big {
+        display: block;
+        direction: ltr;
+        text-align: right;
+        white-space: nowrap;
+        overflow: visible;
+        text-overflow: clip;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -.035em;
+        line-height: 1.12;
+        max-width: 100%;
+        margin-top: 0.25rem;
+    }
+    .hero-value {
+        font-size: clamp(.8rem, 1.35vw, 1.5rem);
+        font-size: clamp(.78rem, 11cqw, 1.5rem);
+        font-weight: 900;
+        color: var(--mud-palette-text-primary);
+    }
+    .hero-value-big {
+        font-size: clamp(.9rem, 1.55vw, 1.85rem);
+        font-size: clamp(.86rem, 13cqw, 1.85rem);
+        font-weight: 900;
+    }
     .hero-card.net.profit .hero-value-big { color: #10b981; }
     .hero-card.net.loss .hero-value-big { color: #ef4444; }
     .hero-meta { display: block; font-size: 0.78rem; color: var(--mud-palette-text-secondary); margin-top: 0.2rem; }
@@ -860,6 +911,7 @@ else if (_report != null)
     }
 
     .subtotal td { background: rgba(59,130,246,0.05); font-weight: 700; }
+    .salary-row td { background: rgba(124,58,237,0.06); }
     .gross-profit-row td { background: linear-gradient(135deg, rgba(59,130,246,0.1), rgba(59,130,246,0.05)); border-top: 2px solid #3b82f6; border-bottom: 2px solid #3b82f6; font-size: 1.05rem; }
 
     .net-profit-row td {
@@ -915,6 +967,26 @@ else if (_report != null)
     .cr-vals .neutral { color: #94a3b8; font-weight: 700; }
 
     /* ═══════ CHART ═══════ */
+    .income-apex-chart {
+        width: 100%;
+        min-width: 0;
+        direction: ltr;
+        overflow: hidden;
+    }
+    .income-apex-chart .apexcharts-canvas,
+    .income-apex-chart .apexcharts-svg {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    .income-apex-chart .apexcharts-text,
+    .income-apex-chart .apexcharts-xaxis-label,
+    .income-apex-chart .apexcharts-yaxis-label,
+    .income-apex-chart .apexcharts-legend-text,
+    .income-apex-chart .apexcharts-tooltip {
+        direction: rtl !important;
+        unicode-bidi: plaintext;
+    }
+
     .trend-chart-wrap {
         background: var(--mud-palette-background);
         border-radius: 12px; padding: 1rem;
@@ -957,6 +1029,22 @@ else if (_report != null)
         font-size: 0.78rem; font-weight: 700;
     }
 
+    .loans-analysis-card {
+        background: var(--mud-palette-surface);
+        border: 1px solid rgba(14,165,233,.22);
+        border-radius: 16px;
+        padding: 1.25rem;
+        margin-bottom: 1.5rem;
+        background: linear-gradient(135deg, rgba(14,165,233,.06), var(--mud-palette-surface));
+    }
+    .loans-analysis-header { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; }
+    .loans-analysis-header .section-title { margin-bottom:.3rem; border-bottom:0; }
+    .loans-analysis-header p { margin:0; color:var(--mud-palette-text-secondary); font-size:.82rem; }
+    .loans-note-badge { background:rgba(14,165,233,.12); color:#0369a1; border:1px solid rgba(14,165,233,.22); border-radius:999px; padding:.3rem .7rem; font-size:.72rem; font-weight:800; white-space:nowrap; }
+    .loans-kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:.6rem; margin-top:1rem; }
+    .loans-kpis > div { display:flex; flex-direction:column; gap:.25rem; background:var(--mud-palette-background); border:1px solid var(--mud-palette-divider); border-radius:11px; padding:.7rem; }
+    .loans-kpis span { color:var(--mud-palette-text-secondary); font-size:.72rem; font-weight:700; }
+    .loans-kpis strong { color:#0369a1; font-size:1rem; }
     .print-only { display: none; }
     .print-footer {
         text-align: center; padding: 1rem;
@@ -983,6 +1071,8 @@ else if (_report != null)
         .analysis-grid, .comp-grid { grid-template-columns: 1fr; }
     }
     @@media (max-width: 700px) {
+        .loans-analysis-header { flex-direction:column; }
+        .loans-kpis { grid-template-columns:1fr 1fr; }
         .hero-stats { grid-template-columns: 1fr; }
         .target-info { grid-template-columns: 1fr; }
         .filters-bar { flex-direction: column; align-items: stretch; }
@@ -993,8 +1083,11 @@ else if (_report != null)
 @code {
     private bool _isLoading = true;
     private bool _isReloading = false;
+    private bool _disposed;
+    private readonly SemaphoreSlim _reportLoadGate = new(1, 1);
     private IncomeStatementDto? _report;
     private IncomeStatementFilterDto _filter = new();
+    private ApexChartOptions<MonthlyTrendDto> _incomeTrendOptions = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -1005,26 +1098,113 @@ else if (_report != null)
                    || user.IsInRole("Admin");
         if (!canView) { Navigation.NavigateTo("/"); return; }
 
+        InitIncomeTrendOptions();
         await SetPeriod("Month");
         _isLoading = false;
     }
 
+    private void InitIncomeTrendOptions()
+    {
+        _incomeTrendOptions = new ApexChartOptions<MonthlyTrendDto>
+        {
+            Chart = new Chart
+            {
+                FontFamily = "Cairo, Segoe UI, Tahoma, sans-serif",
+                Background = "transparent",
+                Toolbar = new Toolbar { Show = false }
+            },
+            Colors = new List<string> { "#10b981", "#ef4444", "#3b82f6" },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "58%"
+                }
+            },
+            Stroke = new Stroke
+            {
+                Width = new List<double> { 0, 0, 3 },
+                Curve = new List<Curve> { Curve.Smooth }
+            },
+            DataLabels = new DataLabels { Enabled = false },
+            Legend = new Legend
+            {
+                Position = LegendPosition.Top,
+                HorizontalAlign = ApexCharts.Align.Center,
+                FontFamily = "Cairo, sans-serif",
+                FontSize = "12px",
+                FontWeight = "700"
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels
+                {
+                    Style = new AxisLabelStyle
+                    {
+                        FontFamily = "Cairo, sans-serif",
+                        FontSize = "11px"
+                    }
+                }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis
+                {
+                    Labels = new YAxisLabels
+                    {
+                        Formatter = "function(val) { return Number(val).toLocaleString('ar-EG'); }"
+                    }
+                }
+            },
+            Tooltip = new Tooltip
+            {
+                Theme = Mode.Light,
+                Shared = true,
+                Intersect = false,
+                Y = new TooltipY
+                {
+                    Formatter = "function(val) { return Number(val).toLocaleString('ar-EG') + ' ج'; }"
+                }
+            },
+            Grid = new Grid
+            {
+                BorderColor = "#e5e7eb",
+                StrokeDashArray = 3
+            }
+        };
+    }
+
     private async Task LoadReport()
     {
-        _isReloading = true;
+        // منع تشغيل أكثر من تقرير في نفس الوقت على نفس DbContext
+        await _reportLoadGate.WaitAsync();
         try
         {
+            if (_disposed)
+                return;
+
+            _isReloading = true;
+            await InvokeAsync(StateHasChanged);
+
             _report = await FinancialService.GetIncomeStatementAsync(_filter);
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+            Snackbar.Add($"خطأ: {ex.GetBaseException().Message}", Severity.Error);
         }
         finally
         {
             _isReloading = false;
-            StateHasChanged();
+            _reportLoadGate.Release();
+            if (!_disposed)
+                await InvokeAsync(StateHasChanged);
         }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
     }
 
     private async Task SetPeriod(string period)

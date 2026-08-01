@@ -15,6 +15,12 @@ public interface ILeadsCrmService
     Task<(bool Success, string Message, int PartyId, int OpportunityId)> ConvertLeadToClientAsync(LeadConvertDto dto, string userName);
     Task<LeadsCrmStatsDto> GetStatsAsync(LeadsCrmFilterDto? filter = null);
     Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFilterDto filter);
+    Task<List<ShowroomVisitDetailDto>> GetShowroomVisitDetailsAsync(
+        LeadsDashboardFilterDto filter,
+        string originKey);
+    Task<List<ShowroomVisitDetailDto>> GetExternalCustomerSourceDetailsAsync(
+        LeadsDashboardFilterDto filter,
+        int? sourceId);
     Task<(bool Success, string Message, int LeadId)> CreateLeadAsync(LeadsCrmCreateDto dto, string userName);
     Task<(bool Success, string Message)> DeleteLeadAsync(int leadId, string userName);
     Task<List<Employee>> GetEmployeesAsync();

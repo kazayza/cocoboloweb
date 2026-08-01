@@ -10,8 +10,12 @@ public class IncomeStatementDto
     public string PeriodLabel { get; set; } = "";
 
     // ────────────── الإيرادات ──────────────
-    public decimal TotalRevenue { get; set; }              // إجمالي المبيعات
-    public decimal NetRevenue { get; set; }                // الإيرادات بعد الخصومات
+    public decimal TotalRevenue { get; set; }              // إجمالي الإيرادات = الفواتير + الإيرادات الأخرى المكتسبة
+    public decimal InvoiceRevenue { get; set; }            // إجمالي الفواتير فقط
+    public decimal OtherRevenue { get; set; }              // رسوم مكتسبة غير مرتبطة بفواتير
+    public int OtherRevenueCount { get; set; }
+    public List<OtherRevenueBreakdownDto> OtherRevenueByType { get; set; } = new();
+    public decimal NetRevenue { get; set; }                // الإيرادات بعد الخصومات + الإيرادات الأخرى المكتسبة
     public int InvoicesCount { get; set; }
     public decimal AverageInvoiceValue { get; set; }
 
@@ -24,7 +28,11 @@ public class IncomeStatementDto
 
     // ────────────── المصروفات التشغيلية ──────────────
     public decimal TotalOperatingExpenses { get; set; }
+    public decimal PayrollExpense { get; set; }
+    public decimal PayrollPaidAmount { get; set; }
+    public decimal PayrollOutstandingAmount { get; set; }
     public List<ExpenseGroupBreakdownDto> ExpensesByGroup { get; set; } = new();
+    public EmployeeLoansSummaryDto EmployeeLoans { get; set; } = new();
 
     // ────────────── صافي الربح ──────────────
     public decimal NetProfit { get; set; }                 // = الربح الإجمالي - المصروفات
@@ -50,6 +58,25 @@ public class IncomeStatementDto
 // ============================
 // تفصيل المصروفات بالمجموعة
 // ============================
+public class EmployeeLoansSummaryDto
+{
+    public decimal LoansDisbursed { get; set; }
+    public decimal InstallmentsDue { get; set; }
+    public decimal InstallmentsDeducted { get; set; }
+    public decimal OutstandingBalance { get; set; }
+    public int ActiveLoansCount { get; set; }
+    public int EmployeesWithLoansCount { get; set; }
+}
+
+public class OtherRevenueBreakdownDto
+{
+    public string ChargeType { get; set; } = "";
+    public string ChargeTypeName { get; set; } = "";
+    public decimal Amount { get; set; }
+    public int Count { get; set; }
+    public decimal Percentage { get; set; }
+}
+
 public class ExpenseGroupBreakdownDto
 {
     public int GroupId { get; set; }
@@ -155,6 +182,9 @@ public class MonthlyTrendDto
 {
     public DateTime Month { get; set; }
     public string MonthLabel { get; set; } = "";
+    public string ChartMonthLabel => string.IsNullOrWhiteSpace(MonthLabel)
+        ? string.Empty
+        : $"\u2067{MonthLabel.Trim()}\u2069";
     public decimal Revenue { get; set; }
     public decimal Cogs { get; set; }
     public decimal Expenses { get; set; }

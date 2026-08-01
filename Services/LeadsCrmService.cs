@@ -1593,12 +1593,71 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
 
             result.ShowroomVisitOriginDistribution = new List<ChartItemDto>
             {
-                new() { Label = "من الليدز", Value = result.ShowroomVisitMetrics.LeadOriginVisits, Color = "#7c3aed" },
-                new() { Label = "مباشر", Value = result.ShowroomVisitMetrics.DirectVisits, Color = "#0ea5e9" }
+                new() { Key = "lead", Label = "من الليدز", Value = result.ShowroomVisitMetrics.LeadOriginVisits, Color = "#7c3aed" },
+                new() { Key = "direct", Label = "مباشر", Value = result.ShowroomVisitMetrics.DirectVisits, Color = "#0ea5e9" }
             }
             .Where(x => x.Value > 0)
             .ToList();
         }
+
+        // مصادر الفرص البيعية خارج Leads: المصدر الرسمي هو Opportunity.SourceId فقط.
+        // لا نستخدم Party.ContactSourceId هنا، لأن هذا الرسم يقيس مصدر الفرصة البيعية.
+        var directOpportunityIds = allOppDetails
+            .Where(o => !leadOriginOppIdsInScope.Contains(o.OpportunityId))
+            .Select(o => o.OpportunityId)
+            .Distinct()
+            .ToList();
+
+        var directSourceRows = new List<DirectSourceRow>();
+        if (directOpportunityIds.Count > 0)
+        {
+            directSourceRows = await _db.SalesOpportunities.AsNoTracking()
+                .Where(o => directOpportunityIds.Contains(o.OpportunityId))
+                .Select(o => new DirectSourceRow
+                {
+                    SourceId = o.SourceId
+                })
+                .ToListAsync();
+        }
+
+        var directSourceIds = directSourceRows
+            .Where(o => o.SourceId.HasValue)
+            .Select(o => o.SourceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var sourceNames = directSourceIds.Count > 0
+            ? await _db.ContactSources.AsNoTracking()
+                .Where(s => directSourceIds.Contains(s.SourceId))
+                .ToDictionaryAsync(
+                    s => s.SourceId,
+                    s => string.IsNullOrWhiteSpace(s.SourceNameAr)
+                        ? s.SourceName
+                        : s.SourceNameAr!)
+            : new Dictionary<int, string>();
+
+        result.ExternalCustomerSourceDistribution = directSourceRows
+            .GroupBy(o => o.SourceId)
+            .Select(g =>
+            {
+                var sourceKey = g.Key.HasValue
+                    ? $"source:{g.Key.Value}"
+                    : "source:unknown";
+                var sourceLabel = g.Key.HasValue
+                    ? sourceNames.GetValueOrDefault(g.Key.Value, "مصدر غير معروف")
+                    : "مصدر غير محدد";
+
+                return new ChartItemDto
+                {
+                    Key = sourceKey,
+                    Label = sourceLabel,
+                    Value = g.Count(),
+                    Color = "#0ea5e9"
+                };
+            })
+            .OrderByDescending(x => x.Value)
+            .Take(10)
+            .ToList();
 
         var totalQuotations = quotations.Count;
         var acceptedQuotations = quotations.Count(q => string.Equals(q.Status, QuotationStatuses.Accepted, StringComparison.OrdinalIgnoreCase));
@@ -1719,6 +1778,203 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
 }
 
 
+
+    public async Task<List<ShowroomVisitDetailDto>> GetShowroomVisitDetailsAsync(
+        LeadsDashboardFilterDto filter,
+        string originKey)
+    {
+        if (originKey is not ("lead" or "direct"))
+            return new List<ShowroomVisitDetailDto>();
+
+        var visitStatusIds = await _db.ContactStatuses
+            .AsNoTracking()
+            .Where(s =>
+                (s.StatusNameAr != null &&
+                    (s.StatusNameAr.Contains("زيارة") || s.StatusNameAr.Contains("المعرض"))) ||
+                (s.StatusName != null &&
+                    (s.StatusName.Contains("Visit") ||
+                     s.StatusName.Contains("Show Room") ||
+                     s.StatusName.Contains("ShowRoom"))))
+            .Select(s => s.StatusId)
+            .Distinct()
+            .ToListAsync();
+
+        if (visitStatusIds.Count == 0)
+            return new List<ShowroomVisitDetailDto>();
+
+        var scopedLeadsQuery = ApplyDashboardFilter(
+            _db.LeadsCRMs.AsNoTracking(), filter);
+
+        var leadOriginOppIds = await scopedLeadsQuery
+            .Where(l => l.ConvertedOpportunityId.HasValue)
+            .Select(l => l.ConvertedOpportunityId!.Value)
+            .Distinct()
+            .ToListAsync();
+
+        var hasLeadOnlyFilters =
+            !string.IsNullOrWhiteSpace(filter.Platform) ||
+            !string.IsNullOrWhiteSpace(filter.City) ||
+            !string.IsNullOrWhiteSpace(filter.ProjectType) ||
+            !string.IsNullOrWhiteSpace(filter.ProjectStage) ||
+            !string.IsNullOrWhiteSpace(filter.CampaignName);
+
+        var opportunitiesQuery = _db.SalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.IsActive);
+
+        if (filter.EmployeeId.HasValue)
+            opportunitiesQuery = opportunitiesQuery
+                .Where(o => o.EmployeeId == filter.EmployeeId.Value);
+
+        if (filter.DateFrom.HasValue)
+            opportunitiesQuery = opportunitiesQuery
+                .Where(o => o.CreatedAt >= filter.DateFrom.Value.Date);
+
+        if (filter.DateTo.HasValue)
+            opportunitiesQuery = opportunitiesQuery
+                .Where(o => o.CreatedAt < filter.DateTo.Value.Date.AddDays(1));
+
+        if (hasLeadOnlyFilters)
+        {
+            opportunitiesQuery = leadOriginOppIds.Count > 0
+                ? opportunitiesQuery.Where(o => leadOriginOppIds.Contains(o.OpportunityId))
+                : opportunitiesQuery.Where(o => false);
+        }
+
+        var opportunityIds = await opportunitiesQuery
+            .Select(o => o.OpportunityId)
+            .ToListAsync();
+
+        if (opportunityIds.Count == 0)
+            return new List<ShowroomVisitDetailDto>();
+
+        var selectedOpportunityIds = originKey == "lead"
+            ? opportunityIds.Intersect(leadOriginOppIds).ToList()
+            : opportunityIds.Except(leadOriginOppIds).ToList();
+
+        if (selectedOpportunityIds.Count == 0)
+            return new List<ShowroomVisitDetailDto>();
+
+        var visits = await _db.CustomerInteractions
+            .AsNoTracking()
+            .Where(i => selectedOpportunityIds.Contains(i.OpportunityId)
+                        && i.StatusId.HasValue
+                        && visitStatusIds.Contains(i.StatusId.Value)
+                        && (!filter.DateFrom.HasValue ||
+                            i.InteractionDate >= filter.DateFrom.Value.Date)
+                        && (!filter.DateTo.HasValue ||
+                            i.InteractionDate < filter.DateTo.Value.Date.AddDays(1)))
+            .OrderByDescending(i => i.InteractionDate)
+            .Take(500)
+            .Select(i => new ShowroomVisitDetailDto
+            {
+                InteractionId = i.InteractionId,
+                LeadId = null,
+                OpportunityId = i.OpportunityId,
+                PartyId = i.PartyId,
+                CustomerName = i.Party.PartyName,
+                Phone = i.Party.Phone ?? "",
+                VisitDate = i.InteractionDate,
+                EmployeeName = i.Employee != null ? i.Employee.FullName : null,
+                OpportunityStage = i.Opportunity.Stage.StageNameAr ?? i.Opportunity.Stage.StageName,
+                OriginKey = originKey,
+                OriginName = originKey == "lead" ? "من الليدز" : "مباشر"
+            })
+            .ToListAsync();
+
+        if (visits.Count == 0)
+            return visits;
+
+        var visitOpportunityIds = visits
+            .Select(v => v.OpportunityId)
+            .Distinct()
+            .ToList();
+
+        var leadInfoByOpportunity = await _db.LeadsCRMs
+            .AsNoTracking()
+            .Where(l => l.ConvertedOpportunityId.HasValue
+                        && visitOpportunityIds.Contains(l.ConvertedOpportunityId.Value))
+            .Select(l => new
+            {
+                LeadId = l.LeadId,
+                OpportunityId = l.ConvertedOpportunityId!.Value,
+                l.CampaignName,
+                l.Platform
+            })
+            .ToDictionaryAsync(x => x.OpportunityId);
+
+        foreach (var visit in visits)
+        {
+            if (leadInfoByOpportunity.TryGetValue(visit.OpportunityId, out var leadInfo))
+            {
+                visit.LeadId = leadInfo.LeadId;
+                visit.CampaignName = leadInfo.CampaignName;
+                visit.Platform = leadInfo.Platform;
+            }
+        }
+
+        return visits;
+    }
+
+    public async Task<List<ShowroomVisitDetailDto>> GetExternalCustomerSourceDetailsAsync(
+        LeadsDashboardFilterDto filter,
+        int? sourceId)
+    {
+        var leadOriginOpportunityIds = await _db.LeadsCRMs
+            .AsNoTracking()
+            .Where(l => l.ConvertedOpportunityId.HasValue)
+            .Select(l => l.ConvertedOpportunityId!.Value)
+            .Distinct()
+            .ToListAsync();
+
+        var query = _db.SalesOpportunities
+            .AsNoTracking()
+            .Where(o => o.IsActive
+                        && !leadOriginOpportunityIds.Contains(o.OpportunityId));
+
+        if (filter.EmployeeId.HasValue)
+            query = query.Where(o => o.EmployeeId == filter.EmployeeId.Value);
+
+        if (filter.DateFrom.HasValue)
+            query = query.Where(o => o.CreatedAt >= filter.DateFrom.Value.Date);
+
+        if (filter.DateTo.HasValue)
+            query = query.Where(o => o.CreatedAt < filter.DateTo.Value.Date.AddDays(1));
+
+        query = sourceId.HasValue
+            ? query.Where(o => o.SourceId == sourceId.Value)
+            : query.Where(o => !o.SourceId.HasValue);
+
+        var sourceName = sourceId.HasValue
+            ? await _db.ContactSources.AsNoTracking()
+                .Where(s => s.SourceId == sourceId.Value)
+                .Select(s => string.IsNullOrWhiteSpace(s.SourceNameAr)
+                    ? s.SourceName
+                    : s.SourceNameAr!)
+                .FirstOrDefaultAsync() ?? "مصدر غير معروف"
+            : "مصدر غير محدد";
+
+        return await query
+            .OrderByDescending(o => o.CreatedAt)
+            .Take(500)
+            .Select(o => new ShowroomVisitDetailDto
+            {
+                InteractionId = 0,
+                LeadId = null,
+                OpportunityId = o.OpportunityId,
+                PartyId = o.PartyId,
+                CustomerName = o.Party.PartyName,
+                Phone = o.Party.Phone ?? "",
+                VisitDate = o.CreatedAt,
+                EmployeeName = o.Employee != null ? o.Employee.FullName : null,
+                OpportunityStage = o.Stage.StageNameAr ?? o.Stage.StageName,
+                OriginKey = sourceId.HasValue
+                    ? $"source:{sourceId.Value}"
+                    : "source:unknown",
+                OriginName = sourceName
+            })
+            .ToListAsync();
+    }
 
         // ═══════════════════════════════════════════════════════════
     //  إنشاء Lead يدوياً
@@ -1972,6 +2228,11 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             return "من 500 ألف لـ 1 مليون جنيه";
 
         return raw;
+    }
+
+    private sealed class DirectSourceRow
+    {
+        public int? SourceId { get; set; }
     }
 
     private static decimal CalcChange(decimal current, decimal previous)

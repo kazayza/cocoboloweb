@@ -24,6 +24,7 @@ public class LeadsDashboardDataDto
     public List<QuotationPackageMetricDto> QuotationPackageMetrics { get; set; } = new();
     public ShowroomVisitMetricsDto ShowroomVisitMetrics { get; set; } = new();
     public List<ChartItemDto> ShowroomVisitOriginDistribution { get; set; } = new();
+    public List<ChartItemDto> ExternalCustomerSourceDistribution { get; set; } = new();
     public List<CampaignPerformanceDto> TopCampaigns { get; set; } = new();
     public List<ProjectTypeSummaryDto> ProjectSummary { get; set; } = new();
     public List<RecentConvertedDto> RecentConverted { get; set; } = new();
@@ -72,6 +73,16 @@ public class ChartItemDto
     public string Label { get; set; } = "";
     public decimal Value { get; set; }
     public string? Color { get; set; }
+    public string? Key { get; set; }
+
+    // ApexCharts renders labels inside SVG. Unicode bidi-isolation keeps Arabic,
+    // numbers and mixed Arabic/English labels stable across Safari/WebKit.
+    public string ChartLabel => ChartTextForApex(Label);
+
+    private static string ChartTextForApex(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : $"\u2067{value.Trim()}\u2069";
 }
 
 public class DailyTrendItemDto
@@ -137,6 +148,9 @@ public class RecentConvertedDto
 public class SalesByPeriodDto
 {
     public string Period { get; set; } = "";   // "يناير 2026"
+    public string ChartPeriod => string.IsNullOrWhiteSpace(Period)
+        ? string.Empty
+        : $"\u2067{Period.Trim()}\u2069";
     public decimal TotalValue { get; set; }     // إجمالي القيم
     public decimal ExpectedTotalValue { get; set; }  // إجمالي القيمة المتوقعة
     public int DealCount { get; set; }          // عدد الصفقات
@@ -145,6 +159,9 @@ public class SalesByPeriodDto
 public class ValueComparisonDto
 {
     public string Period { get; set; } = "";       // "يناير 2026"
+    public string ChartPeriod => string.IsNullOrWhiteSpace(Period)
+        ? string.Empty
+        : $"\u2067{Period.Trim()}\u2069";
     public decimal ExpectedValue { get; set; }      // القيمة المتوقعة
     public decimal ActualValue { get; set; }        // القيمة الفعلية
 }
@@ -184,6 +201,23 @@ public class ShowroomVisitMetricsDto
     public int LeadOriginVisits { get; set; }
     public int DirectVisits { get; set; }
     public int RepeatVisitors { get; set; }
+}
+
+public class ShowroomVisitDetailDto
+{
+    public int InteractionId { get; set; }
+    public int? LeadId { get; set; }
+    public int OpportunityId { get; set; }
+    public int PartyId { get; set; }
+    public string CustomerName { get; set; } = "";
+    public string Phone { get; set; } = "";
+    public DateTime VisitDate { get; set; }
+    public string? EmployeeName { get; set; }
+    public string? CampaignName { get; set; }
+    public string? Platform { get; set; }
+    public string? OpportunityStage { get; set; }
+    public string OriginKey { get; set; } = "";
+    public string OriginName { get; set; } = "";
 }
 
 // ═══════════════════════════════════════════════════════════════

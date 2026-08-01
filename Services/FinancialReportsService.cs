@@ -28,7 +28,10 @@ public class FinancialReportsService : IFinancialReportsService
         // ────────────── 1. حساب الإيرادات ──────────────
         await CalculateRevenueAsync(dto);
 
-        // ────────────── 2. حساب تكلفة المبيعات (COGS) ──────────────
+        // ────────────── 2. الإيرادات الأخرى المكتسبة من الرسوم المستقلة ──────────────
+        await CalculateOtherRevenueAsync(dto);
+
+        // ────────────── 3. حساب تكلفة المبيعات (COGS) ──────────────
         await CalculateCogsAsync(dto);
 
         // ────────────── 3. الربح الإجمالي ──────────────
@@ -36,10 +39,13 @@ public class FinancialReportsService : IFinancialReportsService
         dto.GrossProfitMargin = dto.NetRevenue == 0 ? 0
             : Math.Round((dto.GrossProfit / dto.NetRevenue) * 100, 2);
 
-        // ────────────── 4. المصروفات التشغيلية ──────────────
+        // ────────────── 4. الأجور والرواتب وسلف الموظفين ──────────────
+        await CalculatePayrollAndLoansAsync(dto);
+
+        // ────────────── 5. المصروفات التشغيلية ──────────────
         await CalculateExpensesAsync(dto);
 
-        // ────────────── 5. صافي الربح ──────────────
+        // ────────────── 6. صافي الربح ──────────────
         dto.NetProfit = dto.GrossProfit - dto.TotalOperatingExpenses;
         dto.NetProfitMargin = dto.NetRevenue == 0 ? 0
             : Math.Round((dto.NetProfit / dto.NetRevenue) * 100, 2);
@@ -112,27 +118,171 @@ public class FinancialReportsService : IFinancialReportsService
     }
 
     // ============================================================
+    //  الإيرادات الأخرى المكتسبة من الرسوم غير المرتبطة بفواتير
+    // ============================================================
+    private async Task CalculateOtherRevenueAsync(IncomeStatementDto dto)
+    {
+        // الرسوم المرتبطة بفواتير لا تدخل هنا حتى لا يتم احتسابها مرتين؛
+        // فهي موجودة بالفعل داخل GrandTotal/TotalChargesAmount للفواتير.
+        // الدفعات المقدمة غير المكتسبة لا تدخل قائمة الدخل.
+        var charges = await _db.AdditionalCharges.AsNoTracking()
+            .Where(c => c.TransactionId == null
+                     && c.AppliedToTransactionId == null
+                     && (c.Status == ChargeStatuses.Paid
+                         || c.Status == ChargeStatuses.NonRefundable)
+                     && c.CreatedAt.HasValue
+                     && c.CreatedAt.Value >= dto.FromDate
+                     && c.CreatedAt.Value <= dto.ToDate)
+            .Select(c => new
+            {
+                c.ChargeType,
+                Amount = c.ChargeAmount ?? 0m
+            })
+            .ToListAsync();
+
+        dto.OtherRevenue = charges.Sum(c => c.Amount);
+        dto.OtherRevenueCount = charges.Count;
+        dto.OtherRevenueByType = charges
+            .GroupBy(c => c.ChargeType ?? "Other")
+            .Select(g => new OtherRevenueBreakdownDto
+            {
+                ChargeType = g.Key,
+                ChargeTypeName = ChargeTypes.All.GetValueOrDefault(g.Key, "إيرادات رسوم أخرى"),
+                Amount = g.Sum(x => x.Amount),
+                Count = g.Count()
+            })
+            .OrderByDescending(x => x.Amount)
+            .ToList();
+
+        var total = dto.OtherRevenue == 0 ? 1m : dto.OtherRevenue;
+        foreach (var item in dto.OtherRevenueByType)
+            item.Percentage = Math.Round(item.Amount / total * 100m, 1);
+
+        dto.InvoiceRevenue = dto.TotalRevenue;
+        dto.TotalRevenue += dto.OtherRevenue;
+        dto.NetRevenue += dto.OtherRevenue;
+    }
+
+    // ============================================================
     //  حساب تكلفة المبيعات (COGS)
     // ============================================================
     private async Task CalculateCogsAsync(IncomeStatementDto dto)
     {
-        // جمع تكلفة المنتجات المباعة في الفترة
-        var cogs = await (
-            from t in _db.Transactions.AsNoTracking()
-            join d in _db.TransactionDetails.AsNoTracking() on t.TransactionId equals d.TransactionId
-            join p in _db.Products.AsNoTracking() on d.ProductId equals p.ProductId
-            where t.TransactionType == TransactionTypes.Sale
-                && t.InvoiceStatus != "Cancelled"
-                && t.TransactionDate >= dto.FromDate
-                && t.TransactionDate <= dto.ToDate
-            select new
-            {
-                Quantity = d.Quantity,
-                Price = p.PurchasePrice ?? 0
-            }
-        ).ToListAsync();
+        dto.CostOfGoodsSold = await GetCogsFromMirrorPurchasesAsync(
+            dto.FromDate,
+            dto.ToDate);
+    }
 
-        dto.CostOfGoodsSold = cogs.Sum(c => c.Quantity * c.Price);
+    /// <summary>
+    /// تكلفة البضاعة المباعة من فاتورة الشراء المرآة المرتبطة بكل فاتورة بيع.
+    /// لا نستخدم Product.PurchasePrice الحالي، لأن المنتج قد يكون له أكثر من
+    /// باقة/تسعير، ولأن سعره قد يتغير بعد إنشاء الفاتورة.
+    /// </summary>
+    private async Task<decimal> GetCogsFromMirrorPurchasesAsync(
+        DateTime fromDate,
+        DateTime toDate)
+    {
+        var saleIds = await _db.Transactions.AsNoTracking()
+            .Where(t => t.TransactionType == TransactionTypes.Sale
+                        && t.InvoiceStatus != InvoiceStatuses.Cancelled
+                        && t.TransactionDate >= fromDate
+                        && t.TransactionDate <= toDate)
+            .Select(t => t.TransactionId)
+            .ToListAsync();
+
+        if (saleIds.Count == 0)
+            return 0m;
+
+        // InvoiceService ينشئ فاتورة شراء مرآة بالشكل:
+        // ReferenceType = "MirrorOf:" + SaleTransactionId
+        var mirrorReferences = saleIds
+            .Select(id => "MirrorOf:" + id)
+            .ToList();
+
+        // نأخذ إجمالي فاتورة الشراء المرآة نفسها، مرة واحدة لكل فاتورة،
+        // وليس سعر المنتج الحالي ولا مجموع كل فواتير المشتريات العامة.
+        return await _db.Transactions.AsNoTracking()
+            .Where(purchase => purchase.TransactionType == TransactionTypes.Purchase
+                && purchase.InvoiceStatus != InvoiceStatuses.Cancelled
+                && purchase.ReferenceType != null
+                && mirrorReferences.Contains(purchase.ReferenceType))
+            .SumAsync(purchase => (decimal?)purchase.GrandTotal) ?? 0m;
+    }
+
+    // ============================================================
+    //  الأجور والرواتب + ملخص سلف الموظفين
+    // ============================================================
+    private async Task CalculatePayrollAndLoansAsync(IncomeStatementDto dto)
+    {
+        var monthFrom = new DateTime(dto.FromDate.Year, dto.FromDate.Month, 1)
+            .ToString("yyyy-MM");
+        var monthTo = new DateTime(dto.ToDate.Year, dto.ToDate.Month, 1)
+            .ToString("yyyy-MM");
+
+        var recognizedStatuses = new[]
+        {
+            PayrollPaymentStatuses.PendingReview,
+            PayrollPaymentStatuses.Approved,
+            PayrollPaymentStatuses.Unpaid,
+            PayrollPaymentStatuses.Paid
+        };
+
+        var payrolls = await _db.Payrolls.AsNoTracking()
+            .Where(p => string.Compare(p.PayrollMonth, monthFrom) >= 0
+                     && string.Compare(p.PayrollMonth, monthTo) <= 0
+                     && recognizedStatuses.Contains(p.PaymentStatus))
+            .Select(p => new
+            {
+                p.BasicSalary,
+                p.Allowances,
+                p.BonusInPayroll,
+                p.NetSalary,
+                p.PaymentStatus
+            })
+            .ToListAsync();
+
+        // تكلفة الأجور = الإجمالي المستحق، وليس صافي ما تم تحويله للموظف.
+        // Allowances و BonusInPayroll متداخلان في بعض السجلات القديمة، لذلك نستخدم
+        // البدلات أولاً ثم المكافأة كبديل حتى لا يتم احتسابها مرتين.
+        dto.PayrollExpense = payrolls
+            .Sum(p => p.BasicSalary + (p.Allowances ?? p.BonusInPayroll ?? 0m));
+        dto.PayrollPaidAmount = payrolls
+            .Where(p => p.PaymentStatus == PayrollPaymentStatuses.Paid)
+            .Sum(p => p.NetSalary ?? p.BasicSalary);
+        dto.PayrollOutstandingAmount = payrolls
+            .Where(p => p.PaymentStatus != PayrollPaymentStatuses.Paid)
+            .Sum(p => p.NetSalary ?? p.BasicSalary);
+
+        var loans = await _db.EmployeeLoans.AsNoTracking()
+            .Where(l => l.LoanDate >= dto.FromDate && l.LoanDate <= dto.ToDate)
+            .Select(l => new { l.LoanAmount })
+            .ToListAsync();
+
+        var installmentRows = await _db.LoanInstallments.AsNoTracking()
+            .Where(i => string.Compare(i.DeductionMonth, monthFrom) >= 0
+                     && string.Compare(i.DeductionMonth, monthTo) <= 0
+                     && i.Status != "Skipped")
+            .Select(i => new { i.Amount, i.Status })
+            .ToListAsync();
+
+        dto.EmployeeLoans = new EmployeeLoansSummaryDto
+        {
+            LoansDisbursed = loans.Sum(x => x.LoanAmount),
+            InstallmentsDue = installmentRows.Sum(x => x.Amount),
+            InstallmentsDeducted = installmentRows
+                .Where(x => x.Status == "Deducted")
+                .Sum(x => x.Amount),
+            OutstandingBalance = await _db.EmployeeLoans.AsNoTracking()
+                .Where(l => l.Status == "Active")
+                .SumAsync(l => (decimal?)l.RemainingAmount) ?? 0m,
+            ActiveLoansCount = await _db.EmployeeLoans.AsNoTracking()
+                .CountAsync(l => l.Status == "Active"),
+            EmployeesWithLoansCount = await _db.EmployeeLoans.AsNoTracking()
+                .Where(l => l.Status == "Active")
+                .Select(l => l.EmployeeId)
+                .Distinct()
+                .CountAsync()
+        };
     }
 
     // ============================================================
@@ -191,6 +341,23 @@ public class FinancialReportsService : IFinancialReportsService
                 .OrderByDescending(g => g.Amount)
                 .ToList();
         }
+
+        if (dto.PayrollExpense > 0)
+        {
+            dto.ExpensesByGroup.Add(new ExpenseGroupBreakdownDto
+            {
+                GroupId = -1,
+                GroupName = "الأجور والرواتب",
+                Amount = dto.PayrollExpense,
+                Count = 0,
+                Color = "#7c3aed"
+            });
+        }
+
+        dto.TotalOperatingExpenses = dto.ExpensesByGroup.Sum(g => g.Amount);
+        var operatingTotal = dto.TotalOperatingExpenses == 0 ? 1m : dto.TotalOperatingExpenses;
+        foreach (var group in dto.ExpensesByGroup)
+            group.Percentage = Math.Round(group.Amount / operatingTotal * 100m, 1);
     }
 
     // ============================================================
@@ -386,7 +553,7 @@ if (prevYear.HasValue && prevYear.Value.Revenue > 0)
 }
     }
 
-    private async Task<(decimal Revenue, decimal Cogs, decimal Expenses)?> GetSummaryAsync(
+    private async Task<(decimal Revenue, decimal Cogs, decimal Expenses, decimal Payroll, decimal OtherRevenue)?> GetSummaryAsync(
     DateTime fromDate, DateTime toDate)
 {
     // إيرادات
@@ -397,17 +564,8 @@ if (prevYear.HasValue && prevYear.Value.Revenue > 0)
             && t.TransactionDate <= toDate)
         .SumAsync(t => (decimal?)(t.NetTotalAmount ?? t.GrandTotal)) ?? 0;
 
-    // COGS
-    var cogs = await (
-        from t in _db.Transactions.AsNoTracking()
-        join d in _db.TransactionDetails.AsNoTracking() on t.TransactionId equals d.TransactionId
-        join p in _db.Products.AsNoTracking() on d.ProductId equals p.ProductId
-        where t.TransactionType == TransactionTypes.Sale
-            && t.InvoiceStatus != "Cancelled"
-            && t.TransactionDate >= fromDate
-            && t.TransactionDate <= toDate
-        select d.Quantity * (p.PurchasePrice ?? 0)
-    ).SumAsync(x => (decimal?)x) ?? 0;
+    // COGS من إجمالي فواتير الشراء المرآة المرتبطة بفواتير البيع
+    var cogs = await GetCogsFromMirrorPurchasesAsync(fromDate, toDate);
 
     // المصروفات
     var exp = await _db.Expenses.AsNoTracking()
@@ -416,22 +574,58 @@ if (prevYear.HasValue && prevYear.Value.Revenue > 0)
             && ((e.IsAdvance != true) || (e.AdvanceParentExpenseId.HasValue)))
         .SumAsync(e => (decimal?)e.Amount) ?? 0;
 
-    return (rev, cogs, exp);
+    var payroll = await GetPayrollExpenseForRangeAsync(fromDate, toDate);
+    var otherRevenue = await GetOtherRevenueForRangeAsync(fromDate, toDate);
+    return (rev + otherRevenue, cogs, exp, payroll, otherRevenue);
 }
 
+    private async Task<decimal> GetOtherRevenueForRangeAsync(DateTime fromDate, DateTime toDate)
+    {
+        return await _db.AdditionalCharges.AsNoTracking()
+            .Where(c => c.TransactionId == null
+                     && c.AppliedToTransactionId == null
+                     && (c.Status == ChargeStatuses.Paid
+                         || c.Status == ChargeStatuses.NonRefundable)
+                     && c.CreatedAt.HasValue
+                     && c.CreatedAt.Value >= fromDate
+                     && c.CreatedAt.Value <= toDate)
+            .SumAsync(c => (decimal?)(c.ChargeAmount ?? 0m)) ?? 0m;
+    }
+
+    private async Task<decimal> GetPayrollExpenseForRangeAsync(DateTime fromDate, DateTime toDate)
+    {
+        var monthFrom = new DateTime(fromDate.Year, fromDate.Month, 1).ToString("yyyy-MM");
+        var monthTo = new DateTime(toDate.Year, toDate.Month, 1).ToString("yyyy-MM");
+        var statuses = new[]
+        {
+            PayrollPaymentStatuses.PendingReview,
+            PayrollPaymentStatuses.Approved,
+            PayrollPaymentStatuses.Unpaid,
+            PayrollPaymentStatuses.Paid
+        };
+
+        return await _db.Payrolls.AsNoTracking()
+            .Where(p => string.Compare(p.PayrollMonth, monthFrom) >= 0
+                     && string.Compare(p.PayrollMonth, monthTo) <= 0
+                     && statuses.Contains(p.PaymentStatus))
+            .SumAsync(p => (decimal?)p.BasicSalary
+                + (p.Allowances ?? p.BonusInPayroll ?? 0m)) ?? 0m;
+    }
+
     private IncomeComparisonDto BuildComparison(string label, IncomeStatementDto current,
-        (decimal Revenue, decimal Cogs, decimal Expenses)? prev)
+        (decimal Revenue, decimal Cogs, decimal Expenses, decimal Payroll, decimal OtherRevenue)? prev)
     {
         if (prev == null) return new() { Label = label };
 
-        var prevNetProfit = prev.Value.Revenue - prev.Value.Cogs - prev.Value.Expenses;
+        var previousTotalExpenses = prev.Value.Expenses + prev.Value.Payroll;
+        var prevNetProfit = prev.Value.Revenue - prev.Value.Cogs - previousTotalExpenses;
         var prevMargin = prev.Value.Revenue == 0 ? 0
             : Math.Round((prevNetProfit / prev.Value.Revenue) * 100, 2);
 
         var revChange = prev.Value.Revenue == 0 ? 0
             : Math.Round(((current.NetRevenue - prev.Value.Revenue) / prev.Value.Revenue) * 100, 1);
-        var expChange = prev.Value.Expenses == 0 ? 0
-            : Math.Round(((current.TotalOperatingExpenses - prev.Value.Expenses) / prev.Value.Expenses) * 100, 1);
+        var expChange = previousTotalExpenses == 0 ? 0
+            : Math.Round(((current.TotalOperatingExpenses - previousTotalExpenses) / previousTotalExpenses) * 100, 1);
         var profitChange = prevNetProfit == 0 ? 0
             : Math.Round(((current.NetProfit - prevNetProfit) / Math.Abs(prevNetProfit)) * 100, 1);
 
@@ -471,7 +665,8 @@ if (prevYear.HasValue && prevYear.Value.Revenue > 0)
             var summary = await GetSummaryAsync(current, monthEnd.Date.AddDays(1).AddTicks(-1));
             if (summary != null)
             {
-                var profit = summary.Value.Revenue - summary.Value.Cogs - summary.Value.Expenses;
+                var totalExpenses = summary.Value.Expenses + summary.Value.Payroll;
+                var profit = summary.Value.Revenue - summary.Value.Cogs - totalExpenses;
                 var margin = summary.Value.Revenue == 0 ? 0
                     : Math.Round((profit / summary.Value.Revenue) * 100, 1);
 
@@ -481,7 +676,7 @@ if (prevYear.HasValue && prevYear.Value.Revenue > 0)
                     MonthLabel = current.ToString("yyyy/MM"),
                     Revenue = summary.Value.Revenue,
                     Cogs = summary.Value.Cogs,
-                    Expenses = summary.Value.Expenses,
+                    Expenses = totalExpenses,
                     NetProfit = profit,
                     NetProfitMargin = margin
                 });

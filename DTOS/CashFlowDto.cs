@@ -94,6 +94,9 @@ public class MonthlyFlowDto
 {
     public DateTime Month { get; set; }
     public string MonthLabel { get; set; } = "";
+    public string ChartMonthLabel => string.IsNullOrWhiteSpace(MonthLabel)
+        ? string.Empty
+        : $"\u2067{MonthLabel.Trim()}\u2069";
     public decimal Inflows { get; set; }
     public decimal Outflows { get; set; }
     public decimal NetFlow => Inflows - Outflows;

@@ -43,19 +43,19 @@ public class CashFlowService : ICashFlowService
         // 6. الترند الشهري (آخر 12 شهر)
         if (filter.IncludeMonthlyTrend)
         {
-            await CalculateMonthlyTrendAsync(dto);
+            await CalculateMonthlyTrendAsync(dto, filter);
         }
 
         // 7. أكبر الحركات
         await GetTopFlowsAsync(dto, filter);
 
         // 8. تحليل السيولة
-        await CalculateLiquidityAsync(dto);
+        await CalculateLiquidityAsync(dto, filter);
 
         // 9. التوقعات (لو مفعّلة)
         if (filter.IncludeForecast)
         {
-            await CalculateForecastAsync(dto);
+            await CalculateForecastAsync(dto, filter);
         }
 
         // 10. التوصيات والتنبيهات
@@ -80,15 +80,21 @@ public class CashFlowService : ICashFlowService
         var outflows = await query.Where(t => t.TransactionType == "صرف" || t.TransactionType == "Out")
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
-        // أيضاً نضيف الرصيد الافتتاحي للخزن
+        // نستخدم الرصيد المحفوظ في CashBox فقط إذا لم توجد حركة OpeningBalance
+        // لنفس الخزينة، حتى لا يتم احتسابه مرتين.
         var boxesQuery = _db.CashBoxes.AsNoTracking().AsQueryable();
         if (filter.CashBoxId.HasValue)
             boxesQuery = boxesQuery.Where(c => c.CashBoxId == filter.CashBoxId.Value);
 
-        // الـ OpeningBalance من الخزينة بيتسجل كـ Transaction نوع "OpeningBalance"
-        // فبالتالي محسوب ضمن inflows فوق
+        var configuredOpening = await boxesQuery
+            .Where(c => c.OpeningDate.HasValue && c.OpeningDate.Value < dto.FromDate)
+            .Where(c => !_db.CashboxTransactions.Any(t =>
+                t.CashBoxId == c.CashBoxId &&
+                t.ReferenceType == CashBoxRefTypes.OpeningBalance &&
+                t.TransactionDate < dto.FromDate))
+            .SumAsync(c => (decimal?)c.OpeningBalance) ?? 0m;
 
-        dto.OpeningBalance = inflows - outflows;
+        dto.OpeningBalance = configuredOpening + inflows - outflows;
     }
 
     // ============================================================
@@ -183,7 +189,16 @@ public class CashFlowService : ICashFlowService
                     && (t.TransactionType == "صرف" || t.TransactionType == "Out")
                     && t.TransactionDate < dto.FromDate)
                 .SumAsync(t => (decimal?)t.Amount) ?? 0;
-            var openingBal = beforeIn - beforeOut;
+            var hasOpeningTransaction = await _db.CashboxTransactions.AsNoTracking()
+                .AnyAsync(t => t.CashBoxId == box.CashBoxId
+                    && t.ReferenceType == CashBoxRefTypes.OpeningBalance
+                    && t.TransactionDate < dto.FromDate);
+            var configuredOpening = !hasOpeningTransaction
+                && box.OpeningDate.HasValue
+                && box.OpeningDate.Value < dto.FromDate
+                    ? box.OpeningBalance
+                    : 0m;
+            var openingBal = configuredOpening + beforeIn - beforeOut;
 
             // التدفقات في الفترة
             var periodIn = await _db.CashboxTransactions.AsNoTracking()
@@ -240,12 +255,11 @@ public class CashFlowService : ICashFlowService
 
         // بناء كل يوم في الفترة
         var totalDays = (dto.ToDate.Date - dto.FromDate.Date).Days + 1;
-        var maxDays = Math.Min(totalDays, 60); // حد أقصى 60 يوم للأداء
 
         decimal runningBalance = dto.OpeningBalance;
         var trend = new List<DailyFlowDto>();
 
-        for (int i = 0; i < maxDays; i++)
+        for (int i = 0; i < totalDays; i++)
         {
             var date = dto.FromDate.AddDays(i);
             var data = dailyData.FirstOrDefault(d => d.Date == date.Date);
@@ -268,7 +282,7 @@ public class CashFlowService : ICashFlowService
     // ============================================================
     //  5. الترند الشهري (12 شهر)
     // ============================================================
-    private async Task CalculateMonthlyTrendAsync(CashFlowStatementDto dto)
+    private async Task CalculateMonthlyTrendAsync(CashFlowStatementDto dto, CashFlowFilterDto filter)
     {
         var endDate = DateTime.Today;
         var startDate = endDate.AddMonths(-11);
@@ -284,13 +298,15 @@ public class CashFlowService : ICashFlowService
             var inflows = await _db.CashboxTransactions.AsNoTracking()
                 .Where(t => (t.TransactionType == "قبض" || t.TransactionType == "In")
                     && t.TransactionDate >= current
-                    && t.TransactionDate <= monthEnd)
+                    && t.TransactionDate <= monthEnd
+                    && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
                 .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
             var outflows = await _db.CashboxTransactions.AsNoTracking()
                 .Where(t => (t.TransactionType == "صرف" || t.TransactionType == "Out")
                     && t.TransactionDate >= current
-                    && t.TransactionDate <= monthEnd)
+                    && t.TransactionDate <= monthEnd
+                    && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
                 .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
             months.Add(new MonthlyFlowDto
@@ -382,7 +398,7 @@ public class CashFlowService : ICashFlowService
     // ============================================================
     //  7. ⭐ تحليل السيولة
     // ============================================================
-    private async Task CalculateLiquidityAsync(CashFlowStatementDto dto)
+    private async Task CalculateLiquidityAsync(CashFlowStatementDto dto, CashFlowFilterDto filter)
     {
         var l = dto.LiquidityAnalysis;
         l.CurrentBalance = dto.ClosingBalance;
@@ -391,7 +407,8 @@ public class CashFlowService : ICashFlowService
         var threeMonthsAgo = DateTime.Today.AddMonths(-3);
         var totalOutflowsLast3 = await _db.CashboxTransactions.AsNoTracking()
             .Where(t => (t.TransactionType == "صرف" || t.TransactionType == "Out")
-                && t.TransactionDate >= threeMonthsAgo)
+                && t.TransactionDate >= threeMonthsAgo
+                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         l.AverageMonthlyOutflow = Math.Round(totalOutflowsLast3 / 3m, 2);
@@ -438,7 +455,7 @@ public class CashFlowService : ICashFlowService
     // ============================================================
     //  8. ⭐ التوقعات
     // ============================================================
-    private async Task CalculateForecastAsync(CashFlowStatementDto dto)
+    private async Task CalculateForecastAsync(CashFlowStatementDto dto, CashFlowFilterDto filter)
     {
         var f = dto.Forecast;
 
@@ -449,13 +466,15 @@ public class CashFlowService : ICashFlowService
         var totalIn3 = await _db.CashboxTransactions.AsNoTracking()
             .Where(t => (t.TransactionType == "قبض" || t.TransactionType == "In")
                 && t.TransactionDate >= threeMonthsAgo
-                && t.TransactionDate <= endLastMonth)
+                && t.TransactionDate <= endLastMonth
+                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         var totalOut3 = await _db.CashboxTransactions.AsNoTracking()
             .Where(t => (t.TransactionType == "صرف" || t.TransactionType == "Out")
                 && t.TransactionDate >= threeMonthsAgo
-                && t.TransactionDate <= endLastMonth)
+                && t.TransactionDate <= endLastMonth
+                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         f.AverageMonthlyInflow = Math.Round(totalIn3 / 3m, 2);
@@ -473,7 +492,8 @@ public class CashFlowService : ICashFlowService
         var lastMonthIn = await _db.CashboxTransactions.AsNoTracking()
             .Where(t => (t.TransactionType == "قبض" || t.TransactionType == "In")
                 && t.TransactionDate >= lastMonthStart
-                && t.TransactionDate <= endLastMonth.Date.AddDays(1).AddTicks(-1))
+                && t.TransactionDate <= endLastMonth.Date.AddDays(1).AddTicks(-1)
+                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         var twoMonthsAgoStart = lastMonthStart.AddMonths(-1);
@@ -481,7 +501,8 @@ public class CashFlowService : ICashFlowService
         var twoMonthsIn = await _db.CashboxTransactions.AsNoTracking()
             .Where(t => (t.TransactionType == "قبض" || t.TransactionType == "In")
                 && t.TransactionDate >= twoMonthsAgoStart
-                && t.TransactionDate <= twoMonthsAgoEnd.Date.AddDays(1).AddTicks(-1))
+                && t.TransactionDate <= twoMonthsAgoEnd.Date.AddDays(1).AddTicks(-1)
+                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         if (twoMonthsIn > 0)
