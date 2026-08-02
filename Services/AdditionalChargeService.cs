@@ -1,6 +1,7 @@
 using COCOBOLOERPNEW.Components;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services;
@@ -8,18 +9,22 @@ namespace COCOBOLOERPNEW.Services;
 public class AdditionalChargeService : IAdditionalChargeService
 {
     private readonly db24804Context _db;
-private readonly IAuditService _audit;
+    private readonly IAuditService _audit;
+    private readonly IPaymentService _paymentService;
+    private readonly IHttpContextAccessor _http;
 
     private async Task<int> GetDefaultCashBoxIdAsync()
-{
-    var cashBox = await _db.CashBoxes.FirstOrDefaultAsync();
-    return cashBox?.CashBoxId ?? 1;
-}
+    {
+        var cashBox = await _db.CashBoxes.AsNoTracking().FirstOrDefaultAsync();
+        return cashBox?.CashBoxId ?? 1;
+    }
 
-    public AdditionalChargeService(db24804Context db, IAuditService audit)
+    public AdditionalChargeService(db24804Context db, IAuditService audit, IPaymentService paymentService, IHttpContextAccessor http)
     {
         _db = db;
         _audit = audit;
+        _paymentService = paymentService;
+        _http = http;
     }
 
     public async Task<PagedResult<AdditionalChargeListDto>> GetChargesAsync(AdditionalChargeFilterDto filter)
@@ -116,7 +121,7 @@ private readonly IAuditService _audit;
 
     public async Task<AdditionalChargeFormDto?> GetChargeForEditAsync(int chargeId)
     {
-        return await _db.AdditionalCharges.AsNoTracking()
+        var dto = await _db.AdditionalCharges.AsNoTracking()
             .Where(c => c.ChargeId == chargeId)
             .Select(c => new AdditionalChargeFormDto
             {
@@ -128,15 +133,118 @@ private readonly IAuditService _audit;
                 Status = c.Status,
                 Notes = c.Notes
             }).FirstOrDefaultAsync();
+
+        if (dto == null) return null;
+
+        dto.CashBoxId = await _db.CashboxTransactions.AsNoTracking()
+            .Where(ct => ct.ReferenceId == chargeId && ct.ReferenceType == "Charge")
+            .OrderByDescending(ct => ct.CashboxTransactionId)
+            .Select(ct => (int?)ct.CashBoxId)
+            .FirstOrDefaultAsync();
+
+        return dto;
     }
 
-    public async Task<(bool Success, string Message)> CreateChargeAsync(AdditionalChargeFormDto dto, string currentUserName)
+    public async Task<AdditionalChargeReceiptDto?> GetChargeReceiptAsync(int chargeId)
+    {
+        var charge = await _db.AdditionalCharges.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.ChargeId == chargeId);
+        if (charge == null) return null;
+
+        var party = charge.PartyId.HasValue
+            ? await _db.Parties.AsNoTracking().FirstOrDefaultAsync(p => p.PartyId == charge.PartyId.Value)
+            : null;
+
+        Transaction? appliedTransaction = null;
+        if (charge.AppliedToTransactionId.HasValue)
+        {
+            appliedTransaction = await _db.Transactions.AsNoTracking()
+                .FirstOrDefaultAsync(t => t.TransactionId == charge.AppliedToTransactionId.Value);
+        }
+        else if (charge.TransactionId.HasValue)
+        {
+            appliedTransaction = await _db.Transactions.AsNoTracking()
+                .FirstOrDefaultAsync(t => t.TransactionId == charge.TransactionId.Value);
+        }
+
+        var cashRef = await (from ct in _db.CashboxTransactions.AsNoTracking()
+                             join cb in _db.CashBoxes.AsNoTracking() on ct.CashBoxId equals cb.CashBoxId
+                             where ct.ReferenceId == charge.ChargeId && ct.ReferenceType == "Charge"
+                             orderby ct.CashboxTransactionId descending
+                             select new { ct.CashBoxId, cb.CashBoxName, ct.TransactionDate })
+            .FirstOrDefaultAsync();
+
+        var company = await _db.CompanyInfos.AsNoTracking().FirstOrDefaultAsync();
+        var chargeTypeName = ChargeTypes.All.TryGetValue(charge.ChargeType ?? "", out var mappedType)
+            ? mappedType
+            : ResolveAdvanceReceiptCategory(charge.ChargeDescription, charge.ChargeType);
+        var statusName = ChargeStatuses.All.TryGetValue(charge.Status ?? "", out var mappedStatus)
+            ? mappedStatus
+            : charge.Status ?? "—";
+        var receiptDate = cashRef?.TransactionDate ?? charge.CreatedAt ?? DateTime.Now;
+
+        var createdByDisplayName = charge.CreatedBy;
+        if (!string.IsNullOrWhiteSpace(charge.CreatedBy))
+        {
+            var userInfo = await (from u in _db.Users.AsNoTracking()
+                                  join e in _db.Employees.AsNoTracking() on u.EmployeeId equals e.EmployeeId into ee
+                                  from e in ee.DefaultIfEmpty()
+                                  where u.Username == charge.CreatedBy
+                                  select new
+                                  {
+                                      EmployeeName = e != null ? e.FullName : null,
+                                      UserFullName = u.FullName
+                                  })
+                .FirstOrDefaultAsync();
+
+            createdByDisplayName = !string.IsNullOrWhiteSpace(userInfo?.EmployeeName)
+                ? userInfo!.EmployeeName
+                : (!string.IsNullOrWhiteSpace(userInfo?.UserFullName) ? userInfo!.UserFullName : charge.CreatedBy);
+        }
+
+        return new AdditionalChargeReceiptDto
+        {
+            ChargeId = charge.ChargeId,
+            ReceiptNumber = GenerateChargeReceiptNumber(charge.ChargeId, charge.ChargeType, charge.ChargeDescription, receiptDate),
+            ReceiptTitle = ResolveReceiptTitle(charge.ChargeDescription, charge.ChargeType),
+            ReceiptCategoryLabel = chargeTypeName,
+            ReceiptTypeAr = "سند قبض",
+            CompanyName = company?.CompanyName ?? "COCOBOLO",
+            CompanyPhone = string.Join(" - ", new[] { company?.Phone1, company?.Phone2 }.Where(x => !string.IsNullOrWhiteSpace(x))),
+            CompanyAddress = company?.Address,
+            CompanyTaxNumber = null,
+            CompanyLogoPath = company?.LogoPath,
+            PartyId = charge.PartyId,
+            PartyName = party?.PartyName ?? "غير محدد",
+            PartyPhone = party?.Phone,
+            CustomerAddress = party?.Address,
+            CustomerCity = party?.City,
+            CustomerEmail = party?.Email,
+            ChargeType = charge.ChargeType,
+            ChargeTypeName = chargeTypeName,
+            ChargeDescription = charge.ChargeDescription,
+            ChargeAmount = charge.ChargeAmount ?? 0,
+            AmountInWords = _paymentService.ConvertNumberToArabicWords(charge.ChargeAmount ?? 0),
+            Status = charge.Status,
+            StatusName = statusName,
+            Notes = charge.Notes,
+            AppliedToTransactionId = charge.AppliedToTransactionId ?? charge.TransactionId,
+            AppliedToReferenceNumber = appliedTransaction?.ReferenceNumber,
+            CashBoxId = cashRef?.CashBoxId,
+            CashBoxName = cashRef?.CashBoxName,
+            ReceiptDate = receiptDate,
+            CreatedBy = charge.CreatedBy,
+            CreatedByDisplayName = createdByDisplayName
+        };
+    }
+
+    public async Task<(bool Success, string Message, int? ChargeId)> CreateChargeAsync(AdditionalChargeFormDto dto, string currentUserName)
 {
     if (dto.ChargeAmount <= 0)
-        return (false, "المبلغ يجب أن يكون أكبر من صفر.");
+        return (false, "المبلغ يجب أن يكون أكبر من صفر.", null);
 
     if (dto.PartyId == null || dto.PartyId == 0)
-        return (false, "يرجى اختيار العميل.");
+        return (false, "يرجى اختيار العميل.", null);
 
     var partyName = await _db.Parties.Where(p => p.PartyId == dto.PartyId)
         .Select(p => p.PartyName).FirstOrDefaultAsync() ?? "غير محدد";
@@ -160,7 +268,7 @@ private readonly IAuditService _audit;
     await _db.SaveChangesAsync();
 
     // ⭐ إضافة حركة الخزينة
-    var cashBoxId = await GetDefaultCashBoxIdAsync();
+    var cashBoxId = dto.CashBoxId ?? await GetDefaultCashBoxIdAsync();
     var cashNote = $"تحصيل {dto.ChargeAmount:N2} ج - {chargeTypeName} - {partyName}";
 
     var cashTrans = new CashboxTransaction
@@ -181,7 +289,7 @@ private readonly IAuditService _audit;
     await _audit.LogAsync("AdditionalCharges", "Insert",
         charge.ChargeId.ToString(), null, charge, currentUserName);
 
-    return (true, "تم إضافة الرسوم وتسجيل التحصيل في الخزينة بنجاح.");
+    return (true, "تم إضافة الرسوم وتسجيل التحصيل في الخزينة بنجاح.", charge.ChargeId);
 }
 
     public async Task<(bool Success, string Message)> UpdateChargeAsync(int chargeId, AdditionalChargeFormDto dto, string currentUserName)
@@ -189,11 +297,11 @@ private readonly IAuditService _audit;
     var charge = await _db.AdditionalCharges.FirstOrDefaultAsync(c => c.ChargeId == chargeId);
     if (charge == null) return (false, "الرسوم غير موجودة.");
 
-    if (charge.Status == ChargeStatuses.Applied)
-        return (false, "لا يمكن تعديل رسوم مطبقة على فاتورة.");
+    if (!CanEditUnlinkedCharge())
+        return (false, "ليس لديك صلاحية تعديل الرسوم. التعديل متاح فقط للإدارة أو الحسابات.");
 
-    if (charge.Status == ChargeStatuses.NonRefundable)
-        return (false, "لا يمكن تعديل رسوم غير مستردة.");
+    if (IsChargeLocked(charge))
+        return (false, "لا يمكن تعديل رسوم مرتبطة أو مطبقة على فاتورة أو محددة كغير مستردة.");
 
     var oldData = new { charge.ChargeType, charge.ChargeAmount, charge.Status };
 
@@ -215,6 +323,8 @@ private readonly IAuditService _audit;
 
         cashTrans.Amount = dto.ChargeAmount;
         cashTrans.Notes = $"تحصيل {dto.ChargeAmount:N2} ج - {chargeTypeName} - {partyName}";
+        if (dto.CashBoxId.HasValue && dto.CashBoxId.Value > 0)
+            cashTrans.CashBoxId = dto.CashBoxId.Value;
     }
 
     await _db.SaveChangesAsync();
@@ -230,11 +340,11 @@ private readonly IAuditService _audit;
     var charge = await _db.AdditionalCharges.FirstOrDefaultAsync(c => c.ChargeId == chargeId);
     if (charge == null) return (false, "الرسوم غير موجودة.");
 
-    if (charge.Status == ChargeStatuses.Applied)
-        return (false, "لا يمكن حذف رسوم مطبقة على فاتورة.");
+    if (!CanDeleteUnlinkedCharge())
+        return (false, "ليس لديك صلاحية حذف الرسوم. الحذف متاح فقط للإدارة أو مدير الحسابات.");
 
-    if (charge.Status == ChargeStatuses.NonRefundable)
-        return (false, "لا يمكن حذف رسوم غير مستردة.");
+    if (IsChargeLocked(charge))
+        return (false, "لا يمكن حذف رسوم مرتبطة أو مطبقة على فاتورة أو محددة كغير مستردة.");
 
     // ⭐ حذف حركة الخزينة المرتبطة
     var cashTrans = await _db.CashboxTransactions
@@ -314,8 +424,6 @@ private readonly IAuditService _audit;
 
     if (cashTrans != null)
     {
-        var partyName = await _db.Parties.Where(p => p.PartyId == charge.PartyId)
-            .Select(p => p.PartyName).FirstOrDefaultAsync() ?? "غير محدد";
         cashTrans.Notes += $" | غير مستردة: {reason}";
     }
 
@@ -326,4 +434,66 @@ private readonly IAuditService _audit;
 
     return (true, "تم تحديد الرسوم كغير مستردة.");
 }
+
+    private bool CanEditUnlinkedCharge()
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+        return user.IsInRole(SystemRoles.Admin)
+               || user.IsInRole(SystemRoles.AccountManager)
+               || user.IsInRole(SystemRoles.Account);
+    }
+
+    private bool CanDeleteUnlinkedCharge()
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+        return user.IsInRole(SystemRoles.Admin)
+               || user.IsInRole(SystemRoles.AccountManager);
+    }
+
+    private static bool IsChargeLocked(AdditionalCharge charge)
+        => charge.TransactionId.HasValue
+           || charge.AppliedToTransactionId.HasValue
+           || charge.Status == ChargeStatuses.Applied
+           || charge.Status == ChargeStatuses.NonRefundable;
+
+    private static string ResolveAdvanceReceiptCategory(string? description, string? chargeType)
+    {
+        if (chargeType == ChargeTypes.Inspection || (description?.Contains("معاينة") ?? false))
+            return "رسوم معاينة";
+
+        if (description?.Contains("عربون") ?? false)
+            return "عربون";
+
+        if ((description?.Contains("دفعة") ?? false) || (description?.Contains("مقدمة") ?? false))
+            return "دفعة مقدمة";
+
+        return "رسوم إضافية";
+    }
+
+    private static string ResolveReceiptTitle(string? description, string? chargeType)
+    {
+        if (chargeType == ChargeTypes.Inspection || (description?.Contains("معاينة") ?? false))
+            return "إيصال استلام رسوم معاينة";
+
+        if (description?.Contains("عربون") ?? false)
+            return "إيصال استلام عربون";
+
+        if ((description?.Contains("دفعة") ?? false) || (description?.Contains("مقدمة") ?? false))
+            return "إيصال استلام دفعة مقدمة";
+
+        return "إيصال استلام رسوم إضافية";
+    }
+
+    private static string GenerateChargeReceiptNumber(int chargeId, string? chargeType, string? description, DateTime receiptDate)
+    {
+        var prefix = chargeType == ChargeTypes.Inspection || (description?.Contains("معاينة") ?? false)
+            ? "INS"
+            : ((description?.Contains("دفعة") ?? false) || (description?.Contains("عربون") ?? false) || (description?.Contains("مقدمة") ?? false)
+                ? "ADV"
+                : "CHR");
+
+        return $"{prefix}-{receiptDate.Year}-{chargeId:D6}";
+    }
 }

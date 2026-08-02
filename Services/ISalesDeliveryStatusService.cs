@@ -12,6 +12,7 @@ public interface ISalesDeliveryStatusService
     Task<List<VwSalesDeliveryStatus>> GetFilteredAsync(
         DateTime? dateFrom,
         DateTime? dateTo,
+        string dateFilterType,
         string? partyName,
         string? deliveryStatus);
     
@@ -22,6 +23,7 @@ public interface ISalesDeliveryStatusService
     Task<DeliverySummaryDto> GetSummaryAsync(
         DateTime? dateFrom,
         DateTime? dateTo,
+        string dateFilterType,
         string? partyName,
         string? deliveryStatus);
     

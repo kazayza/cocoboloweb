@@ -8,6 +8,8 @@
 @inject ISnackbar Snackbar
 @inject AuthenticationStateProvider AuthState
 @inject NotificationService Notify
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
 
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
 <!-- ⭐ BACKGROUND DECORATIONS                                                   -->
@@ -440,21 +442,33 @@
                             تحديد كغير مستردة
                         </MudMenuItem>
                     }
-                    <MudMenuItem Icon="@Icons.Material.Filled.Visibility">
+                    <MudMenuItem Icon="@Icons.Material.Filled.Print"
+                                 OnClick="@(() => OpenReceipt(context.ChargeId))">
+                        طباعة إيصال
+                    </MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Filled.Visibility"
+                                 OnClick="@(() => OpenDetails(context.ChargeId))">
                         عرض التفاصيل
                     </MudMenuItem>
                     <MudMenuItem Icon="@Icons.Material.Filled.ContentCopy">
                         نسخ
                     </MudMenuItem>
                     <MudDivider />
+                    @if (context.TransactionId.HasValue || context.AppliedToTransactionId.HasValue)
+                    {
+                        <MudMenuItem Icon="@Icons.Material.Filled.ReceiptLong"
+                                     OnClick="@(() => OpenLinkedInvoice(context))">
+                            فتح الفاتورة المرتبطة
+                        </MudMenuItem>
+                    }
                     <MudMenuItem Icon="@Icons.Material.Filled.Edit"
                                  OnClick="@(() => OpenEditDialog(context))"
-                                 Disabled="@(context.Status == ChargeStatuses.Applied || context.Status == ChargeStatuses.NonRefundable)">
+                                 Disabled="@(!_canEditCharges || IsChargeLocked(context))">
                         تعديل
                     </MudMenuItem>
                     <MudMenuItem Icon="@Icons.Material.Filled.Delete"
                                  OnClick="@(() => ConfirmDelete(context))"
-                                 Disabled="@(context.Status == ChargeStatuses.Applied || context.Status == ChargeStatuses.NonRefundable)"
+                                 Disabled="@(!_canDeleteCharges || IsChargeLocked(context))"
                                  Class="menu-item-danger">
                         حذف
                     </MudMenuItem>
@@ -2303,6 +2317,8 @@
     private bool _showNonRefundDialog = false;
     private bool _showDeleteDialog = false;
     private bool _isEditing = false;
+    private bool _canEditCharges = false;
+    private bool _canDeleteCharges = false;
 
     // Form
     private AdditionalChargeFormDto _formData = new();
@@ -2318,7 +2334,13 @@
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthState.GetAuthenticationStateAsync();
-        _currentUserName = auth.User.Identity?.Name ?? "System";
+        var user = auth.User;
+        _currentUserName = user.Identity?.Name ?? "System";
+        _canEditCharges = user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole(SystemRoles.AccountManager)
+            || user.IsInRole(SystemRoles.Account);
+        _canDeleteCharges = user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole(SystemRoles.AccountManager);
         await LoadData();
     }
 
@@ -2402,7 +2424,30 @@
     private string GetChargeTypeName(string? type) =>
         ChargeTypes.All.TryGetValue(type ?? "", out var name) ? name : "رسوم";
 
+    private bool IsChargeLocked(AdditionalChargeListDto charge)
+        => charge.TransactionId.HasValue
+           || charge.AppliedToTransactionId.HasValue
+           || charge.Status == ChargeStatuses.Applied
+           || charge.Status == ChargeStatuses.NonRefundable;
+
     private string FormatMoney(decimal v) => $"{v:N2}";
+
+    private async Task OpenReceipt(int chargeId)
+    {
+        await JS.InvokeVoidAsync("open", $"/additional-charges/{chargeId}/receipt", "_blank");
+    }
+
+    private void OpenDetails(int chargeId)
+    {
+        Navigation.NavigateTo($"/additional-charges/{chargeId}/edit");
+    }
+
+    private void OpenLinkedInvoice(AdditionalChargeListDto charge)
+    {
+        var invoiceId = charge.AppliedToTransactionId ?? charge.TransactionId;
+        if (invoiceId.HasValue)
+            Navigation.NavigateTo($"/sales/invoices/{invoiceId.Value}");
+    }
 
     /* ═══════════════════════════════════════════════════════════════════════════
        NOTIFICATIONS
@@ -2426,28 +2471,14 @@
        ═══════════════════════════════════════════════════════════════════════════ */
     private void OpenCreateDialog()
     {
-        _isEditing = false;
-        _formData = new() { Status = ChargeStatuses.Paid, ChargeType = _formData.ChargeType ?? ChargeTypes.Inspection };
-        _selectedParty = null;
-        _fabExpanded = false;
-        _showFormDialog = true;
+        var type = _formData.ChargeType ?? ChargeTypes.Inspection;
+        Navigation.NavigateTo($"/additional-charges/new?type={Uri.EscapeDataString(type)}");
     }
 
-    private async Task OpenEditDialog(AdditionalChargeListDto charge)
+    private Task OpenEditDialog(AdditionalChargeListDto charge)
     {
-        _isEditing = true;
-        var data = await ChargeService.GetChargeForEditAsync(charge.ChargeId);
-        if (data != null)
-        {
-            _formData = data;
-            _selectedParty = new PartyLookupDto
-            {
-                PartyId = charge.PartyId ?? 0,
-                PartyName = charge.PartyName ?? "",
-                Phone = charge.PartyPhone
-            };
-            _showFormDialog = true;
-        }
+        Navigation.NavigateTo($"/additional-charges/{charge.ChargeId}/edit");
+        return Task.CompletedTask;
     }
 
     private async Task SaveCharge()
@@ -2466,9 +2497,19 @@
         _isSaving = true;
         _formData.PartyId = _selectedParty?.PartyId;
 
-        var (ok, msg) = _isEditing
-            ? await ChargeService.UpdateChargeAsync(_formData.ChargeId, _formData, _currentUserName)
-            : await ChargeService.CreateChargeAsync(_formData, _currentUserName);
+        bool ok;
+        string msg;
+        int? chargeId = null;
+
+        if (_isEditing)
+        {
+            (ok, msg) = await ChargeService.UpdateChargeAsync(_formData.ChargeId, _formData, _currentUserName);
+            chargeId = _formData.ChargeId;
+        }
+        else
+        {
+            (ok, msg, chargeId) = await ChargeService.CreateChargeAsync(_formData, _currentUserName);
+        }
 
         Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
 
@@ -2481,6 +2522,9 @@
         _isSaving = false;
         _showFormDialog = false;
         await LoadData();
+
+        if (ok && !_isEditing && chargeId.HasValue)
+            await OpenReceipt(chargeId.Value);
     }
 
     /* ═══════════════════════════════════════════════════════════════════════════

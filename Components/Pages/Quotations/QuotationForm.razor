@@ -59,11 +59,23 @@ else
         <strong>سبب الرفض من العميل:</strong>
         <br />
         @_rejectionReason
-        @if (_rejectedAt.HasValue)
+        @if (_rejectedAt.HasValue || !string.IsNullOrWhiteSpace(_rejectedBy))
         {
-            <div style="font-size:0.85rem; opacity:0.8; margin-top:8px;">
-                <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" />
-                تاريخ الرفض: @_rejectedAt.Value.ToString("yyyy/MM/dd HH:mm")
+            <div style="font-size:0.85rem; opacity:0.8; margin-top:8px; line-height:1.8;">
+                @if (!string.IsNullOrWhiteSpace(_rejectedBy))
+                {
+                    <div>
+                        <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                        تم تسجيل الرفض بواسطة: <strong>@_rejectedBy</strong>
+                    </div>
+                }
+                @if (_rejectedAt.HasValue)
+                {
+                    <div>
+                        <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" />
+                        تاريخ الرفض: <strong>@_rejectedAt.Value.ToString("yyyy/MM/dd HH:mm")</strong>
+                    </div>
+                }
             </div>
         }
     </MudAlert>
@@ -88,7 +100,7 @@ else
                         <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="OpenPrintPage"
                                    StartIcon="@Icons.Material.Filled.Print">طباعة</MudButton>
 
-                        @if (!_form.IsConverted)
+                        @if (!_form.IsConverted && (string.IsNullOrWhiteSpace(_form.Status) || _form.Status == QuotationStatuses.Draft))
                         {
                             <MudButton Variant="Variant.Filled" Color="Color.Success"
                                        OnClick="OpenWhatsAppDialog"
@@ -239,6 +251,39 @@ else
                     @_form.InvoiceReference
                 </a>
                 ولا يمكن تعديله.
+            </MudAlert>
+        }
+
+        @if (_form.Status == QuotationStatuses.Sent && !_form.IsConverted)
+        {
+            <MudAlert Severity="Severity.Info" Class="mb-3" Icon="@Icons.Material.Filled.MarkEmailRead" Dense="true">
+                ✅ تم إرسال عرض السعر للعميل، ويمكنك الآن متابعة الرد أو تغيير الحالة عند الحاجة.
+            </MudAlert>
+        }
+
+        @if (_form.Status == QuotationStatuses.Accepted)
+        {
+            <MudAlert Severity="Severity.Success" Class="mb-3" Icon="@Icons.Material.Filled.ThumbUp" Dense="true">
+                <strong>تمت الموافقة على عرض السعر</strong>
+                @if (_acceptedAt.HasValue || !string.IsNullOrWhiteSpace(_acceptedBy))
+                {
+                    <div style="font-size:0.85rem; opacity:0.9; margin-top:8px; line-height:1.8;">
+                        @if (!string.IsNullOrWhiteSpace(_acceptedBy))
+                        {
+                            <div>
+                                <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                                تم اعتماد العرض بواسطة: <strong>@_acceptedBy</strong>
+                            </div>
+                        }
+                        @if (_acceptedAt.HasValue)
+                        {
+                            <div>
+                                <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" />
+                                تاريخ ووقت الموافقة: <strong>@_acceptedAt.Value.ToString("yyyy/MM/dd HH:mm")</strong>
+                            </div>
+                        }
+                    </div>
+                }
             </MudAlert>
         }
 
@@ -1226,46 +1271,44 @@ else
                        Variant="Variant.Outlined"
                        Class="mb-3" />
 
-        <div class="quick-pay-row mb-3">
-            <span style="font-size:0.85rem; font-weight:600;">دفعة فورية:</span>
-            @foreach (var pct in SystemConstants.QuickPayPercentages)
-            {
-                <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
-                           OnClick="@(() => _convertPaidAmount = Math.Round(_form.GrandTotal * pct / 100m, 2))">
-                    @pct%
-                </MudButton>
-            }
-            <MudButton Variant="Variant.Filled" Size="Size.Small" Color="Color.Success"
-                       OnClick="@(() => _convertPaidAmount = _form.GrandTotal)">
-                كامل
-            </MudButton>
-            <MudButton Variant="Variant.Text" Size="Size.Small"
-                       OnClick="@(() => _convertPaidAmount = 0)">
-                بدون
-            </MudButton>
-        </div>
+        <MudText Typo="Typo.body2" Class="mb-2" Style="font-weight:700;">الدفعات المقدمة المتاحة للعميل</MudText>
 
-        <MudNumericField @bind-Value="_convertPaidAmount" Label="المبلغ المدفوع"
-                         Variant="Variant.Outlined" Min="0m" Max="@_form.GrandTotal" Class="mb-3" />
-
-        @if (_convertPaidAmount > 0)
+        @if (_convertAvailableAdvances.Any())
         {
-            <MudSelect T="string" @bind-Value="_convertPaymentMethod"
-                       Label="طريقة الدفع" Variant="Variant.Outlined" Class="mb-3">
-                @foreach (var pm in PaymentMethods.All)
+            <div class="convert-advances-list mb-3">
+                @foreach (var adv in _convertAvailableAdvances)
                 {
-                    <MudSelectItem T="string" Value="@pm.Key">@pm.Value</MudSelectItem>
+                    <div class="convert-advance-item">
+                        <MudCheckBox T="bool"
+                                     Value="@_selectedAdvanceChargeIds.Contains(adv.ChargeId)"
+                                     ValueChanged="@(v => ToggleAdvanceSelection(adv.ChargeId, v))"
+                                     Color="Color.Success" />
+                        <div class="convert-advance-body">
+                            <strong>@(adv.ChargeDescription ?? "دفعة مقدمة")</strong>
+                            <small>@(adv.CreatedAt?.ToString("yyyy/MM/dd") ?? "-")</small>
+                        </div>
+                        <div class="convert-advance-amount">@FormatMoney(adv.ChargeAmount) ج</div>
+                    </div>
                 }
-            </MudSelect>
-
-            <MudSelect T="int?" @bind-Value="_convertCashBoxId"
-                       Label="الخزينة" Variant="Variant.Outlined" Class="mb-3">
-                @foreach (var cb in _cashBoxes)
-                {
-                    <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName</MudSelectItem>
-                }
-            </MudSelect>
+            </div>
         }
+        else
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">لا توجد دفعات مقدمة متاحة لهذا العميل.</MudAlert>
+        }
+
+        <MudPaper Class="convert-summary-box mb-3" Elevation="0">
+            <div><strong>إجمالي عرض السعر:</strong> @FormatMoney(_form.GrandTotal) ج</div>
+            <div><strong>الدفعات المقدمة المختارة:</strong> @FormatMoney(GetSelectedAdvanceTotal()) ج</div>
+            <div><strong>المتبقي بعد الخصم:</strong> @FormatMoney(GetRemainingAfterAdvances(_form.GrandTotal)) ج</div>
+        </MudPaper>
+
+        <MudSwitch T="bool" @bind-Value="_convertGoToPayments"
+                   Label="بعد التحويل افتح شاشة المدفوعات لو يوجد متبقي على الفاتورة"
+                   Color="Color.Primary" Class="mb-1" />
+        <MudText Typo="Typo.caption" Style="color:var(--mud-palette-text-secondary);">
+            سيتم تطبيق الدفعات المقدمة أولاً، ثم عند اختيار هذا الخيار سيتم فتح شاشة المدفوعات على الفاتورة الجديدة مباشرة.
+        </MudText>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="@(() => _showConvertDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
@@ -1383,7 +1426,7 @@ else
         <MudSelect T="string" @bind-Value="_newStatus"
                    Label="الحالة الجديدة *"
                    Variant="Variant.Outlined">
-            @foreach (var s in QuotationStatuses.All.Where(x => x.Key != QuotationStatuses.Converted))
+            @foreach (var s in QuotationStatuses.All.Where(x => x.Key != QuotationStatuses.Converted && x.Key != QuotationStatuses.Expired))
             {
                 <MudSelectItem T="string" Value="@s.Key">@s.Value</MudSelectItem>
             }
@@ -2213,16 +2256,59 @@ else
     .discount-row strong { color: var(--mud-palette-error); }
 
     /* ============================================ */
-    /*  QUICK PAY                                    */
+    /*  CONVERT ADVANCES                             */
     /* ============================================ */
-    .quick-pay-row {
+    .convert-advances-list {
         display: flex;
-        gap: 0.25rem;
+        flex-direction: column;
+        gap: 0.45rem;
+        max-height: 240px;
+        overflow: auto;
+    }
+
+    .convert-advance-item {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
         align-items: center;
-        flex-wrap: wrap;
-        padding: 0.5rem;
-        background: rgba(16,185,129,0.08);
-        border-radius: 6px;
+        gap: 0.55rem;
+        padding: 0.65rem 0.75rem;
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 10px;
+        background: #fff;
+    }
+
+    .convert-advance-body {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+    }
+
+    .convert-advance-body strong {
+        font-size: 0.82rem;
+        color: var(--mud-palette-text-primary);
+    }
+
+    .convert-advance-body small {
+        font-size: 0.72rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .convert-advance-amount {
+        font-size: 0.84rem;
+        font-weight: 800;
+        color: var(--mud-palette-success);
+        white-space: nowrap;
+    }
+
+    .convert-summary-box {
+        padding: 0.85rem 1rem;
+        border-radius: 12px;
+        background: rgba(59,130,246,0.08);
+        border: 1px solid rgba(59,130,246,0.18);
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        font-size: 0.85rem;
     }
 
     /* ============================================ */
@@ -2607,8 +2693,10 @@ else
     private bool _isLoading = true;
     private bool _isSaving = false;
     private string? _rejectionReason;
-private DateTime? _rejectedAt;
-private string? _rejectedBy;
+    private DateTime? _rejectedAt;
+    private string? _rejectedBy;
+    private DateTime? _acceptedAt;
+    private string? _acceptedBy;
 
     private QuotationFormDto _form = new()
     {
@@ -2626,12 +2714,12 @@ private string? _rejectedBy;
 
     // Convert dialog
     private bool _showConvertDialog, _isConverting;
-    private decimal _convertPaidAmount;
-    private string _convertPaymentMethod = PaymentMethods.Cash;
-    private int? _convertCashBoxId;
     private DateTime? _convertInvoiceDate = DateTime.Today;
     private DateTime? _convertCalculatedDueDate;
     private int _convertMaxPeriodDays;
+    private bool _convertGoToPayments;
+    private List<CustomerAdvanceDto> _convertAvailableAdvances = new();
+    private HashSet<int> _selectedAdvanceChargeIds = new();
 
     // WhatsApp dialog
     private bool _showWhatsAppDialog;
@@ -2724,6 +2812,8 @@ private string? _rejectedBy;
             _rejectionReason = null;
             _rejectedAt = null;
             _rejectedBy = null;
+            _acceptedAt = null;
+            _acceptedBy = null;
             StateHasChanged();
 
             if (IsEdit)
@@ -2747,6 +2837,10 @@ private string? _rejectedBy;
                     _rejectionReason = rejectionDetails.Reason;
                     _rejectedAt = rejectionDetails.RejectedAt;
                     _rejectedBy = rejectionDetails.RejectedBy;
+
+                    var acceptanceDetails = await QuotationService.GetAcceptanceDetailsAsync(_form.QuotationId);
+                    _acceptedAt = acceptanceDetails.AcceptedAt;
+                    _acceptedBy = acceptanceDetails.AcceptedBy;
                 }
 
                 if (_form.PartyId.HasValue)
@@ -3774,7 +3868,7 @@ private void UpdateGrandTotal()
     // ============================================================
     // Convert to Invoice
     // ============================================================
-    private void OpenConvertDialog()
+    private async Task OpenConvertDialog()
     {
         if (_form.IsConverted)
         {
@@ -3782,15 +3876,17 @@ private void UpdateGrandTotal()
             return;
         }
 
-        _convertPaidAmount = 0;
-        _convertPaymentMethod = PaymentMethods.Cash;
-        _convertCashBoxId = _cashBoxes.FirstOrDefault()?.CashBoxId;
         _convertInvoiceDate = DateTime.Today;
         _convertMaxPeriodDays = _form.Items
             .Where(i => i.Period.HasValue)
             .Select(i => i.Period!.Value)
             .DefaultIfEmpty(0)
             .Max();
+        _convertGoToPayments = false;
+        _convertAvailableAdvances = _form.PartyId.HasValue
+            ? await InvoiceService.GetCustomerAdvancesAsync(_form.PartyId.Value, unappliedOnly: true) ?? new List<CustomerAdvanceDto>()
+            : new List<CustomerAdvanceDto>();
+        _selectedAdvanceChargeIds = new();
         RecalculateConvertDatesPreview();
         _showConvertDialog = true;
     }
@@ -3808,23 +3904,29 @@ private void UpdateGrandTotal()
         _convertCalculatedDueDate = invoiceDate.AddDays(_convertMaxPeriodDays);
     }
 
+    private void ToggleAdvanceSelection(int chargeId, bool selected)
+    {
+        if (selected)
+            _selectedAdvanceChargeIds.Add(chargeId);
+        else
+            _selectedAdvanceChargeIds.Remove(chargeId);
+    }
+
+    private decimal GetSelectedAdvanceTotal()
+        => _convertAvailableAdvances
+            .Where(a => _selectedAdvanceChargeIds.Contains(a.ChargeId))
+            .Sum(a => a.ChargeAmount);
+
+    private decimal GetRemainingAfterAdvances(decimal total)
+        => Math.Max(0m, total - GetSelectedAdvanceTotal());
+
     private async Task ExecuteConvert()
     {
         if (_isConverting) return;
 
-        if (_convertPaidAmount > 0 && (_convertCashBoxId is null or 0))
+        if (GetSelectedAdvanceTotal() > _form.GrandTotal)
         {
-            Snackbar.Add("يرجى اختيار الخزينة", Severity.Warning);
-            return;
-        }
-        if (_convertPaidAmount < 0)
-        {
-            Snackbar.Add("الدفعة لا يمكن أن تكون سالبة", Severity.Warning);
-            return;
-        }
-        if (_convertPaidAmount > _form.GrandTotal)
-        {
-            Snackbar.Add("الدفعة أكبر من إجمالي العرض", Severity.Warning);
+            Snackbar.Add("إجمالي الدفعات المقدمة المختارة أكبر من إجمالي عرض السعر.", Severity.Warning);
             return;
         }
 
@@ -3832,15 +3934,18 @@ private void UpdateGrandTotal()
         try
         {
             var (ok, msg, invId) = await QuotationService.ConvertToInvoiceAsync(
-                _form.QuotationId, _convertPaidAmount,
-                _convertCashBoxId, _convertPaymentMethod, _currentUserName!, _convertInvoiceDate);
+                _form.QuotationId, _selectedAdvanceChargeIds.ToList(), _currentUserName!, _convertInvoiceDate);
 
             Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
 
             if (ok && invId.HasValue)
             {
                 _showConvertDialog = false;
-                Navigation.NavigateTo($"/sales/invoices/{invId.Value}");
+                var remainingAfterAdvances = Math.Max(0m, _form.GrandTotal - GetSelectedAdvanceTotal());
+                if (_convertGoToPayments && remainingAfterAdvances > 0)
+                    Navigation.NavigateTo($"/payments/new?type=Sale&invoice={invId.Value}");
+                else
+                    Navigation.NavigateTo($"/sales/invoices/{invId.Value}");
             }
         }
         catch (Exception ex)

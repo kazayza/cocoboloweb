@@ -416,11 +416,49 @@ public class AdditionalChargeFormDto
 {
     public int ChargeId { get; set; }
     public int? PartyId { get; set; }
+    public int? CashBoxId { get; set; }
     public string? ChargeType { get; set; }
     public string? ChargeDescription { get; set; }
     public decimal ChargeAmount { get; set; }
     public string? Status { get; set; }
     public string? Notes { get; set; }
+}
+
+public class AdditionalChargeReceiptDto
+{
+    public int ChargeId { get; set; }
+    public string ReceiptNumber { get; set; } = "";
+    public string ReceiptTitle { get; set; } = "إيصال استلام";
+    public string ReceiptCategoryLabel { get; set; } = "رسوم إضافية";
+    public string ReceiptTypeAr { get; set; } = "سند قبض";
+    public string? CompanyName { get; set; }
+    public string? CompanyPhone { get; set; }
+    public string? CompanyAddress { get; set; }
+    public string? CompanyTaxNumber { get; set; }
+    public string? CompanyLogoPath { get; set; }
+    public int? PartyId { get; set; }
+    public string PartyName { get; set; } = "";
+    public string? PartyPhone { get; set; }
+    public string? CustomerAddress { get; set; }
+    public string? CustomerCity { get; set; }
+    public string? CustomerEmail { get; set; }
+    public string? ChargeType { get; set; }
+    public string ChargeTypeName { get; set; } = "";
+    public string? ChargeDescription { get; set; }
+    public decimal ChargeAmount { get; set; }
+    public string AmountInWords { get; set; } = "";
+    public string? Status { get; set; }
+    public string StatusName { get; set; } = "";
+    public string? Notes { get; set; }
+    public int? AppliedToTransactionId { get; set; }
+    public string? AppliedToReferenceNumber { get; set; }
+    public int? CashBoxId { get; set; }
+    public string? CashBoxName { get; set; }
+    public DateTime ReceiptDate { get; set; }
+    public string? CreatedBy { get; set; }
+    public string? CreatedByDisplayName { get; set; }
+    public bool IsInspection => ChargeType == ChargeTypes.Inspection || (ChargeDescription?.Contains("معاينة") ?? false);
+    public bool IsAdvanceLike => (ChargeDescription?.Contains("دفعة") ?? false) || (ChargeDescription?.Contains("عربون") ?? false) || (ChargeDescription?.Contains("مقدمة") ?? false);
 }
 
 // === إحصائيات الرسوم ===

@@ -425,7 +425,10 @@ if (canViewCost && quoteIds.Any())
             var today = DateTime.Today;
             baseQuery = baseQuery.Where(q => q.ValidUntil.HasValue
                                           && q.ValidUntil.Value < today
-                                          && q.InvoiceId == null);
+                                          && q.InvoiceId == null
+                                          && (string.IsNullOrEmpty(q.Status)
+                                              || q.Status == QuotationStatuses.Draft
+                                              || q.Status == QuotationStatuses.Sent));
         }
 
         return baseQuery;
@@ -695,7 +698,12 @@ if (canViewCost && quoteIds.Any())
                 RejectedCount = raw.Count(x => x.Stat == QuotationStatuses.Rejected),
                 ConvertedCount = converted,
                 ConvertedValue = convertedValue,
-                ExpiredCount = raw.Count(x => x.Valid.HasValue && x.Valid.Value < today && x.InvId == null),
+                ExpiredCount = raw.Count(x => x.Valid.HasValue
+                                              && x.Valid.Value < today
+                                              && x.InvId == null
+                                              && (string.IsNullOrEmpty(x.Stat)
+                                                  || x.Stat == QuotationStatuses.Draft
+                                                  || x.Stat == QuotationStatuses.Sent)),
                 ConversionRate = total == 0 ? 0 : Math.Round(((decimal)converted / total) * 100, 1)
             };
         }
@@ -1064,8 +1072,8 @@ if (canViewCost && quoteIds.Any())
 //  تحويل لفاتورة (بدون transaction خارجية)
 // ============================================================
 public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
-    int quotationId, decimal initialPaidAmount, int? cashBoxId,
-    string paymentMethod, string currentUserName, DateTime? invoiceDate = null)
+    int quotationId, List<int>? selectedAdvanceChargeIds,
+    string currentUserName, DateTime? invoiceDate = null)
 {
     if (!HasPermission("Edit"))
         return (false, "ليس لديك صلاحية تحويل عرض السعر لفاتورة.", null);
@@ -1126,7 +1134,10 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
         if (!warehouseId.HasValue)
             return (false, "يرجى اختيار المخزن قبل التحويل.", null);
 
-        initialPaidAmount = Math.Round(initialPaidAmount, 0, MidpointRounding.AwayFromZero);
+        var advanceChargeIds = selectedAdvanceChargeIds?
+            .Where(id => id > 0)
+            .Distinct()
+            .ToList() ?? new List<int>();
 
         var invoiceDateValue = invoiceDate?.Date ?? DateTime.Today;
         var maxProductionDays = dRows
@@ -1153,10 +1164,11 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
                 : null,
             DiscountPercentage = null,
 
-            PaidAmount = initialPaidAmount,
-            CashBoxId = cashBoxId,
-            PaymentMethod = paymentMethod,
+            PaidAmount = 0,
+            CashBoxId = null,
+            PaymentMethod = PaymentMethods.Cash,
             OpportunityId = quotation.OpportunityId,
+            SelectedAdvanceChargeIds = advanceChargeIds,
 
             Items = dRows.Select(d =>
             {
@@ -1211,9 +1223,7 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
                 opportunity.LastUpdatedBy = currentUserName;
                 opportunity.LastUpdatedAt = DateTime.Now;
                 opportunity.LastContactDate = DateTime.Now;
-                opportunity.NextFollowUpDate = opportunity.NextFollowUpDate.HasValue && opportunity.NextFollowUpDate.Value >= DateTime.Today
-                    ? opportunity.NextFollowUpDate
-                    : DateTime.Today.AddDays(7);
+                opportunity.NextFollowUpDate = null;
 
                 var openTasks = await _db.CrmTasks
                     .Where(t => t.OpportunityId == opportunity.OpportunityId
@@ -1788,7 +1798,53 @@ public async Task<(string? Reason, DateTime? RejectedAt, string? RejectedBy)>
             q.RejectedBy
         })
         .FirstOrDefaultAsync();
+
+    string? rejectedByDisplay = null;
+    if (!string.IsNullOrWhiteSpace(result?.RejectedBy))
+        rejectedByDisplay = await ResolveQuotationActorDisplayNameAsync(result.RejectedBy!);
     
-    return (result?.RejectionReason, result?.RejectedAt, result?.RejectedBy);
+    return (result?.RejectionReason, result?.RejectedAt, rejectedByDisplay ?? result?.RejectedBy);
+}
+
+public async Task<(DateTime? AcceptedAt, string? AcceptedBy)> GetAcceptanceDetailsAsync(int quotationId)
+{
+    var result = await _db.Quotations
+        .AsNoTracking()
+        .Where(q => q.QuotationId == quotationId)
+        .Select(q => new
+        {
+            q.AcceptedAt,
+            q.AcceptedBy
+        })
+        .FirstOrDefaultAsync();
+
+    string? acceptedByDisplay = null;
+    if (!string.IsNullOrWhiteSpace(result?.AcceptedBy))
+        acceptedByDisplay = await ResolveQuotationActorDisplayNameAsync(result.AcceptedBy!);
+
+    return (result?.AcceptedAt, acceptedByDisplay ?? result?.AcceptedBy);
+}
+
+private async Task<string?> ResolveQuotationActorDisplayNameAsync(string userName)
+{
+    var userInfo = await (from u in _db.Users.AsNoTracking()
+                          join e in _db.Employees.AsNoTracking() on u.EmployeeId equals e.EmployeeId into ee
+                          from e in ee.DefaultIfEmpty()
+                          where u.Username == userName
+                          select new
+                          {
+                              EmployeeName = e != null ? e.FullName : null,
+                              UserFullName = u.FullName,
+                              u.Username
+                          })
+        .FirstOrDefaultAsync();
+
+    if (!string.IsNullOrWhiteSpace(userInfo?.EmployeeName))
+        return userInfo!.EmployeeName;
+
+    if (!string.IsNullOrWhiteSpace(userInfo?.UserFullName))
+        return userInfo!.UserFullName;
+
+    return userInfo?.Username ?? userName;
 }
 }

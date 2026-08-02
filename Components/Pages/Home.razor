@@ -15,8 +15,10 @@
 @inject AuthenticationStateProvider AuthProvider
 @inject IDbContextFactory<db24804Context> DbFactory
 @inject ICashBoxService          CashBoxService
+@inject ITaskService             TaskService
 @inject NavigationManager        Navigation
 @inject ISnackbar                Snackbar
+@inject IJSRuntime               JS
 
 <PageTitle>الرئيسية — COCOBOLO ERP</PageTitle>
 
@@ -309,11 +311,289 @@ else
         </div>
     }
 
+    @if (_priorityItems.Any() || ShouldShowDeliveryWidget() || ShouldShowFinanceWidget() || ShouldShowCrmWidget() || ShouldShowCrmTeamWidget())
+    {
+        <div class="focus-layout animate-card" style="--delay: 0.26s">
+            @if (_priorityItems.Any())
+            {
+                <div class="pro-card focus-main-card">
+                    <div class="card-hdr">
+                        <div class="hdr-left">
+                            <div class="hdr-icon focus-icon">
+                                <MudIcon Icon="@Icons.Material.Filled.Bolt" />
+                            </div>
+                            <div>
+                                <h3>أولوياتك اليوم</h3>
+                                <p>@GetPrioritySectionSubtitle()</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="priority-grid">
+                        @foreach (var item in _priorityItems.Take(6))
+                        {
+                            <button type="button" class='priority-item @item.Severity' @onclick='() => Navigation.NavigateTo(item.Link)'>
+                                <div class="priority-icon" style='@($"--priority-color: {item.Color}")'>
+                                    <MudIcon Icon="@item.Icon" />
+                                </div>
+                                <div class="priority-text">
+                                    <strong>@item.Title</strong>
+                                    <small>@item.Description</small>
+                                </div>
+                                <div class="priority-meta">
+                                    <span class="priority-count">@item.Count</span>
+                                    <span class="priority-action">افتح</span>
+                                </div>
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (ShouldShowDeliveryWidget() || ShouldShowFinanceWidget() || ShouldShowCrmWidget() || ShouldShowCrmTeamWidget())
+            {
+                <div class='focus-side-stack @(!_priorityItems.Any() ? "full-width" : "")'>
+                    @if (ShouldShowDeliveryWidget())
+                    {
+                        <div class="pro-card mini-insight-card delivery-widget-card">
+                            <div class="card-hdr mini-card-hdr">
+                                <div class="hdr-left">
+                                    <div class="hdr-icon delivery-widget-icon">
+                                        <MudIcon Icon="@Icons.Material.Filled.LocalShipping" />
+                                    </div>
+                                    <div>
+                                        <h3>متابعة التسليمات</h3>
+                                        <p>حالة التنفيذ اليوم</p>
+                                    </div>
+                                </div>
+                                <button class="view-all" @onclick='() => Navigation.NavigateTo("/sales-delivery-status")'>
+                                    فتح المتابعة
+                                    <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Size="MudBlazor.Size.Small" />
+                                </button>
+                            </div>
+                            <div class="mini-metrics-grid">
+                                @foreach (var metric in BuildDeliveryMetrics())
+                                {
+                                    <div class='mini-metric @metric.Tone'>
+                                        <span>@metric.Label</span>
+                                        <strong>@metric.Value</strong>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+
+                    @if (ShouldShowCrmWidget())
+                    {
+                        <div class="pro-card mini-insight-card crm-widget-card">
+                            <div class="card-hdr mini-card-hdr">
+                                <div class="hdr-left">
+                                    <div class="hdr-icon crm-widget-icon">
+                                        <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" />
+                                    </div>
+                                    <div>
+                                        <h3>متابعات CRM الخاصة بي</h3>
+                                        <p>@GetCrmWidgetSubtitle()</p>
+                                    </div>
+                                </div>
+                                <button class="view-all" @onclick='() => Navigation.NavigateTo(GetCrmMainRoute())'>
+                                    افتح المتابعة
+                                    <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Size="MudBlazor.Size.Small" />
+                                </button>
+                            </div>
+
+                            @if (_crmHomeLoadFailed)
+                            {
+                                <div class="crm-empty-note error-note">
+                                    <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Size="MudBlazor.Size.Small" />
+                                    <span>تعذر تحميل متابعات CRM الآن. غالبًا كانت مشكلة تحميل داخلية وليست مشكلة ربط موظف.</span>
+                                </div>
+                            }
+                            else if (!_crmWidget.IsEmployeeLinked)
+                            {
+                                <div class="crm-empty-note">
+                                    <MudIcon Icon="@Icons.Material.Filled.Info" Size="MudBlazor.Size.Small" />
+                                    <span>هذا الحساب غير مربوط بموظف، لذلك لم نتمكن من إظهار متابعاتك الشخصية.</span>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="mini-metrics-grid crm-metrics-grid">
+                                    @foreach (var metric in BuildCrmMetrics())
+                                    {
+                                        <div class='mini-metric @metric.Tone'>
+                                            <span>@metric.Label</span>
+                                            <strong>@metric.Value</strong>
+                                        </div>
+                                    }
+                                </div>
+
+                                <div class="crm-quick-actions">
+                                    @if (_p.ViewTasks)
+                                    {
+                                        <button type="button" class="crm-action-btn" @onclick='() => Navigation.NavigateTo("/crm/tasks")'>
+                                            <MudIcon Icon="@Icons.Material.Filled.TaskAlt" Size="MudBlazor.Size.Small" />
+                                            <span>المهام</span>
+                                        </button>
+                                    }
+                                    @if (_p.ViewLeads)
+                                    {
+                                        <button type="button" class="crm-action-btn" @onclick='() => Navigation.NavigateTo("/crm/leads/my")'>
+                                            <MudIcon Icon="@Icons.Material.Filled.PersonSearch" Size="MudBlazor.Size.Small" />
+                                            <span>الليدز</span>
+                                        </button>
+                                    }
+                                    @if (_p.ViewTasks)
+                                    {
+                                        <button type="button" class="crm-action-btn" @onclick='() => Navigation.NavigateTo("/crm/my-calendar")'>
+                                            <MudIcon Icon="@Icons.Material.Filled.EventNote" Size="MudBlazor.Size.Small" />
+                                            <span>جدولي</span>
+                                        </button>
+                                    }
+                                </div>
+
+                                @if (_crmUpcomingTasks.Any())
+                                {
+                                    <div class="crm-followup-list">
+                                        @foreach (var task in _crmUpcomingTasks.Take(5))
+                                        {
+                                            <button type="button" class='crm-followup-item @GetCrmFollowupClass(task)' @onclick='() => Navigation.NavigateTo(GetCrmItemLink(task))'>
+                                                <div class='crm-followup-icon @(task.IsLeadTask ? "lead" : "client")'>
+                                                    <MudIcon Icon="@(task.IsLeadTask ? Icons.Material.Filled.Campaign : Icons.Material.Filled.Groups)" Size="MudBlazor.Size.Small" />
+                                                </div>
+                                                <div class="crm-followup-text">
+                                                    <div class="crm-followup-title-row">
+                                                        <strong>@(task.ClientName ?? "غير محدد")</strong>
+                                                        <span class="crm-followup-type">@(task.IsLeadTask ? "ليد" : "عميل")</span>
+                                                    </div>
+                                                    <small>@GetCrmTaskSummary(task)</small>
+                                                </div>
+                                                <div class="crm-followup-meta">
+                                                    <span class='crm-due-badge @GetCrmDueBadgeClass(task)'>@GetCrmDueBadgeText(task)</span>
+                                                    <small>@GetCrmDueTimeText(task)</small>
+                                                </div>
+                                            </button>
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="empty-state compact-empty-state crm-empty-state-box">
+                                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" />
+                                        <p>لا توجد متابعات مفتوحة لك حالياً</p>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    }
+
+                    @if (ShouldShowCrmTeamWidget())
+                    {
+                        <div class="pro-card mini-insight-card crm-team-widget-card">
+                            <div class="card-hdr mini-card-hdr">
+                                <div class="hdr-left">
+                                    <div class="hdr-icon crm-team-widget-icon">
+                                        <MudIcon Icon="@Icons.Material.Filled.Groups" />
+                                    </div>
+                                    <div>
+                                        <h3>ملخص فريق CRM</h3>
+                                        <p>@GetCrmTeamSubtitle()</p>
+                                    </div>
+                                </div>
+                                <button class="view-all" @onclick='() => Navigation.NavigateTo("/crm/my-calendar")'>
+                                    فتح تقويم الفريق
+                                    <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Size="MudBlazor.Size.Small" />
+                                </button>
+                            </div>
+
+                            @if (_crmTeamLoadFailed)
+                            {
+                                <div class="crm-empty-note error-note">
+                                    <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Size="MudBlazor.Size.Small" />
+                                    <span>تعذر تحميل ملخص فريق CRM الآن. راجع التحميل بعد تحديث الصفحة أو إعادة الدخول.</span>
+                                </div>
+                            }
+                            else if (_crmTeamWidget.TotalCount <= 0)
+                            {
+                                <div class="empty-state compact-empty-state crm-empty-state-box">
+                                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" />
+                                    <p>لا توجد متابعات مفتوحة للفريق حالياً</p>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="mini-metrics-grid crm-team-metrics-grid">
+                                    @foreach (var metric in BuildCrmTeamMetrics())
+                                    {
+                                        <div class='mini-metric @metric.Tone'>
+                                            <span>@metric.Label</span>
+                                            <strong>@metric.Value</strong>
+                                        </div>
+                                    }
+                                </div>
+
+                                @if (_crmTeamMembers.Any())
+                                {
+                                    <div class="team-member-list">
+                                        @foreach (var member in _crmTeamMembers.Take(5))
+                                        {
+                                            <div class="team-member-row">
+                                                <div class="team-member-main">
+                                                    <strong>@member.Name</strong>
+                                                    <small>@GetCrmTeamMemberSummary(member)</small>
+                                                </div>
+                                                <div class="team-count-cluster">
+                                                    <span class='team-count-badge danger @(member.OverdueCount <= 0 ? "hidden-badge" : "")'>متأخر @member.OverdueCount</span>
+                                                    <span class='team-count-badge warning @(member.TodayCount <= 0 ? "hidden-badge" : "")'>اليوم @member.TodayCount</span>
+                                                    <span class="team-count-badge info">مفتوح @member.TotalCount</span>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            }
+                        </div>
+                    }
+
+                    @if (ShouldShowFinanceWidget())
+                    {
+                        <div class="pro-card mini-insight-card finance-widget-card">
+                            <div class="card-hdr mini-card-hdr">
+                                <div class="hdr-left">
+                                    <div class="hdr-icon finance-widget-icon">
+                                        <MudIcon Icon="@Icons.Material.Filled.Payments" />
+                                    </div>
+                                    <div>
+                                        <h3>التحصيلات والمستحقات</h3>
+                                        <p>ملخص مالي سريع حسب صلاحيتك</p>
+                                    </div>
+                                </div>
+                                <button class="view-all" @onclick='() => Navigation.NavigateTo(_p.ViewCashBox ? "/cashbox/dashboard" : "/sales/invoices")'>
+                                    فتح التفاصيل
+                                    <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Size="MudBlazor.Size.Small" />
+                                </button>
+                            </div>
+                            <div class="mini-metrics-grid finance-metrics-grid">
+                                @foreach (var metric in BuildFinanceMetrics())
+                                {
+                                    <div class='mini-metric @metric.Tone'>
+                                        <span>@metric.Label</span>
+                                        <strong>@metric.Value</strong>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+
     <!-- ⭐ ATTENTION + CHART -->
-    <div class="content-row animate-card" style="--delay: 0.3s">
+    <div class="content-row attention-chart-row animate-card" style="--delay: 0.3s">
         @if (_attentionItems.Any())
         {
-            <div class="pro-card">
+            <div class="pro-card attention-card-layout">
                 <div class="card-hdr">
                     <div class="hdr-left">
                         <div class="hdr-icon attention-icon">
@@ -325,8 +605,13 @@ else
                         </div>
                     </div>
                 </div>
+                <div class="attention-summary-row">
+                    <span class="attention-summary-pill high">عاجل @GetAttentionCount("high")</span>
+                    <span class="attention-summary-pill medium">اليوم @GetAttentionCount("medium")</span>
+                    <span class="attention-summary-pill low">متابعة @GetAttentionCount("low")</span>
+                </div>
                 <div class="att-list">
-                    @foreach (var item in _attentionItems)
+                    @foreach (var item in GetVisibleAttentionItems())
                     {
                         <div class='att-row @item.Severity' @onclick='() => Navigation.NavigateTo(item.Link)'>
                             <div class="att-emoji">@item.Emoji</div>
@@ -343,44 +628,79 @@ else
 
         @if (_p.ViewSales && _salesChart.Any())
         {
-                <div class='pro-card @(_attentionItems.Any() ? "" : "full-width")'>
-                <div class="card-hdr">
+            <div class='pro-card chart-card-layout @(_attentionItems.Any() ? "" : "full-width")'>
+                <div class="card-hdr card-hdr-chart">
                     <div class="hdr-left">
                         <div class="hdr-icon chart-icon">
                             <MudIcon Icon="@Icons.Material.Filled.Analytics" />
                         </div>
                         <div>
                             <h3>تحليل المبيعات</h3>
-                            <p>مبيعات + مصروفات</p>
+                            <p>@GetChartGroupingText() — @GetChartRangeText()</p>
                         </div>
                     </div>
+
                     <div class="chart-controls">
-                        <div class="chart-total">
-                            <small>الإجمالي</small>
-                            <strong>@FormatMoney(_salesChart.Sum(d => d.Amount))</strong>
+                        <div class="chart-summary-pills">
+                            <div class="chart-pill sales">
+                                <span>المبيعات</span>
+                                <strong>@FormatMoney(_chartSalesTotal)</strong>
+                            </div>
+                            <div class="chart-pill expenses">
+                                <span>المصروفات</span>
+                                <strong>@FormatMoney(_chartExpensesTotal)</strong>
+                            </div>
+                            <div class='chart-pill net @(GetChartNetClass())'>
+                                <span>الصافي</span>
+                                <strong>@FormatMoney(_chartNetTotal)</strong>
+                            </div>
                         </div>
-                        <div class="period-toggle">
-                            <button class='period-btn @(_chartPeriod == 7   ? "active" : "")' @onclick='() => SetChartPeriod(7)'>أسبوع</button>
-                            <button class='period-btn @(_chartPeriod == 30  ? "active" : "")' @onclick='() => SetChartPeriod(30)'>شهر</button>
-                            <button class='period-btn @(_chartPeriod == 90  ? "active" : "")' @onclick='() => SetChartPeriod(90)'>3 شهور</button>
-                            <button class='period-btn @(_chartPeriod == 365 ? "active" : "")' @onclick='() => SetChartPeriod(365)'>سنة</button>
+
+                        <div class="period-toggle" role="tablist" aria-label="فترات تحليل المبيعات">
+                            <button type="button" class='period-btn @(_chartPeriod == 1   ? "active" : "")' @onclick='() => SetChartPeriod(1)'>اليوم</button>
+                            <button type="button" class='period-btn @(_chartPeriod == 7   ? "active" : "")' @onclick='() => SetChartPeriod(7)'>7 أيام</button>
+                            <button type="button" class='period-btn @(_chartPeriod == 30  ? "active" : "")' @onclick='() => SetChartPeriod(30)'>30 يوم</button>
+                            <button type="button" class='period-btn @(_chartPeriod == 90  ? "active" : "")' @onclick='() => SetChartPeriod(90)'>3 شهور</button>
+                            <button type="button" class='period-btn @(_chartPeriod == 365 ? "active" : "")' @onclick='() => SetChartPeriod(365)'>سنة</button>
                         </div>
                     </div>
                 </div>
-                <ApexChart TItem="DayData" Options="_salesChartOptions" Height="240">
-                    <ApexPointSeries TItem="DayData"
-                                     Items="_salesChart"
-                                     Name="المبيعات"
-                                     SeriesType="SeriesType.Area"
-                                     XValue="@(d => d.Label)"
-                                     YValue="@(d => (decimal?)d.Amount)" />
-                    <ApexPointSeries TItem="DayData"
-                                     Items="_expensesChart"
-                                     Name="المصروفات"
-                                     SeriesType="SeriesType.Line"
-                                     XValue="@(d => d.Label)"
-                                     YValue="@(d => (decimal?)d.Amount)" />
-                </ApexChart>
+
+                <div class="chart-meta-row">
+                    <div class="chart-meta-badge">
+                        <MudIcon Icon="@Icons.Material.Filled.AutoGraph" Size="MudBlazor.Size.Small" />
+                        <span>التجميع: @GetChartGroupingText()</span>
+                    </div>
+                    <div class="chart-meta-badge subtle">
+                        <MudIcon Icon="@Icons.Material.Filled.DateRange" Size="MudBlazor.Size.Small" />
+                        <span>@GetChartRangeText()</span>
+                    </div>
+                </div>
+
+                <div class='sales-chart-shell @(_isChartLoading ? "loading" : "")'>
+                    @if (_isChartLoading)
+                    {
+                        <div class="chart-loading-overlay">
+                            <MudProgressCircular Color="MudBlazor.Color.Success" Indeterminate="true" Size="MudBlazor.Size.Medium" />
+                            <span>جاري تحديث التحليل...</span>
+                        </div>
+                    }
+
+                    <ApexChart TItem="DayData" @key="_chartRenderKey" Options="_salesChartOptions" Height="340">
+                        <ApexPointSeries TItem="DayData"
+                                         Items="_salesChart"
+                                         Name="المبيعات"
+                                         SeriesType="SeriesType.Area"
+                                         XValue="@(d => d.Label)"
+                                         YValue="@(d => (decimal?)d.Amount)" />
+                        <ApexPointSeries TItem="DayData"
+                                         Items="_expensesChart"
+                                         Name="المصروفات"
+                                         SeriesType="SeriesType.Line"
+                                         XValue="@(d => d.Label)"
+                                         YValue="@(d => (decimal?)d.Amount)" />
+                    </ApexChart>
+                </div>
             </div>
         }
     </div>
@@ -998,20 +1318,89 @@ else
     .stat-expenses  .stat-icon-box { background: rgba(249,115,22,.15); color: #f97316; }
 
     /* ── Chart Period Toggle ── */
-    .chart-controls { display: flex; align-items: center; gap: .5rem; }
+    .chart-controls {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: .75rem;
+    }
+    .chart-summary-pills {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: .5rem;
+    }
+    .chart-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: .45rem;
+        padding: .45rem .75rem;
+        border-radius: 999px;
+        border: 1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-background);
+        color: var(--mud-palette-text-secondary);
+        font-size: .76rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+    .chart-pill strong {
+        font-size: .88rem;
+        font-weight: 900;
+        color: var(--mud-palette-text-primary);
+        font-variant-numeric: tabular-nums;
+    }
+    .chart-pill.sales {
+        background: linear-gradient(135deg, rgba(16,185,129,.12), rgba(16,185,129,.05));
+        border-color: rgba(16,185,129,.22);
+        color: #047857;
+    }
+    .chart-pill.expenses {
+        background: linear-gradient(135deg, rgba(239,68,68,.12), rgba(239,68,68,.05));
+        border-color: rgba(239,68,68,.2);
+        color: #b91c1c;
+    }
+    .chart-pill.net.positive {
+        background: linear-gradient(135deg, rgba(14,165,233,.12), rgba(59,130,246,.05));
+        border-color: rgba(37,99,235,.18);
+        color: #1d4ed8;
+    }
+    .chart-pill.net.negative {
+        background: linear-gradient(135deg, rgba(249,115,22,.12), rgba(239,68,68,.05));
+        border-color: rgba(234,88,12,.18);
+        color: #c2410c;
+    }
     .period-toggle {
-        display: flex; background: rgba(0,0,0,.06);
-        border-radius: 8px; padding: 2px; gap: 2px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        background: linear-gradient(135deg, rgba(15,23,42,.05), rgba(15,23,42,.02));
+        border: 1px solid rgba(148,163,184,.18);
+        border-radius: 14px;
+        padding: 4px;
+        gap: 4px;
     }
     .period-btn {
-        padding: .25rem .6rem; border: none; border-radius: 6px;
-        font-size: .72rem; font-weight: 700; cursor: pointer;
-        background: transparent; color: #64748b;
-        transition: all .2s ease; font-family: inherit;
+        padding: .42rem .8rem;
+        min-width: 74px;
+        border: none;
+        border-radius: 10px;
+        font-size: .75rem;
+        font-weight: 800;
+        cursor: pointer;
+        background: transparent;
+        color: #64748b;
+        transition: all .2s ease;
+        font-family: inherit;
+    }
+    .period-btn:hover {
+        color: #0f172a;
+        background: rgba(255,255,255,.65);
     }
     .period-btn.active {
-        background: white; color: #1e293b;
-        box-shadow: 0 1px 4px rgba(0,0,0,.12);
+        background: linear-gradient(135deg, #10b981, #059669);
+        color: white;
+        box-shadow: 0 8px 16px rgba(16,185,129,.22);
     }
 
     /* ══════════════════════════════════════════════════════════════
@@ -1049,6 +1438,391 @@ else
     .quick-btn-icon .mud-icon-root { font-size: 1.3rem !important; }
 
     /* ══════════════════════════════════════════════════════════════
+       FOCUS / PRIORITIES
+    ══════════════════════════════════════════════════════════════ */
+    .focus-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.55fr) minmax(320px, .95fr);
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+        position: relative;
+        z-index: 1;
+    }
+    .focus-side-stack {
+        display: grid;
+        gap: 1rem;
+        align-content: start;
+    }
+    .focus-side-stack.full-width {
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+    .focus-icon { background: linear-gradient(135deg, #f59e0b, #f97316); }
+    .delivery-widget-icon { background: linear-gradient(135deg, #14b8a6, #0f766e); }
+    .crm-widget-icon { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+    .crm-team-widget-icon { background: linear-gradient(135deg, #0ea5e9, #2563eb); }
+    .finance-widget-icon { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+    .priority-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: .75rem;
+    }
+    .priority-item {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: .75rem;
+        width: 100%;
+        padding: .9rem 1rem;
+        border-radius: 14px;
+        border: 1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-background);
+        color: var(--mud-palette-text-primary);
+        cursor: pointer;
+        text-align: right;
+        font-family: inherit;
+        transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+        border-right: 4px solid transparent;
+    }
+    .priority-item:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 20px rgba(15,23,42,.08);
+    }
+    .priority-item.high { border-right-color: #ef4444; }
+    .priority-item.medium { border-right-color: #f59e0b; }
+    .priority-item.low { border-right-color: #3b82f6; }
+    .priority-icon {
+        --priority-color: #64748b;
+        width: 48px;
+        height: 48px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        background: color-mix(in srgb, var(--priority-color) 14%, transparent);
+        color: var(--priority-color);
+    }
+    .priority-icon ::deep .mud-icon-root { font-size: 1.35rem !important; }
+    .priority-text strong {
+        display: block;
+        font-size: .9rem;
+        font-weight: 800;
+        color: var(--mud-palette-text-primary);
+    }
+    .priority-text small {
+        display: block;
+        margin-top: .15rem;
+        font-size: .76rem;
+        color: var(--mud-palette-text-secondary);
+    }
+    .priority-meta {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: .25rem;
+        white-space: nowrap;
+    }
+    .priority-count {
+        min-width: 34px;
+        padding: .22rem .55rem;
+        border-radius: 999px;
+        background: rgba(15,23,42,.06);
+        color: var(--mud-palette-text-primary);
+        font-size: .78rem;
+        font-weight: 900;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+    }
+    .priority-action {
+        font-size: .72rem;
+        font-weight: 700;
+        color: var(--mud-palette-text-secondary);
+    }
+    .mini-insight-card {
+        margin-bottom: 0;
+    }
+    .mini-card-hdr {
+        margin-bottom: .85rem;
+    }
+    .mini-metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: .65rem;
+    }
+    .mini-metric {
+        padding: .8rem .85rem;
+        border-radius: 14px;
+        border: 1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-background);
+        display: flex;
+        flex-direction: column;
+        gap: .25rem;
+    }
+    .mini-metric span {
+        font-size: .74rem;
+        font-weight: 700;
+        color: var(--mud-palette-text-secondary);
+    }
+    .mini-metric strong {
+        font-size: 1rem;
+        font-weight: 900;
+        color: var(--mud-palette-text-primary);
+        font-variant-numeric: tabular-nums;
+    }
+    .mini-metric.info {
+        background: linear-gradient(135deg, rgba(59,130,246,.08), rgba(59,130,246,.03));
+        border-color: rgba(59,130,246,.15);
+    }
+    .mini-metric.success {
+        background: linear-gradient(135deg, rgba(16,185,129,.08), rgba(16,185,129,.03));
+        border-color: rgba(16,185,129,.15);
+    }
+    .mini-metric.warning {
+        background: linear-gradient(135deg, rgba(245,158,11,.1), rgba(245,158,11,.04));
+        border-color: rgba(245,158,11,.18);
+    }
+    .mini-metric.danger {
+        background: linear-gradient(135deg, rgba(239,68,68,.09), rgba(239,68,68,.03));
+        border-color: rgba(239,68,68,.16);
+    }
+    .crm-empty-note {
+        display: flex;
+        align-items: center;
+        gap: .55rem;
+        padding: .9rem 1rem;
+        border-radius: 14px;
+        background: rgba(245,158,11,.08);
+        border: 1px solid rgba(245,158,11,.16);
+        color: #92400e;
+        font-size: .8rem;
+        font-weight: 700;
+        line-height: 1.6;
+    }
+    .crm-empty-note ::deep .mud-icon-root {
+        color: #f59e0b;
+        flex-shrink: 0;
+    }
+    .crm-empty-note.error-note {
+        background: rgba(239,68,68,.08);
+        border-color: rgba(239,68,68,.16);
+        color: #991b1b;
+    }
+    .crm-empty-note.error-note ::deep .mud-icon-root {
+        color: #ef4444;
+    }
+    .crm-quick-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .5rem;
+        margin: .85rem 0;
+    }
+    .crm-action-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: .35rem;
+        border: 1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-surface);
+        color: var(--mud-palette-text-primary);
+        border-radius: 10px;
+        padding: .45rem .75rem;
+        font-size: .74rem;
+        font-weight: 800;
+        font-family: inherit;
+        cursor: pointer;
+        transition: all .18s ease;
+    }
+    .crm-action-btn:hover {
+        border-color: #8b5cf6;
+        color: #6d28d9;
+        background: rgba(139,92,246,.05);
+        transform: translateY(-1px);
+    }
+    .crm-followup-list {
+        display: flex;
+        flex-direction: column;
+        gap: .55rem;
+    }
+    .crm-followup-item {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: .65rem;
+        width: 100%;
+        padding: .75rem .85rem;
+        border-radius: 14px;
+        border: 1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-background);
+        cursor: pointer;
+        text-align: right;
+        font-family: inherit;
+        transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+        border-right: 4px solid transparent;
+    }
+    .crm-followup-item:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 18px rgba(15,23,42,.07);
+    }
+    .crm-followup-item.overdue { border-right-color: #ef4444; }
+    .crm-followup-item.today { border-right-color: #f59e0b; }
+    .crm-followup-item.upcoming { border-right-color: #3b82f6; }
+    .crm-followup-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    .crm-followup-icon.client {
+        background: rgba(59,130,246,.12);
+        color: #2563eb;
+    }
+    .crm-followup-icon.lead {
+        background: rgba(236,72,153,.12);
+        color: #db2777;
+    }
+    .crm-followup-title-row {
+        display: flex;
+        align-items: center;
+        gap: .45rem;
+        flex-wrap: wrap;
+    }
+    .crm-followup-title-row strong {
+        font-size: .88rem;
+        font-weight: 800;
+        color: var(--mud-palette-text-primary);
+    }
+    .crm-followup-type {
+        display: inline-flex;
+        align-items: center;
+        padding: .15rem .45rem;
+        border-radius: 999px;
+        background: rgba(15,23,42,.06);
+        color: var(--mud-palette-text-secondary);
+        font-size: .67rem;
+        font-weight: 800;
+    }
+    .crm-followup-text small {
+        display: block;
+        margin-top: .15rem;
+        color: var(--mud-palette-text-secondary);
+        font-size: .75rem;
+        line-height: 1.5;
+    }
+    .crm-followup-meta {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: .3rem;
+        white-space: nowrap;
+    }
+    .crm-followup-meta small {
+        color: var(--mud-palette-text-secondary);
+        font-size: .7rem;
+        font-weight: 700;
+    }
+    .crm-due-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: .2rem .5rem;
+        border-radius: 999px;
+        font-size: .68rem;
+        font-weight: 900;
+        border: 1px solid transparent;
+    }
+    .crm-due-badge.overdue {
+        background: rgba(239,68,68,.1);
+        color: #b91c1c;
+        border-color: rgba(239,68,68,.16);
+    }
+    .crm-due-badge.today {
+        background: rgba(245,158,11,.12);
+        color: #b45309;
+        border-color: rgba(245,158,11,.16);
+    }
+    .crm-due-badge.upcoming {
+        background: rgba(59,130,246,.1);
+        color: #1d4ed8;
+        border-color: rgba(59,130,246,.16);
+    }
+    .compact-empty-state {
+        padding: 1.2rem .75rem;
+    }
+    .crm-empty-state-box {
+        margin-top: .25rem;
+    }
+    .team-member-list {
+        display: flex;
+        flex-direction: column;
+        gap: .55rem;
+        margin-top: .85rem;
+    }
+    .team-member-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: .75rem;
+        padding: .75rem .85rem;
+        border-radius: 14px;
+        border: 1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-background);
+    }
+    .team-member-main {
+        min-width: 0;
+    }
+    .team-member-main strong {
+        display: block;
+        font-size: .86rem;
+        font-weight: 800;
+        color: var(--mud-palette-text-primary);
+    }
+    .team-member-main small {
+        display: block;
+        margin-top: .18rem;
+        color: var(--mud-palette-text-secondary);
+        font-size: .74rem;
+        line-height: 1.45;
+    }
+    .team-count-cluster {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: .35rem;
+    }
+    .team-count-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: .18rem .48rem;
+        border-radius: 999px;
+        font-size: .68rem;
+        font-weight: 900;
+        border: 1px solid transparent;
+        white-space: nowrap;
+    }
+    .team-count-badge.danger {
+        background: rgba(239,68,68,.1);
+        color: #b91c1c;
+        border-color: rgba(239,68,68,.16);
+    }
+    .team-count-badge.warning {
+        background: rgba(245,158,11,.12);
+        color: #b45309;
+        border-color: rgba(245,158,11,.16);
+    }
+    .team-count-badge.info {
+        background: rgba(59,130,246,.1);
+        color: #1d4ed8;
+        border-color: rgba(59,130,246,.16);
+    }
+    .team-count-badge.hidden-badge {
+        opacity: .45;
+    }
+
+    /* ══════════════════════════════════════════════════════════════
        CONTENT CARDS
     ══════════════════════════════════════════════════════════════ */
     .content-row {
@@ -1056,6 +1830,10 @@ else
         grid-template-columns: 1fr 1fr;
         gap: 1rem; margin-bottom: 1.5rem;
         position: relative; z-index: 1;
+    }
+    .attention-chart-row {
+        grid-template-columns: minmax(320px, .9fr) minmax(0, 1.7fr);
+        align-items: start;
     }
     .pro-card {
         background: var(--mud-palette-surface);
@@ -1095,14 +1873,70 @@ else
         margin: .15rem 0 0; font-size: .75rem;
         color: var(--mud-palette-text-secondary);
     }
-    .chart-total { text-align: left; }
-    .chart-total small {
-        display: block; font-size: .7rem;
+    .card-hdr-chart {
+        align-items: flex-start;
+        gap: 1rem;
+    }
+    .chart-meta-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: .75rem;
+        flex-wrap: wrap;
+        margin-bottom: .85rem;
+    }
+    .chart-meta-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: .35rem;
+        padding: .45rem .75rem;
+        border-radius: 999px;
+        background: rgba(16,185,129,.08);
+        border: 1px solid rgba(16,185,129,.16);
+        color: #047857;
+        font-size: .76rem;
+        font-weight: 700;
+    }
+    .chart-meta-badge.subtle {
+        background: var(--mud-palette-background);
+        border-color: var(--mud-palette-divider);
         color: var(--mud-palette-text-secondary);
     }
-    .chart-total strong {
-        font-size: 1.1rem; font-weight: 800; color: #10b981;
-        font-variant-numeric: tabular-nums;
+    .chart-meta-badge ::deep .mud-icon-root {
+        font-size: .95rem !important;
+    }
+    .sales-chart-shell {
+        position: relative;
+        min-height: 340px;
+        border-radius: 16px;
+        padding: .35rem .25rem 0;
+        background: linear-gradient(180deg, rgba(16,185,129,.03), transparent 18%);
+    }
+    .sales-chart-shell.loading {
+        opacity: .88;
+    }
+    .chart-loading-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: .6rem;
+        border-radius: 16px;
+        background: rgba(255,255,255,.72);
+        backdrop-filter: blur(3px);
+        color: #047857;
+        font-size: .82rem;
+        font-weight: 800;
+    }
+    .attention-card-layout,
+    .chart-card-layout {
+        height: 100%;
+    }
+    .chart-card-layout {
+        overflow: hidden;
     }
     .view-all {
         display: inline-flex; align-items: center; gap: .35rem;
@@ -1238,6 +2072,37 @@ else
     /* ══════════════════════════════════════════════════════════════
        ATTENTION
     ══════════════════════════════════════════════════════════════ */
+    .attention-summary-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .5rem;
+        margin-bottom: .85rem;
+    }
+    .attention-summary-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: .35rem;
+        padding: .35rem .75rem;
+        border-radius: 999px;
+        font-size: .74rem;
+        font-weight: 800;
+        border: 1px solid transparent;
+    }
+    .attention-summary-pill.high {
+        background: rgba(239,68,68,.1);
+        color: #b91c1c;
+        border-color: rgba(239,68,68,.16);
+    }
+    .attention-summary-pill.medium {
+        background: rgba(245,158,11,.12);
+        color: #b45309;
+        border-color: rgba(245,158,11,.18);
+    }
+    .attention-summary-pill.low {
+        background: rgba(59,130,246,.1);
+        color: #1d4ed8;
+        border-color: rgba(59,130,246,.16);
+    }
     .att-list { display: flex; flex-direction: column; gap: .5rem; }
     .att-row {
         display: flex; align-items: center; gap: .85rem;
@@ -1430,10 +2295,17 @@ else
        RESPONSIVE
     ══════════════════════════════════════════════════════════════ */
     @@media (max-width: 1024px) {
-        .content-row { grid-template-columns: 1fr; }
+        .content-row,
+        .attention-chart-row,
+        .focus-layout { grid-template-columns: 1fr; }
         .pro-card.full-width { grid-column: span 1; }
         .stats-grid { gap: .75rem; }
         .stat-card { min-width: 130px; }
+        .card-hdr-chart { flex-direction: column; }
+        .chart-controls { align-items: stretch; }
+        .chart-summary-pills,
+        .period-toggle { justify-content: flex-start; }
+        .priority-grid { grid-template-columns: 1fr; }
     }
     @@media (max-width: 768px) {
         .home-page { padding: 0 1rem 120px; }
@@ -1453,6 +2325,19 @@ else
         .quick-grid { grid-template-columns: repeat(3,1fr); }
         .activity-item { grid-template-columns: 1fr auto; }
         .ai-id, .ai-status { grid-column: 1 / -1; }
+        .chart-summary-pills { justify-content: flex-start; }
+        .chart-meta-row { align-items: stretch; }
+        .chart-meta-badge { width: 100%; justify-content: center; }
+        .period-toggle { justify-content: stretch; }
+        .period-btn { flex: 1 1 calc(50% - 4px); min-width: 0; }
+        .sales-chart-shell { min-height: 300px; }
+        .mini-metrics-grid { grid-template-columns: 1fr 1fr; }
+        .priority-item { grid-template-columns: auto 1fr; }
+        .priority-meta { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; width: 100%; }
+        .crm-followup-item { grid-template-columns: auto 1fr; }
+        .crm-followup-meta { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; width: 100%; }
+        .team-member-row { flex-direction: column; align-items: stretch; }
+        .team-count-cluster { justify-content: flex-start; }
         .fab-wrap { bottom: 1rem; left: 1rem; }
         .fab-main { width: 54px; height: 54px; }
         .fab-icon { width: 42px; height: 42px; }
@@ -1460,6 +2345,16 @@ else
     @@media (max-width: 480px) {
         .stat-card { flex: 1 1 100%; }
         .quick-grid { grid-template-columns: repeat(3,1fr); }
+        .mini-metrics-grid { grid-template-columns: 1fr; }
+        .priority-item { grid-template-columns: 1fr; text-align: center; }
+        .priority-icon { margin: 0 auto; }
+        .priority-meta { justify-content: center; }
+        .crm-followup-item { grid-template-columns: 1fr; text-align: center; }
+        .crm-followup-icon { margin: 0 auto; }
+        .crm-followup-meta { justify-content: center; }
+        .crm-quick-actions { justify-content: center; }
+        .team-member-main,
+        .team-count-cluster { text-align: center; justify-content: center; }
     }
 </style>
 
@@ -1468,6 +2363,7 @@ else
     private bool   _isLoading         = true;
     private bool   _fabOpen           = false;
     private string _currentUserName   = "User";
+    private int?   _currentUserId;
     private string _currentUserRole   = "";
     private string _greetingIcon      = "👋";
     private string _greetingMessage   = "أهلاً بك";
@@ -1485,14 +2381,27 @@ else
     private List<RecentQuote>    _recentQuotes    = new();
     private List<AttentionItem>  _attentionItems  = new();
     private List<Notification>   _notifications   = new();
+    private List<PriorityItem>      _priorityItems      = new();
+    private List<TaskListDto>       _crmUpcomingTasks   = new();
+    private List<CrmTeamMemberItem> _crmTeamMembers     = new();
+    private DeliveryWidgetData      _deliveryWidget     = new();
+    private FinanceWidgetData       _financeWidget      = new();
+    private CrmWidgetData           _crmWidget          = new();
+    private CrmTeamWidgetData       _crmTeamWidget      = new();
+    private bool                    _crmHomeLoadFailed;
+    private bool                    _crmTeamLoadFailed;
 
     // ── Charts ─────────────────────────────────────────────────────
     private List<DayData>   _salesChart    = new();
     private List<DayData>   _expensesChart = new();
     private List<SliceData> _quotesDonut   = new();
     private int             _chartPeriod   = 30;
+    private int             _chartRenderKey;
+    private bool            _isChartLoading;
 
+    private const string ChartPeriodStorageKey = "home_chart_period";
     private System.Threading.Timer? _refreshTimer;
+    private bool _chartPeriodRestored;
 
     // ── ApexCharts Options ─────────────────────────────────────────
     private ApexChartOptions<DayData> _salesChartOptions => new()
@@ -1597,6 +2506,7 @@ else
                 return;
             }
             _currentUserName = user.Identity?.Name ?? "User";
+            _currentUserId = int.TryParse(user.FindFirst("UserId")?.Value, out var uid) ? uid : null;
             _currentUserRole = user.FindFirst(ClaimTypes.Role)?.Value ?? "";
 
             // Greeting
@@ -1624,6 +2534,8 @@ else
                 ViewAttendance = user.HasClaim("Permission", "frm_empAttendance:View")   || user.IsInRole("Admin"),
                 ViewLeads      = user.HasClaim("Permission", "frm_LeadsCRM:View")        || user.IsInRole("Admin"),
                 ViewComplaints = user.HasClaim("Permission", "frm_Complaints_Main:View") || user.IsInRole("Admin"),
+                ViewDeliveryTracking = DeliveryPermissions.CanView(user),
+                ViewCrmTeamSummary = user.IsInRole("Admin") || user.IsInRole("SalesManager"),
                 AddCustomer    = user.HasClaim("Permission", "frm_Parties:Add")          || user.IsInRole("Admin"),
                 AddProduct     = user.HasClaim("Permission", "frm_ProductList:Add")      || user.IsInRole("Admin"),
                 AddQuote       = user.HasClaim("Permission", "frmQuotationsList:Add")    || user.IsInRole("Admin"),
@@ -1633,15 +2545,19 @@ else
                 AddInspection  = user.HasClaim("Permission", "frmInspectionCharge:Add")  || user.IsInRole("Admin"),
             };
 
-            // Load everything in parallel
+            // تحميلات آمنة بالتوازي (كل واحدة تستخدم DbContext مستقل من الـ Factory)
             await Task.WhenAll(
-                LoadKpi(),
                 LoadRecentInvoices(),
                 LoadRecentQuotes(),
                 LoadAttentionItems(),
-                LoadChartData(),
-                LoadNotifications()
+                LoadChartData()
             );
+
+            // تحميلات الخدمات المشتركة بالتتابع لتجنب تعارض DbContext داخل نفس الـ scope
+            await LoadKpi();
+            await LoadNotifications();
+            await LoadPersonalizedInsights();
+            await LoadCrmHomeInsights();
         }
         catch (Exception ex)
         {
@@ -1653,9 +2569,31 @@ else
         }
     }
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender) return;
+
+        if (!_chartPeriodRestored)
+        {
+            _chartPeriodRestored = true;
+            try
+            {
+                var saved = await JS.InvokeAsync<string>("localStorage.getItem", ChartPeriodStorageKey);
+                if (int.TryParse(saved, out var period) && new[] { 1, 7, 30, 90, 365 }.Contains(period) && period != _chartPeriod)
+                {
+                    _isChartLoading = true;
+                    _chartPeriod = period;
+                    await LoadChartData();
+                    _isChartLoading = false;
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch
+            {
+                _isChartLoading = false;
+            }
+        }
+
         _refreshTimer = new System.Threading.Timer(async _ =>
         {
             try
@@ -1688,6 +2626,7 @@ else
         if (_p.ViewEmployees)  links.Add(new("الموظفين",     "/employees",          Icons.Material.Rounded.Badge,                "#ec4899"));
         if (_p.ViewAttendance) links.Add(new("الحضور",       "/attendance",         Icons.Material.Rounded.Hail,                 "#8b5cf6"));
         if (_p.ViewSales)      links.Add(new("المدفوعات",    "/payments",           Icons.Material.Rounded.Payments,             "#3b82f6"));
+        if (_p.ViewDeliveryTracking) links.Add(new("متابعة التسليمات", "/sales-delivery-status", Icons.Material.Rounded.LocalShipping, "#14b8a6"));
         return links;
     }
 
@@ -1850,30 +2789,50 @@ if (_p.ViewQuotes)
             var days      = _chartPeriod;
             var start     = DateTime.Today.AddDays(-(days - 1));
 
-            // تحديد التجميع: يومي للأسبوع والشهر، أسبوعي لـ 3 شهور، شهري للسنة
+            // تحديد التجميع: ساعي لليوم، يومي للأسبوع والشهر، أسبوعي لـ 3 شهور، شهري للسنة
+            bool groupByHour  = days <= 1;
             bool groupByMonth = days >= 365;
             bool groupByWeek  = days >= 90 && !groupByMonth;
 
             var sales = await db.Transactions.AsNoTracking()
                 .Where(t => t.TransactionType == "Sale" && t.TransactionDate >= start)
-                .Select(t => new { Date = t.TransactionDate.Date, t.GrandTotal })
+                .Select(t => new { At = t.TransactionDate, t.GrandTotal })
                 .ToListAsync();
 
             var expenses = _p.ViewExpenses
                 ? await db.Expenses.AsNoTracking()
                     .Where(e => e.ExpenseDate >= start)
-                    .Select(e => new { Date = e.ExpenseDate.Date, e.Amount })
+                    .Select(e => new { At = e.ExpenseDate, e.Amount })
                     .ToListAsync()
                 : new();
 
-            if (groupByMonth)
+            if (groupByHour)
+            {
+                var baseDay = DateTime.Today;
+                _salesChart = Enumerable.Range(0, 24).Select(i =>
+                {
+                    var fromHour = baseDay.AddHours(i);
+                    var toHour = fromHour.AddHours(1);
+                    var amt = sales.Where(t => t.At >= fromHour && t.At < toHour).Sum(t => t.GrandTotal);
+                    return new DayData(fromHour.ToString("HH:mm"), amt);
+                }).ToList();
+
+                _expensesChart = Enumerable.Range(0, 24).Select(i =>
+                {
+                    var fromHour = baseDay.AddHours(i);
+                    var toHour = fromHour.AddHours(1);
+                    var amt = expenses.Where(e => e.At >= fromHour && e.At < toHour).Sum(e => e.Amount);
+                    return new DayData(fromHour.ToString("HH:mm"), amt);
+                }).ToList();
+            }
+            else if (groupByMonth)
             {
                 // تجميع شهري
                 _salesChart = Enumerable.Range(0, 12).Select(i =>
                 {
                     var d   = start.AddMonths(i);
                     if (d > DateTime.Today) return null;
-                    var amt = sales.Where(t => t.Date.Year == d.Year && t.Date.Month == d.Month).Sum(t => t.GrandTotal);
+                    var amt = sales.Where(t => t.At.Year == d.Year && t.At.Month == d.Month).Sum(t => t.GrandTotal);
                     return new DayData(d.ToString("MM/yy"), amt);
                 }).Where(x => x != null).Select(x => x!).ToList();
 
@@ -1881,7 +2840,7 @@ if (_p.ViewQuotes)
                 {
                     var d   = start.AddMonths(i);
                     if (d > DateTime.Today) return null;
-                    var amt = expenses.Where(e => e.Date.Year == d.Year && e.Date.Month == d.Month).Sum(e => e.Amount);
+                    var amt = expenses.Where(e => e.At.Year == d.Year && e.At.Month == d.Month).Sum(e => e.Amount);
                     return new DayData(d.ToString("MM/yy"), amt);
                 }).Where(x => x != null).Select(x => x!).ToList();
             }
@@ -1892,16 +2851,16 @@ if (_p.ViewQuotes)
                 _salesChart = Enumerable.Range(0, weeks).Select(i =>
                 {
                     var wStart = start.AddDays(i * 7);
-                    var wEnd   = wStart.AddDays(6);
-                    var amt    = sales.Where(t => t.Date >= wStart && t.Date <= wEnd).Sum(t => t.GrandTotal);
+                    var wEnd   = wStart.AddDays(7);
+                    var amt    = sales.Where(t => t.At >= wStart && t.At < wEnd).Sum(t => t.GrandTotal);
                     return new DayData(wStart.ToString("dd/MM"), amt);
                 }).ToList();
 
                 _expensesChart = Enumerable.Range(0, weeks).Select(i =>
                 {
                     var wStart = start.AddDays(i * 7);
-                    var wEnd   = wStart.AddDays(6);
-                    var amt    = expenses.Where(e => e.Date >= wStart && e.Date <= wEnd).Sum(e => e.Amount);
+                    var wEnd   = wStart.AddDays(7);
+                    var amt    = expenses.Where(e => e.At >= wStart && e.At < wEnd).Sum(e => e.Amount);
                     return new DayData(wStart.ToString("dd/MM"), amt);
                 }).ToList();
             }
@@ -1911,17 +2870,21 @@ if (_p.ViewQuotes)
                 _salesChart = Enumerable.Range(0, days).Select(i =>
                 {
                     var d   = start.AddDays(i);
-                    var amt = sales.Where(t => t.Date == d).Sum(t => t.GrandTotal);
+                    var next = d.AddDays(1);
+                    var amt = sales.Where(t => t.At >= d && t.At < next).Sum(t => t.GrandTotal);
                     return new DayData(d.ToString("dd/MM"), amt);
                 }).ToList();
 
                 _expensesChart = Enumerable.Range(0, days).Select(i =>
                 {
                     var d   = start.AddDays(i);
-                    var amt = expenses.Where(e => e.Date == d).Sum(e => e.Amount);
+                    var next = d.AddDays(1);
+                    var amt = expenses.Where(e => e.At >= d && e.At < next).Sum(e => e.Amount);
                     return new DayData(d.ToString("dd/MM"), amt);
                 }).ToList();
             }
+
+            _chartRenderKey++;
         }
         catch (Exception ex) { Console.WriteLine($"[LoadChartData] {ex.Message}"); }
     }
@@ -1970,6 +2933,26 @@ if (_p.ViewQuotes)
                 if (oldInv > 0)
                     items.Add(new() { Emoji = "💰", Title = $"{oldInv} فاتورة متأخرة السداد (+30 يوم)", Description = "راجع المتأخرات", Link = "/sales/invoices", Severity = "high" });
 
+                if (_p.ViewDeliveryTracking)
+                {
+                    var overdueDeliveries = await db.VwSalesDeliveryStatuses.AsNoTracking()
+                        .CountAsync(d => d.DeliveryStatus != "تم التسليم"
+                                      && d.DueDate.HasValue
+                                      && d.DueDate.Value.Date < DateTime.Today);
+                    if (overdueDeliveries > 0)
+                        items.Add(new() { Emoji = "🚚", Title = $"{overdueDeliveries} تسليم متأخر", Description = "افتح شاشة متابعة التسليمات", Link = "/sales-delivery-status", Severity = "high" });
+
+                    var dueTodayDeliveries = await db.VwSalesDeliveryStatuses.AsNoTracking()
+                        .CountAsync(d => d.DeliveryStatus != "تم التسليم"
+                                      && d.DueDate.HasValue
+                                      && d.DueDate.Value.Date == DateTime.Today);
+                    if (dueTodayDeliveries > 0)
+                        items.Add(new() { Emoji = "📦", Title = $"{dueTodayDeliveries} تسليم مستحق اليوم", Description = "راجع جدول التسليم اليومي", Link = "/sales-delivery-status", Severity = "medium" });
+                }
+            }
+
+            if (_p.ViewComplaints)
+            {
                 var oldComp = await db.Complaints.AsNoTracking()
                     .CountAsync(c => (c.Status == 1 || c.Status == 2)
                                   && c.CreatedAt.HasValue
@@ -1988,7 +2971,225 @@ if (_p.ViewQuotes)
         }
         catch (Exception ex) { Console.WriteLine($"[LoadAttentionItems] {ex.Message}"); }
 
-        _attentionItems = items;
+        _attentionItems = items
+            .OrderByDescending(i => GetSeverityRank(i.Severity))
+            .ThenBy(i => i.Title)
+            .ToList();
+    }
+
+    private async Task LoadPersonalizedInsights()
+    {
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync();
+            var today = DateTime.Today;
+            var tomorrow = today.AddDays(1);
+            var thisMonthStart = new DateTime(today.Year, today.Month, 1);
+            var soon = today.AddDays(3);
+
+            var priorityItems = new List<PriorityItem>();
+
+            if (_p.ViewQuotes)
+            {
+                var pendingQuotes = await db.Quotations.AsNoTracking()
+                    .CountAsync(q => (q.Status == QuotationStatuses.Draft || q.Status == QuotationStatuses.Sent) && q.InvoiceId == null);
+                if (pendingQuotes > 0)
+                    priorityItems.Add(new("عروض تحتاج متابعة", pendingQuotes, "تابع العروض المعلقة مع العملاء", "/quotations", Icons.Material.Filled.RequestQuote, "#06b6d4", "medium", 70));
+
+                var acceptedQuotes = await db.Quotations.AsNoTracking()
+                    .CountAsync(q => q.Status == QuotationStatuses.Accepted && q.InvoiceId == null);
+                if (acceptedQuotes > 0)
+                    priorityItems.Add(new("عروض جاهزة للتحويل", acceptedQuotes, "حوّل العروض المقبولة إلى فواتير", "/quotations", Icons.Material.Filled.ReceiptLong, "#10b981", "high", 95));
+
+                var expiringQuotes = await db.Quotations.AsNoTracking()
+                    .CountAsync(q => q.ValidUntil.HasValue
+                                  && q.ValidUntil.Value.Date >= today
+                                  && q.ValidUntil.Value.Date <= soon
+                                  && q.InvoiceId == null
+                                  && (q.Status == QuotationStatuses.Draft || q.Status == QuotationStatuses.Sent));
+                if (expiringQuotes > 0)
+                    priorityItems.Add(new("عروض قربت تنتهي", expiringQuotes, "تواصل سريع قبل انتهاء الصلاحية", "/quotations", Icons.Material.Filled.Schedule, "#f59e0b", "medium", 80));
+            }
+
+            if (_p.ViewDeliveryTracking)
+            {
+                _deliveryWidget.OverdueCount = await db.VwSalesDeliveryStatuses.AsNoTracking()
+                    .CountAsync(d => d.DeliveryStatus != "تم التسليم" && d.DueDate.HasValue && d.DueDate.Value.Date < today);
+
+                _deliveryWidget.DueTodayCount = await db.VwSalesDeliveryStatuses.AsNoTracking()
+                    .CountAsync(d => d.DeliveryStatus != "تم التسليم" && d.DueDate.HasValue && d.DueDate.Value.Date == today);
+
+                _deliveryWidget.DeliveredTodayCount = await db.VwSalesDeliveryStatuses.AsNoTracking()
+                    .CountAsync(d => d.DeliveryStatus == "تم التسليم" && d.DeliveredAt.HasValue && d.DeliveredAt.Value >= today && d.DeliveredAt.Value < tomorrow);
+
+                _deliveryWidget.PendingCount = await db.VwSalesDeliveryStatuses.AsNoTracking()
+                    .CountAsync(d => d.DeliveryStatus != "تم التسليم");
+
+                if (_deliveryWidget.OverdueCount > 0)
+                    priorityItems.Add(new("تسليمات متأخرة", _deliveryWidget.OverdueCount, "راجع أوامر التسليم المتأخرة فورًا", "/sales-delivery-status", Icons.Material.Filled.LocalShipping, "#ef4444", "high", 100));
+
+                if (_deliveryWidget.DueTodayCount > 0)
+                    priorityItems.Add(new("تسليمات مستحقة اليوم", _deliveryWidget.DueTodayCount, "رتّب جدول التسليم اليومي", "/sales-delivery-status", Icons.Material.Filled.LocalShipping, "#14b8a6", "high", 90));
+            }
+
+            if (_p.ViewSales || _p.ViewCashBox || _p.ViewExpenses)
+            {
+                _financeWidget.OpenInvoicesCount = await db.Transactions.AsNoTracking()
+                    .CountAsync(t => t.TransactionType == "Sale" && t.InvoiceStatus == "Open");
+
+                _financeWidget.OverdueInvoicesCount = await db.Transactions.AsNoTracking()
+                    .CountAsync(t => t.TransactionType == "Sale" && t.InvoiceStatus == "Open" && t.TransactionDate <= today.AddDays(-30));
+
+                var saleTransactionIds = db.Transactions.AsNoTracking()
+                    .Where(t => t.TransactionType == "Sale")
+                    .Select(t => t.TransactionId);
+
+                _financeWidget.CollectionsToday = await db.Payments.AsNoTracking()
+                    .Where(p => saleTransactionIds.Contains(p.TransactionId) && p.PaymentDate >= today && p.PaymentDate < tomorrow)
+                    .SumAsync(p => (decimal?)p.Amount) ?? 0;
+
+                _financeWidget.CollectionsThisMonth = await db.Payments.AsNoTracking()
+                    .Where(p => saleTransactionIds.Contains(p.TransactionId) && p.PaymentDate >= thisMonthStart)
+                    .SumAsync(p => (decimal?)p.Amount) ?? 0;
+
+                _financeWidget.ExpensesThisMonth = await db.Expenses.AsNoTracking()
+                    .Where(e => e.ExpenseDate >= thisMonthStart)
+                    .SumAsync(e => (decimal?)e.Amount) ?? 0;
+
+                if (_p.ViewCashBox)
+                {
+                    var boxes = await CashBoxService.GetCashBoxesAsync(true);
+                    _financeWidget.CashBalance = boxes.Sum(b => b.CurrentBalance);
+                }
+
+                if (_financeWidget.OverdueInvoicesCount > 0)
+                    priorityItems.Add(new("متحصلات متأخرة", _financeWidget.OverdueInvoicesCount, "ابدأ بالفواتير المفتوحة القديمة", "/sales/invoices", Icons.Material.Filled.Payments, "#f97316", "high", 85));
+            }
+
+            if (_p.ViewProducts)
+            {
+                var productsPendingPricing = await db.Products.AsNoTracking()
+                    .CountAsync(p => p.PricingStatusId == 2);
+                if (productsPendingPricing > 0)
+                    priorityItems.Add(new("منتجات بانتظار التسعير", productsPendingPricing, "استكمال التسعير يسرّع البيع والعروض", "/products", Icons.Material.Filled.Inventory2, "#8b5cf6", "medium", 60));
+            }
+
+            if (_p.ViewComplaints)
+            {
+                var oldComplaints = await db.Complaints.AsNoTracking()
+                    .CountAsync(c => (c.Status == 1 || c.Status == 2)
+                                  && c.CreatedAt.HasValue
+                                  && c.CreatedAt.Value <= today.AddDays(-7));
+                if (oldComplaints > 0)
+                    priorityItems.Add(new("شكاوى قديمة مفتوحة", oldComplaints, "المتابعة السريعة ترفع رضا العملاء", "/complaints/list", Icons.Material.Filled.SupportAgent, "#ef4444", "high", 88));
+            }
+
+            _priorityItems = priorityItems
+                .OrderByDescending(i => i.Rank)
+                .ThenByDescending(i => i.Count)
+                .Take(6)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[LoadPersonalizedInsights] {ex.Message}");
+            _priorityItems = new();
+            _deliveryWidget = new();
+            _financeWidget = new();
+        }
+    }
+
+    private async Task LoadCrmHomeInsights()
+    {
+        _crmWidget = new();
+        _crmUpcomingTasks = new();
+        _crmTeamWidget = new();
+        _crmTeamMembers = new();
+        _crmHomeLoadFailed = false;
+        _crmTeamLoadFailed = false;
+
+        if (!_p.ViewTasks && !_p.ViewLeads)
+            return;
+
+        try
+        {
+            using var db = await DbFactory.CreateDbContextAsync();
+            var today = DateTime.Today;
+            var startOfWeek = today.AddDays(-(int)today.DayOfWeek);
+            var endOfWeek = startOfWeek.AddDays(7);
+
+            var employeeId = await ResolveCurrentEmployeeIdAsync(db);
+
+            _crmWidget.IsEmployeeLinked = employeeId.HasValue;
+            _crmWidget.EmployeeId = employeeId;
+
+            var result = await TaskService.GetTasksAsync(new TaskFilterDto
+            {
+                PageNumber = 1,
+                PageSize = 5000,
+                SortBy = "DueDate",
+                SortDescending = false
+            });
+
+            var allTasks = result.Items
+                .Where(t => t.IsActive && t.Status != "Completed" && t.Status != "Cancelled")
+                .Where(t => (_p.ViewTasks && !t.IsLeadTask) || (_p.ViewLeads && t.IsLeadTask))
+                .OrderBy(t => t.DueDate.Date)
+                .ThenBy(t => t.DueTime ?? new TimeOnly(23, 59))
+                .ToList();
+
+            if (employeeId.HasValue)
+            {
+                var myTasks = allTasks.Where(t => t.AssignedTo == employeeId.Value).ToList();
+
+                _crmWidget.TotalCount = myTasks.Count;
+                _crmWidget.TodayCount = myTasks.Count(t => t.DueDate.Date == today);
+                _crmWidget.OverdueCount = myTasks.Count(t => t.DueDate.Date < today);
+                _crmWidget.WeekCount = myTasks.Count(t => t.DueDate.Date >= today && t.DueDate.Date < endOfWeek);
+                _crmWidget.LeadCount = myTasks.Count(t => t.IsLeadTask);
+                _crmWidget.ClientCount = myTasks.Count(t => !t.IsLeadTask);
+
+                _crmUpcomingTasks = myTasks.Take(5).ToList();
+            }
+
+            if (ShouldShowCrmTeamWidget())
+            {
+                _crmTeamWidget.TotalCount = allTasks.Count;
+                _crmTeamWidget.TodayCount = allTasks.Count(t => t.DueDate.Date == today);
+                _crmTeamWidget.OverdueCount = allTasks.Count(t => t.DueDate.Date < today);
+
+                var grouped = allTasks
+                    .GroupBy(t => new { t.AssignedTo, Name = string.IsNullOrWhiteSpace(t.AssignedToName) ? "غير محدد" : t.AssignedToName! })
+                    .Select(g => new CrmTeamMemberItem
+                    {
+                        EmployeeId = g.Key.AssignedTo,
+                        Name = g.Key.Name,
+                        TotalCount = g.Count(),
+                        OverdueCount = g.Count(x => x.DueDate.Date < today),
+                        TodayCount = g.Count(x => x.DueDate.Date == today),
+                        LeadCount = g.Count(x => x.IsLeadTask)
+                    })
+                    .OrderByDescending(x => x.OverdueCount)
+                    .ThenByDescending(x => x.TodayCount)
+                    .ThenByDescending(x => x.TotalCount)
+                    .ThenBy(x => x.Name)
+                    .ToList();
+
+                _crmTeamMembers = grouped;
+                _crmTeamWidget.MembersWithOverdueCount = grouped.Count(x => x.OverdueCount > 0);
+                _crmTeamWidget.ActiveMembersCount = grouped.Count;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[LoadCrmHomeInsights] {ex.Message}");
+            _crmHomeLoadFailed = true;
+            _crmTeamLoadFailed = ShouldShowCrmTeamWidget();
+            _crmWidget = new();
+            _crmUpcomingTasks = new();
+            _crmTeamWidget = new();
+            _crmTeamMembers = new();
+        }
     }
 
     private async Task LoadNotifications()
@@ -2094,6 +3295,225 @@ if (_p.ViewQuotes)
         _           => s
     };
 
+    private decimal _chartSalesTotal => _salesChart.Sum(d => d.Amount);
+    private decimal _chartExpensesTotal => _expensesChart.Sum(d => d.Amount);
+    private decimal _chartNetTotal => _chartSalesTotal - _chartExpensesTotal;
+
+    private string GetChartGroupingText() => _chartPeriod switch
+    {
+        <= 1 => "تجميع ساعي",
+        >= 365 => "تجميع شهري",
+        >= 90 => "تجميع أسبوعي",
+        _ => "تجميع يومي"
+    };
+
+    private string GetChartRangeText() => _chartPeriod switch
+    {
+        1 => "اليوم",
+        7 => "آخر 7 أيام",
+        30 => "آخر 30 يوم",
+        90 => "آخر 3 شهور",
+        365 => "آخر سنة",
+        _ => $"آخر {_chartPeriod} يوم"
+    };
+
+    private string GetChartNetClass() => _chartNetTotal >= 0 ? "positive" : "negative";
+
+    private string GetPrioritySectionSubtitle()
+    {
+        if (_p.ViewDeliveryTracking && _p.ViewQuotes)
+            return "أهم ما يحتاج حركتك الآن: عروض، تسليمات، ومتابعات سريعة";
+
+        if (_p.ViewCashBox || _p.ViewExpenses)
+            return "مرتب حسب صلاحياتك المالية وأعلى البنود تأثيرًا اليوم";
+
+        if (_p.ViewProducts)
+            return "عرض ذكي لأولويات التشغيل والتسعير والمتابعة";
+
+        return "مرتب حسب صلاحياتك وأولوية التنفيذ اليوم";
+    }
+
+    private bool ShouldShowDeliveryWidget() => _p.ViewDeliveryTracking;
+
+    private bool ShouldShowFinanceWidget() => _p.ViewSales || _p.ViewCashBox || _p.ViewExpenses;
+
+    private List<WidgetMetric> BuildDeliveryMetrics() => new()
+    {
+        new("متأخر", _deliveryWidget.OverdueCount.ToString("N0"), "danger"),
+        new("اليوم", _deliveryWidget.DueTodayCount.ToString("N0"), "warning"),
+        new("تم اليوم", _deliveryWidget.DeliveredTodayCount.ToString("N0"), "success"),
+        new("قيد المتابعة", _deliveryWidget.PendingCount.ToString("N0"), "info")
+    };
+
+    private List<WidgetMetric> BuildFinanceMetrics()
+    {
+        var metrics = new List<WidgetMetric>();
+
+        if (_p.ViewCashBox)
+            metrics.Add(new("رصيد الخزنة", FormatMoney(_financeWidget.CashBalance), "success"));
+
+        if (_p.ViewSales)
+        {
+            metrics.Add(new("فواتير مفتوحة", _financeWidget.OpenInvoicesCount.ToString("N0"), "info"));
+            metrics.Add(new("متأخرات", _financeWidget.OverdueInvoicesCount.ToString("N0"), "danger"));
+            metrics.Add(new("تحصيل اليوم", FormatMoney(_financeWidget.CollectionsToday), "warning"));
+        }
+
+        if (_p.ViewExpenses)
+            metrics.Add(new("مصروفات الشهر", FormatMoney(_financeWidget.ExpensesThisMonth), "warning"));
+
+        if (_p.ViewSales)
+            metrics.Add(new("تحصيل الشهر", FormatMoney(_financeWidget.CollectionsThisMonth), "success"));
+
+        return metrics.Take(4).ToList();
+    }
+
+    private bool ShouldShowCrmWidget() => _p.ViewTasks || _p.ViewLeads;
+
+    private bool ShouldShowCrmTeamWidget() => _p.ViewCrmTeamSummary && (_p.ViewTasks || _p.ViewLeads);
+
+    private async Task<int?> ResolveCurrentEmployeeIdAsync(db24804Context db)
+    {
+        if (_currentUserId.HasValue)
+        {
+            var byUserId = await db.Users.AsNoTracking()
+                .Where(u => u.UserId == _currentUserId.Value && u.EmployeeId != null)
+                .Select(u => u.EmployeeId)
+                .FirstOrDefaultAsync();
+
+            if (byUserId.HasValue)
+                return byUserId;
+        }
+
+        var normalizedUserName = (_currentUserName ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(normalizedUserName))
+        {
+            var byUserName = await db.Users.AsNoTracking()
+                .Where(u => u.EmployeeId != null && u.Username.Trim() == normalizedUserName)
+                .Select(u => u.EmployeeId)
+                .FirstOrDefaultAsync();
+
+            if (byUserName.HasValue)
+                return byUserName;
+        }
+
+        return null;
+    }
+
+    private string GetCrmWidgetSubtitle()
+    {
+        if (!_crmWidget.IsEmployeeLinked)
+            return "اربط الحساب بموظف لإظهار المتابعات الشخصية";
+
+        if (_crmWidget.TotalCount == 0)
+            return "لا توجد متابعات مفتوحة حالياً";
+
+        return $"{_crmWidget.TotalCount:N0} متابعة مفتوحة تخصك الآن";
+    }
+
+    private string GetCrmTeamSubtitle()
+    {
+        if (_crmTeamWidget.TotalCount <= 0)
+            return "نظرة سريعة على توزيع متابعات الفريق";
+
+        return $"{_crmTeamWidget.ActiveMembersCount:N0} عضو عليهم متابعات مفتوحة الآن";
+    }
+
+    private List<WidgetMetric> BuildCrmMetrics() => new()
+    {
+        new("اليوم", _crmWidget.TodayCount.ToString("N0"), "warning"),
+        new("متأخر", _crmWidget.OverdueCount.ToString("N0"), "danger"),
+        new("هذا الأسبوع", _crmWidget.WeekCount.ToString("N0"), "info"),
+        new("الليدز", _crmWidget.LeadCount.ToString("N0"), "success")
+    };
+
+    private List<WidgetMetric> BuildCrmTeamMetrics() => new()
+    {
+        new("اليوم", _crmTeamWidget.TodayCount.ToString("N0"), "warning"),
+        new("متأخر", _crmTeamWidget.OverdueCount.ToString("N0"), "danger"),
+        new("أعضاء متأخرون", _crmTeamWidget.MembersWithOverdueCount.ToString("N0"), "info"),
+        new("المفتوح", _crmTeamWidget.TotalCount.ToString("N0"), "success")
+    };
+
+    private string GetCrmTeamMemberSummary(CrmTeamMemberItem member)
+    {
+        if (member.OverdueCount > 0 && member.TodayCount > 0)
+            return $"{member.OverdueCount:N0} متأخر و {member.TodayCount:N0} اليوم";
+
+        if (member.OverdueCount > 0)
+            return $"{member.OverdueCount:N0} متابعات متأخرة تحتاج تدخل";
+
+        if (member.TodayCount > 0)
+            return $"{member.TodayCount:N0} متابعات مستحقة اليوم";
+
+        return $"{member.TotalCount:N0} متابعات مفتوحة";
+    }
+
+    private string GetCrmMainRoute() => _p.ViewTasks ? "/crm/my-calendar" : "/crm/leads/my";
+
+    private string GetCrmItemLink(TaskListDto task)
+    {
+        if (task.IsLeadTask && task.LeadId.HasValue)
+            return $"/crm/leads/{task.LeadId.Value}";
+
+        if (task.OpportunityId.HasValue)
+            return $"/crm/opportunities/{task.OpportunityId.Value}";
+
+        return GetCrmMainRoute();
+    }
+
+    private string GetCrmTaskSummary(TaskListDto task)
+    {
+        var text = task.TaskDescription;
+        if (string.IsNullOrWhiteSpace(text))
+            return task.IsLeadTask ? "متابعة ليد مستحقة" : "متابعة عميل مستحقة";
+
+        return text.Length > 70 ? text[..70] + "..." : text;
+    }
+
+    private string GetCrmFollowupClass(TaskListDto task)
+    {
+        var due = task.DueDate.Date;
+        if (due < DateTime.Today) return "overdue";
+        if (due == DateTime.Today) return "today";
+        return "upcoming";
+    }
+
+    private string GetCrmDueBadgeClass(TaskListDto task) => GetCrmFollowupClass(task);
+
+    private string GetCrmDueBadgeText(TaskListDto task)
+    {
+        var due = task.DueDate.Date;
+        if (due < DateTime.Today)
+        {
+            var days = (DateTime.Today - due).Days;
+            return days <= 1 ? "متأخر" : $"متأخر {days} يوم";
+        }
+
+        if (due == DateTime.Today) return "اليوم";
+        if (due == DateTime.Today.AddDays(1)) return "غدًا";
+        return task.DueDate.ToString("dd/MM");
+    }
+
+    private string GetCrmDueTimeText(TaskListDto task)
+    {
+        if (task.DueTime.HasValue)
+            return task.DueTime.Value.ToString("HH\\:mm");
+
+        return task.DueDate.ToString("dd/MM/yyyy");
+    }
+
+    private int GetAttentionCount(string severity) => _attentionItems.Count(i => i.Severity == severity);
+
+    private IEnumerable<AttentionItem> GetVisibleAttentionItems() => _attentionItems.Take(6);
+
+    private static int GetSeverityRank(string severity) => severity switch
+    {
+        "high" => 3,
+        "medium" => 2,
+        _ => 1
+    };
+
     private static string TimeAgo(DateTime dt)
     {
         var span = DateTime.Now - dt;
@@ -2106,9 +3526,24 @@ if (_p.ViewQuotes)
 
     private async Task SetChartPeriod(int days)
     {
-        _chartPeriod = days;
-        await LoadChartData();
-        StateHasChanged();
+        if (_chartPeriod == days && _salesChart.Any())
+            return;
+
+        _isChartLoading = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            _chartPeriod = days;
+            await LoadChartData();
+            try { await JS.InvokeVoidAsync("localStorage.setItem", ChartPeriodStorageKey, days.ToString()); } catch { }
+        }
+        finally
+        {
+            _isChartLoading = false;
+        }
+
+        await InvokeAsync(StateHasChanged);
     }
 
     private static string GetStatClass(string val) =>
@@ -2120,9 +3555,9 @@ if (_p.ViewQuotes)
     // ── Models ─────────────────────────────────────────────────────
     private class Perms
     {
-        public bool ViewSales, ViewQuotes, ViewCustomers, ViewCashBox,ViewPurchases;
-        public bool ViewProducts, ViewEmployees, ViewExpenses,ViewLeads, ViewAttendance;
-        public bool ViewTasks;
+        public bool ViewSales, ViewQuotes, ViewCustomers, ViewCashBox, ViewPurchases;
+        public bool ViewProducts, ViewEmployees, ViewExpenses, ViewLeads, ViewAttendance;
+        public bool ViewTasks, ViewDeliveryTracking, ViewCrmTeamSummary;
         public bool AddCustomer, AddProduct, AddQuote, AddInvoice;
         public bool AddCashBox, AddComplaint, AddInspection;
         public bool ViewComplaints;
@@ -2166,7 +3601,58 @@ if (_p.ViewQuotes)
         public string Severity    { get; set; } = "medium";
     }
 
+    private class DeliveryWidgetData
+    {
+        public int OverdueCount { get; set; }
+        public int DueTodayCount { get; set; }
+        public int DeliveredTodayCount { get; set; }
+        public int PendingCount { get; set; }
+    }
+
+    private class FinanceWidgetData
+    {
+        public int OpenInvoicesCount { get; set; }
+        public int OverdueInvoicesCount { get; set; }
+        public decimal CollectionsToday { get; set; }
+        public decimal CollectionsThisMonth { get; set; }
+        public decimal CashBalance { get; set; }
+        public decimal ExpensesThisMonth { get; set; }
+    }
+
+    private class CrmWidgetData
+    {
+        public int? EmployeeId { get; set; }
+        public bool IsEmployeeLinked { get; set; }
+        public int TotalCount { get; set; }
+        public int TodayCount { get; set; }
+        public int OverdueCount { get; set; }
+        public int WeekCount { get; set; }
+        public int LeadCount { get; set; }
+        public int ClientCount { get; set; }
+    }
+
+    private class CrmTeamWidgetData
+    {
+        public int TotalCount { get; set; }
+        public int TodayCount { get; set; }
+        public int OverdueCount { get; set; }
+        public int MembersWithOverdueCount { get; set; }
+        public int ActiveMembersCount { get; set; }
+    }
+
+    private class CrmTeamMemberItem
+    {
+        public int EmployeeId { get; set; }
+        public string Name { get; set; } = "غير محدد";
+        public int TotalCount { get; set; }
+        public int OverdueCount { get; set; }
+        public int TodayCount { get; set; }
+        public int LeadCount { get; set; }
+    }
+
     private record QuickLink(string Label, string Url, string Icon, string Color);
     private record DayData(string Label, decimal Amount);
     private record SliceData(string Label, decimal Value, string Status, string Color);
+    private record WidgetMetric(string Label, string Value, string Tone);
+    private record PriorityItem(string Title, int Count, string Description, string Link, string Icon, string Color, string Severity, int Rank);
 }

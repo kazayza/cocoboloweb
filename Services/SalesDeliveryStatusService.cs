@@ -7,10 +7,20 @@ namespace COCOBOLOERPNEW.Services;
 public class SalesDeliveryStatusService : ISalesDeliveryStatusService
 {
     private readonly IDbContextFactory<db24804Context> _factory;
+    private readonly IAuditService _audit;
+    private readonly NotificationService _notify;
+    private readonly ILogger<SalesDeliveryStatusService> _logger;
 
-    public SalesDeliveryStatusService(IDbContextFactory<db24804Context> factory)
+    public SalesDeliveryStatusService(
+        IDbContextFactory<db24804Context> factory,
+        IAuditService audit,
+        NotificationService notify,
+        ILogger<SalesDeliveryStatusService> logger)
     {
         _factory = factory;
+        _audit = audit;
+        _notify = notify;
+        _logger = logger;
     }
 
     public async Task<List<VwSalesDeliveryStatus>> GetAllAsync()
@@ -25,26 +35,28 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
     public async Task<List<VwSalesDeliveryStatus>> GetFilteredAsync(
         DateTime? dateFrom,
         DateTime? dateTo,
+        string dateFilterType,
         string? partyName,
         string? deliveryStatus)
     {
         using var db = await _factory.CreateDbContextAsync();
 
         var query = db.VwSalesDeliveryStatuses.AsNoTracking().AsQueryable();
-
-        if (dateFrom.HasValue)
-            query = query.Where(x => x.TransactionDate >= dateFrom.Value.Date);
-
-        if (dateTo.HasValue)
-            query = query.Where(x => x.TransactionDate <= dateTo.Value.Date.AddDays(1).AddTicks(-1));
+        query = ApplyDateFilter(query, dateFrom, dateTo, dateFilterType);
 
         if (!string.IsNullOrWhiteSpace(partyName))
-            query = query.Where(x => x.PartyName != null && x.PartyName.Contains(partyName.Trim()));
+        {
+            var term = partyName.Trim();
+            query = query.Where(x => x.PartyName != null && x.PartyName.Contains(term));
+        }
 
         if (!string.IsNullOrWhiteSpace(deliveryStatus))
             query = query.Where(x => x.DeliveryStatus == deliveryStatus);
 
-        return await query.OrderByDescending(x => x.TransactionDate).ToListAsync();
+        return await query
+            .OrderByDescending(x => x.DueDate ?? x.TransactionDate)
+            .ThenByDescending(x => x.TransactionId)
+            .ToListAsync();
     }
 
     public async Task<VwSalesDeliveryStatus?> GetByTransactionIdAsync(int transactionId)
@@ -58,21 +70,20 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
     public async Task<DeliverySummaryDto> GetSummaryAsync(
         DateTime? dateFrom,
         DateTime? dateTo,
+        string dateFilterType,
         string? partyName,
         string? deliveryStatus)
     {
         using var db = await _factory.CreateDbContextAsync();
 
         var query = db.VwSalesDeliveryStatuses.AsNoTracking().AsQueryable();
-
-        if (dateFrom.HasValue)
-            query = query.Where(x => x.TransactionDate >= dateFrom.Value.Date);
-
-        if (dateTo.HasValue)
-            query = query.Where(x => x.TransactionDate <= dateTo.Value.Date.AddDays(1).AddTicks(-1));
+        query = ApplyDateFilter(query, dateFrom, dateTo, dateFilterType);
 
         if (!string.IsNullOrWhiteSpace(partyName))
-            query = query.Where(x => x.PartyName != null && x.PartyName.Contains(partyName.Trim()));
+        {
+            var term = partyName.Trim();
+            query = query.Where(x => x.PartyName != null && x.PartyName.Contains(term));
+        }
 
         if (!string.IsNullOrWhiteSpace(deliveryStatus))
             query = query.Where(x => x.DeliveryStatus == deliveryStatus);
@@ -153,11 +164,20 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
         if (transaction == null)
             return (false, "الفاتورة غير موجودة");
 
+        var oldSnapshot = new
+        {
+            transaction.DeliveryEmployeeId,
+            transaction.DeliveryEmployeeName,
+            transaction.IsDelivered,
+            transaction.DeliveredAt,
+            transaction.DeliveredNotes
+        };
+
         try
         {
             transaction.DeliveryEmployeeName = dto.DeliveryEmployeeName;
             transaction.DeliveryEmployeeId   = dto.DeliveryEmployeeId;
-            
+
             if (dto.Status == "تم التسليم")
             {
                 transaction.IsDelivered = true;
@@ -168,15 +188,31 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
                 transaction.IsDelivered = false;
                 transaction.DeliveredAt = null;
             }
-            
+
             transaction.DeliveredNotes = dto.Notes;
 
             await db.SaveChangesAsync();
+
+            var newSnapshot = new
+            {
+                transaction.DeliveryEmployeeId,
+                transaction.DeliveryEmployeeName,
+                transaction.IsDelivered,
+                transaction.DeliveredAt,
+                transaction.DeliveredNotes,
+                RequestedStatus = dto.Status
+            };
+
+            await _audit.LogAsync<object>("Transactions", "UpdateDeliveryStatus",
+                dto.TransactionId.ToString(), oldSnapshot, newSnapshot, dto.UserName);
+
+            await NotifyDeliveryUpdateAsync(db, transaction, dto);
 
             return (true, "تم تحديث حالة التسليم بنجاح");
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "UpdateDeliveryStatusAsync failed for transaction {Id}", dto.TransactionId);
             return (false, $"حدث خطأ: {ex.Message}");
         }
     }
@@ -207,5 +243,81 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
 
         // TODO: QuestPDF Implementation
         return Array.Empty<byte>();
+    }
+
+    private static IQueryable<VwSalesDeliveryStatus> ApplyDateFilter(
+        IQueryable<VwSalesDeliveryStatus> query,
+        DateTime? dateFrom,
+        DateTime? dateTo,
+        string? dateFilterType)
+    {
+        var filterType = string.IsNullOrWhiteSpace(dateFilterType)
+            ? DeliveryDateFilterTypes.DueDate
+            : dateFilterType;
+
+        var from = dateFrom?.Date;
+        var toExclusive = dateTo?.Date.AddDays(1);
+
+        return filterType switch
+        {
+            DeliveryDateFilterTypes.InvoiceDate => query
+                .Where(x => !from.HasValue || x.TransactionDate >= from.Value)
+                .Where(x => !toExclusive.HasValue || x.TransactionDate < toExclusive.Value),
+
+            DeliveryDateFilterTypes.DeliveredDate => query
+                .Where(x => !from.HasValue || (x.DeliveredAt.HasValue && x.DeliveredAt.Value >= from.Value))
+                .Where(x => !toExclusive.HasValue || (x.DeliveredAt.HasValue && x.DeliveredAt.Value < toExclusive.Value)),
+
+            _ => query
+                .Where(x => !from.HasValue || (x.DueDate.HasValue && x.DueDate.Value >= from.Value))
+                .Where(x => !toExclusive.HasValue || (x.DueDate.HasValue && x.DueDate.Value < toExclusive.Value))
+        };
+    }
+
+    private async Task NotifyDeliveryUpdateAsync(db24804Context db, Transaction transaction, DeliveryUpdateDto dto)
+    {
+        try
+        {
+            var partyName = await db.Parties.AsNoTracking()
+                .Where(p => p.PartyId == transaction.PartyId)
+                .Select(p => p.PartyName)
+                .FirstOrDefaultAsync() ?? "غير محدد";
+
+            var title = dto.Status switch
+            {
+                "تم التسليم" => "🚚 تم تأكيد التسليم",
+                "متأخر" => "⏰ تحديث: متأخر في التسليم",
+                "مرتجع" => "↩️ تحديث: مرتجع",
+                _ => "📦 تحديث حالة التسليم"
+            };
+
+            var message = $"تم تحديث حالة تسليم الفاتورة {transaction.ReferenceNumber ?? $"#{transaction.TransactionId}"} للعميل {partyName} إلى ({dto.Status}) بواسطة {dto.UserName}" +
+                          (string.IsNullOrWhiteSpace(dto.DeliveryEmployeeName) ? string.Empty : $" — مندوب التسليم: {dto.DeliveryEmployeeName}");
+
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.Admin, dto.UserName,
+                "sales-delivery-status", "Transactions", transaction.TransactionId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, dto.UserName,
+                "sales-delivery-status", "Transactions", transaction.TransactionId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.SalesManager, dto.UserName,
+                "sales-delivery-status", "Transactions", transaction.TransactionId);
+
+            if (dto.DeliveryEmployeeId.HasValue)
+            {
+                var recipientUser = await db.Users.AsNoTracking()
+                    .Where(u => u.EmployeeId == dto.DeliveryEmployeeId.Value && u.IsActive == true)
+                    .Select(u => u.Username)
+                    .FirstOrDefaultAsync();
+
+                if (!string.IsNullOrWhiteSpace(recipientUser))
+                {
+                    await _notify.AddAsync(title, message, recipientUser!, dto.UserName,
+                        "sales-delivery-status", "Transactions", transaction.TransactionId);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to send delivery notification for transaction {Id}", transaction.TransactionId);
+        }
     }
 }

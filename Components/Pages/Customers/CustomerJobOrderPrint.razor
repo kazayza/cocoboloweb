@@ -1,0 +1,318 @@
+@page "/customers/{PartyId:int}/job-order/print"
+@page "/products/job-order/{PartyId:int}/print"
+@layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else if (!_canView || _party == null)
+{
+    <div class="not-found"><h2>الملف غير متاح</h2></div>
+}
+else
+{
+    <div class="print-actions no-print">
+        <button class="btn-action btn-print" @onclick="PrintNow">🖨️ طباعة</button>
+        <button class="btn-action btn-back" @onclick="GoBack">← رجوع</button>
+    </div>
+
+    <div class="print-page">
+        <div class="content" dir="rtl">
+            <div class="invoice-top-meta">
+                <div class="meta-type">ملف تشغيل العميل</div>
+                <div class="meta-number">@_party.PartyName</div>
+                <div class="meta-date">@DateTime.Now.ToString("yyyy/MM/dd")</div>
+            </div>
+
+            <div class="party-grid">
+                <div class="party-box">
+                    <h3>بيانات العميل</h3>
+                    <div class="party-line"><strong>الاسم:</strong> @_party.PartyName</div>
+                    @if (!string.IsNullOrWhiteSpace(_party.Phone))
+                    {
+                        <div class="party-line"><strong>الهاتف:</strong> @_party.Phone</div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_party.City))
+                    {
+                        <div class="party-line"><strong>المدينة:</strong> @_party.City</div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_party.Address))
+                    {
+                        <div class="party-line"><strong>العنوان:</strong> @_party.Address</div>
+                    }
+                </div>
+
+                <div class="party-box">
+                    <h3>بيانات الملف</h3>
+                    <div class="party-line"><strong>عدد المنتجات المختارة:</strong> @_products.Count</div>
+                    <div class="party-line"><strong>عدد الملفات المتاحة:</strong> @_products.Count(x => x.HasPdf)</div>
+                    <div class="party-line"><strong>تاريخ الإصدار:</strong> @DateTime.Now.ToString("yyyy/MM/dd HH:mm")</div>
+                    <div class="party-line"><strong>تم بواسطة:</strong> @_displayUserName</div>
+                </div>
+            </div>
+
+            <table class="items-table">
+                <thead>
+                    <tr>
+                        <th style="width:40px;">#</th>
+                        <th style="width:100px;">الصورة</th>
+                        <th>المنتج</th>
+                        <th style="width:180px;">مواصفات التصنيع</th>
+                        <th style="width:100px;">الباقة</th>
+                        <th style="width:90px;">الحالة</th>
+                        <th style="width:80px;">المدة</th>
+                        <th style="width:80px;">PDF</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (var i = 0; i < _products.Count; i++)
+                    {
+                        var item = _products[i];
+                        <tr>
+                            <td class="text-center">@(i + 1)</td>
+                            <td class="text-center">
+                                <img src="/api/product-images/@item.ProductId"
+                                     alt="@item.ProductName"
+                                     class="product-img"
+                                     onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+                                <div class="img-placeholder" style="display:none">📦</div>
+                            </td>
+                            <td>
+                                <strong>@item.ProductName</strong>
+                                <div class="item-desc">#@item.ProductId</div>
+                                @if (!string.IsNullOrWhiteSpace(item.ProductDescription))
+                                {
+                                    <div class="item-desc">@item.ProductDescription</div>
+                                }
+                            </td>
+                            <td>
+                                @if (!string.IsNullOrWhiteSpace(item.ManufacturingDescription))
+                                {
+                                    <div class="manufacturing-note">@item.ManufacturingDescription</div>
+                                }
+                                else
+                                {
+                                    <span class="empty-manufacturing">—</span>
+                                }
+                            </td>
+                            <td class="text-center">@GetPricingTypeText(item.PricingType)</td>
+                            <td class="text-center">@GetStatusText(item.PricingStatusId)</td>
+                            <td class="text-center">@(item.Period.HasValue && item.Period.Value > 0 ? $"{item.Period.Value} يوم" : "—")</td>
+                            <td class="text-center">@(item.HasPdf ? "متوفر" : "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            <div class="notes-box notes-large">
+                <strong>ملاحظات:</strong>
+                <p>
+                    هذا الملف هو عرض تجميعي مؤقت لمنتجات العميل المختارة ضمن ملف تشغيل موحد،
+                    ويمكن الرجوع إلى ملفات الـ PDF الأصلية الخاصة بكل منتج عند الحاجة.
+                </p>
+            </div>
+
+            <div class="signatures signatures-large">
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">توقيع المستلم</div>
+                    <div class="signature-name">@_displayUserName</div>
+                </div>
+                <div class="signature-box">
+                    <div class="signature-line"></div>
+                    <div class="signature-label">اعتماد الإدارة</div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    body { margin: 0; padding: 0; background: #f2f2f2; font-family: 'Segoe UI', 'Tajawal', sans-serif; }
+    .loading-container, .not-found { display:flex; justify-content:center; align-items:center; min-height:100vh; }
+    .print-actions { position: fixed; top: 1rem; left: 1rem; display:flex; gap:.5rem; z-index:9999; }
+    .btn-action { border:none; border-radius:8px; padding:.7rem 1.4rem; cursor:pointer; font-weight:700; }
+    .btn-print { background:#d4af37; color:#fff; }
+    .btn-back { background:#ddd; }
+    .print-page { width:210mm; min-height:297mm; margin:1rem auto; position:relative; background-image:url('/images/design-background.png'); background-repeat:no-repeat; background-size:cover; background-position:center; overflow:hidden; box-shadow:0 0 10px rgba(0,0,0,.15); box-sizing:border-box; }
+    .content { position:relative; min-height:297mm; padding-top:42mm; padding-bottom:38mm; padding-left:12mm; padding-right:12mm; box-sizing:border-box; }
+    .invoice-top-meta { position:absolute; top:14mm; left:14mm; width:52mm; text-align:center; z-index:5; }
+    .meta-type { font-size:.95rem; font-weight:700; color:#1a2842; margin-bottom:.3rem; }
+    .meta-number { font-size:.88rem; font-weight:600; color:#444; margin-bottom:.2rem; letter-spacing:.5px; }
+    .meta-date { font-size:.8rem; color:#666; }
+    .party-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem; }
+    .party-box { background:#faf6e8; border:1px solid #d4af3744; border-radius:10px; padding:1rem; }
+    .party-box h3 { margin:0 0 .45rem 0; font-size:.88rem; color:#1a2842; padding-bottom:.35rem; border-bottom:1px solid #d4af3744; }
+    .party-line { font-size:.76rem; margin:.18rem 0; line-height:1.45; }
+    .items-table { width:100%; border-collapse:collapse; margin-bottom:1rem; font-size:.82rem; background:#fff; }
+    .items-table th, .items-table td { border:1px solid #ddd; padding:.5rem; vertical-align:middle; }
+    .items-table thead th { background:#1a2842; color:#fff; font-weight:700; }
+    .product-img { width:88px; height:88px; object-fit:cover; border-radius:6px; border:1px solid #ddd; }
+    .img-placeholder { width:88px; height:88px; display:flex; align-items:center; justify-content:center; background:#f5f5f5; border-radius:6px; border:1px dashed #ccc; margin:auto; }
+    .item-desc { font-size:.72rem; color:#777; margin-top:.2rem; }
+    .manufacturing-note { padding:.35rem .5rem; background:#f8fafc; border-right:3px solid #667eea; border-radius:6px; font-size:.73rem; color:#334155; line-height:1.7; }
+    .empty-manufacturing { color:#94a3b8; font-style:italic; }
+    .notes-box { background:#fafafa; border-right:3px solid #d4af37; padding:.8rem; border-radius:8px; }
+    .notes-large { margin-top:1.5rem; font-size:.9rem; }
+    .signatures { display:grid; grid-template-columns:1fr 1fr; gap:3rem; margin-top:2rem; }
+    .signatures-large { width:80%; margin:2rem auto 0 auto; }
+    .signature-box { text-align:center; }
+    .signature-line { border-top:1px solid #333; margin-top:2.5rem; margin-bottom:.5rem; }
+    .signature-label { font-weight:700; }
+    .signature-name { margin-top:.3rem; color:#666; font-size:.8rem; }
+    .text-center { text-align:center; }
+    @@media print {
+        @@page { size: A4; margin: 0; }
+        html, body { width:210mm; margin:0; padding:0; background:#fff; }
+        .no-print { display:none !important; }
+        .print-page { margin:0; box-shadow:none; }
+    }
+</style>
+
+@code {
+    [Parameter] public int PartyId { get; set; }
+    [SupplyParameterFromQuery(Name = "ids")] public string? Ids { get; set; }
+    [SupplyParameterFromQuery(Name = "autoprint")] public string? AutoPrint { get; set; }
+
+    private bool _isLoading = true;
+    private bool _canView;
+    private Party? _party;
+    private string _displayUserName = "";
+    private List<JobOrderPrintProductVm> _products = new();
+    private bool _didAutoPrint;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _displayUserName = user.Identity?.Name ?? "System";
+        _canView = user.IsInRole(SystemRoles.Admin)
+                   || user.IsInRole(SystemRoles.SalesManager)
+                   || user.IsInRole(SystemRoles.Sales)
+                   || user.IsInRole(SystemRoles.AccountManager)
+                   || user.IsInRole(SystemRoles.HrManager)
+                   || user.IsInRole("factory");
+
+        if (!_canView)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        _party = await Db.Parties.AsNoTracking().FirstOrDefaultAsync(p => p.PartyId == PartyId);
+        if (_party != null)
+            await LoadProductsAsync();
+
+        _isLoading = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_didAutoPrint && string.Equals(AutoPrint, "true", StringComparison.OrdinalIgnoreCase) && !_isLoading)
+        {
+            _didAutoPrint = true;
+            await JS.InvokeVoidAsync("window.print");
+        }
+    }
+
+    private async Task LoadProductsAsync()
+    {
+        var selectedIds = ParseIds();
+        var query = Db.Products.AsNoTracking().Where(p => p.Customer == PartyId);
+        if (selectedIds.Any())
+            query = query.Where(p => selectedIds.Contains(p.ProductId));
+
+        _products = await query
+            .OrderByDescending(p => p.ProductId)
+            .Select(p => new JobOrderPrintProductVm
+            {
+                ProductId = p.ProductId,
+                ProductName = p.ProductName,
+                ProductDescription = p.ProductDescription,
+                ManufacturingDescription = p.ManufacturingDescription,
+                PricingType = p.PricingType,
+                PricingStatusId = p.PricingStatusId,
+                PdfPath = p.PdfPath,
+                HasOldPdf = p.Pdffile != null,
+                Period = p.Period
+            })
+            .ToListAsync();
+    }
+
+    private HashSet<int> ParseIds()
+    {
+        return string.IsNullOrWhiteSpace(Ids)
+            ? new HashSet<int>()
+            : Ids.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                 .Select(x => int.TryParse(x, out var id) ? id : 0)
+                 .Where(x => x > 0)
+                 .ToHashSet();
+    }
+
+    private void GoBack() => Navigation.NavigateTo($"/products/job-order/{PartyId}");
+    private async Task PrintNow() => await JS.InvokeVoidAsync("window.print");
+
+    private static string GetStatusText(int? statusId) => statusId switch
+    {
+        1 => "مسودة",
+        2 => "بانتظار التسعير",
+        3 => "تم التسعير",
+        4 => "طلب تعديل سعر",
+        5 => "تمت الموافقة",
+        6 => "مرفوض",
+        7 => "طلب تعديل سعر بيع",
+        8 => "طلب تعديل تكلفة",
+        _ => "غير محدد"
+    };
+
+    private static string NormalizePricingType(string? pricingType)
+    {
+        if (string.IsNullOrWhiteSpace(pricingType))
+            return string.Empty;
+        var normalized = pricingType.Trim();
+        if (string.Equals(normalized, "CClass", StringComparison.OrdinalIgnoreCase) || string.Equals(normalized, "C Class", StringComparison.OrdinalIgnoreCase))
+            return "CClass";
+        if (string.Equals(normalized, "Premium", StringComparison.OrdinalIgnoreCase))
+            return "Premium";
+        if (string.Equals(normalized, "Elite", StringComparison.OrdinalIgnoreCase))
+            return "Elite";
+        return normalized;
+    }
+
+    private static string GetPricingTypeText(string? pricingType) => NormalizePricingType(pricingType) switch
+    {
+        "CClass" => "Standard",
+        "Premium" => "Premium",
+        "Elite" => "Elite",
+        _ => pricingType ?? "-"
+    };
+
+    private sealed class JobOrderPrintProductVm
+    {
+        public int ProductId { get; set; }
+        public string ProductName { get; set; } = "";
+        public string? ProductDescription { get; set; }
+        public string? ManufacturingDescription { get; set; }
+        public string? PricingType { get; set; }
+        public int? PricingStatusId { get; set; }
+        public string? PdfPath { get; set; }
+        public bool HasOldPdf { get; set; }
+        public int? Period { get; set; }
+        public bool HasPdf => !string.IsNullOrWhiteSpace(PdfPath) || HasOldPdf;
+    }
+}

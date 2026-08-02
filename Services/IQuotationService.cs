@@ -29,11 +29,13 @@ public interface IQuotationService
 
     // التحويل لفاتورة (مع المرآة)
     Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
-        int quotationId, decimal initialPaidAmount, int? cashBoxId,
-        string paymentMethod, string currentUserName, DateTime? invoiceDate = null);
+        int quotationId, List<int>? selectedAdvanceChargeIds,
+        string currentUserName, DateTime? invoiceDate = null);
     
     Task<(string? Reason, DateTime? RejectedAt, string? RejectedBy)> 
     GetRejectionDetailsAsync(int quotationId);
+
+    Task<(DateTime? AcceptedAt, string? AcceptedBy)> GetAcceptanceDetailsAsync(int quotationId);
 
     Task<(bool Success, string Message)> SendDiscountRequestAsync(
         QuotationDiscountRequestDto dto, string currentUserName);

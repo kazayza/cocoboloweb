@@ -1,0 +1,240 @@
+@page "/products/job-order/{PartyId:int}/pdfs"
+@page "/customers/{PartyId:int}/job-order/pdfs"
+@layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+@if (_isLoading)
+{
+    <div class="jop-loading">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل ملفات الـ PDF...</MudText>
+    </div>
+}
+else if (!_canView || _party == null)
+{
+    <MudAlert Severity="Severity.Error">الملف غير متاح.</MudAlert>
+}
+else if (!_products.Any())
+{
+    <MudAlert Severity="Severity.Warning">لا توجد ملفات PDF للمنتجات المحددة.</MudAlert>
+}
+else
+{
+    <div class="jop-page" dir="rtl">
+        <div class="jop-actions no-print">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Print" OnClick="PrintNow">
+                طباعة
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.ArrowForward" OnClick="GoBack">
+                رجوع
+            </MudButton>
+        </div>
+
+        <div class="jop-header">
+            <div class="jop-header-bg"></div>
+            <div class="jop-header-content">
+                <div>
+                    <div class="jop-badge">PDF Packet</div>
+                    <h1>ملفات الجوب أوردر المختارة</h1>
+                    <p>@_party.PartyName — عدد الملفات: @_products.Count</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="jop-nav no-print">
+            @foreach (var item in _products)
+            {
+                <a href="#pdf-@item.ProductId" class="jop-nav-link">#@item.ProductId — @item.ProductName</a>
+            }
+        </div>
+
+        @foreach (var item in _products)
+        {
+            <section class="pdf-section" id="pdf-@item.ProductId">
+                <div class="pdf-section-head">
+                    <div>
+                        <h3>@item.ProductName</h3>
+                        <p>#@item.ProductId • @(string.IsNullOrWhiteSpace(item.PricingType) ? "—" : item.PricingType)</p>
+                    </div>
+                    <div class="pdf-section-actions no-print">
+                        @if (!string.IsNullOrWhiteSpace(item.PdfPath) || item.HasOldPdf)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="() => OpenSinglePdfAsync(item)">
+                                فتح الملف منفصلًا
+                            </MudButton>
+                        }
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(item.PdfPath))
+                {
+                    <iframe src="@GetAbsolutePdfPath(item.PdfPath)" class="pdf-frame"></iframe>
+                }
+                else if (item.HasOldPdf)
+                {
+                    if (_oldPdfUrls.TryGetValue(item.ProductId, out var oldPdfUrl) && !string.IsNullOrWhiteSpace(oldPdfUrl))
+                    {
+                        <iframe src="@oldPdfUrl" class="pdf-frame"></iframe>
+                    }
+                    else
+                    {
+                        <div class="pdf-empty">تعذّر تحميل ملف PDF القديم لهذا المنتج.</div>
+                    }
+                }
+                else
+                {
+                    <div class="pdf-empty">لا يوجد ملف PDF لهذا المنتج.</div>
+                }
+            </section>
+        }
+    </div>
+}
+
+<style>
+    .jop-page { padding: 1rem; max-width: 1500px; margin: 0 auto; }
+    .jop-loading { min-height: 60vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    .jop-actions { display:flex; gap:.75rem; justify-content:flex-start; margin-bottom:1rem; }
+    .jop-header { position:relative; overflow:hidden; border-radius:20px; margin-bottom:1rem; }
+    .jop-header-bg { position:absolute; inset:0; background:linear-gradient(135deg,#0f172a 0%, #1e3a8a 55%, #3b82f6 100%); }
+    .jop-header-content { position:relative; z-index:1; color:#fff; padding:1.5rem 1.75rem; }
+    .jop-badge { display:inline-block; margin-bottom:.5rem; padding:.28rem .7rem; border-radius:999px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); font-size:.72rem; font-weight:800; }
+    .jop-header h1 { margin:0; font-size:1.6rem; font-weight:900; }
+    .jop-header p { margin:.35rem 0 0; color:rgba(255,255,255,.85); }
+    .jop-nav { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1rem; }
+    .jop-nav-link { display:inline-flex; align-items:center; padding:.45rem .75rem; border-radius:999px; background:#fff; border:1px solid #e2e8f0; color:#1e293b; text-decoration:none; font-size:.8rem; font-weight:700; }
+    .jop-nav-link:hover { background:#eff6ff; color:#2563eb; }
+    .pdf-section { background:#fff; border:1px solid #e2e8f0; border-radius:18px; overflow:hidden; margin-bottom:1rem; box-shadow:0 2px 12px rgba(0,0,0,.04); }
+    .pdf-section-head { display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; padding:1rem 1.1rem; border-bottom:1px solid #e2e8f0; background:#f8fafc; }
+    .pdf-section-head h3 { margin:0; font-size:1rem; font-weight:800; color:#1e293b; }
+    .pdf-section-head p { margin:.2rem 0 0; color:#64748b; font-size:.78rem; }
+    .pdf-frame { width:100%; height:85vh; border:0; background:#fff; }
+    .pdf-empty { min-height:220px; display:flex; align-items:center; justify-content:center; color:#94a3b8; font-weight:700; }
+    @@media print {
+        .no-print { display:none !important; }
+        .jop-page { padding:0; }
+        .pdf-frame { height:90vh; }
+        .pdf-section { break-inside: avoid; }
+    }
+</style>
+
+@code {
+    [Parameter] public int PartyId { get; set; }
+    [SupplyParameterFromQuery(Name = "ids")] public string? Ids { get; set; }
+
+    private bool _isLoading = true;
+    private bool _canView;
+    private Party? _party;
+    private List<JobOrderPdfVm> _products = new();
+    private Dictionary<int, string> _oldPdfUrls = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _canView = user.IsInRole(SystemRoles.Admin)
+                   || user.IsInRole(SystemRoles.SalesManager)
+                   || user.IsInRole(SystemRoles.Sales)
+                   || user.IsInRole(SystemRoles.AccountManager)
+                   || user.IsInRole(SystemRoles.HrManager)
+                   || user.IsInRole("factory");
+
+        if (!_canView)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        _party = await Db.Parties.AsNoTracking().FirstOrDefaultAsync(p => p.PartyId == PartyId);
+        if (_party != null)
+            await LoadProductsAsync();
+
+        _isLoading = false;
+    }
+
+    private async Task LoadProductsAsync()
+    {
+        var selectedIds = ParseIds();
+        var query = Db.Products.AsNoTracking().Where(p => p.Customer == PartyId);
+        if (selectedIds.Any())
+            query = query.Where(p => selectedIds.Contains(p.ProductId));
+
+        _products = await query
+            .Where(p => !string.IsNullOrWhiteSpace(p.PdfPath) || p.Pdffile != null)
+            .OrderByDescending(p => p.ProductId)
+            .Select(p => new JobOrderPdfVm
+            {
+                ProductId = p.ProductId,
+                ProductName = p.ProductName,
+                PricingType = p.PricingType,
+                PdfPath = p.PdfPath,
+                HasOldPdf = p.Pdffile != null
+            })
+            .ToListAsync();
+
+        var oldPdfProducts = _products.Where(p => string.IsNullOrWhiteSpace(p.PdfPath) && p.HasOldPdf).Select(p => p.ProductId).ToList();
+        foreach (var productId in oldPdfProducts)
+        {
+            var fileBytes = await Db.Products.AsNoTracking()
+                .Where(p => p.ProductId == productId)
+                .Select(p => p.Pdffile)
+                .FirstOrDefaultAsync();
+
+            if (fileBytes?.Length > 0)
+                _oldPdfUrls[productId] = $"data:application/pdf;base64,{Convert.ToBase64String(fileBytes)}";
+        }
+    }
+
+    private HashSet<int> ParseIds()
+    {
+        return string.IsNullOrWhiteSpace(Ids)
+            ? new HashSet<int>()
+            : Ids.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                 .Select(x => int.TryParse(x, out var id) ? id : 0)
+                 .Where(x => x > 0)
+                 .ToHashSet();
+    }
+
+    private string GetAbsolutePdfPath(string path)
+    {
+        var normalized = path.Replace("\\", "/");
+        if (!normalized.StartsWith("http") && !normalized.StartsWith("/"))
+            normalized = "/" + normalized;
+        return Navigation.ToAbsoluteUri(normalized).ToString();
+    }
+
+    private async Task OpenSinglePdfAsync(JobOrderPdfVm item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.PdfPath))
+        {
+            await JS.InvokeVoidAsync("open", GetAbsolutePdfPath(item.PdfPath), "_blank");
+            return;
+        }
+
+        if (item.HasOldPdf && _oldPdfUrls.TryGetValue(item.ProductId, out var url))
+            await JS.InvokeVoidAsync("openPdfBase64", url.Replace("data:application/pdf;base64,", ""));
+    }
+
+    private async Task PrintNow() => await JS.InvokeVoidAsync("window.print");
+    private void GoBack() => Navigation.NavigateTo($"/products/job-order/{PartyId}");
+
+    private sealed class JobOrderPdfVm
+    {
+        public int ProductId { get; set; }
+        public string ProductName { get; set; } = "";
+        public string? PricingType { get; set; }
+        public string? PdfPath { get; set; }
+        public bool HasOldPdf { get; set; }
+    }
+}

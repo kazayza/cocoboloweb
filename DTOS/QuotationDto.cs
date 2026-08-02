@@ -35,7 +35,10 @@ public class QuotationListDto
     public bool IsExpired =>
         ValidUntil.HasValue
         && ValidUntil.Value.Date < DateTime.Today
-        && Status != QuotationStatuses.Converted;
+        && Status != QuotationStatuses.Converted
+        && (string.IsNullOrWhiteSpace(Status)
+            || Status == QuotationStatuses.Draft
+            || Status == QuotationStatuses.Sent);
 
     // ✅ إصلاح: cast صريح لـ int? بدلاً من الاعتماد على الـ ternary
     public int? DaysUntilExpiry =>
@@ -91,7 +94,10 @@ public class QuotationFormDto
     public bool IsExpired =>
         ValidUntil.HasValue
         && ValidUntil.Value.Date < DateTime.Today
-        && !IsConverted;
+        && !IsConverted
+        && (string.IsNullOrWhiteSpace(Status)
+            || Status == QuotationStatuses.Draft
+            || Status == QuotationStatuses.Sent);
 
     public int? DaysUntilExpiry =>
         ValidUntil.HasValue

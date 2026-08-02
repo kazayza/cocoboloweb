@@ -1,0 +1,449 @@
+@page "/additional-charges/new"
+@page "/additional-charges/{Id:int}"
+@page "/additional-charges/{Id:int}/edit"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+@inject IAdditionalChargeService ChargeService
+@inject IInvoiceService InvoiceService
+@inject IPaymentService PaymentService
+@inject NotificationService Notify
+@inject AuthenticationStateProvider AuthState
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<PageTitle>@(IsEdit ? "تعديل الرسوم" : "إضافة رسوم جديدة")</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="acf-loading">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-3">جاري تجهيز الصفحة...</MudText>
+    </div>
+}
+else
+{
+<div class="acf-page" dir="rtl">
+    <div class="acf-header">
+        <div class="acf-header-bg"></div>
+        <div class="acf-header-content">
+            <div>
+                <div class="acf-badge">Premium Workflow</div>
+                <h1>@(IsEdit ? "تعديل الرسوم الإضافية" : "إضافة رسوم جديدة")</h1>
+                <p>
+                    @(IsEdit
+                        ? "عدّل بيانات الرسوم مع معاينة مباشرة للإيصال قبل الحفظ."
+                        : "سجّل رسوم معاينة أو دفعة مقدمة أو رسوم إضافية بشكل احترافي مع إيصال جاهز للطباعة.")
+                </p>
+            </div>
+            <div class="acf-header-actions">
+                <MudButton Variant="Variant.Outlined" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.ArrowForward" OnClick="GoBack">
+                    رجوع للقائمة
+                </MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Print" OnClick="() => SaveAsync(true)" Disabled="@_isSaving">
+                    حفظ وطباعة
+                </MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" OnClick="() => SaveAsync(false)" Disabled="@_isSaving">
+                    @(IsEdit ? "حفظ التعديل" : "حفظ الرسوم")
+                </MudButton>
+            </div>
+        </div>
+    </div>
+
+    <div class="acf-grid">
+        <div class="acf-main-card">
+            <div class="acf-section-head">
+                <div>
+                    <h3>بيانات العملية</h3>
+                    <p>أدخل بيانات الرسوم وحدد الخزينة المناسبة قبل الحفظ</p>
+                </div>
+            </div>
+
+            @if (IsEdit)
+            {
+                <div class="acf-party-static">
+                    <div class="acf-party-avatar">@GetPartyInitials()</div>
+                    <div>
+                        <div class="acf-party-name">@(_existingReceipt?.PartyName ?? "غير محدد")</div>
+                        <div class="acf-party-sub">@(_existingReceipt?.PartyPhone ?? "—")</div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="acf-field">
+                    <label>العميل *</label>
+                    <MudAutocomplete T="PartyLookupDto"
+                                     Value="_selectedParty"
+                                     ValueChanged="OnPartySelected"
+                                     SearchFunc="SearchParties"
+                                     ToStringFunc="@(p => p == null ? string.Empty : $"{p.PartyName} - {p.Phone}")"
+                                     Placeholder="ابحث عن العميل بالاسم أو الهاتف"
+                                     Variant="Variant.Outlined"
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.Search"
+                                     ResetValueOnEmptyText="true"
+                                     Class="acf-input" />
+                </div>
+            }
+
+            <div class="acf-field">
+                <label>نوع الرسوم *</label>
+                <div class="acf-type-grid">
+                    @foreach (var item in _chargeTypeCards)
+                    {
+                        <button type="button"
+                                class="acf-type-card @(_form.ChargeType == item.Key ? "active" : string.Empty)"
+                                @onclick="() => SelectChargeType(item.Key)">
+                            <span class="acf-type-icon">@item.Icon</span>
+                            <span class="acf-type-title">@item.Title</span>
+                            <small>@item.SubTitle</small>
+                        </button>
+                    }
+                </div>
+            </div>
+
+            <div class="acf-form-grid">
+                <div class="acf-field">
+                    <label>المبلغ *</label>
+                    <MudNumericField T="decimal" @bind-Value="_form.ChargeAmount"
+                                     Variant="Variant.Outlined"
+                                     Min="0.01m" Step="100m"
+                                     Immediate="true"
+                                     Adornment="Adornment.End"
+                                     AdornmentText="ج.م"
+                                     Class="acf-input" />
+                </div>
+
+                <div class="acf-field">
+                    <label>الخزينة *</label>
+                    <MudSelect T="int?" @bind-Value="_form.CashBoxId" Variant="Variant.Outlined" Class="acf-input">
+                        @foreach (var box in _cashBoxes)
+                        {
+                            <MudSelectItem T="int?" Value="@((int?)box.CashBoxId)">@box.CashBoxName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </div>
+            </div>
+
+            <div class="acf-field">
+                <label>الوصف</label>
+                <MudTextField T="string" @bind-Value="_form.ChargeDescription"
+                              Variant="Variant.Outlined"
+                              Placeholder="مثال: معاينة شقة التجمع الخامس"
+                              Class="acf-input" />
+            </div>
+
+            <div class="acf-field">
+                <label>ملاحظات</label>
+                <MudTextField T="string" @bind-Value="_form.Notes"
+                              Variant="Variant.Outlined"
+                              Lines="3"
+                              Placeholder="أي تعليمات أو تفاصيل إضافية"
+                              Class="acf-input" />
+            </div>
+
+            <div class="acf-footer-actions">
+                <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="GoBack">إلغاء</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Print" OnClick="() => SaveAsync(true)" Disabled="@_isSaving">
+                    حفظ وطباعة
+                </MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" OnClick="() => SaveAsync(false)" Disabled="@_isSaving">
+                    @if (_isSaving)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="ms-2" />
+                    }
+                    @(IsEdit ? "حفظ التعديل" : "حفظ الرسوم")
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="acf-side-stack">
+            <div class="acf-side-card acf-summary-card">
+                <div class="acf-section-head compact">
+                    <div>
+                        <h3>ملخص سريع</h3>
+                        <p>معاينة فورية قبل الحفظ</p>
+                    </div>
+                </div>
+
+                <div class="acf-summary-row">
+                    <span>العميل</span>
+                    <strong>@CurrentPartyName</strong>
+                </div>
+                <div class="acf-summary-row">
+                    <span>نوع الرسوم</span>
+                    <strong>@CurrentChargeTypeName</strong>
+                </div>
+                <div class="acf-summary-row">
+                    <span>الخزينة</span>
+                    <strong>@CurrentCashBoxName</strong>
+                </div>
+                <div class="acf-summary-amount">
+                    <span>المبلغ</span>
+                    <strong>@FormatMoney(_form.ChargeAmount)</strong>
+                    <small>جنيه مصري</small>
+                </div>
+                <div class="acf-words">
+                    @GetAmountInWords()
+                </div>
+            </div>
+
+            <div class="acf-side-card acf-preview-card">
+                <div class="acf-section-head compact">
+                    <div>
+                        <h3>شكل الإيصال</h3>
+                        <p>المعاينة النصية للسند قبل الطباعة</p>
+                    </div>
+                </div>
+
+                <div class="acf-preview-receipt">
+                    <div class="preview-title">@GetReceiptTitlePreview()</div>
+                    <div class="preview-number">@(IsEdit ? $"سيصدر على السند الحالي #{Id}" : "سيتم توليد رقم السند تلقائيًا")</div>
+                    <div class="preview-line"><span>العميل:</span><strong>@CurrentPartyName</strong></div>
+                    <div class="preview-line"><span>الفئة:</span><strong>@CurrentChargeTypeName</strong></div>
+                    <div class="preview-line"><span>المبلغ:</span><strong>@FormatMoney(_form.ChargeAmount) ج</strong></div>
+                    <div class="preview-line"><span>الخزينة:</span><strong>@CurrentCashBoxName</strong></div>
+                    @if (!string.IsNullOrWhiteSpace(_form.ChargeDescription))
+                    {
+                        <div class="preview-note">@_form.ChargeDescription</div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+}
+
+<style>
+    .acf-page { padding: 0 1.25rem 2rem; max-width: 1450px; margin: 0 auto; }
+    .acf-loading { min-height: 60vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    .acf-header { position: relative; overflow: hidden; border-radius: 24px; margin-bottom: 1rem; box-shadow: 0 10px 35px rgba(15,23,42,.10); }
+    .acf-header-bg { position:absolute; inset:0; background: linear-gradient(135deg,#0f172a 0%, #1e3a8a 55%, #3b82f6 100%); }
+    .acf-header-content { position:relative; z-index:1; color:#fff; padding:1.75rem 2rem; display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; flex-wrap:wrap; }
+    .acf-badge { display:inline-block; padding:.3rem .7rem; border-radius:999px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); font-size:.72rem; font-weight:800; margin-bottom:.65rem; }
+    .acf-header h1 { margin:0; font-size:1.7rem; font-weight:900; }
+    .acf-header p { margin:.35rem 0 0; color:rgba(255,255,255,.82); font-size:.9rem; }
+    .acf-header-actions { display:flex; gap:.55rem; flex-wrap:wrap; }
+
+    .acf-grid { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(320px,.9fr); gap:1rem; align-items:start; }
+    .acf-main-card, .acf-side-card { background: var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:20px; box-shadow: 0 4px 20px rgba(15,23,42,.05); }
+    .acf-main-card { padding:1.25rem; }
+    .acf-side-stack { display:grid; gap:1rem; }
+    .acf-side-card { padding:1rem; }
+    .acf-section-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; }
+    .acf-section-head h3 { margin:0; font-size:1rem; font-weight:800; color:var(--mud-palette-text-primary); }
+    .acf-section-head p { margin:.2rem 0 0; font-size:.78rem; color:var(--mud-palette-text-secondary); }
+    .acf-section-head.compact { margin-bottom:.8rem; }
+
+    .acf-party-static { display:flex; align-items:center; gap:.8rem; padding:.9rem 1rem; border-radius:16px; background:#f8fafc; border:1px solid var(--mud-palette-divider); margin-bottom:1rem; }
+    .acf-party-avatar { width:44px; height:44px; border-radius:14px; background:linear-gradient(135deg,#d4a853,#b8912a); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:900; }
+    .acf-party-name { font-weight:800; color:var(--mud-palette-text-primary); }
+    .acf-party-sub { font-size:.78rem; color:var(--mud-palette-text-secondary); }
+
+    .acf-field { display:flex; flex-direction:column; gap:.42rem; margin-bottom:1rem; }
+    .acf-field label { font-size:.8rem; font-weight:800; color:var(--mud-palette-text-secondary); }
+    .acf-input .mud-input-outlined-border { border-radius:14px !important; }
+    .acf-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:.85rem; }
+
+    .acf-type-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.75rem; }
+    .acf-type-card { border:1px solid var(--mud-palette-divider); background:#fff; border-radius:16px; padding:.95rem; display:flex; flex-direction:column; align-items:flex-start; gap:.22rem; cursor:pointer; transition:all .22s ease; text-align:right; font-family:inherit; }
+    .acf-type-card:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(15,23,42,.06); border-color:#cbd5e1; }
+    .acf-type-card.active { border-color:#d4a853; background:#fffaf0; box-shadow:0 8px 22px rgba(212,168,83,.12); }
+    .acf-type-icon { font-size:1.25rem; }
+    .acf-type-title { font-weight:800; color:var(--mud-palette-text-primary); font-size:.9rem; }
+    .acf-type-card small { color:var(--mud-palette-text-secondary); font-size:.72rem; }
+
+    .acf-footer-actions { display:flex; justify-content:flex-end; gap:.6rem; padding-top:.3rem; }
+
+    .acf-summary-row { display:flex; justify-content:space-between; gap:.75rem; padding:.5rem 0; border-bottom:1px dashed var(--mud-palette-divider); font-size:.84rem; }
+    .acf-summary-row strong { color:var(--mud-palette-text-primary); }
+    .acf-summary-amount { margin-top:.9rem; border-radius:18px; padding:1rem; background:linear-gradient(135deg,#fff7e6,#fff); border:1px solid rgba(212,168,83,.25); text-align:center; }
+    .acf-summary-amount span { display:block; color:var(--mud-palette-text-secondary); font-size:.78rem; font-weight:700; }
+    .acf-summary-amount strong { display:block; color:#b8912a; font-size:1.7rem; font-weight:900; margin-top:.2rem; }
+    .acf-summary-amount small { color:#7c6a3a; font-size:.72rem; }
+    .acf-words { margin-top:.8rem; font-size:.82rem; line-height:1.8; color:var(--mud-palette-text-primary); background:#f8fafc; border-radius:14px; padding:.8rem .9rem; }
+
+    .acf-preview-receipt { border-radius:18px; padding:1rem; background:linear-gradient(180deg,#0f172a,#1e293b); color:#fff; }
+    .preview-title { font-size:1rem; font-weight:900; margin-bottom:.4rem; color:#f8d67a; }
+    .preview-number { font-size:.74rem; color:rgba(255,255,255,.65); margin-bottom:.8rem; }
+    .preview-line { display:flex; justify-content:space-between; gap:.75rem; padding:.35rem 0; border-bottom:1px solid rgba(255,255,255,.08); font-size:.82rem; }
+    .preview-line span { color:rgba(255,255,255,.7); }
+    .preview-note { margin-top:.8rem; background:rgba(255,255,255,.08); border-radius:12px; padding:.7rem .8rem; font-size:.8rem; color:#e2e8f0; }
+
+    @@media (max-width: 1100px) {
+        .acf-grid { grid-template-columns:1fr; }
+    }
+    @@media (max-width: 768px) {
+        .acf-page { padding:0 .75rem 1.5rem; }
+        .acf-header-content { padding:1.25rem; }
+        .acf-form-grid, .acf-type-grid { grid-template-columns:1fr; }
+        .acf-footer-actions { flex-wrap:wrap; justify-content:stretch; }
+        .acf-footer-actions > * { flex:1 1 100%; }
+    }
+</style>
+
+@code {
+    [Parameter] public int Id { get; set; }
+    [SupplyParameterFromQuery(Name = "type")] public string? QueryType { get; set; }
+
+    private bool _isLoading = true;
+    private bool _isSaving;
+    private string _currentUserName = "System";
+    private AdditionalChargeFormDto _form = new() { ChargeType = ChargeTypes.Inspection, Status = ChargeStatuses.Paid };
+    private AdditionalChargeReceiptDto? _existingReceipt;
+    private PartyLookupDto? _selectedParty;
+    private List<Models.CashBox> _cashBoxes = new();
+
+    private bool IsEdit => Id > 0;
+    private string CurrentPartyName => IsEdit ? (_existingReceipt?.PartyName ?? "غير محدد") : (_selectedParty?.PartyName ?? "اختر العميل");
+    private string CurrentChargeTypeName => ChargeTypes.All.TryGetValue(_form.ChargeType ?? "", out var name)
+        ? name
+        : ResolveAdvanceTypeName(_form.ChargeDescription, _form.ChargeType);
+    private string CurrentCashBoxName => _cashBoxes.FirstOrDefault(x => x.CashBoxId == _form.CashBoxId)?.CashBoxName ?? "الخزينة الافتراضية";
+
+    private readonly List<ChargeTypeCard> _chargeTypeCards = new()
+    {
+        new(ChargeTypes.Inspection, "🔎", "رسوم معاينة", "للزيارات والمعاينات الأولية"),
+        new(ChargeTypes.Shipping, "🚚", "رسوم شحن", "للشحن والتوصيل والنقل"),
+        new(ChargeTypes.Installation, "🛠️", "رسوم تركيب", "لأعمال التركيب والتنفيذ"),
+        new(ChargeTypes.Other, "💳", "دفعة مقدمة / أخرى", "عربون أو دفعة مقدمة أو رسوم متنوعة")
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        _currentUserName = auth.User.Identity?.Name ?? "System";
+        _cashBoxes = await InvoiceService.GetCashBoxesAsync();
+        _form.CashBoxId = _cashBoxes.FirstOrDefault()?.CashBoxId;
+
+        if (!IsEdit && !string.IsNullOrWhiteSpace(QueryType))
+            _form.ChargeType = QueryType;
+
+        if (IsEdit)
+        {
+            _form = await ChargeService.GetChargeForEditAsync(Id) ?? new AdditionalChargeFormDto();
+            _existingReceipt = await ChargeService.GetChargeReceiptAsync(Id);
+            _form.CashBoxId ??= _cashBoxes.FirstOrDefault()?.CashBoxId;
+        }
+
+        _isLoading = false;
+    }
+
+    private async Task<IEnumerable<PartyLookupDto>> SearchParties(string value, CancellationToken token)
+    {
+        return await InvoiceService.SearchPartiesAsync(value, 15);
+    }
+
+    private void OnPartySelected(PartyLookupDto? party)
+    {
+        _selectedParty = party;
+        _form.PartyId = party?.PartyId;
+    }
+
+    private void SelectChargeType(string type)
+    {
+        _form.ChargeType = type;
+        if (string.IsNullOrWhiteSpace(_form.ChargeDescription))
+            _form.ChargeDescription = CurrentChargeTypeName;
+    }
+
+    private async Task SaveAsync(bool printAfterSave)
+    {
+        if (!IsEdit && (_selectedParty == null || !_form.PartyId.HasValue || _form.PartyId <= 0))
+        {
+            Snackbar.Add("يرجى اختيار العميل أولاً", Severity.Warning);
+            return;
+        }
+
+        if (_form.ChargeAmount <= 0)
+        {
+            Snackbar.Add("يرجى إدخال مبلغ صحيح", Severity.Warning);
+            return;
+        }
+
+        _isSaving = true;
+
+        bool ok;
+        string message;
+        int? chargeId = null;
+
+        if (IsEdit)
+        {
+            (ok, message) = await ChargeService.UpdateChargeAsync(Id, _form, _currentUserName);
+            chargeId = Id;
+        }
+        else
+        {
+            (ok, message, chargeId) = await ChargeService.CreateChargeAsync(_form, _currentUserName);
+        }
+
+        if (ok)
+        {
+            var actionWord = IsEdit ? "تعديل" : "إضافة";
+            await SendNotification($"{actionWord} رسوم {_form.ChargeAmount:N2} ج - {CurrentChargeTypeName} - {CurrentPartyName} بواسطة {_currentUserName}", chargeId ?? Id);
+            Snackbar.Add(message, Severity.Success);
+
+            if (printAfterSave && chargeId.HasValue)
+                await JS.InvokeVoidAsync("open", $"/additional-charges/{chargeId.Value}/receipt", "_blank");
+
+            Navigation.NavigateTo("/additional-charges");
+            return;
+        }
+
+        Snackbar.Add(message, Severity.Error);
+        _isSaving = false;
+    }
+
+    private async Task SendNotification(string msg, int relatedId)
+    {
+        try
+        {
+            await Notify.NotifyRoleAsync("💰 رسوم إضافية", msg, SystemRoles.Admin, _currentUserName, "additional-charges", "AdditionalCharges", relatedId);
+            await Notify.NotifyRoleAsync("💰 رسوم إضافية", msg, SystemRoles.AccountManager, _currentUserName, "additional-charges", "AdditionalCharges", relatedId);
+            await Notify.NotifyRoleAsync("💰 رسوم إضافية", msg, SystemRoles.Account, _currentUserName, "additional-charges", "AdditionalCharges", relatedId);
+        }
+        catch { }
+    }
+
+    private string GetAmountInWords()
+        => _form.ChargeAmount <= 0 ? "—" : PaymentService.ConvertNumberToArabicWords(_form.ChargeAmount);
+
+    private string GetReceiptTitlePreview()
+    {
+        if (_form.ChargeType == ChargeTypes.Inspection || (_form.ChargeDescription?.Contains("معاينة") ?? false))
+            return "إيصال استلام رسوم معاينة";
+        if ((_form.ChargeDescription?.Contains("عربون") ?? false))
+            return "إيصال استلام عربون";
+        if ((_form.ChargeDescription?.Contains("دفعة") ?? false) || (_form.ChargeDescription?.Contains("مقدمة") ?? false) || _form.ChargeType == ChargeTypes.Other)
+            return "إيصال استلام دفعة مقدمة";
+        return "إيصال استلام رسوم إضافية";
+    }
+
+    private string ResolveAdvanceTypeName(string? description, string? chargeType)
+    {
+        if (chargeType == ChargeTypes.Inspection || (description?.Contains("معاينة") ?? false))
+            return "رسوم معاينة";
+        if (description?.Contains("عربون") ?? false)
+            return "عربون";
+        if ((description?.Contains("دفعة") ?? false) || (description?.Contains("مقدمة") ?? false) || chargeType == ChargeTypes.Other)
+            return "دفعة مقدمة";
+        return "رسوم إضافية";
+    }
+
+    private string GetPartyInitials()
+    {
+        var name = _existingReceipt?.PartyName;
+        if (string.IsNullOrWhiteSpace(name)) return "--";
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x => x[0]);
+        return string.Concat(parts);
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/additional-charges");
+    private static string FormatMoney(decimal v) => v.ToString("N2");
+
+    private sealed record ChargeTypeCard(string Key, string Icon, string Title, string SubTitle);
+}

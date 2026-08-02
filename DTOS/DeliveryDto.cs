@@ -100,11 +100,19 @@ public class DeliveryFilterDto
 {
     public DateTime? DateFrom { get; set; }
     public DateTime? DateTo { get; set; }
+    public string DateFilterType { get; set; } = DeliveryDateFilterTypes.DueDate;
     public string? PartyName { get; set; }
     public string? DeliveryStatus { get; set; }
     public int? SalesEmployeeId { get; set; }
     public int? PageNumber { get; set; } = 1;
     public int? PageSize { get; set; } = 20;
+}
+
+public static class DeliveryDateFilterTypes
+{
+    public const string InvoiceDate = "invoice";
+    public const string DueDate = "due";
+    public const string DeliveredDate = "delivered";
 }
 
 #endregion

@@ -19,10 +19,10 @@
             <MudIcon Icon="@Icons.Material.Filled.Notifications" Class="page-icon" />
             <div>
                 <h1>الإشعارات</h1>
-                <p>@_notifications.Count إشعار - @_notifications.Count(n => !n.IsRead) جديد</p>
+                <p>عرض @_notifications.Count من أصل @_totalMatchingCount إشعار</p>
             </div>
         </div>
-        @if (_notifications.Any(n => !n.IsRead))
+        @if (_unreadCount > 0)
         {
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
                        StartIcon="@Icons.Material.Filled.DoneAll"
@@ -30,15 +30,29 @@
         }
     </div>
 
+    <div class="search-bar-wrap">
+        <MudTextField T="string"
+                      Value="_searchText"
+                      ValueChanged="OnSearchChanged"
+                      Placeholder="ابحث بعنوان الإشعار أو محتواه أو اسم المُرسل..."
+                      Variant="Variant.Outlined"
+                      Immediate="true"
+                      DebounceInterval="350"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true"
+                      Class="notif-search-input" />
+    </div>
+
     <div class="filter-tabs">
         <button class="tab @(_filter == "all" ? "active" : "")" @onclick='() => SetFilter("all")'>
-            الكل (@_notifications.Count)
+            الكل (@_allCount)
         </button>
         <button class="tab @(_filter == "unread" ? "active" : "")" @onclick='() => SetFilter("unread")'>
-            غير مقروء (@_notifications.Count(n => !n.IsRead))
+            غير مقروء (@_unreadCount)
         </button>
         <button class="tab @(_filter == "read" ? "active" : "")" @onclick='() => SetFilter("read")'>
-            مقروء (@_notifications.Count(n => n.IsRead))
+            مقروء (@_readCount)
         </button>
     </div>
 
@@ -49,10 +63,10 @@
             <p>جاري التحميل...</p>
         </div>
     }
-    else if (FilteredNotifications.Any())
+    else if (_notifications.Any())
     {
         <div class="notif-list">
-            @foreach (var notif in FilteredNotifications)
+            @foreach (var notif in _notifications)
             {
                 <div class="notif-card @(!notif.IsRead ? "unread" : "")" @onclick="() => HandleClick(notif)">
                     <div class="nc-icon @(!notif.IsRead ? "active" : "")">
@@ -77,7 +91,7 @@
             }
         </div>
 
-        @if (_notifications.Count >= _limit)
+        @if (_notifications.Count < _totalMatchingCount)
         {
             <div style="text-align: center; margin: 2rem 0 1rem;">
                 <MudButton Variant="Variant.Outlined" Color="Color.Primary"
@@ -87,7 +101,7 @@
                     {
                         <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
                     }
-                    عرض المزيد من الإشعارات السابقة
+                    تحميل المزيد من الإشعارات (@(_totalMatchingCount - _notifications.Count) متبقي)
                 </MudButton>
             </div>
         }
@@ -124,6 +138,14 @@
     }
     .page-header h1 { margin: 0; font-size: 1.75rem; color: #1e293b; }
     .page-header p { margin: 0; color: #64748b; font-size: .9rem; }
+
+    .search-bar-wrap {
+        margin-bottom: 1rem;
+    }
+
+    .notif-search-input .mud-input-outlined-border {
+        border-radius: 12px !important;
+    }
 
     .filter-tabs {
         display: flex;
@@ -237,18 +259,17 @@
     private List<Notification> _notifications = new();
     private bool _isLoading = true;
     private bool _isLoadingMore = false;
-    private int _limit = 350;
+    private const int PageSize = 100;
+    private int _loadedCount = PageSize;
+    private int _totalMatchingCount;
+    private int _allCount;
+    private int _unreadCount;
+    private int _readCount;
     private string _filter = "all";
+    private string? _searchText;
     private string? _currentUserName;
     private string? _currentUserRole;
     private List<string> _userRoles = new();
-
-    private IEnumerable<Notification> FilteredNotifications => _filter switch
-    {
-        "unread" => _notifications.Where(n => !n.IsRead),
-        "read" => _notifications.Where(n => n.IsRead),
-        _ => _notifications
-    };
 
     protected override async Task OnInitializedAsync()
     {
@@ -273,19 +294,53 @@
 
     private async Task Load()
     {
-        _notifications = await NotificationService.GetLatestAsync(
-            _currentUserName ?? "", _userRoles, _limit);
+        var unreadOnly = _filter switch
+        {
+            "unread" => true,
+            "read" => false,
+            _ => (bool?)null
+        };
+
+        _notifications = await NotificationService.GetNotificationsPageAsync(
+            _currentUserName ?? "", _userRoles, _searchText, unreadOnly, 0, _loadedCount);
+
+        _totalMatchingCount = await NotificationService.GetNotificationsCountAsync(
+            _currentUserName ?? "", _userRoles, _searchText, unreadOnly);
+
+        _allCount = await NotificationService.GetNotificationsCountAsync(
+            _currentUserName ?? "", _userRoles, _searchText, null);
+        _unreadCount = await NotificationService.GetNotificationsCountAsync(
+            _currentUserName ?? "", _userRoles, _searchText, true);
+        _readCount = await NotificationService.GetNotificationsCountAsync(
+            _currentUserName ?? "", _userRoles, _searchText, false);
     }
 
     private async Task LoadMoreAsync()
     {
         _isLoadingMore = true;
-        _limit += 300;
+        _loadedCount += PageSize;
         await Load();
         _isLoadingMore = false;
     }
 
-    private void SetFilter(string f) => _filter = f;
+    private async Task SetFilter(string f)
+    {
+        _filter = f;
+        _loadedCount = PageSize;
+        _isLoading = true;
+        await Load();
+        _isLoading = false;
+    }
+
+    private async Task OnSearchChanged(string? value)
+    {
+        _searchText = value;
+        _loadedCount = PageSize;
+        _isLoading = true;
+        await Load();
+        _isLoading = false;
+        await InvokeAsync(StateHasChanged);
+    }
 
     private async Task HandleClick(Notification notif)
     {
@@ -305,10 +360,7 @@
     private async Task MarkAllAsRead()
     {
         await NotificationService.MarkAllAsReadForUserAsync(_currentUserName ?? "", _userRoles);
-        foreach (var n in _notifications)
-        {
-            n.IsRead = true;
-        }
+        await Load();
         Snackbar.Add("تم تعليم جميع الإشعارات كمقروءة", Severity.Success);
     }
     private static string? GetNotificationUrl(Notification notif)
@@ -324,6 +376,20 @@
     if (string.Equals(notif.RelatedTable, "PayrollRuns", StringComparison.OrdinalIgnoreCase) && notif.RelatedId.HasValue)
         return $"/hr/payroll/run/{notif.RelatedId.Value}";
 
+    if (string.Equals(notif.RelatedTable, "AdditionalCharges", StringComparison.OrdinalIgnoreCase) && notif.RelatedId.HasValue)
+        return $"/additional-charges/{notif.RelatedId.Value}/edit";
+
+    if (string.Equals(notif.RelatedTable, "Payments", StringComparison.OrdinalIgnoreCase))
+    {
+        if ((notif.Title?.Contains("إلغاء") ?? false) || (notif.Message?.Contains("إلغاء") ?? false))
+            return "/payments";
+
+        if (notif.RelatedId.HasValue)
+            return $"/payments/{notif.RelatedId.Value}/receipt";
+
+        return "/payments";
+    }
+
     if (string.Equals(notif.RelatedTable, "Payroll", StringComparison.OrdinalIgnoreCase))
     {
         if (string.Equals(notif.FormName, "frm_PayrollPayment", StringComparison.OrdinalIgnoreCase))
@@ -337,6 +403,17 @@
         return null;
 
     var form = notif.FormName.Trim().TrimStart('/');
+
+    if (string.Equals(form, "payments", StringComparison.OrdinalIgnoreCase))
+    {
+        if ((notif.Title?.Contains("إلغاء") ?? false) || (notif.Message?.Contains("إلغاء") ?? false))
+            return "/payments";
+
+        if (notif.RelatedId.HasValue)
+            return $"/payments/{notif.RelatedId.Value}/receipt";
+
+        return "/payments";
+    }
 
     if (notif.RelatedId.HasValue)
         return $"/{form}/{notif.RelatedId.Value}";

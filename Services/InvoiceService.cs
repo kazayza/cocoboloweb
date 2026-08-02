@@ -1272,21 +1272,42 @@ public class InvoiceService : IInvoiceService
     {
         if (amount <= 0) return (false, "المبلغ يجب أن يكون أكبر من صفر.", null);
 
-        var partyExists = await _db.Parties.AnyAsync(p => p.PartyId == partyId);
-        if (!partyExists) return (false, "العميل غير موجود.", null);
+        var party = await _db.Parties.AsNoTracking().FirstOrDefaultAsync(p => p.PartyId == partyId);
+        if (party == null) return (false, "العميل غير موجود.", null);
+
+        var chargeType = description == AdvanceChargeTypes.Inspection
+            ? ChargeTypes.Inspection
+            : ChargeTypes.Other;
 
         var charge = new AdditionalCharge
         {
             PartyId = partyId,
             TransactionId = null,
+            ChargeType = chargeType,
             ChargeDescription = description,
             ChargeAmount = amount,
+            Status = ChargeStatuses.Paid,
             Notes = notes,
             CreatedBy = currentUserName,
             CreatedAt = DateTime.Now
         };
 
         _db.AdditionalCharges.Add(charge);
+        await _db.SaveChangesAsync();
+
+        var cashBoxId = await GetDefaultCashBoxIdAsync();
+        _db.CashboxTransactions.Add(new CashboxTransaction
+        {
+            CashBoxId = cashBoxId,
+            ReferenceId = charge.ChargeId,
+            ReferenceType = "Charge",
+            TransactionType = "قبض",
+            Amount = amount,
+            TransactionDate = DateTime.Now,
+            Notes = $"تحصيل {amount:N2} ج - {description} - {party.PartyName}",
+            CreatedBy = currentUserName,
+            CreatedAt = DateTime.Now
+        });
         await _db.SaveChangesAsync();
 
         await _audit.LogAsync("AdditionalCharges", "Insert",
@@ -1315,6 +1336,12 @@ public class InvoiceService : IInvoiceService
     // ============================================================
     //  Helpers
     // ============================================================
+    private async Task<int> GetDefaultCashBoxIdAsync()
+    {
+        var cashBox = await _db.CashBoxes.AsNoTracking().FirstOrDefaultAsync();
+        return cashBox?.CashBoxId ?? 1;
+    }
+
     private async Task SendInvoiceNotificationsAsync(
         Transaction transaction, string actor, string action)
     {

@@ -1,0 +1,590 @@
+@page "/customers/{PartyId:int}/job-order"
+@page "/products/job-order/{PartyId:int}"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<PageTitle>ملف تشغيل العميل</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="cjo-loading">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل ملف تشغيل العميل...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error">ليس لديك صلاحية الوصول إلى ملف تشغيل العميل.</MudAlert>
+}
+else if (_party == null)
+{
+    <MudAlert Severity="Severity.Warning">العميل غير موجود.</MudAlert>
+}
+else
+{
+    <div class="cjo-page" dir="rtl">
+        <div class="cjo-header">
+            <div class="cjo-header-bg"></div>
+            <div class="cjo-header-content">
+                <div>
+                    <div class="cjo-badge">Customer Job Order</div>
+                    <h1>ملف تشغيل العميل</h1>
+                    <p>@_party.PartyName — @(_party.Phone ?? "بدون هاتف")</p>
+                </div>
+                <div class="cjo-header-actions">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                               StartIcon="@Icons.Material.Filled.ArrowForward"
+                               OnClick="GoBackToProducts">
+                        رجوع للمنتجات
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Info"
+                               StartIcon="@Icons.Material.Filled.Visibility"
+                               Disabled="@(!_selectedProductIds.Any())"
+                               OnClick="OpenPreviewPacketAsync">
+                        معاينة الملف الموحد
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Print"
+                               Disabled="@(!_selectedProductIds.Any())"
+                               OnClick="OpenPrintPacketAsync">
+                        طباعة الملف الموحد
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+
+        <div class="cjo-stats-row">
+            <div class="cjo-stat-card">
+                <span class="cjo-stat-label">إجمالي المنتجات</span>
+                <strong class="cjo-stat-value">@_allProducts.Count</strong>
+            </div>
+            <div class="cjo-stat-card">
+                <span class="cjo-stat-label">لها PDF</span>
+                <strong class="cjo-stat-value">@_allProducts.Count(x => x.HasPdf)</strong>
+            </div>
+            <div class="cjo-stat-card">
+                <span class="cjo-stat-label">المحددة للطباعة</span>
+                <strong class="cjo-stat-value">@_selectedProductIds.Count</strong>
+            </div>
+        </div>
+
+        <div class="cjo-toolbar">
+            <div class="cjo-toolbar-row">
+                <MudTextField T="string"
+                              Value="_searchText"
+                              ValueChanged="OnSearchChanged"
+                              Placeholder="ابحث باسم المنتج أو بالكود..."
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Class="cjo-search" />
+
+                <MudSelect T="string"
+                           Value="_pdfFilter"
+                           ValueChanged="OnPdfFilterChanged"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Class="cjo-filter">
+                    <MudSelectItem T="string" Value="@("all")">كل المنتجات</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("withpdf")">التي لها PDF فقط</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("withoutpdf")">بدون PDF</MudSelectItem>
+                </MudSelect>
+
+                <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="SelectAllVisible">تحديد الكل</MudButton>
+                <MudButton Variant="Variant.Text" Color="Color.Success" OnClick="SelectAllWithPdf">تحديد المنتجات التي لها PDF</MudButton>
+                <MudButton Variant="Variant.Text" Color="Color.Warning" OnClick="SelectIncompleteProducts">تحديد المنتجات غير المكتملة</MudButton>
+                <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="ClearSelection">إلغاء التحديد</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Info"
+                           Disabled="@(!_selectedProductIds.Any(x => GetProductById(x)?.HasPdf == true))"
+                           OnClick="OpenSelectedPdfsViewerAsync">
+                    عرض PDFs المختارة
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error"
+                           Disabled="@(!_selectedProductIds.Any(x => GetProductById(x)?.HasPdf == true))"
+                           OnClick="OpenSelectedPdfsAsync">
+                    فتح PDFs المحددة
+                </MudButton>
+            </div>
+        </div>
+
+        <MudPaper Class="cjo-table-wrap" Elevation="0">
+            @if (!_filteredProducts.Any())
+            {
+                <div class="cjo-empty">
+                    <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Large" />
+                    <h3>لا توجد منتجات لهذا العميل</h3>
+                    <p>أو لا توجد نتائج مطابقة للفلاتر الحالية.</p>
+                </div>
+            }
+            else
+            {
+                <MudTable Items="_filteredProducts" Hover="true" Breakpoint="Breakpoint.Sm" Elevation="0" Class="cjo-table">
+                    <HeaderContent>
+                        <MudTh Style="width:55px;">
+                            <MudCheckBox T="bool" Value="@IsAllVisibleSelected" ValueChanged="ToggleAllVisible" Dense="true" />
+                        </MudTh>
+                        <MudTh>الصورة</MudTh>
+                        <MudTh>المنتج</MudTh>
+                        <MudTh>مواصفات التصنيع</MudTh>
+                        <MudTh>الباقة</MudTh>
+                        <MudTh>الحالة</MudTh>
+                        <MudTh>مدة التصنيع</MudTh>
+                        <MudTh>PDF</MudTh>
+                        <MudTh>إجراءات</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            <MudCheckBox T="bool"
+                                         Value="@_selectedProductIds.Contains(context.ProductId)"
+                                         ValueChanged="@(v => ToggleProductSelection(context.ProductId, v))"
+                                         Dense="true" />
+                        </MudTd>
+                        <MudTd>
+                            <div class="cjo-thumb-box">
+                                <img src="/api/product-images/@context.ProductId"
+                                     alt="@context.ProductName"
+                                     class="cjo-thumb"
+                                     onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
+                                <div class="cjo-thumb-placeholder" style="display:none">
+                                    <MudIcon Icon="@Icons.Material.Filled.Image" />
+                                </div>
+                            </div>
+                        </MudTd>
+                        <MudTd>
+                            <div class="cjo-product-cell">
+                                <strong>@context.ProductName</strong>
+                                <small>#@context.ProductId</small>
+                                @if (!string.IsNullOrWhiteSpace(context.ProductDescription))
+                                {
+                                    <span>@context.ProductDescription</span>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd>
+                            @if (!string.IsNullOrWhiteSpace(context.ManufacturingDescription))
+                            {
+                                <div class="cjo-manufacturing-cell">@context.ManufacturingDescription</div>
+                            }
+                            else
+                            {
+                                <span class="cjo-empty-cell">—</span>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <span class="cjo-bundle-badge @GetPricingTypeBadgeClass(context.PricingType)">@GetPricingTypeText(context.PricingType)</span>
+                        </MudTd>
+                        <MudTd>
+                            <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(context.PricingStatusId)" Variant="Variant.Outlined">
+                                @GetStatusText(context.PricingStatusId)
+                            </MudChip>
+                        </MudTd>
+                        <MudTd>
+                            @(context.Period.HasValue && context.Period.Value > 0 ? $"{context.Period.Value} يوم" : "—")
+                        </MudTd>
+                        <MudTd>
+                            @if (context.HasPdf)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">متوفر</MudChip>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">غير متوفر</MudChip>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <div class="cjo-actions">
+                                <MudTooltip Text="فتح المنتج">
+                                    <MudIconButton Icon="@Icons.Material.Filled.OpenInNew" Color="Color.Info" Size="Size.Small"
+                                                   OnClick="() => OpenProduct(context.ProductId)" />
+                                </MudTooltip>
+                                <MudTooltip Text="فتح PDF">
+                                    <MudIconButton Icon="@Icons.Material.Filled.PictureAsPdf" Color="Color.Error" Size="Size.Small"
+                                                   Disabled="@(!context.HasPdf)"
+                                                   OnClick="() => OpenPdfAsync(context)" />
+                                </MudTooltip>
+                            </div>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudPaper>
+    </div>
+}
+
+<style>
+    .cjo-page { padding: 0 1.25rem 2rem; max-width: 1500px; margin: 0 auto; }
+    .cjo-loading { min-height: 60vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    .cjo-header { position: relative; overflow: hidden; border-radius: 24px; margin-bottom: 1rem; }
+    .cjo-header-bg { position:absolute; inset:0; background: linear-gradient(135deg,#0f172a 0%, #1e3a8a 55%, #3b82f6 100%); }
+    .cjo-header-content { position:relative; z-index:1; display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; flex-wrap:wrap; color:#fff; padding:1.75rem 2rem; }
+    .cjo-badge { display:inline-block; margin-bottom:.5rem; padding:.28rem .7rem; border-radius:999px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); font-size:.72rem; font-weight:800; }
+    .cjo-header h1 { margin:0; font-size:1.75rem; font-weight:900; }
+    .cjo-header p { margin:.35rem 0 0; color:rgba(255,255,255,.82); }
+    .cjo-header-actions { display:flex; gap:.55rem; flex-wrap:wrap; }
+
+    .cjo-stats-row { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.75rem; margin-bottom:1rem; }
+    .cjo-stat-card { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:16px; padding:1rem 1.1rem; box-shadow:0 2px 10px rgba(0,0,0,.04); }
+    .cjo-stat-label { display:block; color:var(--mud-palette-text-secondary); font-size:.78rem; font-weight:700; }
+    .cjo-stat-value { display:block; color:var(--mud-palette-text-primary); font-size:1.4rem; font-weight:900; margin-top:.2rem; }
+
+    .cjo-toolbar { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:16px; padding:1rem 1.1rem; margin-bottom:1rem; }
+    .cjo-toolbar-row { display:flex; align-items:center; gap:.65rem; flex-wrap:wrap; }
+    .cjo-search { min-width:260px; flex:1 1 280px; }
+    .cjo-filter { min-width:190px; }
+
+    .cjo-table-wrap { border-radius:16px; overflow:hidden; border:1px solid var(--mud-palette-divider); }
+    .cjo-table .mud-table-cell { vertical-align:middle; }
+    .cjo-thumb-box { width:56px; height:56px; border-radius:10px; overflow:hidden; background:#f8fafc; border:1px solid var(--mud-palette-divider); display:flex; align-items:center; justify-content:center; }
+    .cjo-thumb { width:100%; height:100%; object-fit:cover; }
+    .cjo-thumb-placeholder { width:100%; height:100%; display:none; align-items:center; justify-content:center; color:#cbd5e1; }
+    .cjo-product-cell { display:flex; flex-direction:column; gap:.15rem; }
+    .cjo-product-cell strong { color:var(--mud-palette-text-primary); font-size:.9rem; }
+    .cjo-product-cell small { color:#667eea; font-weight:700; }
+    .cjo-product-cell span { color:var(--mud-palette-text-secondary); font-size:.78rem; }
+    .cjo-manufacturing-cell {
+        font-size: .78rem;
+        color: var(--mud-palette-text-primary);
+        line-height: 1.7;
+        max-width: 320px;
+        white-space: normal;
+    }
+    .cjo-empty-cell {
+        color: var(--mud-palette-text-disabled);
+        font-style: italic;
+    }
+    .cjo-bundle-badge { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:.25rem .7rem; font-size:.75rem; font-weight:800; }
+    .cjo-bundle-badge.cclass { background:rgba(124,58,237,.1); color:#7c3aed; }
+    .cjo-bundle-badge.premium { background:rgba(139,92,246,.1); color:#8b5cf6; }
+    .cjo-bundle-badge.elite { background:rgba(236,72,153,.1); color:#ec4899; }
+    .cjo-actions { display:flex; gap:.2rem; justify-content:center; }
+
+    .cjo-empty { min-height:280px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.5rem; color:var(--mud-palette-text-secondary); }
+
+    @@media (max-width: 960px) {
+        .cjo-page { padding: 0 .75rem 1.5rem; }
+        .cjo-header-content { padding:1.25rem; }
+        .cjo-stats-row { grid-template-columns:1fr; }
+        .cjo-toolbar-row { flex-direction:column; align-items:stretch; }
+        .cjo-search, .cjo-filter { width:100%; min-width:100%; }
+    }
+</style>
+
+@code {
+    [Parameter] public int PartyId { get; set; }
+
+    private bool _isLoading = true;
+    private bool _canView;
+    private Party? _party;
+    private List<JobOrderProductVm> _allProducts = new();
+    private List<JobOrderProductVm> _filteredProducts = new();
+    private HashSet<int> _selectedProductIds = new();
+    private string? _searchText;
+    private string _pdfFilter = "all";
+
+    private bool IsAllVisibleSelected => _filteredProducts.Any() && _filteredProducts.All(p => _selectedProductIds.Contains(p.ProductId));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _canView = user.IsInRole(SystemRoles.Admin)
+                   || user.IsInRole(SystemRoles.SalesManager)
+                   || user.IsInRole(SystemRoles.Sales)
+                   || user.IsInRole(SystemRoles.AccountManager)
+                   || user.IsInRole(SystemRoles.HrManager)
+                   || user.IsInRole("factory");
+
+        if (!_canView)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        _party = await Db.Parties.AsNoTracking().FirstOrDefaultAsync(p => p.PartyId == PartyId);
+        if (_party != null)
+            await LoadProductsAsync();
+
+        _isLoading = false;
+    }
+
+    private async Task LoadProductsAsync()
+    {
+        _allProducts = await Db.Products.AsNoTracking()
+            .Where(p => p.Customer == PartyId)
+            .OrderByDescending(p => p.ProductId)
+            .Select(p => new JobOrderProductVm
+            {
+                ProductId = p.ProductId,
+                ProductName = p.ProductName,
+                ProductDescription = p.ProductDescription,
+                ManufacturingDescription = p.ManufacturingDescription,
+                PricingType = p.PricingType,
+                PricingStatusId = p.PricingStatusId,
+                PdfPath = p.PdfPath,
+                HasOldPdf = p.Pdffile != null,
+                CreatedAt = p.CreatedAt,
+                Period = p.Period
+            })
+            .ToListAsync();
+
+        _filteredProducts = _allProducts.ToList();
+    }
+
+    private void ApplyFilter()
+    {
+        var query = _allProducts.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var s = _searchText.Trim();
+            query = query.Where(p => p.ProductId.ToString().Contains(s)
+                                  || (p.ProductName?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false)
+                                  || (p.ProductDescription?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+
+        if (_pdfFilter == "withpdf")
+            query = query.Where(p => p.HasPdf);
+        else if (_pdfFilter == "withoutpdf")
+            query = query.Where(p => !p.HasPdf);
+
+        _filteredProducts = query.ToList();
+    }
+
+    private Task OnSearchChanged(string? value)
+    {
+        _searchText = value;
+        ApplyFilter();
+        return Task.CompletedTask;
+    }
+
+    private Task OnPdfFilterChanged(string? value)
+    {
+        _pdfFilter = string.IsNullOrWhiteSpace(value) ? "all" : value;
+        ApplyFilter();
+        return Task.CompletedTask;
+    }
+
+    private void ToggleProductSelection(int productId, bool selected)
+    {
+        if (selected)
+            _selectedProductIds.Add(productId);
+        else
+            _selectedProductIds.Remove(productId);
+    }
+
+    private void ToggleAllVisible(bool selected)
+    {
+        if (selected)
+        {
+            foreach (var p in _filteredProducts)
+                _selectedProductIds.Add(p.ProductId);
+        }
+        else
+        {
+            foreach (var p in _filteredProducts)
+                _selectedProductIds.Remove(p.ProductId);
+        }
+    }
+
+    private void SelectAllVisible()
+    {
+        foreach (var p in _filteredProducts)
+            _selectedProductIds.Add(p.ProductId);
+    }
+
+    private void SelectAllWithPdf()
+    {
+        foreach (var p in _filteredProducts.Where(p => p.HasPdf))
+            _selectedProductIds.Add(p.ProductId);
+    }
+
+    private void SelectIncompleteProducts()
+    {
+        foreach (var p in _filteredProducts.Where(IsIncompleteForJobOrder))
+            _selectedProductIds.Add(p.ProductId);
+    }
+
+    private void ClearSelection() => _selectedProductIds.Clear();
+
+    private async Task OpenSelectedPdfsViewerAsync()
+    {
+        var ids = GetSelectedPdfIdsCsv();
+        if (string.IsNullOrWhiteSpace(ids))
+        {
+            Snackbar.Add("لا توجد ملفات PDF ضمن المنتجات المختارة.", Severity.Warning);
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", $"/products/job-order/{PartyId}/pdfs?ids={ids}", "_blank");
+    }
+
+    private async Task OpenSelectedPdfsAsync()
+    {
+        var selectedProducts = _allProducts.Where(p => _selectedProductIds.Contains(p.ProductId) && p.HasPdf).ToList();
+        if (!selectedProducts.Any())
+        {
+            Snackbar.Add("لا توجد ملفات PDF للمنتجات المحددة.", Severity.Warning);
+            return;
+        }
+
+        foreach (var product in selectedProducts)
+            await OpenPdfAsync(product);
+    }
+
+    private async Task OpenPdfAsync(JobOrderProductVm product)
+    {
+        if (!string.IsNullOrWhiteSpace(product.PdfPath))
+        {
+            var path = product.PdfPath.Replace("\\", "/");
+            if (!path.StartsWith("http") && !path.StartsWith("/"))
+                path = "/" + path;
+
+            await JS.InvokeVoidAsync("open", Navigation.ToAbsoluteUri(path).ToString(), "_blank");
+            return;
+        }
+
+        if (product.HasOldPdf)
+        {
+            var fileBytes = await Db.Products
+                .Where(p => p.ProductId == product.ProductId)
+                .Select(p => p.Pdffile)
+                .FirstOrDefaultAsync();
+
+            if (fileBytes?.Length > 0)
+            {
+                var base64 = Convert.ToBase64String(fileBytes);
+                await JS.InvokeVoidAsync("openPdfBase64", base64);
+            }
+        }
+    }
+
+    private async Task OpenPreviewPacketAsync()
+    {
+        var ids = GetSelectedIdsCsv();
+        if (string.IsNullOrWhiteSpace(ids))
+        {
+            Snackbar.Add("اختر منتجًا واحدًا على الأقل.", Severity.Warning);
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", $"/products/job-order/{PartyId}/print?ids={ids}", "_blank");
+    }
+
+    private async Task OpenPrintPacketAsync()
+    {
+        var ids = GetSelectedIdsCsv();
+        if (string.IsNullOrWhiteSpace(ids))
+        {
+            Snackbar.Add("اختر منتجًا واحدًا على الأقل.", Severity.Warning);
+            return;
+        }
+
+        await JS.InvokeVoidAsync("open", $"/products/job-order/{PartyId}/print?ids={ids}&autoprint=true", "_blank");
+    }
+
+    private string GetSelectedIdsCsv()
+        => string.Join(",", _selectedProductIds.OrderBy(x => x));
+
+    private string GetSelectedPdfIdsCsv()
+        => string.Join(",", _selectedProductIds
+            .Where(x => GetProductById(x)?.HasPdf == true)
+            .OrderBy(x => x));
+
+    private JobOrderProductVm? GetProductById(int id)
+        => _allProducts.FirstOrDefault(x => x.ProductId == id);
+
+    private void OpenProduct(int productId)
+        => Navigation.NavigateTo($"/products/form/{productId}");
+
+    private void GoBackToProducts()
+        => Navigation.NavigateTo("/products");
+
+    private static string GetStatusText(int? statusId) => statusId switch
+    {
+        1 => "مسودة",
+        2 => "بانتظار التسعير",
+        3 => "تم التسعير",
+        4 => "طلب تعديل سعر",
+        5 => "تمت الموافقة",
+        6 => "مرفوض",
+        7 => "طلب تعديل سعر بيع",
+        8 => "طلب تعديل تكلفة",
+        _ => "غير محدد"
+    };
+
+    private static Color GetStatusColor(int? statusId) => statusId switch
+    {
+        1 => Color.Default,
+        2 => Color.Warning,
+        3 => Color.Success,
+        4 => Color.Info,
+        5 => Color.Success,
+        6 => Color.Error,
+        7 => Color.Info,
+        8 => Color.Info,
+        _ => Color.Default
+    };
+
+    private static string NormalizePricingType(string? pricingType)
+    {
+        if (string.IsNullOrWhiteSpace(pricingType))
+            return string.Empty;
+
+        var normalized = pricingType.Trim();
+        if (string.Equals(normalized, "CClass", StringComparison.OrdinalIgnoreCase) || string.Equals(normalized, "C Class", StringComparison.OrdinalIgnoreCase))
+            return "CClass";
+        if (string.Equals(normalized, "Premium", StringComparison.OrdinalIgnoreCase))
+            return "Premium";
+        if (string.Equals(normalized, "Elite", StringComparison.OrdinalIgnoreCase))
+            return "Elite";
+        return normalized;
+    }
+
+    private static string GetPricingTypeText(string? pricingType) => NormalizePricingType(pricingType) switch
+    {
+        "CClass" => "Standard",
+        "Premium" => "Premium",
+        "Elite" => "Elite",
+        _ => pricingType ?? "-"
+    };
+
+    private static bool IsIncompleteForJobOrder(JobOrderProductVm product)
+        => !product.HasPdf
+           || !product.Period.HasValue
+           || product.Period.Value <= 0
+           || string.IsNullOrWhiteSpace(product.ManufacturingDescription);
+
+    private static string GetPricingTypeBadgeClass(string? pricingType) => NormalizePricingType(pricingType) switch
+    {
+        "CClass" => "cclass",
+        "Elite" => "elite",
+        _ => "premium"
+    };
+
+    private sealed class JobOrderProductVm
+    {
+        public int ProductId { get; set; }
+        public string ProductName { get; set; } = "";
+        public string? ProductDescription { get; set; }
+        public string? ManufacturingDescription { get; set; }
+        public string? PricingType { get; set; }
+        public int? PricingStatusId { get; set; }
+        public string? PdfPath { get; set; }
+        public bool HasOldPdf { get; set; }
+        public DateTime? CreatedAt { get; set; }
+        public int? Period { get; set; }
+        public bool HasPdf => !string.IsNullOrWhiteSpace(PdfPath) || HasOldPdf;
+    }
+}
