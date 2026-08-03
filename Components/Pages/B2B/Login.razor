@@ -1,0 +1,134 @@
+@page "/b2b/login"
+@layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
+
+@using System.ComponentModel.DataAnnotations
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [AllowAnonymous]
+
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+
+<PageTitle>دخول بوابة B2B</PageTitle>
+
+<div class="b2b-login-page" dir="rtl">
+    <div class="b2b-login-card">
+        <div class="b2b-login-head">
+            <img src="/logo.png" alt="COCOBOLO" />
+            <div>
+                <h1>بوابة B2B</h1>
+                <p>دخول العملاء التجاريين لمتابعة الطلبات والعروض والفواتير</p>
+            </div>
+        </div>
+
+        <EditForm Model="_model" OnValidSubmit="HandleLoginAsync">
+            <DataAnnotationsValidator />
+
+            <MudTextField @bind-Value="_model.UserName"
+                          Label="اسم المستخدم"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Disabled="_isSubmitting" />
+
+            <MudTextField @bind-Value="_model.Password"
+                          Label="كلمة المرور"
+                          InputType="@(_showPassword ? InputType.Text : InputType.Password)"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Disabled="_isSubmitting"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@(_showPassword ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                          OnAdornmentClick="@(() => _showPassword = !_showPassword)" />
+
+            @if (!string.IsNullOrWhiteSpace(_error))
+            {
+                <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-3">@_error</MudAlert>
+            }
+
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       ButtonType="ButtonType.Submit"
+                       FullWidth="true"
+                       Disabled="_isSubmitting"
+                       Class="mt-4 b2b-login-btn">
+                @if (_isSubmitting)
+                {
+                    <MudProgressCircular Size="MudBlazor.Size.Small" Indeterminate="true" Class="me-2" />
+                }
+                دخول البوابة
+            </MudButton>
+        </EditForm>
+    </div>
+</div>
+
+<style>
+    .b2b-login-page { min-height:100vh; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%); padding:1rem; }
+    .b2b-login-card { width:min(100%, 460px); background:#fff; border-radius:18px; padding:1.5rem; box-shadow:0 18px 50px rgba(0,0,0,.18); }
+    .b2b-login-head { display:flex; align-items:center; gap:1rem; margin-bottom:1rem; }
+    .b2b-login-head img { width:64px; height:64px; object-fit:contain; }
+    .b2b-login-head h1 { margin:0; font-size:1.5rem; color:#0f172a; }
+    .b2b-login-head p { margin:.35rem 0 0; color:#64748b; font-size:.9rem; }
+    .b2b-login-btn { height:48px; font-weight:800; }
+</style>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private LoginModel _model = new();
+    private bool _isSubmitting;
+    private bool _showPassword;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthenticationStateTask is null)
+            return;
+
+        var authState = await AuthenticationStateTask;
+        if (B2BPermissions.IsPortalUser(authState.User))
+            Navigation.NavigateTo("/b2b/dashboard", forceLoad: true);
+    }
+
+    private async Task HandleLoginAsync()
+    {
+        _isSubmitting = true;
+        _error = null;
+
+        try
+        {
+            var result = await JS.InvokeAsync<B2BJsLoginResult>("cocoboloB2BAuth.login", _model.UserName, _model.Password);
+            if (result?.Ok == true)
+            {
+                Navigation.NavigateTo("/b2b/dashboard", forceLoad: true);
+                return;
+            }
+
+            _error = result?.Message ?? "تعذر تسجيل الدخول.";
+        }
+        catch
+        {
+            _error = "حدث خطأ غير متوقع أثناء تسجيل الدخول.";
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private sealed class LoginModel
+    {
+        [Required(ErrorMessage = "اسم المستخدم مطلوب")]
+        public string UserName { get; set; } = "";
+
+        [Required(ErrorMessage = "كلمة المرور مطلوبة")]
+        public string Password { get; set; } = "";
+    }
+
+    private sealed class B2BJsLoginResult
+    {
+        public bool Ok { get; set; }
+        public string? Message { get; set; }
+    }
+}

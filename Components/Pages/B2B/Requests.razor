@@ -1,0 +1,830 @@
+@page "/b2b/requests"
+@layout COCOBOLOERPNEW.Components.Layout.B2BLayout
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject AuthenticationStateProvider AuthProvider
+@inject IB2BRequestService RequestService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>طلباتي - بوابة B2B</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="b2b-loading">
+        <div class="loading-shell">
+            <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+            <div class="loading-text">
+                <strong>جاري تحميل الطلبات</strong>
+                <span>يرجى الانتظار لحظات...</span>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    var filteredRequests = FilteredRequests.ToList();
+    var activeCount = _requests.Count(x => x.Status == B2BRequestStatuses.New || x.Status == B2BRequestStatuses.UnderReview);
+
+    <div class="b2b-requests-page" dir="rtl">
+
+        <!-- ══════════════ HERO ══════════════ -->
+        <section class="hero-panel">
+            <div class="hero-glow g1"></div>
+            <div class="hero-glow g2"></div>
+
+            <div class="hero-body">
+                <div class="hero-icon-wrap">
+                    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14,2 14,8 20,8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                        <polyline points="10,9 9,9 8,9"/>
+                    </svg>
+                </div>
+
+                <div class="hero-text">
+                    <div class="hero-chip">
+                        <span class="chip-dot"></span>
+                        بوابة العملاء B2B
+                    </div>
+                    <h1>إدارة الطلبات</h1>
+                    <p>أنشئ طلباتك الجديدة وتابع حالتها لحظة بلحظة مع الموظف المسئول.</p>
+                </div>
+            </div>
+
+            <div class="hero-metrics-row">
+                <div class="h-metric">
+                    <strong>@_requests.Count</strong>
+                    <span>إجمالي</span>
+                </div>
+                <div class="h-metric-sep"></div>
+                <div class="h-metric">
+                    <strong>@activeCount</strong>
+                    <span>نشطة</span>
+                </div>
+                <div class="h-metric-sep"></div>
+                <div class="h-metric">
+                    <strong>@_requests.Count(x => x.Status == B2BRequestStatuses.Converted)</strong>
+                    <span>محوّلة</span>
+                </div>
+                <div class="h-metric-sep"></div>
+                <div class="h-metric">
+                    <strong>@_requests.Count(x => x.Status == B2BRequestStatuses.Closed || x.Status == B2BRequestStatuses.Rejected)</strong>
+                    <span>مغلق/مرفوض</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ KPIs ══════════════ -->
+        <section class="kpi-strip">
+            <div class="kpi-card">
+                <div class="kpi-dot new-dot"></div>
+                <div class="kpi-info"><span>جديد</span><strong>@_requests.Count(x => x.Status == B2BRequestStatuses.New)</strong></div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-dot review-dot"></div>
+                <div class="kpi-info"><span>تحت المراجعة</span><strong>@_requests.Count(x => x.Status == B2BRequestStatuses.UnderReview)</strong></div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-dot converted-dot"></div>
+                <div class="kpi-info"><span>تم التحويل</span><strong>@_requests.Count(x => x.Status == B2BRequestStatuses.Converted)</strong></div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-dot closed-dot"></div>
+                <div class="kpi-info"><span>مغلق / مرفوض</span><strong>@_requests.Count(x => x.Status == B2BRequestStatuses.Closed || x.Status == B2BRequestStatuses.Rejected)</strong></div>
+            </div>
+        </section>
+
+        <!-- ══════════════ CREATE REQUEST ══════════════ -->
+        <section class="create-surface" id="create-request">
+            <div class="surface-glow"></div>
+
+            <div class="create-header">
+                <div class="create-header-icon">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                </div>
+                <div>
+                    <h3>إنشاء طلب جديد</h3>
+                    <p>حدد نوع الطلب، اكتب التفاصيل، ثم أرسله لفريقنا.</p>
+                </div>
+            </div>
+
+            <!-- Wizard -->
+            <div class="wizard-steps">
+                <div class="wizard-step active">
+                    <div class="wizard-step-num">1</div>
+                    <div class="wizard-step-text"><strong>نوع الطلب</strong><small>اختر التصنيف</small></div>
+                </div>
+                <div class="wizard-connector"></div>
+                <div class="wizard-step active">
+                    <div class="wizard-step-num">2</div>
+                    <div class="wizard-step-text"><strong>التفاصيل</strong><small>ملاحظات وبنود</small></div>
+                </div>
+                <div class="wizard-connector"></div>
+                <div class="wizard-step active">
+                    <div class="wizard-step-num">3</div>
+                    <div class="wizard-step-text"><strong>الإرسال</strong><small>راجع وأرسل</small></div>
+                </div>
+            </div>
+
+            <!-- Type tiles -->
+            <div class="type-selection-grid">
+                @foreach (var type in _requestTypes)
+                {
+                    var isActive = _createModel.RequestType == type.Key;
+                    <button type="button"
+                            class='type-tile @(isActive ? "active" : "")'
+                            @onclick='() => SelectRequestType(type.Key)'>
+                        <div class="tile-glow"></div>
+                        <div class="tile-check">
+                            @if (isActive)
+                            {
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20,6 9,17 4,12"/></svg>
+                            }
+                        </div>
+                        <div class="tile-icon">@type.Icon</div>
+                        <strong>@type.Title</strong>
+                        <small>@type.Description</small>
+                    </button>
+                }
+            </div>
+
+            <!-- Form -->
+            <div class="form-panel">
+                <div class="form-panel-label">
+                    <span class="form-label-icon">📝</span>
+                    <div>
+                        <strong>تفاصيل الطلب — @GetRequestTypeText(_createModel.RequestType)</strong>
+                        <small>وضح احتياجك بشكل مفصل ليتمكن فريقنا من خدمتك بأسرع وقت.</small>
+                    </div>
+                </div>
+
+                <MudTextField T="string"
+                              Label="ملخص الطلب / ملاحظات عامة"
+                              @bind-Value="_createModel.Notes"
+                              Lines="5"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Placeholder="مثال: أحتاج عرض سعر لـ 500 قطعة من المنتج X مع التوصيل..." />
+            </div>
+
+            <!-- Items -->
+            @if (SupportsItems(_createModel.RequestType))
+            {
+                <div class="items-zone">
+                    <div class="items-zone-head">
+                        <div class="items-zone-title">
+                            <span class="zone-icon">📦</span>
+                            <div>
+                                <strong>بنود الطلب</strong>
+                                <p>عدد البنود الحالية: <b>@_createModel.Items.Count</b></p>
+                            </div>
+                        </div>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Add" Class="add-item-btn"
+                                   OnClick="AddItemLine">إضافة بند</MudButton>
+                    </div>
+
+                    @if (!_createModel.Items.Any())
+                    {
+                        <div class="empty-items-card">
+                            <div class="empty-items-visual">
+                                <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                            </div>
+                            <strong>لا توجد بنود مضافة بعد</strong>
+                            <p>اضغط "إضافة بند" لتحديد المنتجات والكميات.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="items-list">
+                            @for (var i = 0; i < _createModel.Items.Count; i++)
+                            {
+                                var idx = i;
+                                <div class="item-row">
+                                    <div class="item-row-badge">@(idx + 1)</div>
+                                    <MudGrid>
+                                        <MudItem xs="12" md="5">
+                                            <MudAutocomplete T="B2BProductLookupDto"
+                                                             Value="_createModel.Items[idx].SelectedProduct"
+                                                             ValueChanged="@(p => OnProductChanged(idx, p))"
+                                                             SearchFunc="SearchProductsAsync"
+                                                             ToStringFunc="@(p => p?.DisplayName ?? string.Empty)"
+                                                             Label="ابحث عن المنتج"
+                                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                             Clearable="true" ResetValueOnEmptyText="true" CoerceText="false"
+                                                             Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search">
+                                                <ItemTemplate Context="product">
+                                                    <div class="product-dropdown-item">
+                                                        <strong>@product.ProductName</strong>
+                                                        @if (!string.IsNullOrWhiteSpace(product.ProductDescription))
+                                                        { <small>@product.ProductDescription</small> }
+                                                    </div>
+                                                </ItemTemplate>
+                                            </MudAutocomplete>
+                                        </MudItem>
+                                        <MudItem xs="12" md="2">
+                                            <MudNumericField T="decimal" @bind-Value="_createModel.Items[idx].Quantity"
+                                                             Label="الكمية" Min="1" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                        </MudItem>
+                                        <MudItem xs="12" md="4">
+                                            <MudTextField T="string" @bind-Value="_createModel.Items[idx].Notes"
+                                                          Label="ملاحظات البند" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                        </MudItem>
+                                        <MudItem xs="12" md="1" Class="d-flex align-center justify-center">
+                                            <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                                           Color="Color.Error" Class="delete-item-btn"
+                                                           OnClick='() => RemoveItemLine(idx)' />
+                                        </MudItem>
+                                    </MudGrid>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+            <!-- Submit bar -->
+            <div class="submit-bar">
+                <div class="submit-bar-summary">
+                    <div class="summary-icon">
+                        @(_requestTypes.FirstOrDefault(x => x.Key == _createModel.RequestType)?.Icon ?? "📄")
+                    </div>
+                    <div class="summary-text">
+                        <strong>@GetRequestTypeText(_createModel.RequestType)</strong>
+                        <span>
+                            @if (SupportsItems(_createModel.RequestType))
+                            { <text>@_createModel.Items.Count بند</text> }
+                            else
+                            { <text>طلب نصّي</text> }
+                            @if (!string.IsNullOrWhiteSpace(_createModel.Notes))
+                            { <text> · يحتوي ملاحظات</text> }
+                        </span>
+                    </div>
+                </div>
+                <div class="submit-bar-actions">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Medium"
+                               StartIcon="@Icons.Material.Filled.Send" Class="submit-btn"
+                               OnClick="CreateRequestAsync">إرسال الطلب</MudButton>
+                    <MudButton Variant="Variant.Text" Color="Color.Default" Size="Size.Medium"
+                               StartIcon="@Icons.Material.Filled.RestartAlt"
+                               OnClick="ResetForm">مسح</MudButton>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════ HISTORY ══════════════ -->
+        <section class="history-surface" id="requests-history">
+            <div class="history-header">
+                <div class="history-header-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
+                </div>
+                <div>
+                    <h3>سجل الطلبات</h3>
+                    <p>تابع وراجع كل طلباتك السابقة وحالاتها.</p>
+                </div>
+                <div class="history-badge">
+                    <strong>@filteredRequests.Count</strong>
+                    <span>من @_requests.Count</span>
+                </div>
+            </div>
+
+            <div class="history-toolbar">
+                <div class="toolbar-search">
+                    <MudTextField T="string" @bind-Value="_historySearch"
+                                  Placeholder="ابحث برقم الطلب أو النوع أو الملاحظات..."
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Clearable="true" Immediate="true" />
+                </div>
+                <div class="toolbar-filters">
+                    @foreach (var f in _historyFilters)
+                    {
+                        <button type="button"
+                                class='filter-chip @(_historyStatus == f.Key ? "active" : "")'
+                                @onclick='() => SetHistoryFilter(f.Key)'>
+                            @f.Title <b>@GetHistoryFilterCount(f.Key)</b>
+                        </button>
+                    }
+                </div>
+            </div>
+
+            @if (filteredRequests.Any())
+            {
+                <div class="requests-grid">
+                    @foreach (var req in filteredRequests)
+                    {
+                        <div class='req-card @GetStatusClass(req.Status)' @key="req.RequestId">
+                            <div class="req-card-top">
+                                <div class="req-card-id">
+                                    <span class="req-hash">#@req.RequestId</span>
+                                    <span class="req-type-label">@GetRequestTypeText(req.RequestType)</span>
+                                </div>
+                                <span class='req-status @GetStatusClass(req.Status)'>@GetRequestStatusText(req.Status)</span>
+                            </div>
+                            <div class="req-progress"><div class='req-progress-fill @GetStatusClass(req.Status)' style="width:@(GetProgressPercent(req.Status))%"></div></div>
+                            <div class="req-card-meta">
+                                <div class="meta-item">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                                    <span>@req.CreatedAt.ToString("yyyy/MM/dd")</span>
+                                </div>
+                                <div class="meta-item">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                    <span>@(req.ResponsibleEmployeeName ?? "لم يحدد بعد")</span>
+                                </div>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(req.Notes))
+                            {
+                                <div class="req-card-note">@(req.Notes.Length > 90 ? req.Notes[..90] + "..." : req.Notes)</div>
+                            }
+                            <div class="req-card-action">
+                                <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                                           EndIcon="@Icons.Material.Filled.ArrowBack"
+                                           OnClick='() => Navigation.NavigateTo($"/b2b/requests/{req.RequestId}")'>
+                                    عرض التفاصيل
+                                </MudButton>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else if (_requests.Any())
+            {
+                <div class="empty-state">
+                    <div class="empty-state-visual">🔍</div>
+                    <strong>لا توجد نتائج مطابقة</strong>
+                    <p>جرّب تغيير كلمات البحث أو اختيار فلتر آخر.</p>
+                </div>
+            }
+            else
+            {
+                <div class="empty-state">
+                    <div class="empty-state-visual">📭</div>
+                    <strong>لا توجد طلبات سابقة</strong>
+                    <p>أنشئ طلبك الأول من القسم العلوي وسيظهر هنا.</p>
+                </div>
+            }
+        </section>
+    </div>
+}
+
+<style>
+    :root {
+        --surface:#ffffff;
+        --border:#e4eaf3;
+        --text:#0f172a;
+        --muted:#64748b;
+        --primary:#2563eb;
+        --primary-light:#dbeafe;
+        --r-xl:28px;
+        --r-lg:22px;
+        --r-md:16px;
+        --sh-sm:0 4px 14px rgba(15,23,42,.04);
+        --sh-md:0 12px 30px rgba(15,23,42,.06);
+        --sh-lg:0 20px 50px rgba(15,23,42,.10);
+    }
+
+    .b2b-loading{min-height:55vh;display:flex;align-items:center;justify-content:center}
+    .loading-shell{display:flex;align-items:center;gap:1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-xl);padding:1.4rem 1.6rem;box-shadow:var(--sh-lg)}
+    .loading-text{display:flex;flex-direction:column;gap:.12rem}
+    .loading-text strong{color:var(--text);font-size:.95rem}
+    .loading-text span{color:var(--muted);font-size:.82rem}
+
+    .b2b-requests-page{display:flex;flex-direction:column;gap:1rem;padding:.15rem}
+
+    /* ══ HERO ══ */
+    .hero-panel{
+        position:relative;overflow:hidden;
+        border-radius:var(--r-xl);padding:1rem 1.2rem;
+        color:#fff;
+        background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 50%,#2563eb 100%);
+        display:flex;align-items:center;justify-content:space-between;
+        gap:1rem;flex-wrap:wrap;
+        box-shadow:0 16px 42px rgba(15,23,42,.20);
+    }
+
+    .hero-glow{position:absolute;border-radius:50%;filter:blur(70px);opacity:.3;pointer-events:none}
+    .hero-glow.g1{width:180px;height:180px;top:-50px;right:-25px;background:radial-gradient(circle,#60a5fa,transparent)}
+    .hero-glow.g2{width:140px;height:140px;bottom:-40px;left:-15px;background:radial-gradient(circle,#34d399,transparent)}
+
+    .hero-body{position:relative;z-index:1;display:flex;align-items:center;gap:.85rem;flex-wrap:wrap;flex:1}
+
+    .hero-icon-wrap{
+        width:50px;height:50px;border-radius:var(--r-md);
+        background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);
+        display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#dbeafe;
+    }
+
+    .hero-text{flex:1;min-width:200px}
+
+    .hero-chip{
+        display:inline-flex;align-items:center;gap:.4rem;
+        padding:.28rem .7rem;border-radius:999px;
+        background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.14);
+        font-size:.7rem;font-weight:800;margin-bottom:.35rem;
+    }
+
+    .chip-dot{width:7px;height:7px;border-radius:50%;background:#34d399;animation:pulse-dot 2s infinite}
+    @@keyframes pulse-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.5)}}
+
+    .hero-text h1{margin:0;font-size:1.3rem;font-weight:900;line-height:1.2}
+    .hero-text p{margin:.25rem 0 0;color:#bfdbfe;font-size:.84rem;line-height:1.6}
+
+    .hero-metrics-row{
+        position:relative;z-index:1;
+        display:flex;align-items:center;
+        background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);
+        border-radius:var(--r-lg);backdrop-filter:blur(8px);overflow:hidden;
+    }
+    .h-metric{flex:1;display:flex;flex-direction:column;align-items:center;padding:.6rem .5rem;min-width:70px}
+    .h-metric strong{font-size:1.3rem;font-weight:900;line-height:1}
+    .h-metric span{margin-top:.18rem;color:#bfdbfe;font-size:.7rem;font-weight:700}
+    .h-metric-sep{width:1px;height:32px;background:rgba(255,255,255,.14);flex-shrink:0}
+
+    /* ══ KPIs ══ */
+    .kpi-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:.8rem}
+    .kpi-card{
+        display:flex;align-items:center;gap:.75rem;
+        background:var(--surface);border:1px solid var(--border);
+        border-radius:var(--r-lg);padding:.85rem .95rem;
+        box-shadow:var(--sh-sm);transition:.22s ease;
+    }
+    .kpi-card:hover{transform:translateY(-3px);box-shadow:var(--sh-md)}
+    .kpi-dot{width:11px;height:11px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 3px rgba(0,0,0,.04)}
+    .new-dot{background:#3b82f6}.review-dot{background:#f59e0b}.converted-dot{background:#10b981}.closed-dot{background:#94a3b8}
+    .kpi-info{display:flex;flex-direction:column}
+    .kpi-info span{color:var(--muted);font-size:.82rem;margin-bottom:.12rem}
+    .kpi-info strong{color:var(--text);font-size:1.35rem;line-height:1}
+
+    /* ══ CREATE ══ */
+    .create-surface{
+        position:relative;overflow:hidden;
+        background:rgba(255,255,255,.96);border:1px solid var(--border);
+        border-radius:var(--r-xl);padding:1.2rem;
+        box-shadow:var(--sh-md);backdrop-filter:blur(6px);
+    }
+    .surface-glow{
+        position:absolute;top:-50px;right:-50px;width:160px;height:160px;
+        border-radius:50%;background:radial-gradient(circle,rgba(37,99,235,.07),transparent);pointer-events:none;
+    }
+    .create-header{display:flex;align-items:flex-start;gap:.8rem;margin-bottom:.9rem;position:relative;z-index:1}
+    .create-header-icon{
+        width:46px;height:46px;border-radius:var(--r-md);
+        background:var(--primary-light);color:var(--primary);
+        display:flex;align-items:center;justify-content:center;flex-shrink:0;
+    }
+    .create-header h3{margin:0;color:var(--text);font-size:1.12rem;font-weight:900}
+    .create-header p{margin:.25rem 0 0;color:var(--muted);font-size:.86rem}
+
+    .wizard-steps{
+        display:flex;align-items:center;gap:.6rem;
+        padding:.75rem .9rem;border:1px solid #edf2f7;
+        border-radius:var(--r-lg);background:linear-gradient(180deg,#fbfdff,#f8fafc);
+        margin-bottom:.9rem;overflow-x:auto;
+    }
+    .wizard-step{display:flex;align-items:center;gap:.5rem;white-space:nowrap}
+    .wizard-step-num{
+        width:26px;height:26px;border-radius:50%;
+        background:var(--primary-light);color:var(--primary);
+        display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:900;flex-shrink:0;
+    }
+    .wizard-step-text strong{display:block;color:var(--text);font-size:.8rem}
+    .wizard-step-text small{color:var(--muted);font-size:.7rem}
+    .wizard-connector{width:32px;height:2px;background:#dbe2ea;border-radius:999px;flex-shrink:0}
+
+    .type-selection-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.8rem;margin-bottom:.9rem}
+    .type-tile{
+        position:relative;overflow:hidden;
+        display:flex;flex-direction:column;align-items:center;
+        gap:.5rem;padding:1rem .85rem;
+        border-radius:var(--r-lg);border:1.5px solid var(--border);
+        background:var(--surface);cursor:pointer;text-align:center;font-family:inherit;
+        transition:.25s ease;box-shadow:var(--sh-sm);
+    }
+    .type-tile:hover{transform:translateY(-2px);box-shadow:var(--sh-md)}
+    .type-tile.active{border-color:var(--primary);background:linear-gradient(180deg,#eff6ff,#fff);box-shadow:0 14px 28px rgba(37,99,235,.12)}
+
+    .tile-glow{position:absolute;top:0;left:0;right:0;height:4px;border-radius:var(--r-lg) var(--r-lg) 0 0;background:transparent}
+    .type-tile.active .tile-glow{background:linear-gradient(90deg,#2563eb,#60a5fa,#2563eb);background-size:200% 100%;animation:glow-slide 3s ease infinite}
+    @@keyframes glow-slide{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+
+    .tile-check{
+        position:absolute;top:8px;left:8px;width:20px;height:20px;border-radius:50%;
+        border:2px solid #cbd5e1;display:flex;align-items:center;justify-content:center;
+    }
+    .type-tile.active .tile-check{background:var(--primary);border-color:var(--primary);color:#fff}
+
+    .tile-icon{width:46px;height:46px;border-radius:14px;background:#f8fafc;display:flex;align-items:center;justify-content:center;font-size:1.3rem}
+    .type-tile.active .tile-icon{background:var(--primary-light)}
+    .type-tile strong{color:var(--text);font-size:.92rem}
+    .type-tile small{color:var(--muted);font-size:.78rem;line-height:1.6}
+
+    .form-panel{padding:.95rem;border:1px solid #edf2f7;border-radius:var(--r-lg);background:#fbfdff;margin-bottom:.1rem}
+    .form-panel-label{display:flex;align-items:flex-start;gap:.7rem;margin-bottom:.75rem}
+    .form-label-icon{width:36px;height:36px;border-radius:10px;background:#fef3c7;display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0}
+    .form-panel-label strong{display:block;color:var(--text);font-size:.9rem}
+    .form-panel-label small{color:var(--muted);font-size:.8rem;line-height:1.65}
+
+    .items-zone{margin-top:.9rem;padding:.95rem;border:1.5px dashed #c9d6e4;border-radius:var(--r-xl);background:linear-gradient(180deg,#f8fbff,#f8fafc)}
+    .items-zone-head{display:flex;align-items:center;justify-content:space-between;gap:.9rem;flex-wrap:wrap;margin-bottom:.8rem}
+    .items-zone-title{display:flex;align-items:flex-start;gap:.6rem}
+    .zone-icon{width:36px;height:36px;border-radius:10px;background:var(--primary-light);display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0}
+    .items-zone-title strong{display:block;color:var(--text);font-size:.92rem}
+    .items-zone-title p{margin:.15rem 0 0;color:var(--muted);font-size:.8rem}
+    .add-item-btn{border-radius:12px!important}
+
+    .empty-items-card{display:flex;flex-direction:column;align-items:center;gap:.5rem;padding:1.3rem 1rem;text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg)}
+    .empty-items-card strong{color:var(--text)}
+    .empty-items-card p{margin:0;color:var(--muted);font-size:.82rem}
+
+    .items-list{display:flex;flex-direction:column;gap:.7rem}
+    .item-row{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:.9rem .85rem .6rem;box-shadow:var(--sh-sm)}
+    .item-row-badge{position:absolute;top:-9px;right:12px;background:var(--text);color:#fff;padding:.15rem .55rem;border-radius:999px;font-size:.7rem;font-weight:900}
+
+    .product-dropdown-item{display:flex;flex-direction:column;gap:2px}
+    .product-dropdown-item strong{color:var(--text);font-size:.86rem}
+    .product-dropdown-item small{color:var(--muted);font-size:.72rem}
+    .delete-item-btn{background:#fff5f5;border-radius:10px}
+
+    .submit-bar{
+        margin-top:.9rem;position:sticky;bottom:10px;z-index:3;
+        display:flex;align-items:center;justify-content:space-between;gap:.9rem;flex-wrap:wrap;
+        padding:.85rem 1rem;border:1px solid var(--border);border-radius:var(--r-lg);
+        background:rgba(255,255,255,.97);backdrop-filter:blur(12px);box-shadow:0 -4px 22px rgba(15,23,42,.07);
+    }
+    .submit-bar-summary{display:flex;align-items:center;gap:.65rem}
+    .summary-icon{width:38px;height:38px;border-radius:10px;background:var(--primary-light);display:flex;align-items:center;justify-content:center;font-size:1rem}
+    .summary-text{display:flex;flex-direction:column;gap:.08rem}
+    .summary-text strong{color:var(--text);font-size:.88rem}
+    .summary-text span{color:var(--muted);font-size:.78rem}
+    .submit-bar-actions{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+    .submit-btn{border-radius:12px!important;font-weight:900!important}
+
+    /* ══ HISTORY ══ */
+    .history-surface{background:rgba(255,255,255,.96);border:1px solid var(--border);border-radius:var(--r-xl);padding:1.2rem;box-shadow:var(--sh-md)}
+    .history-header{display:flex;align-items:center;gap:.8rem;margin-bottom:.9rem;flex-wrap:wrap}
+    .history-header-icon{width:42px;height:42px;border-radius:14px;background:#f1f5f9;color:var(--muted);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .history-header h3{margin:0;color:var(--text);font-size:1.1rem;font-weight:900}
+    .history-header p{margin:.2rem 0 0;color:var(--muted);font-size:.84rem}
+    .history-badge{margin-right:auto;margin-left:0;padding:.55rem .8rem;border-radius:var(--r-md);background:#f8fafc;border:1px solid var(--border);text-align:center}
+    .history-badge strong{display:block;color:var(--text);font-size:1.15rem;font-weight:900;line-height:1}
+    .history-badge span{color:var(--muted);font-size:.72rem}
+
+    .history-toolbar{display:flex;flex-direction:column;gap:.8rem;margin-bottom:.9rem}
+    .toolbar-search{max-width:500px}
+    .toolbar-filters{display:flex;gap:.5rem;flex-wrap:wrap}
+
+    .filter-chip{
+        display:inline-flex;align-items:center;gap:.4rem;
+        border:1px solid var(--border);background:var(--surface);color:#334155;
+        border-radius:999px;padding:.42rem .75rem;font-family:inherit;cursor:pointer;
+        font-size:.8rem;font-weight:800;transition:.2s ease;
+    }
+    .filter-chip:hover{transform:translateY(-1px);border-color:#c0cee0}
+    .filter-chip.active{background:var(--text);color:#fff;border-color:var(--text);box-shadow:0 8px 16px rgba(15,23,42,.12)}
+    .filter-chip b{min-width:20px;height:20px;padding:0 .3rem;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:#f1f5f9;color:var(--text);font-size:.68rem;font-weight:900}
+    .filter-chip.active b{background:rgba(255,255,255,.15);color:#fff}
+
+    .requests-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:.9rem}
+    .req-card{
+        background:var(--surface);border:1px solid var(--border);border-radius:var(--r-xl);
+        padding:.95rem;display:flex;flex-direction:column;gap:.65rem;
+        box-shadow:var(--sh-sm);transition:.25s ease;border-top:4px solid #94a3b8;
+    }
+    .req-card:hover{transform:translateY(-3px);box-shadow:var(--sh-lg)}
+    .req-card.new{border-top-color:#3b82f6}.req-card.review{border-top-color:#f59e0b}
+    .req-card.converted{border-top-color:#10b981}.req-card.closed{border-top-color:#94a3b8}
+    .req-card.rejected{border-top-color:#ef4444}
+
+    .req-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:.7rem}
+    .req-card-id{display:flex;flex-direction:column;gap:.15rem}
+    .req-hash{font-weight:900;color:var(--text);font-size:1rem}
+    .req-type-label{color:var(--muted);font-size:.8rem}
+
+    .req-status{display:inline-flex;padding:.28rem .65rem;border-radius:999px;font-size:.7rem;font-weight:900;white-space:nowrap}
+    .req-status.new{background:#dbeafe;color:#1d4ed8}.req-status.review{background:#fef3c7;color:#b45309}
+    .req-status.converted{background:#d1fae5;color:#047857}.req-status.closed{background:#e2e8f0;color:#475569}
+    .req-status.rejected{background:#fee2e2;color:#b91c1c}
+
+    .req-progress{height:3px;border-radius:999px;background:#edf2f7;overflow:hidden}
+    .req-progress-fill{height:100%;border-radius:999px;transition:width .4s ease}
+    .req-progress-fill.new{background:#3b82f6}.req-progress-fill.review{background:#f59e0b}
+    .req-progress-fill.converted{background:#10b981}.req-progress-fill.closed{background:#94a3b8}
+    .req-progress-fill.rejected{background:#ef4444}
+
+    .req-card-meta{display:flex;gap:.5rem;flex-wrap:wrap}
+    .meta-item{display:inline-flex;align-items:center;gap:.3rem;padding:.4rem .6rem;border-radius:10px;background:#f8fafc;border:1px solid #edf2f7;color:var(--muted);font-size:.76rem}
+
+    .req-card-note{padding:.6rem .7rem;border-radius:12px;background:#f8fafc;border:1px solid #edf2f7;color:#334155;font-size:.8rem;line-height:1.7}
+    .req-card-action{display:flex;justify-content:flex-end}
+
+    .empty-state{
+        display:flex;flex-direction:column;align-items:center;justify-content:center;
+        gap:.5rem;padding:2rem 1rem;text-align:center;
+        border-radius:var(--r-xl);background:linear-gradient(180deg,#fbfdff,#f8fafc);border:1.5px dashed #d8e2ec;
+    }
+    .empty-state-visual{font-size:1.8rem;margin-bottom:.2rem}
+    .empty-state strong{color:var(--text);font-size:.95rem}
+    .empty-state p{margin:0;color:var(--muted);font-size:.85rem}
+
+    @@media(max-width:960px){.hero-panel{padding:.9rem 1rem}.hero-text h1{font-size:1.15rem}}
+    @@media(max-width:700px){
+        .hero-panel,.create-surface,.history-surface{border-radius:var(--r-lg);padding:.9rem}
+        .hero-body{flex-direction:column;align-items:flex-start}
+        .hero-metrics-row{width:100%}
+        .submit-bar,.history-header,.items-zone-head,.req-card-top,.create-header{flex-direction:column;align-items:flex-start}
+        .submit-bar-actions{width:100%}.submit-bar-actions .mud-button-root{width:100%}
+        .toolbar-search{max-width:100%}.history-badge{margin-right:0}
+        .wizard-connector{width:20px}
+        .type-selection-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private List<B2BRequestListDto> _requests = new();
+    private B2BCreateRequestDto _createModel = new()
+    {
+        RequestType = B2BRequestTypes.Quotation,
+        Items = new List<B2BRequestItemInputDto> { new() { Quantity = 1 } }
+    };
+
+    private int? _portalUserId;
+    private int? _partyId;
+    private int? _responsibleEmployeeId;
+    private string _currentUserName = "portal";
+    private string _historySearch = string.Empty;
+    private string _historyStatus = "All";
+
+    private readonly List<RequestTypeCardVm> _requestTypes =
+    [
+        new(B2BRequestTypes.Quotation, "🧾", "طلب عرض سعر", "اطلب عرض سعر لمنتجات أو خدمات جديدة."),
+        new(B2BRequestTypes.Reorder, "🔁", "إعادة طلب", "أعد طلب فاتورة أو منتجات سابقة بسهولة."),
+        new(B2BRequestTypes.PaymentProof, "💳", "إثبات دفع", "أرسل تفاصيل تحويل أو دفعة لمراجعتها."),
+        new(B2BRequestTypes.Support, "🎧", "دعم / استفسار", "استفسار عام أو طلب مساعدة.")
+    ];
+
+    private readonly List<HistoryFilterVm> _historyFilters =
+    [
+        new("All", "الكل"),
+        new(B2BRequestStatuses.New, "جديد"),
+        new(B2BRequestStatuses.UnderReview, "قيد المراجعة"),
+        new(B2BRequestStatuses.Converted, "محوّل"),
+        new(B2BRequestStatuses.Closed, "مغلق"),
+        new(B2BRequestStatuses.Rejected, "مرفوض")
+    ];
+
+    private IEnumerable<B2BRequestListDto> FilteredRequests =>
+        _requests.Where(r =>
+        {
+            if (_historyStatus != "All" && r.Status != _historyStatus) return false;
+            if (string.IsNullOrWhiteSpace(_historySearch)) return true;
+            var t = _historySearch.Trim();
+            return r.RequestId.ToString().Contains(t, StringComparison.OrdinalIgnoreCase)
+                || GetRequestTypeText(r.RequestType).Contains(t, StringComparison.OrdinalIgnoreCase)
+                || (r.Notes?.Contains(t, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (r.ResponsibleEmployeeName?.Contains(t, StringComparison.OrdinalIgnoreCase) ?? false);
+        });
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        if (!B2BPermissions.IsPortalUser(user))
+        {
+            Navigation.NavigateTo("/b2b/login", forceLoad: true);
+            return;
+        }
+
+        _portalUserId = B2BPermissions.GetPortalUserId(user);
+        _partyId = B2BPermissions.GetPartyId(user);
+        _responsibleEmployeeId = B2BPermissions.GetResponsibleEmployeeId(user);
+        _currentUserName = user.Identity?.Name ?? "portal";
+
+        await LoadRequestsAsync();
+        _isLoading = false;
+    }
+
+    private async Task LoadRequestsAsync()
+    {
+        if (_partyId.HasValue)
+            _requests = await RequestService.GetRequestsAsync(partyId: _partyId.Value);
+    }
+
+    private void SelectRequestType(string type)
+    {
+        _createModel.RequestType = type;
+        if (!SupportsItems(type)) _createModel.Items.Clear();
+        else if (!_createModel.Items.Any()) AddItemLine();
+    }
+
+    private bool SupportsItems(string type)
+        => type is B2BRequestTypes.Quotation or B2BRequestTypes.Reorder;
+
+    private void AddItemLine() => _createModel.Items.Add(new B2BRequestItemInputDto { Quantity = 1 });
+
+    private void RemoveItemLine(int index)
+    {
+        if (index >= 0 && index < _createModel.Items.Count)
+            _createModel.Items.RemoveAt(index);
+    }
+
+    private async Task<IEnumerable<B2BProductLookupDto>> SearchProductsAsync(string? value, CancellationToken token)
+    {
+        try { return await RequestService.SearchProductsAsync(value, 20); }
+        catch { return Enumerable.Empty<B2BProductLookupDto>(); }
+    }
+
+    private Task OnProductChanged(int index, B2BProductLookupDto? product)
+    {
+        if (index < 0 || index >= _createModel.Items.Count) return Task.CompletedTask;
+        _createModel.Items[index].SelectedProduct = product;
+        _createModel.Items[index].ProductId = product?.ProductId;
+        return Task.CompletedTask;
+    }
+
+    private void ResetForm()
+    {
+        _createModel = new B2BCreateRequestDto { RequestType = B2BRequestTypes.Quotation };
+        AddItemLine();
+    }
+
+    private async Task CreateRequestAsync()
+    {
+        if (!_portalUserId.HasValue || !_partyId.HasValue) return;
+
+        var hasData = _createModel.Items.Any(i => i.ProductId.HasValue || !string.IsNullOrWhiteSpace(i.Notes));
+
+        if (SupportsItems(_createModel.RequestType) && !hasData)
+        { Snackbar.Add("أضف بندًا واحدًا على الأقل.", Severity.Warning); return; }
+
+        if (!SupportsItems(_createModel.RequestType) && string.IsNullOrWhiteSpace(_createModel.Notes))
+        { Snackbar.Add("اكتب ملخص الطلب قبل الإرسال.", Severity.Warning); return; }
+
+        var (success, message, newId) = await RequestService.CreateAsync(
+            _createModel, _portalUserId.Value, _partyId.Value, _responsibleEmployeeId, _currentUserName);
+
+        Snackbar.Add(message, success ? Severity.Success : Severity.Error);
+        if (!success) return;
+
+        await LoadRequestsAsync();
+        var createdId = newId;
+        ResetForm();
+        StateHasChanged();
+
+        if (createdId.HasValue)
+            Navigation.NavigateTo($"/b2b/requests/{createdId.Value}");
+    }
+
+    private void SetHistoryFilter(string status) => _historyStatus = status;
+
+    private int GetHistoryFilterCount(string status) =>
+        status == "All" ? _requests.Count : _requests.Count(x => x.Status == status);
+
+    private static int GetProgressPercent(string status) => status switch
+    {
+        B2BRequestStatuses.New => 20,
+        B2BRequestStatuses.UnderReview => 50,
+        B2BRequestStatuses.Converted => 100,
+        B2BRequestStatuses.Closed => 100,
+        B2BRequestStatuses.Rejected => 100,
+        _ => 10
+    };
+
+    private static string GetRequestTypeText(string v) => v switch
+    {
+        B2BRequestTypes.Quotation => "طلب عرض سعر",
+        B2BRequestTypes.Reorder => "إعادة طلب",
+        B2BRequestTypes.PaymentProof => "إثبات دفع",
+        B2BRequestTypes.Support => "دعم / استفسار",
+        _ => v
+    };
+
+    private static string GetRequestStatusText(string v) => v switch
+    {
+        B2BRequestStatuses.New => "جديد",
+        B2BRequestStatuses.UnderReview => "تحت المراجعة",
+        B2BRequestStatuses.Converted => "تم التحويل",
+        B2BRequestStatuses.Closed => "مغلق",
+        B2BRequestStatuses.Rejected => "مرفوض",
+        _ => v
+    };
+
+    private static string GetStatusClass(string v) => v switch
+    {
+        B2BRequestStatuses.New => "new",
+        B2BRequestStatuses.UnderReview => "review",
+        B2BRequestStatuses.Converted => "converted",
+        B2BRequestStatuses.Closed => "closed",
+        B2BRequestStatuses.Rejected => "rejected",
+        _ => "closed"
+    };
+
+    private sealed record RequestTypeCardVm(string Key, string Icon, string Title, string Description);
+    private sealed record HistoryFilterVm(string Key, string Title);
+}

@@ -1,0 +1,577 @@
+@page "/admin/b2b/requests"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject IB2BRequestService RequestService
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>طلبات B2B</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="b2b-loading">
+        <div class="loading-shell">
+            <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+            <div class="loading-text">
+                <strong>جاري تحميل الطلبات</strong>
+                <span>يرجى الانتظار لحظات...</span>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    var filtered = FilteredRequests.ToList();
+
+    <div dir="rtl" class="admin-requests-page">
+
+        <!-- ══════════════ HERO ══════════════ -->
+        <section class="hero-panel">
+            <div class="hero-glow g1"></div>
+            <div class="hero-glow g2"></div>
+
+            <div class="hero-body">
+                <div class="hero-icon-wrap">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14,2 14,8 20,8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                </div>
+                <div class="hero-text">
+                    <div class="hero-chip">
+                        <span class="chip-dot"></span>
+                        إدارة داخلية
+                    </div>
+                    <h1>إدارة طلبات B2B</h1>
+                    <p>صندوق وارد موحّد لمتابعة الطلبات الجديدة، مراجعتها، وتحويلها إلى إجراءات داخلية.</p>
+                </div>
+            </div>
+
+            <div class="hero-side">
+                <div class="hero-metrics-row">
+                    <div class="h-metric">
+                        <strong>@_allRequests.Count</strong>
+                        <span>إجمالي</span>
+                    </div>
+                    <div class="h-metric-sep"></div>
+                    <div class="h-metric">
+                        <strong>@_allRequests.Count(x => x.Status == B2BRequestStatuses.New || x.Status == B2BRequestStatuses.UnderReview)</strong>
+                        <span>نشطة</span>
+                    </div>
+                    <div class="h-metric-sep"></div>
+                    <div class="h-metric">
+                        <strong>@filtered.Count</strong>
+                        <span>ظاهرة</span>
+                    </div>
+                </div>
+
+                <button class="refresh-btn" @onclick="LoadAsync">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,4 23,10 17,10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    تحديث
+                </button>
+            </div>
+        </section>
+
+        <!-- ══════════════ KPIs ══════════════ -->
+        <section class="kpi-strip">
+            <div class="kpi-card kpi-blue">
+                <div class="kpi-dot new-dot"></div>
+                <div class="kpi-info"><span>جديد</span><strong>@_allRequests.Count(x => x.Status == B2BRequestStatuses.New)</strong></div>
+                @if (_allRequests.Any(x => x.Status == B2BRequestStatuses.New))
+                {
+                    <div class="kpi-alert"><span class="alert-dot"></span>تحتاج مراجعة</div>
+                }
+            </div>
+            <div class="kpi-card kpi-amber">
+                <div class="kpi-dot review-dot"></div>
+                <div class="kpi-info"><span>تحت المراجعة</span><strong>@_allRequests.Count(x => x.Status == B2BRequestStatuses.UnderReview)</strong></div>
+            </div>
+            <div class="kpi-card kpi-green">
+                <div class="kpi-dot converted-dot"></div>
+                <div class="kpi-info"><span>تم التحويل</span><strong>@_allRequests.Count(x => x.Status == B2BRequestStatuses.Converted)</strong></div>
+            </div>
+            <div class="kpi-card kpi-slate">
+                <div class="kpi-dot closed-dot"></div>
+                <div class="kpi-info"><span>مغلقة</span><strong>@_allRequests.Count(x => x.Status == B2BRequestStatuses.Closed)</strong></div>
+            </div>
+            <div class="kpi-card kpi-red">
+                <div class="kpi-dot rejected-dot"></div>
+                <div class="kpi-info"><span>مرفوضة</span><strong>@_allRequests.Count(x => x.Status == B2BRequestStatuses.Rejected)</strong></div>
+            </div>
+        </section>
+
+        <!-- ══════════════ REQUESTS LIST ══════════════ -->
+        <section class="requests-surface">
+
+            <!-- Toolbar -->
+            <div class="toolbar">
+                <div class="toolbar-search">
+                    <MudTextField T="string" @bind-Value="_searchText"
+                                  Placeholder="ابحث بالعميل، المستخدم، أو رقم الطلب..."
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Clearable="true" Immediate="true" />
+                </div>
+                <div class="toolbar-select">
+                    <MudSelect T="string" Value="_statusFilter" ValueChanged="OnStatusChanged"
+                               Label="فلتر الحالة" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+                        <MudSelectItem Value="@B2BRequestStatuses.New">جديد</MudSelectItem>
+                        <MudSelectItem Value="@B2BRequestStatuses.UnderReview">تحت المراجعة</MudSelectItem>
+                        <MudSelectItem Value="@B2BRequestStatuses.Converted">تم التحويل</MudSelectItem>
+                        <MudSelectItem Value="@B2BRequestStatuses.Closed">مغلق</MudSelectItem>
+                        <MudSelectItem Value="@B2BRequestStatuses.Rejected">مرفوض</MudSelectItem>
+                    </MudSelect>
+                </div>
+            </div>
+
+            <!-- Filter chips -->
+            <div class="filter-chips">
+                @foreach (var f in _statusFilters)
+                {
+                    <button type="button"
+                            class='filter-chip @(_statusFilter == f.Key ? "active" : "")'
+                            @onclick='() => OnStatusChanged(f.Key == "All" ? null : f.Key)'>
+                        @f.Title <b>@GetFilterCount(f.Key)</b>
+                    </button>
+                }
+            </div>
+
+            <!-- Results -->
+            @if (filtered.Any())
+            {
+                <div class="results-header">
+                    <span>عرض <b>@filtered.Count</b> من <b>@_allRequests.Count</b> طلب</span>
+                </div>
+
+                <div class="requests-grid">
+                    @foreach (var req in filtered)
+                    {
+                        <div class='req-card @GetStatusClass(req.Status)'>
+                            <!-- Card top -->
+                            <div class="req-card-top">
+                                <div class="req-card-id">
+                                    <span class="req-hash">#@req.RequestId</span>
+                                    <span class="req-customer">@req.PartyName</span>
+                                </div>
+                                <span class='status-pill @GetStatusClass(req.Status)'>@GetRequestStatusText(req.Status)</span>
+                            </div>
+
+                            <!-- Progress -->
+                            <div class="req-progress">
+                                <div class='req-progress-fill @GetStatusClass(req.Status)' style="width:@(GetProgressPercent(req.Status))%"></div>
+                            </div>
+
+                            <!-- Meta -->
+                            <div class="req-card-meta">
+                                <div class="meta-chip">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+                                    @GetRequestTypeText(req.RequestType)
+                                </div>
+                                <div class="meta-chip">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                                    @req.CreatedAt.ToString("yyyy/MM/dd")
+                                </div>
+                            </div>
+
+                            <div class="req-card-details">
+                                <div class="detail-row">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                    <span>مستخدم البوابة:</span>
+                                    <strong>@req.PortalUserName</strong>
+                                </div>
+                                <div class="detail-row">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+                                    <span>الموظف المسئول:</span>
+                                    <strong>@(req.ResponsibleEmployeeName ?? "لم يحدد")</strong>
+                                </div>
+                            </div>
+
+                            @if (!string.IsNullOrWhiteSpace(req.Notes))
+                            {
+                                <div class="req-card-note">
+                                    @(req.Notes.Length > 100 ? req.Notes[..100] + "..." : req.Notes)
+                                </div>
+                            }
+
+                            <!-- Actions -->
+                            <div class="req-card-actions">
+                                <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                                           EndIcon="@Icons.Material.Filled.ArrowBack"
+                                           OnClick='() => Navigation.NavigateTo($"/admin/b2b/requests/{req.RequestId}")'>
+                                    فتح التفاصيل
+                                </MudButton>
+
+                                @if (req.Status == B2BRequestStatuses.New)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Visibility"
+                                               OnClick='() => UpdateStatusAsync(req.RequestId, B2BRequestStatuses.UnderReview)'>
+                                        مراجعة
+                                    </MudButton>
+                                }
+
+                                @if (req.Status == B2BRequestStatuses.New || req.Status == B2BRequestStatuses.UnderReview)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Check"
+                                               OnClick='() => UpdateStatusAsync(req.RequestId, B2BRequestStatuses.Converted)'>
+                                        تحويل
+                                    </MudButton>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="empty-state">
+                    <div class="empty-state-visual">🔍</div>
+                    <strong>لا توجد طلبات مطابقة</strong>
+                    <p>جرّب تغيير كلمات البحث أو اختيار حالة أخرى من الفلاتر.</p>
+                </div>
+            }
+        </section>
+    </div>
+}
+
+<style>
+    :root {
+        --surface: #ffffff;
+        --border: #e4eaf3;
+        --text: #0f172a;
+        --muted: #64748b;
+        --primary: #2563eb;
+        --primary-light: #dbeafe;
+        --r-xl: 28px;
+        --r-lg: 22px;
+        --r-md: 16px;
+        --sh-sm: 0 4px 14px rgba(15,23,42,.04);
+        --sh-md: 0 12px 30px rgba(15,23,42,.06);
+        --sh-lg: 0 20px 50px rgba(15,23,42,.10);
+    }
+
+    .b2b-loading { min-height: 55vh; display: flex; align-items: center; justify-content: center; }
+    .loading-shell { display: flex; align-items: center; gap: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-xl); padding: 1.4rem 1.6rem; box-shadow: var(--sh-lg); }
+    .loading-text { display: flex; flex-direction: column; gap: .12rem; }
+    .loading-text strong { color: var(--text); font-size: .95rem; }
+    .loading-text span { color: var(--muted); font-size: .82rem; }
+
+    .admin-requests-page { display: flex; flex-direction: column; gap: 1rem; padding: .15rem; }
+
+    /* ══ HERO ══ */
+    .hero-panel {
+        position: relative; overflow: hidden;
+        border-radius: var(--r-xl); padding: 1rem 1.2rem;
+        color: #fff;
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #2563eb 100%);
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 1rem; flex-wrap: wrap;
+        box-shadow: 0 16px 42px rgba(15,23,42,.20);
+    }
+
+    .hero-glow { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .3; pointer-events: none; }
+    .hero-glow.g1 { width: 180px; height: 180px; top: -50px; right: -25px; background: radial-gradient(circle, #60a5fa, transparent); }
+    .hero-glow.g2 { width: 140px; height: 140px; bottom: -40px; left: -15px; background: radial-gradient(circle, #34d399, transparent); }
+
+    .hero-body { position: relative; z-index: 1; display: flex; align-items: center; gap: .85rem; flex: 1; flex-wrap: wrap; }
+    .hero-icon-wrap {
+        width: 50px; height: 50px; border-radius: var(--r-md);
+        background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.16);
+        display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: #dbeafe;
+    }
+    .hero-text { flex: 1; min-width: 200px; }
+    .hero-chip {
+        display: inline-flex; align-items: center; gap: .4rem;
+        padding: .28rem .7rem; border-radius: 999px;
+        background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.14);
+        font-size: .7rem; font-weight: 800; margin-bottom: .35rem;
+    }
+    .chip-dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; animation: pulse-dot 2s infinite; }
+    @@keyframes pulse-dot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .4; transform: scale(1.5); } }
+    .hero-text h1 { margin: 0; font-size: 1.3rem; font-weight: 900; line-height: 1.2; }
+    .hero-text p { margin: .25rem 0 0; color: #bfdbfe; font-size: .84rem; line-height: 1.6; }
+
+    .hero-side { position: relative; z-index: 1; display: flex; flex-direction: column; gap: .6rem; align-items: flex-end; }
+
+    .hero-metrics-row {
+        display: flex; align-items: center;
+        background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);
+        border-radius: var(--r-lg); backdrop-filter: blur(8px); overflow: hidden;
+    }
+    .h-metric { flex: 1; display: flex; flex-direction: column; align-items: center; padding: .55rem .5rem; min-width: 65px; }
+    .h-metric strong { font-size: 1.2rem; font-weight: 900; line-height: 1; }
+    .h-metric span { margin-top: .15rem; color: #bfdbfe; font-size: .68rem; font-weight: 700; }
+    .h-metric-sep { width: 1px; height: 28px; background: rgba(255,255,255,.14); flex-shrink: 0; }
+
+    .refresh-btn {
+        display: inline-flex; align-items: center; gap: .4rem;
+        padding: .45rem .85rem; border-radius: 12px;
+        background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.16);
+        color: #fff; font-family: inherit; font-size: .78rem; font-weight: 800;
+        cursor: pointer; transition: .2s ease;
+    }
+    .refresh-btn:hover { background: rgba(255,255,255,.18); transform: translateY(-1px); }
+
+    /* ══ KPIs ══ */
+    .kpi-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .8rem; }
+
+    .kpi-card {
+        display: flex; align-items: center; gap: .65rem;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--r-lg); padding: .8rem .9rem;
+        box-shadow: var(--sh-sm); transition: .22s ease; position: relative;
+    }
+    .kpi-card:hover { transform: translateY(-2px); box-shadow: var(--sh-md); }
+
+    .kpi-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 3px rgba(0,0,0,.04); }
+    .new-dot { background: #3b82f6; }
+    .review-dot { background: #f59e0b; }
+    .converted-dot { background: #10b981; }
+    .closed-dot { background: #94a3b8; }
+    .rejected-dot { background: #ef4444; }
+
+    .kpi-info { display: flex; flex-direction: column; flex: 1; }
+    .kpi-info span { color: var(--muted); font-size: .78rem; margin-bottom: .1rem; }
+    .kpi-info strong { color: var(--text); font-size: 1.25rem; line-height: 1; }
+
+    .kpi-alert {
+        display: flex; align-items: center; gap: .25rem;
+        font-size: .66rem; color: #dc2626; font-weight: 800; white-space: nowrap;
+    }
+    .alert-dot { width: 5px; height: 5px; border-radius: 50%; background: #ef4444; animation: pulse-dot 2s infinite; }
+
+    /* ══ REQUESTS SURFACE ══ */
+    .requests-surface {
+        background: rgba(255,255,255,.96); border: 1px solid var(--border);
+        border-radius: var(--r-xl); padding: 1.2rem; box-shadow: var(--sh-md);
+    }
+
+    .toolbar {
+        display: grid; grid-template-columns: 1fr 220px;
+        gap: .75rem; margin-bottom: .75rem;
+    }
+    .toolbar-search { min-width: 0; }
+    .toolbar-select { min-width: 0; }
+
+    .filter-chips { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .9rem; }
+
+    .filter-chip {
+        display: inline-flex; align-items: center; gap: .4rem;
+        border: 1px solid var(--border); background: var(--surface); color: #334155;
+        border-radius: 999px; padding: .4rem .7rem; font-family: inherit; cursor: pointer;
+        font-size: .78rem; font-weight: 800; transition: .2s ease;
+    }
+    .filter-chip:hover { transform: translateY(-1px); border-color: #c0cee0; }
+    .filter-chip.active { background: var(--text); color: #fff; border-color: var(--text); box-shadow: 0 8px 16px rgba(15,23,42,.12); }
+    .filter-chip b {
+        min-width: 20px; height: 20px; padding: 0 .3rem; border-radius: 999px;
+        display: inline-flex; align-items: center; justify-content: center;
+        background: #f1f5f9; color: var(--text); font-size: .66rem; font-weight: 900;
+    }
+    .filter-chip.active b { background: rgba(255,255,255,.15); color: #fff; }
+
+    .results-header { margin-bottom: .7rem; color: var(--muted); font-size: .82rem; }
+    .results-header b { color: var(--text); }
+
+    /* ── Request cards ── */
+    .requests-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: .9rem; }
+
+    .req-card {
+        background: var(--surface); border: 1px solid var(--border);
+        border-top: 4px solid #94a3b8;
+        border-radius: var(--r-xl); padding: .95rem;
+        display: flex; flex-direction: column; gap: .6rem;
+        box-shadow: var(--sh-sm); transition: .25s ease;
+    }
+    .req-card:hover { transform: translateY(-3px); box-shadow: var(--sh-lg); }
+
+    .req-card.new { border-top-color: #3b82f6; }
+    .req-card.review { border-top-color: #f59e0b; }
+    .req-card.converted { border-top-color: #10b981; }
+    .req-card.closed { border-top-color: #94a3b8; }
+    .req-card.rejected { border-top-color: #ef4444; }
+
+    .req-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem; }
+    .req-card-id { display: flex; flex-direction: column; gap: .12rem; }
+    .req-hash { font-weight: 900; color: var(--text); font-size: 1rem; }
+    .req-customer { color: var(--muted); font-size: .8rem; }
+
+    .status-pill { display: inline-flex; padding: .25rem .6rem; border-radius: 999px; font-size: .68rem; font-weight: 900; white-space: nowrap; }
+    .status-pill.new { background: #dbeafe; color: #1d4ed8; }
+    .status-pill.review { background: #fef3c7; color: #b45309; }
+    .status-pill.converted { background: #d1fae5; color: #047857; }
+    .status-pill.closed { background: #e2e8f0; color: #475569; }
+    .status-pill.rejected { background: #fee2e2; color: #b91c1c; }
+
+    .req-progress { height: 3px; border-radius: 999px; background: #edf2f7; overflow: hidden; }
+    .req-progress-fill { height: 100%; border-radius: 999px; transition: width .4s ease; }
+    .req-progress-fill.new { background: #3b82f6; }
+    .req-progress-fill.review { background: #f59e0b; }
+    .req-progress-fill.converted { background: #10b981; }
+    .req-progress-fill.closed { background: #94a3b8; }
+    .req-progress-fill.rejected { background: #ef4444; }
+
+    .req-card-meta { display: flex; gap: .45rem; flex-wrap: wrap; }
+    .meta-chip {
+        display: inline-flex; align-items: center; gap: .3rem;
+        padding: .35rem .55rem; border-radius: 10px;
+        background: #f8fafc; border: 1px solid #edf2f7;
+        color: var(--muted); font-size: .74rem;
+    }
+
+    .req-card-details { display: flex; flex-direction: column; gap: .4rem; }
+    .detail-row {
+        display: flex; align-items: center; gap: .35rem;
+        font-size: .78rem; color: var(--muted);
+    }
+    .detail-row strong { color: var(--text); margin-right: .15rem; }
+
+    .req-card-note {
+        padding: .6rem .7rem; border-radius: 12px;
+        background: #f8fafc; border: 1px solid #edf2f7;
+        color: #334155; font-size: .8rem; line-height: 1.7;
+    }
+
+    .req-card-actions {
+        display: flex; gap: .4rem; flex-wrap: wrap;
+        padding-top: .4rem; border-top: 1px solid #f1f5f9;
+    }
+
+    /* ── Empty ── */
+    .empty-state {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: .5rem; padding: 2rem 1rem; text-align: center;
+        border-radius: var(--r-xl); background: linear-gradient(180deg, #fbfdff, #f8fafc);
+        border: 1.5px dashed #d8e2ec;
+    }
+    .empty-state-visual { font-size: 1.8rem; margin-bottom: .2rem; }
+    .empty-state strong { color: var(--text); font-size: .95rem; }
+    .empty-state p { margin: 0; color: var(--muted); font-size: .85rem; }
+
+    /* ── Responsive ── */
+    @@media (max-width: 960px) {
+        .hero-panel { padding: .9rem 1rem; }
+        .hero-text h1 { font-size: 1.15rem; }
+    }
+
+    @@media (max-width: 700px) {
+        .hero-panel, .requests-surface { border-radius: var(--r-lg); padding: .9rem; }
+        .hero-body, .hero-side { flex-direction: column; align-items: flex-start; }
+        .hero-side { width: 100%; align-items: stretch; }
+        .hero-metrics-row { width: 100%; }
+        .toolbar { grid-template-columns: 1fr; }
+        .req-card-actions { flex-direction: column; }
+        .req-card-actions .mud-button-root { width: 100%; }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private string? _statusFilter;
+    private string _searchText = string.Empty;
+    private string _currentUserName = "system";
+    private List<B2BRequestListDto> _allRequests = new();
+
+    private readonly List<StatusFilterVm> _statusFilters =
+    [
+        new("All", "الكل"),
+        new(B2BRequestStatuses.New, "جديد"),
+        new(B2BRequestStatuses.UnderReview, "قيد المراجعة"),
+        new(B2BRequestStatuses.Converted, "محوّل"),
+        new(B2BRequestStatuses.Closed, "مغلق"),
+        new(B2BRequestStatuses.Rejected, "مرفوض")
+    ];
+
+    private IEnumerable<B2BRequestListDto> FilteredRequests => _allRequests.Where(x =>
+        (string.IsNullOrWhiteSpace(_searchText)
+            || x.PartyName.Contains(_searchText, StringComparison.OrdinalIgnoreCase)
+            || x.PortalUserName.Contains(_searchText, StringComparison.OrdinalIgnoreCase)
+            || x.RequestId.ToString().Contains(_searchText, StringComparison.OrdinalIgnoreCase))
+        && (string.IsNullOrWhiteSpace(_statusFilter) || x.Status == _statusFilter));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        if (!B2BPermissions.CanManage(user))
+        {
+            Snackbar.Add("ليس لديك صلاحية متابعة طلبات B2B", Severity.Error);
+            Navigation.NavigateTo("/");
+            return;
+        }
+
+        _currentUserName = user.Identity?.Name ?? "system";
+        await LoadAsync();
+        _isLoading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        _allRequests = await RequestService.GetRequestsAsync();
+    }
+
+    private async Task OnStatusChanged(string? value)
+    {
+        _statusFilter = value;
+        await Task.CompletedTask;
+    }
+
+    private async Task UpdateStatusAsync(int requestId, string status)
+    {
+        var (success, message) = await RequestService.UpdateStatusAsync(requestId, status, _currentUserName);
+        Snackbar.Add(message, success ? Severity.Success : Severity.Error);
+        if (success)
+            await LoadAsync();
+    }
+
+    private int GetFilterCount(string key) =>
+        key == "All" ? _allRequests.Count : _allRequests.Count(x => x.Status == key);
+
+    private static int GetProgressPercent(string status) => status switch
+    {
+        B2BRequestStatuses.New => 20,
+        B2BRequestStatuses.UnderReview => 50,
+        B2BRequestStatuses.Converted => 100,
+        B2BRequestStatuses.Closed => 100,
+        B2BRequestStatuses.Rejected => 100,
+        _ => 10
+    };
+
+    private static string GetRequestTypeText(string v) => v switch
+    {
+        B2BRequestTypes.Quotation => "طلب عرض سعر",
+        B2BRequestTypes.Reorder => "إعادة طلب",
+        B2BRequestTypes.PaymentProof => "إثبات دفع",
+        B2BRequestTypes.Support => "دعم / استفسار",
+        _ => v
+    };
+
+    private static string GetRequestStatusText(string v) => v switch
+    {
+        B2BRequestStatuses.New => "جديد",
+        B2BRequestStatuses.UnderReview => "تحت المراجعة",
+        B2BRequestStatuses.Converted => "تم التحويل",
+        B2BRequestStatuses.Closed => "مغلق",
+        B2BRequestStatuses.Rejected => "مرفوض",
+        _ => v
+    };
+
+    private static string GetStatusClass(string v) => v switch
+    {
+        B2BRequestStatuses.New => "new",
+        B2BRequestStatuses.UnderReview => "review",
+        B2BRequestStatuses.Converted => "converted",
+        B2BRequestStatuses.Closed => "closed",
+        B2BRequestStatuses.Rejected => "rejected",
+        _ => "closed"
+    };
+
+    private sealed record StatusFilterVm(string Key, string Title);
+}

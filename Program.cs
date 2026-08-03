@@ -150,6 +150,10 @@ builder.Services.AddScoped<IInteractionService, InteractionService>();
 builder.Services.AddScoped<ITaskService, TaskService>();
 builder.Services.AddScoped<ICrmSettingsService, CrmSettingsService>();
 builder.Services.AddScoped<ILeadsCrmService, LeadsCrmService>();
+builder.Services.AddScoped<IB2BAuthService, B2BAuthService>();
+builder.Services.AddScoped<IB2BPortalUserService, B2BPortalUserService>();
+builder.Services.AddScoped<IB2BRequestService, B2BRequestService>();
+builder.Services.AddScoped<IB2BPortalService, B2BPortalService>();
 
 
 
@@ -274,7 +278,7 @@ app.MapDelete("/api/company-locations/{locationId:int}", async (
 }).RequireAuthorization();
 
 
-app.MapRazorComponents<App>()
+app.MapRazorComponents<COCOBOLOERPNEW.Components.App>()
     .AddInteractiveServerRenderMode();
 
 // ============================================================
@@ -394,6 +398,81 @@ app.MapGet("/auth/current-user", (ClaimsPrincipal user) => Results.Ok(new
                       .Select(c => c.Value)
                       .ToList()
 })).RequireAuthorization();
+
+// ============================================================
+// 🔐 B2B Portal Auth
+// ============================================================
+app.MapPost("/b2b/auth/login", async (
+    [FromBody] LoginRequest request,
+    HttpContext http,
+    IB2BAuthService b2bAuth,
+    db24804Context db) =>
+{
+    var username = request.Username?.Trim();
+    var password = request.Password ?? string.Empty;
+
+    if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+        return Results.BadRequest("يرجى إدخال اسم المستخدم وكلمة المرور.");
+
+    var result = await b2bAuth.ValidateLoginAsync(username, password);
+    if (result is null)
+        return Results.BadRequest("بيانات الدخول غير صحيحة.");
+
+    var claims = new List<Claim>
+    {
+        new(ClaimTypes.Name, result.UserName),
+        new(ClaimTypes.Role, B2BPermissions.PortalRole),
+        new("UserId", "0"),
+        new("PortalUserId", result.PortalUserId.ToString()),
+        new("PartyId", result.PartyId.ToString()),
+        new("PortalDisplayName", result.FullName)
+    };
+
+    if (result.ResponsibleEmployeeId.HasValue)
+        claims.Add(new Claim("ResponsibleEmployeeId", result.ResponsibleEmployeeId.Value.ToString()));
+
+    var principal = new ClaimsPrincipal(
+        new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
+
+    await http.SignInAsync(
+        CookieAuthenticationDefaults.AuthenticationScheme,
+        principal,
+        new AuthenticationProperties
+        {
+            IsPersistent = false,
+            AllowRefresh = true
+        });
+
+    var portalUser = await db.B2BPortalUsers.FirstOrDefaultAsync(x => x.PortalUserId == result.PortalUserId);
+    if (portalUser != null)
+    {
+        portalUser.LastLogin = DateTime.Now;
+        await db.SaveChangesAsync();
+    }
+
+    return Results.Ok(new { message = "Authenticated" });
+}).RequireRateLimiting("login");
+
+app.MapPost("/b2b/auth/logout", async (HttpContext http) =>
+{
+    await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Ok(new { message = "Logged out" });
+});
+
+app.MapGet("/b2b/auth/current-user", (ClaimsPrincipal user) =>
+{
+    if (!B2BPermissions.IsPortalUser(user))
+        return Results.Unauthorized();
+
+    return Results.Ok(new
+    {
+        Username = user.Identity?.Name,
+        DisplayName = user.FindFirst("PortalDisplayName")?.Value,
+        PartyId = user.FindFirst("PartyId")?.Value,
+        PortalUserId = user.FindFirst("PortalUserId")?.Value,
+        ResponsibleEmployeeId = user.FindFirst("ResponsibleEmployeeId")?.Value
+    });
+}).RequireAuthorization();
 // ============================================================
 // 🖼️ Product Image API
 // ============================================================

@@ -10,6 +10,7 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
 @using MudBlazor
+@using COCOBOLOERPNEW.Helpers
 
 @inject NotificationService      NotificationService
 @inject AuthenticationStateProvider AuthProvider
@@ -691,13 +692,13 @@ else
                                          Items="_salesChart"
                                          Name="المبيعات"
                                          SeriesType="SeriesType.Area"
-                                         XValue="@(d => d.Label)"
+                                         XValue="@(d => d.ChartLabel)"
                                          YValue="@(d => (decimal?)d.Amount)" />
                         <ApexPointSeries TItem="DayData"
                                          Items="_expensesChart"
                                          Name="المصروفات"
                                          SeriesType="SeriesType.Line"
-                                         XValue="@(d => d.Label)"
+                                         XValue="@(d => d.ChartLabel)"
                                          YValue="@(d => (decimal?)d.Amount)" />
                     </ApexChart>
                 </div>
@@ -744,7 +745,7 @@ else
                                          Items="_quotesDonut"
                                          Name="العروض"
                                          SeriesType="SeriesType.Donut"
-                                         XValue="@(d => d.Label)"
+                                         XValue="@(d => d.ChartLabel)"
                                          YValue="@(d => (decimal?)d.Value)" />
                     </ApexChart>
                 </div>
@@ -2536,6 +2537,7 @@ else
                 ViewComplaints = user.HasClaim("Permission", "frm_Complaints_Main:View") || user.IsInRole("Admin"),
                 ViewDeliveryTracking = DeliveryPermissions.CanView(user),
                 ViewCrmTeamSummary = user.IsInRole("Admin") || user.IsInRole("SalesManager"),
+                ViewB2BManagement = user.HasClaim("Permission", "B2B:View") || user.IsInRole("Admin"),
                 AddCustomer    = user.HasClaim("Permission", "frm_Parties:Add")          || user.IsInRole("Admin"),
                 AddProduct     = user.HasClaim("Permission", "frm_ProductList:Add")      || user.IsInRole("Admin"),
                 AddQuote       = user.HasClaim("Permission", "frmQuotationsList:Add")    || user.IsInRole("Admin"),
@@ -2627,6 +2629,7 @@ else
         if (_p.ViewAttendance) links.Add(new("الحضور",       "/attendance",         Icons.Material.Rounded.Hail,                 "#8b5cf6"));
         if (_p.ViewSales)      links.Add(new("المدفوعات",    "/payments",           Icons.Material.Rounded.Payments,             "#3b82f6"));
         if (_p.ViewDeliveryTracking) links.Add(new("متابعة التسليمات", "/sales-delivery-status", Icons.Material.Rounded.LocalShipping, "#14b8a6"));
+        if (_p.ViewB2BManagement) links.Add(new("طلبات B2B", "/admin/b2b/requests", Icons.Material.Rounded.StoreMallDirectory, "#0ea5e9"));
         return links;
     }
 
@@ -2968,6 +2971,19 @@ if (_p.ViewQuotes)
                 if (needPrice > 0)
                     items.Add(new() { Emoji = "🏷️", Title = $"{needPrice} منتج في انتظار التسعير", Description = "ادخل التكلفة لتحديد السعر", Link = "/products", Severity = "medium" });
             }
+
+            if (_p.ViewB2BManagement)
+            {
+                var newB2BRequests = await db.B2BRequests.AsNoTracking()
+                    .CountAsync(x => x.Status == B2BRequestStatuses.New);
+                if (newB2BRequests > 0)
+                    items.Add(new() { Emoji = "🛒", Title = $"{newB2BRequests} طلب B2B جديد", Description = "راجع طلبات العملاء التجارية الجديدة", Link = "/admin/b2b/requests", Severity = "high" });
+
+                var reviewB2BRequests = await db.B2BRequests.AsNoTracking()
+                    .CountAsync(x => x.Status == B2BRequestStatuses.UnderReview);
+                if (reviewB2BRequests > 0)
+                    items.Add(new() { Emoji = "📋", Title = $"{reviewB2BRequests} طلب B2B تحت المراجعة", Description = "استكمل متابعة الطلبات المفتوحة", Link = "/admin/b2b/requests", Severity = "medium" });
+            }
         }
         catch (Exception ex) { Console.WriteLine($"[LoadAttentionItems] {ex.Message}"); }
 
@@ -3072,6 +3088,14 @@ if (_p.ViewQuotes)
                     .CountAsync(p => p.PricingStatusId == 2);
                 if (productsPendingPricing > 0)
                     priorityItems.Add(new("منتجات بانتظار التسعير", productsPendingPricing, "استكمال التسعير يسرّع البيع والعروض", "/products", Icons.Material.Filled.Inventory2, "#8b5cf6", "medium", 60));
+            }
+
+            if (_p.ViewB2BManagement)
+            {
+                var newB2BRequests = await db.B2BRequests.AsNoTracking()
+                    .CountAsync(x => x.Status == B2BRequestStatuses.New);
+                if (newB2BRequests > 0)
+                    priorityItems.Add(new("طلبات B2B جديدة", newB2BRequests, "راجع الطلبات الواردة من بوابة العملاء فورًا", "/admin/b2b/requests", Icons.Material.Filled.StoreMallDirectory, "#0ea5e9", "high", 92));
             }
 
             if (_p.ViewComplaints)
@@ -3549,6 +3573,11 @@ if (_p.ViewQuotes)
     private static string GetStatClass(string val) =>
         val.Length >= 7 ? "val-sm" : val.Length >= 5 ? "val-md" : "val-num";
 
+    private static string SafeChartText(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : $"\u2067{value.Trim()}\u2069";
+
     private void ToggleFab() => _fabOpen = !_fabOpen;
     private void NavTo(string url) { _fabOpen = false; Navigation.NavigateTo(url); }
 
@@ -3557,7 +3586,7 @@ if (_p.ViewQuotes)
     {
         public bool ViewSales, ViewQuotes, ViewCustomers, ViewCashBox, ViewPurchases;
         public bool ViewProducts, ViewEmployees, ViewExpenses, ViewLeads, ViewAttendance;
-        public bool ViewTasks, ViewDeliveryTracking, ViewCrmTeamSummary;
+        public bool ViewTasks, ViewDeliveryTracking, ViewCrmTeamSummary, ViewB2BManagement;
         public bool AddCustomer, AddProduct, AddQuote, AddInvoice;
         public bool AddCashBox, AddComplaint, AddInspection;
         public bool ViewComplaints;
@@ -3651,8 +3680,14 @@ if (_p.ViewQuotes)
     }
 
     private record QuickLink(string Label, string Url, string Icon, string Color);
-    private record DayData(string Label, decimal Amount);
-    private record SliceData(string Label, decimal Value, string Status, string Color);
+    private record DayData(string Label, decimal Amount)
+    {
+        public string ChartLabel => SafeChartText(Label);
+    }
+    private record SliceData(string Label, decimal Value, string Status, string Color)
+    {
+        public string ChartLabel => SafeChartText(Label);
+    }
     private record WidgetMetric(string Label, string Value, string Tone);
     private record PriorityItem(string Title, int Count, string Description, string Link, string Icon, string Color, string Severity, int Rank);
 }
