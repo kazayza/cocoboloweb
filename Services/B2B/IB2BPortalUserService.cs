@@ -9,6 +9,7 @@ public interface IB2BPortalUserService
     Task<List<B2BLookupDto>> SearchPartyLookupsAsync(string? searchText, int take = 20);
     Task<B2BLookupDto?> GetPartyLookupByIdAsync(int id);
     Task<List<B2BLookupDto>> GetEmployeeLookupsAsync();
+    Task<List<B2BLookupDto>> GetPortalUserLookupsByPartyAsync(int partyId);
     Task<(bool Success, string Message, int? Id)> SaveAsync(B2BPortalUserFormDto dto, string currentUserName);
     Task<(bool Success, string Message)> SetActiveAsync(int id, bool isActive, string currentUserName);
 }

@@ -778,6 +778,16 @@ try
         relatedTable: "Quotations",
         relatedId: quotationId);
 
+    // إشعار للمدير العام
+    await notify.NotifyRoleAsync(
+        title: title,
+        message: message,
+        role: "GeneralManager",
+        createdBy: "Customer",
+        formName: "quotations",
+        relatedTable: "Quotations",
+        relatedId: quotationId);
+
     // إشعار لمدير المبيعات
     await notify.NotifyRoleAsync(
         title: title,

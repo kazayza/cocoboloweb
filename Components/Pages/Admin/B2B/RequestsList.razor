@@ -3,8 +3,10 @@
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
 
 @inject IB2BRequestService RequestService
+@inject IB2BPortalUserService PortalUserService
 @inject AuthenticationStateProvider AuthProvider
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
@@ -71,10 +73,16 @@ else
                     </div>
                 </div>
 
-                <button class="refresh-btn" @onclick="LoadAsync">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,4 23,10 17,10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                    تحديث
-                </button>
+                <div class="hero-side-actions">
+                    <button class="refresh-btn" @onclick="LoadAsync">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,4 23,10 17,10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                        تحديث
+                    </button>
+                    <button class="create-btn" @onclick="ToggleCreateInternal">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        طلب جديد نيابة عن عميل
+                    </button>
+                </div>
             </div>
         </section>
 
@@ -105,6 +113,167 @@ else
                 <div class="kpi-info"><span>مرفوضة</span><strong>@_allRequests.Count(x => x.Status == B2BRequestStatuses.Rejected)</strong></div>
             </div>
         </section>
+
+        @if (_showInternalCreate)
+        {
+            <section class="requests-surface internal-create-surface">
+                <div class="surface-title-row">
+                    <div>
+                        <h3>إنشاء طلب نيابة عن العميل</h3>
+                        <p>استخدم هذا النموذج عندما يطلب العميل عبر الهاتف أو واتساب أو الزيارة دون الدخول إلى البوابة.</p>
+                    </div>
+                </div>
+
+                <MudGrid>
+                    <MudItem xs="12" md="6">
+                        <MudAutocomplete T="B2BLookupDto"
+                                         Value="_selectedParty"
+                                         ValueChanged="OnInternalPartyChanged"
+                                         SearchFunc="SearchPartiesAsync"
+                                         ToStringFunc="@(x => x?.Name ?? string.Empty)"
+                                         Label="ابحث عن العميل"
+                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                         Clearable="true" ResetValueOnEmptyText="true" CoerceText="false"
+                                         Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" />
+                    </MudItem>
+                    <MudItem xs="12" md="3">
+                        <MudSelect T="string" @bind-Value="_internalCreate.RequestSource" Label="مصدر الطلب" Variant="Variant.Outlined" Margin="Margin.Dense">
+                            <MudSelectItem Value="@("Internal")">داخلي</MudSelectItem>
+                            <MudSelectItem Value="@("Phone")">هاتف</MudSelectItem>
+                            <MudSelectItem Value="@("WhatsApp")">واتساب</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="3">
+                        <MudSelect T="int?" @bind-Value="_internalCreate.ResponsibleEmployeeId" Label="الموظف المسئول" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+                            @foreach (var emp in _employees)
+                            {
+                                <MudSelectItem Value="@((int?)emp.Id)">@emp.Name</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="4">
+                        <MudSelect T="int?" @bind-Value="_internalCreate.PortalUserId" Label="مستخدم البوابة (اختياري)" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+                            @foreach (var pu in _partyPortalUsers)
+                            {
+                                <MudSelectItem Value="@((int?)pu.Id)">@pu.Name</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="4">
+                        <MudTextField T="string" @bind-Value="_internalCreate.RequestedContactName" Label="اسم الشخص الذي طلب" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </MudItem>
+                    <MudItem xs="12" md="4">
+                        <MudTextField T="string" @bind-Value="_internalCreate.RequestedContactPhone" Label="هاتف جهة التواصل" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </MudItem>
+                    <MudItem xs="12" md="4">
+                        <MudSelect T="string" @bind-Value="_internalCreate.RequestType" Label="نوع الطلب" Variant="Variant.Outlined" Margin="Margin.Dense">
+                            <MudSelectItem Value="@B2BRequestTypes.Quotation">طلب عرض سعر</MudSelectItem>
+                            <MudSelectItem Value="@B2BRequestTypes.Reorder">إعادة طلب</MudSelectItem>
+                            <MudSelectItem Value="@B2BRequestTypes.PaymentProof">إثبات دفع</MudSelectItem>
+                            <MudSelectItem Value="@B2BRequestTypes.Support">دعم / استفسار</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="8">
+                        <MudTextField T="string" @bind-Value="_internalCreate.Notes" Label="ملخص / ملاحظات عامة" Lines="4" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                    </MudItem>
+                </MudGrid>
+
+                @if (!_internalCreate.PartyId.HasValue)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                        اختر العميل أولاً قبل اختيار مستخدم البوابة أو حفظ الطلب.
+                    </MudAlert>
+                }
+                else if (!_partyPortalUsers.Any())
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                        لا يوجد حساب بوابة لهذا العميل — يمكن المتابعة بدون بوابة، أو إنشاء حساب لاحقًا من شاشة مستخدمي البوابة.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                        يوجد لهذا العميل حسابات بوابة مرتبطة — اختيار مستخدم البوابة اختياري فقط.
+                    </MudAlert>
+                }
+
+                @if (SupportsItems(_internalCreate.RequestType))
+                {
+                    <div class="internal-items-zone">
+                        <div class="internal-items-head">
+                            <strong>بنود الطلب</strong>
+                            <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="AddInternalItemLine">إضافة بند</MudButton>
+                        </div>
+                        @for (var i = 0; i < _internalCreate.Items.Count; i++)
+                        {
+                            var idx = i;
+                            <div class="internal-item-row">
+                                <MudGrid>
+                                    <MudItem xs="12" md="5">
+                                        <MudAutocomplete T="B2BProductLookupDto"
+                                                         Value="_internalCreate.Items[idx].SelectedProduct"
+                                                         ValueChanged="@(p => OnInternalProductChanged(idx, p))"
+                                                         SearchFunc="SearchProductsAsync"
+                                                         ToStringFunc="@(p => p?.DisplayName ?? string.Empty)"
+                                                         Label="ابحث عن المنتج"
+                                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Clearable="true" ResetValueOnEmptyText="true" CoerceText="false"
+                                                         Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search">
+                                            <ItemTemplate Context="product">
+                                                <div class="product-dropdown-item with-image">
+                                                    @if (!string.IsNullOrWhiteSpace(product.ImageUrl))
+                                                    {
+                                                        <img src="@product.ImageUrl" alt="@product.ProductName" class="product-thumb" />
+                                                    }
+                                                    <div class="product-dropdown-text">
+                                                        <strong>@product.ProductName</strong>
+                                                        @if (!string.IsNullOrWhiteSpace(product.ProductDescription))
+                                                        { <small>@product.ProductDescription</small> }
+                                                    </div>
+                                                </div>
+                                            </ItemTemplate>
+                                        </MudAutocomplete>
+                                    </MudItem>
+                                    <MudItem xs="12" md="2">
+                                        <MudNumericField T="decimal" @bind-Value="_internalCreate.Items[idx].Quantity" Label="الكمية" Min="1" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    </MudItem>
+                                    <MudItem xs="12" md="4">
+                                        <MudTextField T="string" @bind-Value="_internalCreate.Items[idx].Notes" Label="ملاحظات البند" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    </MudItem>
+                                    <MudItem xs="12" md="1" Class="d-flex align-center justify-center">
+                                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline" Color="Color.Error" OnClick='() => RemoveInternalItemLine(idx)' />
+                                    </MudItem>
+                                </MudGrid>
+                            </div>
+                        }
+                    </div>
+                }
+
+                <div class="attachments-zone">
+                    <div class="internal-items-head">
+                        <strong>مرفقات الطلب</strong>
+                    </div>
+                    <InputFile OnChange="OnInternalFilesChanged" multiple class="attachment-input" />
+                    @if (_internalFiles.Any())
+                    {
+                        <div class="attachments-preview-list">
+                            @foreach (var file in _internalFiles)
+                            {
+                                <div class="attachment-chip">
+                                    <span>@file.Name</span>
+                                    <small>@FormatFileSize(file.Size)</small>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="internal-create-actions">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CreateInternalAsync">حفظ الطلب</MudButton>
+                    <MudButton Variant="Variant.Text" OnClick="ResetInternalForm">مسح</MudButton>
+                </div>
+            </section>
+        }
 
         <!-- ══════════════ REQUESTS LIST ══════════════ -->
         <section class="requests-surface">
@@ -183,8 +352,21 @@ else
                                 <div class="detail-row">
                                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                                     <span>مستخدم البوابة:</span>
-                                    <strong>@req.PortalUserName</strong>
+                                    <strong>@GetPortalUserDisplay(req)</strong>
                                 </div>
+                                <div class="detail-row">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>
+                                    <span>المصدر:</span>
+                                    <strong>@GetRequestSourceText(req.RequestSource)</strong>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(req.RequestedContactName) || !string.IsNullOrWhiteSpace(req.RequestedContactPhone))
+                                {
+                                    <div class="detail-row">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 3.15 10.8 19.79 19.79 0 0 1 .08 2.09 2 2 0 0 1 2.06-.09h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L6.09 7.91a16 16 0 0 0 10 10l1.36-1.22a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                                        <span>جهة التواصل:</span>
+                                        <strong>@GetContactDisplay(req)</strong>
+                                    </div>
+                                }
                                 <div class="detail-row">
                                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
                                     <span>الموظف المسئول:</span>
@@ -299,6 +481,8 @@ else
     .hero-text p { margin: .25rem 0 0; color: #bfdbfe; font-size: .84rem; line-height: 1.6; }
 
     .hero-side { position: relative; z-index: 1; display: flex; flex-direction: column; gap: .6rem; align-items: flex-end; }
+    .hero-side-actions{display:flex;gap:.5rem;flex-wrap:wrap;justify-content:flex-end}
+    .create-btn{display:inline-flex;align-items:center;gap:.4rem;padding:.45rem .85rem;border-radius:12px;background:#fff;color:#0f172a;border:1px solid rgba(255,255,255,.16);font-family:inherit;font-size:.78rem;font-weight:800;cursor:pointer;transition:.2s ease}.create-btn:hover{transform:translateY(-1px);box-shadow:0 10px 20px rgba(15,23,42,.10)}
 
     .hero-metrics-row {
         display: flex; align-items: center;
@@ -352,6 +536,18 @@ else
         background: rgba(255,255,255,.96); border: 1px solid var(--border);
         border-radius: var(--r-xl); padding: 1.2rem; box-shadow: var(--sh-md);
     }
+    .internal-create-surface{margin-top:.2rem}
+    .surface-title-row h3{margin:0;color:var(--text);font-size:1.08rem;font-weight:900}.surface-title-row p{margin:.25rem 0 0;color:var(--muted);font-size:.84rem}
+    .internal-items-zone{margin-top:1rem;padding:1rem;border:1px dashed #cbd5e1;border-radius:16px;background:#f8fafc}
+    .internal-items-head{display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem}
+    .internal-item-row{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:.6rem .75rem;margin-bottom:.6rem}
+    .attachments-zone{margin-top:1rem;padding:1rem;border:1px dashed #cbd5e1;border-radius:16px;background:#fff}
+    .attachment-input{display:block;width:100%;padding:.75rem;border:1px dashed #cbd5e1;border-radius:12px;background:#f8fafc;margin-top:.5rem}
+    .attachments-preview-list{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.75rem}
+    .attachment-chip{display:flex;flex-direction:column;gap:.08rem;padding:.5rem .7rem;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc}
+    .attachment-chip span{font-size:.82rem;color:#0f172a;font-weight:700}.attachment-chip small{font-size:.72rem;color:#64748b}
+    .internal-create-actions{display:flex;gap:.75rem;justify-content:flex-end;align-items:center;margin-top:1rem;flex-wrap:wrap}
+    .product-dropdown-item{display:flex;flex-direction:column;gap:2px}.product-dropdown-item.with-image{flex-direction:row;align-items:center;gap:.65rem}.product-dropdown-text{display:flex;flex-direction:column;gap:2px;min-width:0}.product-thumb{width:44px;height:44px;object-fit:cover;border-radius:10px;border:1px solid #e2e8f0;background:#f8fafc;flex-shrink:0}.product-dropdown-item strong{color:var(--text);font-size:.86rem}.product-dropdown-item small{color:var(--muted);font-size:.72rem}
 
     .toolbar {
         display: grid; grid-template-columns: 1fr 220px;
@@ -469,15 +665,31 @@ else
         .toolbar { grid-template-columns: 1fr; }
         .req-card-actions { flex-direction: column; }
         .req-card-actions .mud-button-root { width: 100%; }
+        .internal-create-actions .mud-button-root { width: 100%; }
+        .hero-side-actions { width:100%; justify-content:stretch; }
+        .create-btn, .refresh-btn { width:100%; justify-content:center; }
+        .party-picker-wrap{flex-direction:column}
+        .party-picker-wrap > .mud-button-root{width:100%;margin-top:0}
     }
 </style>
 
 @code {
     private bool _isLoading = true;
+    private bool _showInternalCreate;
     private string? _statusFilter;
     private string _searchText = string.Empty;
     private string _currentUserName = "system";
     private List<B2BRequestListDto> _allRequests = new();
+    private List<B2BLookupDto> _employees = new();
+    private List<B2BLookupDto> _partyPortalUsers = new();
+    private B2BLookupDto? _selectedParty;
+    private List<IBrowserFile> _internalFiles = new();
+    private B2BInternalCreateRequestDto _internalCreate = new()
+    {
+        RequestSource = "Internal",
+        RequestType = B2BRequestTypes.Quotation,
+        Items = new List<B2BRequestItemInputDto> { new() { Quantity = 1 } }
+    };
 
     private readonly List<StatusFilterVm> _statusFilters =
     [
@@ -508,6 +720,7 @@ else
         }
 
         _currentUserName = user.Identity?.Name ?? "system";
+        _employees = await PortalUserService.GetEmployeeLookupsAsync();
         await LoadAsync();
         _isLoading = false;
     }
@@ -515,6 +728,105 @@ else
     private async Task LoadAsync()
     {
         _allRequests = await RequestService.GetRequestsAsync();
+    }
+
+    private void ToggleCreateInternal() => _showInternalCreate = !_showInternalCreate;
+
+    private async Task<IEnumerable<B2BLookupDto>> SearchPartiesAsync(string? value, CancellationToken token)
+    {
+        try { return await PortalUserService.SearchPartyLookupsAsync(value, 20); }
+        catch { return Enumerable.Empty<B2BLookupDto>(); }
+    }
+
+    private async Task OnInternalPartyChanged(B2BLookupDto? item)
+    {
+        _selectedParty = item;
+        _internalCreate.PartyId = item?.Id;
+        _internalCreate.PortalUserId = null;
+        _partyPortalUsers = item is null ? new() : await PortalUserService.GetPortalUserLookupsByPartyAsync(item.Id);
+    }
+
+    private bool SupportsItems(string type)
+        => type is B2BRequestTypes.Quotation or B2BRequestTypes.Reorder;
+
+    private void AddInternalItemLine() => _internalCreate.Items.Add(new B2BRequestItemInputDto { Quantity = 1 });
+
+    private void RemoveInternalItemLine(int index)
+    {
+        if (index >= 0 && index < _internalCreate.Items.Count)
+            _internalCreate.Items.RemoveAt(index);
+    }
+
+    private async Task<IEnumerable<B2BProductLookupDto>> SearchProductsAsync(string? value, CancellationToken token)
+    {
+        try { return await RequestService.SearchProductsAsync(value, 50); }
+        catch { return Enumerable.Empty<B2BProductLookupDto>(); }
+    }
+
+    private Task OnInternalProductChanged(int index, B2BProductLookupDto? product)
+    {
+        if (index < 0 || index >= _internalCreate.Items.Count) return Task.CompletedTask;
+        _internalCreate.Items[index].SelectedProduct = product;
+        _internalCreate.Items[index].ProductId = product?.ProductId;
+        return Task.CompletedTask;
+    }
+
+    private Task OnInternalFilesChanged(InputFileChangeEventArgs e)
+    {
+        _internalFiles = e.GetMultipleFiles(10).ToList();
+        return Task.CompletedTask;
+    }
+
+    private void ResetInternalForm()
+    {
+        _selectedParty = null;
+        _partyPortalUsers = new();
+        _internalFiles = new();
+        _internalCreate = new B2BInternalCreateRequestDto
+        {
+            RequestSource = "Internal",
+            RequestType = B2BRequestTypes.Quotation,
+            Items = new List<B2BRequestItemInputDto> { new() { Quantity = 1 } }
+        };
+    }
+
+    private async Task CreateInternalAsync()
+    {
+        if (!_internalCreate.PartyId.HasValue)
+        {
+            Snackbar.Add("اختر العميل أولاً", Severity.Warning);
+            return;
+        }
+
+        var hasItems = _internalCreate.Items.Any(i => i.ProductId.HasValue || !string.IsNullOrWhiteSpace(i.Notes));
+        if (SupportsItems(_internalCreate.RequestType) && !hasItems)
+        {
+            Snackbar.Add("أضف بندًا واحدًا على الأقل للطلب الداخلي.", Severity.Warning);
+            return;
+        }
+
+        if (!SupportsItems(_internalCreate.RequestType) && string.IsNullOrWhiteSpace(_internalCreate.Notes))
+        {
+            Snackbar.Add("اكتب ملخص الطلب قبل الحفظ.", Severity.Warning);
+            return;
+        }
+
+        var result = await RequestService.CreateInternalAsync(_internalCreate, _currentUserName);
+        Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+        if (!result.Success) return;
+
+        if (result.Id.HasValue && _internalFiles.Any())
+        {
+            var upload = await RequestService.UploadAttachmentsAsync(result.Id.Value, _internalFiles, _currentUserName);
+            Snackbar.Add(upload.Message, upload.Success ? Severity.Success : Severity.Warning);
+        }
+
+        await LoadAsync();
+        var createdId = result.Id;
+        ResetInternalForm();
+        _showInternalCreate = false;
+        if (createdId.HasValue)
+            Navigation.NavigateTo($"/admin/b2b/requests/{createdId.Value}");
     }
 
     private async Task OnStatusChanged(string? value)
@@ -533,6 +845,30 @@ else
 
     private int GetFilterCount(string key) =>
         key == "All" ? _allRequests.Count : _allRequests.Count(x => x.Status == key);
+
+    private static string GetRequestSourceText(string value) => value switch
+    {
+        "Portal" => "من البوابة",
+        "Internal" => "داخلي",
+        "Phone" => "هاتف",
+        "WhatsApp" => "واتساب",
+        _ => value
+    };
+
+    private static string GetPortalUserDisplay(B2BRequestListDto req)
+        => !string.IsNullOrWhiteSpace(req.PortalUserName)
+            ? req.PortalUserName
+            : "تم إنشاؤه بواسطة الموظف";
+
+    private static string GetContactDisplay(B2BRequestListDto req)
+        => string.Join(" — ", new[] { req.RequestedContactName, req.RequestedContactPhone }.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes >= 1024 * 1024) return $"{bytes / 1024d / 1024d:F1} MB";
+        if (bytes >= 1024) return $"{bytes / 1024d:F0} KB";
+        return $"{bytes} B";
+    }
 
     private static int GetProgressPercent(string status) => status switch
     {

@@ -1,0 +1,147 @@
+@page "/b2b/notifications"
+@layout COCOBOLOERPNEW.Components.Layout.B2BLayout
+
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject AuthenticationStateProvider AuthProvider
+@inject NotificationService NotificationService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>إشعارات البورتال</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="b2b-loading"><MudProgressCircular Indeterminate="true" Color="Color.Primary" /></div>
+}
+else
+{
+    <div class="portal-notifications-page" dir="rtl">
+        <section class="notif-hero-card">
+            <div>
+                <h1>إشعارات البورتال</h1>
+                <p>تابع آخر تحديثات الطلبات والحالة الحالية لكل إجراء.</p>
+            </div>
+            <div class="notif-hero-actions">
+                <MudChip T="string" Color="Color.Error" Variant="Variant.Outlined">غير مقروء: @_unreadCount</MudChip>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="MarkAllReadAsync">تعليم الكل كمقروء</MudButton>
+            </div>
+        </section>
+
+        <MudPaper Class="pa-4" Elevation="0">
+            @if (_notifications.Any())
+            {
+                <div class="portal-notification-list">
+                    @foreach (var item in _notifications)
+                    {
+                        <button type="button" class='portal-notification-item @(item.IsRead ? "" : "unread")' @onclick='() => OpenNotificationAsync(item)'>
+                            <div class="portal-notification-icon">
+                                <MudIcon Icon="@Icons.Material.Filled.NotificationsActive" Size="Size.Small" />
+                            </div>
+                            <div class="portal-notification-body">
+                                <div class="portal-notification-head">
+                                    <strong>@item.Title</strong>
+                                    <span>@GetTimeAgo(item.CreatedAt)</span>
+                                </div>
+                                <p>@item.Message</p>
+                            </div>
+                        </button>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="empty-history-state">لا توجد إشعارات حالياً.</div>
+            }
+        </MudPaper>
+    </div>
+}
+
+<style>
+    .b2b-loading{min-height:40vh;display:flex;align-items:center;justify-content:center}
+    .portal-notifications-page{display:flex;flex-direction:column;gap:1rem}
+    .notif-hero-card{background:linear-gradient(135deg,#0f172a,#1e293b);color:#fff;border-radius:18px;padding:1.2rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+    .notif-hero-card h1{margin:0;font-size:1.35rem}.notif-hero-card p{margin:.35rem 0 0;color:#cbd5e1}.notif-hero-actions{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap}
+    .portal-notification-list{display:flex;flex-direction:column;gap:.7rem}
+    .portal-notification-item{display:flex;gap:.75rem;align-items:flex-start;width:100%;text-align:right;padding:1rem;border-radius:16px;border:1px solid #e2e8f0;background:#fff;cursor:pointer;font-family:inherit;transition:.18s}
+    .portal-notification-item:hover{transform:translateY(-1px);box-shadow:0 8px 16px rgba(15,23,42,.05)}
+    .portal-notification-item.unread{background:#fffbeb;border-right:4px solid #f59e0b}
+    .portal-notification-icon{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:#eef2ff;color:#4f46e5;flex-shrink:0}
+    .portal-notification-body{flex:1}
+    .portal-notification-head{display:flex;justify-content:space-between;gap:1rem;align-items:center;flex-wrap:wrap}
+    .portal-notification-head strong{color:#0f172a}.portal-notification-head span{font-size:.75rem;color:#64748b}.portal-notification-body p{margin:.35rem 0 0;color:#475569;line-height:1.6}
+    .empty-history-state{padding:1.2rem;text-align:center;color:#64748b;background:#f8fafc;border-radius:14px}
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private int? _portalUserId;
+    private string _recipientKey = string.Empty;
+    private int _unreadCount;
+    private List<Notification> _notifications = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        if (!B2BPermissions.IsPortalUser(user))
+        {
+            Navigation.NavigateTo("/b2b/login", forceLoad: true);
+            return;
+        }
+
+        _portalUserId = B2BPermissions.GetPortalUserId(user);
+        if (!_portalUserId.HasValue)
+        {
+            Navigation.NavigateTo("/b2b/login", forceLoad: true);
+            return;
+        }
+
+        _recipientKey = B2BPermissions.GetPortalRecipientKey(_portalUserId.Value);
+        await LoadAsync();
+        _isLoading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        _unreadCount = await NotificationService.GetUnreadCountAsync(_recipientKey, new List<string>());
+        _notifications = await NotificationService.GetLatestAsync(_recipientKey, new List<string>(), 100);
+    }
+
+    private async Task MarkAllReadAsync()
+    {
+        await NotificationService.MarkAllAsReadForUserAsync(_recipientKey, new List<string>());
+        await LoadAsync();
+        Snackbar.Add("تم تعليم جميع إشعارات البورتال كمقروءة", Severity.Success);
+    }
+
+    private async Task OpenNotificationAsync(Notification item)
+    {
+        await NotificationService.MarkAsReadAsync(item.NotificationId);
+        var url = GetNotificationUrl(item);
+        Navigation.NavigateTo(url);
+    }
+
+    private static string GetNotificationUrl(Notification item)
+    {
+        if (string.Equals(item.RelatedTable, "B2BRequests", StringComparison.OrdinalIgnoreCase) && item.RelatedId.HasValue)
+            return $"/b2b/requests/{item.RelatedId.Value}";
+
+        if (!string.IsNullOrWhiteSpace(item.FormName))
+            return "/" + item.FormName.Trim().TrimStart('/');
+
+        return "/b2b/dashboard";
+    }
+
+    private static string GetTimeAgo(DateTime dateTime)
+    {
+        var diff = DateTime.Now - dateTime;
+        if (diff.TotalMinutes < 1) return "الآن";
+        if (diff.TotalMinutes < 60) return $"منذ {(int)diff.TotalMinutes} دقيقة";
+        if (diff.TotalHours < 24) return $"منذ {(int)diff.TotalHours} ساعة";
+        if (diff.TotalDays < 7) return $"منذ {(int)diff.TotalDays} يوم";
+        return dateTime.ToString("dd/MM/yyyy");
+    }
+}

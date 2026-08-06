@@ -734,7 +734,7 @@ public async Task<IEnumerable<PartyLookupDto>> SearchPartiesAsync(string search)
 
             await _notify.NotifyRoleAsync("💰 إشعار دفعة", msg, SystemRoles.Admin,
                 currentUserName, "payments", "Payments", payment.PaymentId);
-            await _notify.NotifyRoleAsync("💰 إشعار دفعة", msg, SystemRoles.SalesManager,
+            await _notify.NotifyRoleAsync("💰 إشعار دفعة", msg, SystemRoles.AccountManager,
                 currentUserName, "payments", "Payments", payment.PaymentId);
         }
         catch { }

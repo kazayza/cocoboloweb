@@ -11,6 +11,7 @@
 @inject IQuotationService QuotationService
 @inject IInvoiceService InvoiceService
 @inject IOpportunityService OpportunityService
+@inject IProductService ProductService
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
@@ -868,6 +869,46 @@ else
                                         {
                                             <div class="item-name-display">@item.ProductDescription</div>
                                         }
+
+                                        <div class="item-alt-wrap compact">
+                                            <div class="item-alt-headline">
+                                                <span class="item-alt-caption">المواصفة:</span>
+                                                @if (_isReadOnly)
+                                                {
+                                                    <span class="item-alt-badge @(item.SelectedAlternativeId.HasValue ? "selected" : "base")">
+                                                        @(item.SelectedAlternativeId.HasValue ? item.SelectedAlternativeName : "الأصلي الحالي")
+                                                    </span>
+                                                }
+                                            </div>
+
+                                            @if (!_isReadOnly && HasSelectableAlternatives(item.ProductId))
+                                            {
+                                                <MudSelect T="int?"
+                                                           Value="item.SelectedAlternativeId"
+                                                           ValueChanged="@(async (int? v) => await OnAlternativeChanged(index, v))"
+                                                           Variant="Variant.Outlined"
+                                                           Margin="Margin.Dense"
+                                                           Dense="true"
+                                                           Class="item-alt-select compact-select">
+                                                    <MudSelectItem T="int?" Value="@((int?)null)">الأصلي الحالي</MudSelectItem>
+                                                    @foreach (var altOption in GetSelectableAlternatives(item.ProductId))
+                                                    {
+                                                        <MudSelectItem T="int?" Value="@((int?)altOption.AlternativeId)">
+                                                            @(altOption.IsPrimary ? $"{altOption.AlternativeName} — المعتمد الحالي" : altOption.AlternativeName)
+                                                        </MudSelectItem>
+                                                    }
+                                                </MudSelect>
+                                            }
+                                            else if (!_isReadOnly)
+                                            {
+                                                <span class="item-alt-badge base">الأصلي الحالي</span>
+                                            }
+
+                                            @if (!string.IsNullOrWhiteSpace(item.SelectedAlternativeSummary))
+                                            {
+                                                <div class="item-alt-summary">@item.SelectedAlternativeSummary</div>
+                                            }
+                                        </div>
                                     </div>
                                     <div class="col-tier">
                                         <MudSelect T="string" Value="item.PricingTier"
@@ -1877,15 +1918,15 @@ else
     display: grid;
     grid-template-columns:
         68px
-        minmax(150px, 0.75fr)
+        minmax(250px, 1.15fr)
         88px
         64px
-        minmax(230px, 1.15fr)
+        minmax(230px, 1.1fr)
         120px
         42px;
     gap: 0.45rem;
     align-items: center;
-    min-width: 850px;
+    min-width: 900px;
 }
 
 /* مع عمود التكلفة */
@@ -1893,14 +1934,14 @@ else
 .items-table.with-cost .item-row {
     grid-template-columns:
         68px
-        minmax(145px, 0.65fr)
+        minmax(250px, 1.05fr)
         86px
         64px
-        minmax(235px, 1.2fr)
+        minmax(235px, 1.05fr)
         118px
         118px
         42px;
-    min-width: 1000px;
+    min-width: 1020px;
 }
 
 .items-header {
@@ -1951,7 +1992,7 @@ else
     white-space: nowrap;
 }
 
-.item-name-display {
+ .item-name-display {
     font-size: 0.7rem;
     color: var(--mud-palette-text-secondary);
     margin-top: 0.15rem;
@@ -1959,6 +2000,81 @@ else
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.item-alt-wrap {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
+    margin-top: 0.3rem;
+}
+
+.item-alt-wrap.compact {
+    border-top: 1px dashed rgba(148,163,184,0.18);
+    padding-top: 0.35rem;
+}
+
+.item-alt-headline {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+
+.item-alt-caption {
+    font-size: 0.68rem;
+    font-weight: 800;
+    color: #64748b;
+}
+
+.item-alt-select {
+    width: 100%;
+}
+
+.item-alt-select .mud-input-control {
+    width: 100%;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+
+.item-alt-select .mud-input-root {
+    min-height: 36px !important;
+}
+
+.item-alt-select.compact-select {
+    max-width: 100%;
+}
+
+.item-alt-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 800;
+}
+
+.item-alt-badge.base {
+    background: rgba(100,116,139,0.12);
+    color: #475569;
+}
+
+.item-alt-badge.selected {
+    background: rgba(16,185,129,0.12);
+    color: #047857;
+}
+
+.item-alt-summary {
+    margin-top: 0.08rem;
+    font-size: 0.68rem;
+    color: #64748b;
+    line-height: 1.45;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
 /* الصورة */
@@ -2711,6 +2827,7 @@ else
     private List<Warehouse> _warehouses = new();
     private List<CashBox> _cashBoxes = new();
     private List<ProductLookupDto> _availableProducts = new();
+    private Dictionary<int, List<ProductFactoryAlternativeDto>> _productApprovedAlternatives = new();
 
     // Convert dialog
     private bool _showConvertDialog, _isConverting;
@@ -2852,6 +2969,7 @@ else
                         Phone = _form.PartyPhone
                     };
                     await LoadProducts(_form.PartyId.Value);
+                    await EnsureAlternativesLoadedAsync(_form.Items.Select(i => i.ProductId));
                     await LoadOpportunitiesForParty(_form.PartyId.Value);
                 }
             }
@@ -2898,6 +3016,7 @@ else
                         };
 
                         await LoadProducts(opp.PartyId);
+                        await EnsureAlternativesLoadedAsync(_form.Items.Select(i => i.ProductId));
                         await LoadOpportunitiesForParty(opp.PartyId);
                     }
                 }
@@ -2947,6 +3066,7 @@ else
         else
         {
             _availableProducts = new();
+            _productApprovedAlternatives.Clear();
         }
 
         RecalculateTotals();
@@ -2957,6 +3077,7 @@ else
         try
         {
             _availableProducts = await InvoiceService.SearchProductsForPartyAsync(partyId, null, 200) ?? new();
+            await EnsureAlternativesLoadedAsync(_availableProducts.Select(p => p.ProductId));
 
             if (_availableProducts.Count == 0)
             {
@@ -2974,6 +3095,65 @@ else
                 Severity.Error);
             Console.WriteLine($"[QuotationForm.LoadProducts] {ex}");
         }
+    }
+
+    private async Task EnsureAlternativesLoadedAsync(IEnumerable<int> productIds)
+    {
+        var ids = productIds.Where(id => id > 0).Distinct().ToList();
+        foreach (var id in ids)
+        {
+            if (_productApprovedAlternatives.ContainsKey(id))
+                continue;
+
+            var allAlternatives = await ProductService.GetFactoryAlternativesAsync(id);
+            _productApprovedAlternatives[id] = allAlternatives
+                .Where(a => a.Status == ProductFactoryAlternativeStatuses.Approved || a.IsPrimary)
+                .OrderByDescending(a => a.IsPrimary)
+                .ThenBy(a => a.AlternativeName)
+                .ToList();
+        }
+    }
+
+    private IEnumerable<ProductFactoryAlternativeDto> GetSelectableAlternatives(int productId)
+        => _productApprovedAlternatives.TryGetValue(productId, out var list)
+            ? list
+            : Enumerable.Empty<ProductFactoryAlternativeDto>();
+
+    private bool HasSelectableAlternatives(int productId)
+        => GetSelectableAlternatives(productId).Any();
+
+    private async Task OnAlternativeChanged(int index, int? alternativeId)
+    {
+        if (index < 0 || index >= _form.Items.Count)
+            return;
+
+        var item = _form.Items[index];
+        await EnsureAlternativesLoadedAsync(new[] { item.ProductId });
+
+        var selected = GetSelectableAlternatives(item.ProductId)
+            .FirstOrDefault(a => a.AlternativeId == alternativeId);
+
+        item.SelectedAlternativeId = selected?.AlternativeId;
+        item.SelectedAlternativeName = selected?.AlternativeName;
+        item.SelectedAlternativeSummary = selected?.SpecificationSummary;
+        item.AlternativeSalePriceCClass = selected?.SuggestedSalePriceCClass;
+        item.AlternativeSalePricePremium = selected?.SuggestedSalePricePremium;
+        item.AlternativeSalePriceElite = selected?.SuggestedSalePriceElite;
+        item.AlternativePurchasePriceCClass = selected?.PurchasePriceCClass;
+        item.AlternativePurchasePricePremium = selected?.PurchasePricePremium;
+        item.AlternativePurchasePriceElite = selected?.PurchasePriceElite;
+        item.AlternativePeriod = selected?.Period;
+
+        if (selected != null && !HasItemTier(item, item.PricingTier))
+        {
+            var fallbackTier = GetAvailableTiers(item).Select(t => t.Key).FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(fallbackTier))
+                item.PricingTier = fallbackTier;
+        }
+
+        item.UnitPrice = GetPriceByTier(item, item.PricingTier);
+
+        RecalculateTotals();
     }
 
     private async Task LoadOpportunitiesForParty(int partyId)
@@ -3091,6 +3271,16 @@ else
 
     private bool HasItemTier(QuotationItemDto item, string tier)
     {
+        if (item.SelectedAlternativeId.HasValue)
+        {
+            return NormalizeTier(tier) switch
+            {
+                var t when t == PricingTiers.CClass => (item.AlternativeSalePriceCClass ?? 0) > 0,
+                var t when t == PricingTiers.Elite => ((item.AlternativeSalePriceElite ?? item.AlternativeSalePricePremium) ?? 0) > 0,
+                _ => (item.AlternativeSalePricePremium ?? 0) > 0
+            };
+        }
+
         return NormalizeTier(tier) switch
         {
             var t when t == PricingTiers.CClass => (item.SalePriceCClass ?? 0) > 0,
@@ -3211,6 +3401,16 @@ else
 
     private static decimal GetPriceByTier(QuotationItemDto item, string tier)
     {
+        if (item.SelectedAlternativeId.HasValue)
+        {
+            return tier switch
+            {
+                var t when t == PricingTiers.CClass => item.AlternativeSalePriceCClass ?? 0m,
+                var t when t == PricingTiers.Elite => item.AlternativeSalePriceElite ?? item.AlternativeSalePricePremium ?? 0m,
+                _ => item.AlternativeSalePricePremium ?? 0m
+            };
+        }
+
         return tier switch
         {
             var t when t == PricingTiers.CClass => item.SalePriceCClass ?? 0m,
@@ -3368,6 +3568,16 @@ private decimal NormalizeSalePrice(QuotationItemDto item, decimal rawPrice)
 /// </summary>
 private decimal GetUnitCost(QuotationItemDto item)
 {
+    if (item.SelectedAlternativeId.HasValue)
+    {
+        return NormalizeTier(item.PricingTier) switch
+        {
+            var t when t == PricingTiers.CClass => item.AlternativePurchasePriceCClass ?? 0m,
+            var t when t == PricingTiers.Elite => item.AlternativePurchasePriceElite ?? item.AlternativePurchasePricePremium ?? 0m,
+            _ => item.AlternativePurchasePricePremium ?? 0m
+        };
+    }
+
     return NormalizeTier(item.PricingTier) switch
     {
         var t when t == PricingTiers.CClass => item.PurchasePriceCClass ?? 0m,

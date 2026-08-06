@@ -323,6 +323,15 @@ public static class LeadImportEndpoints
                 formName: "crm/leads",
                 relatedTable: "LeadsCRM",
                 relatedId: lead.LeadId);
+
+            await notify.NotifyRoleAsync(
+                title: title,
+                message: message,
+                role: SystemRoles.GeneralManager,
+                createdBy: "MetaIntegration",
+                formName: "crm/leads",
+                relatedTable: "LeadsCRM",
+                relatedId: lead.LeadId);
         }
         catch (Exception ex)
         {
@@ -355,6 +364,14 @@ public static class LeadImportEndpoints
                 title: title,
                 message: message,
                 role: SystemRoles.SalesManager,
+                createdBy: "MetaIntegration",
+                formName: "crm/leads",
+                relatedTable: "LeadsCRM");
+            
+            await notify.NotifyRoleAsync(
+                title: title,
+                message: message,
+                role: SystemRoles.GeneralManager,
                 createdBy: "MetaIntegration",
                 formName: "crm/leads",
                 relatedTable: "LeadsCRM");

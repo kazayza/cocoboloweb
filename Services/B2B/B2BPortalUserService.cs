@@ -107,6 +107,16 @@ public class B2BPortalUserService : IB2BPortalUserService
             .ToListAsync();
     }
 
+    public async Task<List<B2BLookupDto>> GetPortalUserLookupsByPartyAsync(int partyId)
+    {
+        await using var db = await _factory.CreateDbContextAsync();
+        return await db.B2BPortalUsers.AsNoTracking()
+            .Where(x => x.PartyId == partyId && x.IsActive)
+            .OrderBy(x => x.FullName)
+            .Select(x => new B2BLookupDto { Id = x.PortalUserId, Name = x.FullName + " — " + x.UserName })
+            .ToListAsync();
+    }
+
     public async Task<(bool Success, string Message, int? Id)> SaveAsync(B2BPortalUserFormDto dto, string currentUserName)
     {
         if (!dto.PartyId.HasValue)

@@ -11,12 +11,13 @@ public class OpportunityService : IOpportunityService
     private readonly db24804Context _db;
     private readonly IHttpContextAccessor _http;
     private readonly ILogger<OpportunityService> _logger;
+    private readonly NotificationService _notify;
 
     private static readonly HashSet<string> WonKeywords  = new() { "تم البيع", "بيع", "Closed Deal" };
     private static readonly HashSet<string> LostKeywords = new() { "خسارة", "Lost", "غير مهتم", "Not Interested" };
 
-    public OpportunityService(db24804Context db, IHttpContextAccessor http, ILogger<OpportunityService> logger)
-    { _db = db; _http = http; _logger = logger; }
+    public OpportunityService(db24804Context db, IHttpContextAccessor http, ILogger<OpportunityService> logger, NotificationService notify)
+    { _db = db; _http = http; _logger = logger; _notify = notify; }
 
     // ════════════════════ LIST ════════════════════
     public async Task<PagedResult<OpportunityListDto>> GetOpportunitiesAsync(OpportunityFilterDto filter)
@@ -317,11 +318,47 @@ if (f.DateTo.HasValue)
                     return (false, "تاريخ المتابعة القادم إجباري لهذه المرحلة", 0);
             }
 
-            SalesOpportunity opp; bool isNew = dto.OpportunityId == 0;
-            if (isNew) { opp = new SalesOpportunity { PartyId = dto.PartyId, CreatedBy = userName, CreatedAt = DateTime.Now, IsActive = true }; _db.SalesOpportunities.Add(opp); }
-            else { opp = await _db.SalesOpportunities.FindAsync(dto.OpportunityId); if (opp == null) return (false, "الفرصة غير موجودة", 0); opp.LastUpdatedBy = userName; opp.LastUpdatedAt = DateTime.Now; }
-            opp.EmployeeId = dto.EmployeeId; opp.SourceId = dto.SourceId; opp.AdTypeId = dto.AdTypeId; opp.StageId = dto.StageId; opp.StatusId = dto.StatusId; opp.CategoryId = dto.CategoryId; opp.InterestedProduct = dto.InterestedProduct; opp.ExpectedValue = dto.ExpectedValue; opp.Location = dto.Location; opp.FirstContactDate = dto.FirstContactDate; opp.NextFollowUpDate = dto.NextFollowUpDate; opp.LostReasonId = dto.LostReasonId; opp.LostNotes = dto.LostNotes; opp.Notes = dto.Notes; opp.Guidance = dto.Guidance; opp.IsActive = dto.IsActive;
-                        // لو الفرصة في مرحلة رابحة والقيمة الفعلية فاضية → املأها
+            SalesOpportunity opp;
+            bool isNew = dto.OpportunityId == 0;
+            int? oldEmployeeId = null;
+
+            if (isNew)
+            {
+                opp = new SalesOpportunity
+                {
+                    PartyId = dto.PartyId,
+                    CreatedBy = userName,
+                    CreatedAt = DateTime.Now,
+                    IsActive = true
+                };
+                _db.SalesOpportunities.Add(opp);
+            }
+            else
+            {
+                opp = await _db.SalesOpportunities.FindAsync(dto.OpportunityId);
+                if (opp == null) return (false, "الفرصة غير موجودة", 0);
+                oldEmployeeId = opp.EmployeeId;
+                opp.LastUpdatedBy = userName;
+                opp.LastUpdatedAt = DateTime.Now;
+            }
+
+            opp.EmployeeId = dto.EmployeeId;
+            opp.SourceId = dto.SourceId;
+            opp.AdTypeId = dto.AdTypeId;
+            opp.StageId = dto.StageId;
+            opp.StatusId = dto.StatusId;
+            opp.CategoryId = dto.CategoryId;
+            opp.InterestedProduct = dto.InterestedProduct;
+            opp.ExpectedValue = dto.ExpectedValue;
+            opp.Location = dto.Location;
+            opp.FirstContactDate = dto.FirstContactDate;
+            opp.NextFollowUpDate = dto.NextFollowUpDate;
+            opp.LostReasonId = dto.LostReasonId;
+            opp.LostNotes = dto.LostNotes;
+            opp.Notes = dto.Notes;
+            opp.Guidance = dto.Guidance;
+            opp.IsActive = dto.IsActive;
+
             var stages = await _db.SalesStages.AsNoTracking().ToListAsync();
             var wonIds = stages.Where(s => WonKeywords.Any(k => (s.StageNameAr ?? "").Contains(k) || (s.StageName ?? "").Contains(k))).Select(s => s.StageId).ToHashSet();
             if (wonIds.Contains(opp.StageId) && opp.ActualValue == null)
@@ -339,11 +376,37 @@ if (f.DateTo.HasValue)
                     opp.ActualValue = opp.ExpectedValue;
                 }
             }
-            if (dto.NextFollowUpDate.HasValue) { var party = await _db.Parties.FindAsync(dto.PartyId); if (party != null) party.LastContactDate = DateTime.Now; }
+
+            if (dto.NextFollowUpDate.HasValue)
+            {
+                var party = await _db.Parties.FindAsync(dto.PartyId);
+                if (party != null) party.LastContactDate = DateTime.Now;
+            }
+
             await _db.SaveChangesAsync();
+
+            if (!isNew && oldEmployeeId != dto.EmployeeId && dto.EmployeeId.HasValue)
+            {
+                await AddOpportunityReassignmentInteractionAsync(
+                    opp.OpportunityId,
+                    dto.PartyId,
+                    oldEmployeeId,
+                    dto.EmployeeId.Value,
+                    dto.SourceId,
+                    dto.StatusId,
+                    dto.NextFollowUpDate,
+                    userName);
+
+                await NotifyOpportunityReassignedAsync(opp.OpportunityId, dto.PartyId, oldEmployeeId, dto.EmployeeId.Value, userName);
+            }
+
             return (true, isNew ? "تم إضافة الفرصة بنجاح" : "تم تعديل الفرصة بنجاح", opp.OpportunityId);
         }
-        catch (Exception ex) { _logger.LogError(ex, "Save failed"); return (false, $"خطأ: {ex.InnerException?.Message ?? ex.Message}", 0); }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Save failed");
+            return (false, $"خطأ: {ex.InnerException?.Message ?? ex.Message}", 0);
+        }
     }
 
     // ════════════════════ DELETE ════════════════════
@@ -701,6 +764,7 @@ if (f.DateTo.HasValue)
                 if (opp == null) return (false, "الفرصة غير موجودة", 0);
 
                 stageBefore = opp.StageId;
+                var oldEmployeeId = opp.EmployeeId;
 
                 if (dto.StageId.HasValue) opp.StageId = dto.StageId.Value;
                 opp.StatusId = dto.StatusId ?? opp.StatusId;
@@ -715,9 +779,25 @@ if (f.DateTo.HasValue)
                 opp.Guidance = dto.Guidance;
                 opp.LastUpdatedBy = userName;
                 opp.LastUpdatedAt = now;
+                opp.EmployeeId = dto.EmployeeId ?? opp.EmployeeId;
 
                 await _db.SaveChangesAsync();
                 opportunityId = opp.OpportunityId;
+
+                if (oldEmployeeId != opp.EmployeeId && opp.EmployeeId.HasValue)
+                {
+                    await AddOpportunityReassignmentInteractionAsync(
+                        opportunityId,
+                        partyId,
+                        oldEmployeeId,
+                        opp.EmployeeId.Value,
+                        opp.SourceId,
+                        opp.StatusId,
+                        opp.NextFollowUpDate,
+                        userName);
+
+                    await NotifyOpportunityReassignedAsync(opportunityId, partyId, oldEmployeeId, opp.EmployeeId.Value, userName);
+                }
             }
 
             // ═══ 3. إضافة سجل التواصل (فقط للإضافات الجديدة، أو عند تغيير المرحلة/الملخص) ═══
@@ -886,6 +966,114 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
             await transaction.RollbackAsync();
             _logger.LogError(ex, "SaveWorkflowAsync failed");
             return (false, $"خطأ: {ex.InnerException?.Message ?? ex.Message}", 0);
+        }
+    }
+
+    private async Task AddOpportunityReassignmentInteractionAsync(
+        int opportunityId,
+        int partyId,
+        int? oldEmployeeId,
+        int newEmployeeId,
+        int? sourceId,
+        int? statusId,
+        DateTime? nextFollowUpDate,
+        string actor)
+    {
+        var employeeIds = new List<int>();
+        if (oldEmployeeId.HasValue) employeeIds.Add(oldEmployeeId.Value);
+        employeeIds.Add(newEmployeeId);
+
+        var employeeNames = await _db.Employees
+            .AsNoTracking()
+            .Where(e => employeeIds.Contains(e.EmployeeId))
+            .Select(e => new { e.EmployeeId, e.FullName })
+            .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName ?? "غير محدد");
+
+        var oldEmployeeName = oldEmployeeId.HasValue && employeeNames.TryGetValue(oldEmployeeId.Value, out var oldName)
+            ? oldName
+            : "غير محدد";
+
+        var newEmployeeName = employeeNames.TryGetValue(newEmployeeId, out var newName)
+            ? newName
+            : "غير محدد";
+
+        _db.CustomerInteractions.Add(new CustomerInteraction
+        {
+            OpportunityId = opportunityId,
+            PartyId = partyId,
+            EmployeeId = newEmployeeId,
+            SourceId = sourceId,
+            StatusId = statusId,
+            InteractionDate = DateTime.Now,
+            Summary = $"تم تحويل الفرصة من {oldEmployeeName} إلى {newEmployeeName} بواسطة {actor}",
+            StageBeforeId = null,
+            StageAfterId = null,
+            NextFollowUpDate = nextFollowUpDate,
+            Notes = "إعادة إسناد داخلي",
+            CreatedBy = actor,
+            CreatedAt = DateTime.Now
+        });
+
+        await _db.SaveChangesAsync();
+    }
+
+    private async Task NotifyOpportunityReassignedAsync(int opportunityId, int partyId, int? oldEmployeeId, int newEmployeeId, string actor)
+    {
+        try
+        {
+            var newUser = await _db.Users
+                .AsNoTracking()
+                .Where(u => u.EmployeeId == newEmployeeId && u.IsActive == true)
+                .Select(u => new { u.Username, u.FullName })
+                .FirstOrDefaultAsync();
+
+            if (newUser == null || string.IsNullOrWhiteSpace(newUser.Username))
+            {
+                _logger.LogWarning(
+                    "Opportunity {OpportunityId} reassigned to Employee {EmployeeId}, but no active user is linked to this employee.",
+                    opportunityId,
+                    newEmployeeId);
+                return;
+            }
+
+            var employeeIds = new List<int>();
+            if (oldEmployeeId.HasValue) employeeIds.Add(oldEmployeeId.Value);
+            employeeIds.Add(newEmployeeId);
+
+            var employeeNames = await _db.Employees
+                .AsNoTracking()
+                .Where(e => employeeIds.Contains(e.EmployeeId))
+                .Select(e => new { e.EmployeeId, e.FullName })
+                .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName ?? "غير محدد");
+
+            var oldEmployeeName = oldEmployeeId.HasValue && employeeNames.TryGetValue(oldEmployeeId.Value, out var oldName)
+                ? oldName
+                : "غير محدد";
+
+            var partyName = await _db.Parties
+                .AsNoTracking()
+                .Where(p => p.PartyId == partyId)
+                .Select(p => p.PartyName)
+                .FirstOrDefaultAsync() ?? $"عميل #{partyId}";
+
+            var title = "🎯 تم تحويل فرصة إليك";
+            var message = $"تم تغيير الفرصة #{opportunityId} الخاصة بالعميل {partyName} من {oldEmployeeName} إليك بواسطة {actor}.";
+
+            await _notify.AddAsync(
+                title: title,
+                message: message,
+                recipientUser: newUser.Username,
+                createdBy: actor,
+                formName: "crm/opportunities",
+                relatedTable: "SalesOpportunities",
+                relatedId: opportunityId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to send opportunity reassignment notification. OpportunityId={OpportunityId}, NewEmployeeId={EmployeeId}",
+                opportunityId,
+                newEmployeeId);
         }
     }
 

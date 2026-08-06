@@ -28,4 +28,7 @@ public static class B2BPermissions
         => user.FindFirst("PortalDisplayName")?.Value
            ?? user.Identity?.Name
            ?? "عميل B2B";
+
+    public static string GetPortalRecipientKey(int portalUserId)
+        => $"B2BPortalUser:{portalUserId}";
 }

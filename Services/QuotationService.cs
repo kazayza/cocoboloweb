@@ -491,18 +491,20 @@ if (canViewCost && quoteIds.Any())
         // Step 4: الأصناف (بدون JOIN مع Products - نجيب Products منفصلة)
         var detailRows = await _db.QuotationDetails.AsNoTracking()
             .Where(d => d.QuotationId == qid)
-            .Select(d => new
-            {
-                DId = (int?)d.QuotationDetailId,
-                PrId = (int?)d.ProductId,
-                Qty = (decimal?)d.Quantity,
-                Price = (decimal?)d.UnitPrice,
-                d.Notes,
-                d.PricingTier
-            })
+                .Select(d => new
+                {
+                    DId = (int?)d.QuotationDetailId,
+                    PrId = (int?)d.ProductId,
+                    Qty = (decimal?)d.Quantity,
+                    Price = (decimal?)d.UnitPrice,
+                    d.Notes,
+                    d.PricingTier,
+                    d.SelectedAlternativeId
+                })
             .ToListAsync();
 
         var productIds = detailRows.Where(d => d.PrId.HasValue).Select(d => d.PrId!.Value).Distinct().ToList();
+        var selectedAlternativeIds = detailRows.Where(d => d.SelectedAlternativeId.HasValue).Select(d => d.SelectedAlternativeId!.Value).Distinct().ToList();
         var productsDict = new Dictionary<int, (string? Name, string? Desc, decimal? SaleC, decimal? SaleP, decimal? SaleE, decimal? PurchC, decimal? PurchP, decimal? PurchE, int? Period)>();
         if (productIds.Any())
         {
@@ -528,19 +530,31 @@ if (canViewCost && quoteIds.Any())
                     p.PurchasePriceCClass, p.PurchasePrice, p.PurchasePriceElite, p.Period);
         }
 
+        var alternativesDict = new Dictionary<int, ProductFactoryAlternative>();
+        if (selectedAlternativeIds.Any())
+        {
+            alternativesDict = await _db.ProductFactoryAlternatives.AsNoTracking()
+                .Where(a => selectedAlternativeIds.Contains(a.AlternativeId))
+                .ToDictionaryAsync(a => a.AlternativeId);
+        }
+
         var items = detailRows.Select(d =>
         {
             productsDict.TryGetValue(d.PrId ?? 0, out var p);
+            alternativesDict.TryGetValue(d.SelectedAlternativeId ?? 0, out var alt);
             var effectiveTier = NormalizePricingTier(d.PricingTier, d.Notes);
             return new QuotationItemDto
             {
                 QuotationDetailId = d.DId ?? 0,
                 ProductId = d.PrId ?? 0,
                 ProductName = p.Name,
-                ProductDescription = p.Desc,
+                ProductDescription = alt?.SpecificationSummary ?? p.Desc,
                 Quantity = d.Qty ?? 0,
                 UnitPrice = d.Price ?? 0,
                 Notes = StripTierTag(d.Notes),
+                SelectedAlternativeId = d.SelectedAlternativeId,
+                SelectedAlternativeName = alt?.AlternativeName,
+                SelectedAlternativeSummary = alt?.SpecificationSummary,
                 PricingTier = effectiveTier,
                 SalePriceCClass = p.SaleC,
                 SalePricePremium = p.SaleP,
@@ -548,7 +562,14 @@ if (canViewCost && quoteIds.Any())
                 PurchasePriceCClass = p.PurchC,
                 PurchasePricePremium = p.PurchP,
                 PurchasePriceElite = p.PurchE,
-                Period = p.Period
+                Period = alt?.Period ?? p.Period,
+                AlternativeSalePriceCClass = alt?.SuggestedSalePriceCClass,
+                AlternativeSalePricePremium = alt?.SuggestedSalePricePremium,
+                AlternativeSalePriceElite = alt?.SuggestedSalePriceElite,
+                AlternativePurchasePriceCClass = alt?.PurchasePriceCClass,
+                AlternativePurchasePricePremium = alt?.PurchasePricePremium,
+                AlternativePurchasePriceElite = alt?.PurchasePriceElite,
+                AlternativePeriod = alt?.Period
             };
         }).ToList();
 
@@ -736,6 +757,9 @@ if (canViewCost && quoteIds.Any())
     var validation = ValidateQuotation(dto);
     if (!validation.IsValid) return (false, validation.Message, null);
 
+    var alternativeValidation = await ValidateSelectedAlternativesAsync(dto.Items);
+    if (!alternativeValidation.IsValid) return (false, alternativeValidation.Message, null);
+
     var discountValidation = ValidateDiscountPermission(dto);
     if (!discountValidation.IsValid) return (false, discountValidation.Message, null);
 
@@ -785,6 +809,7 @@ if (canViewCost && quoteIds.Any())
                 Quantity = item.Quantity,
                 UnitPrice = item.UnitPrice,
                 TotalAmount = item.TotalAmount,
+                SelectedAlternativeId = item.SelectedAlternativeId,
                 PricingTier = effectiveTier,
                 Notes = BuildDetailNotes(effectiveTier, item.Notes)
             });
@@ -838,6 +863,9 @@ if (canViewCost && quoteIds.Any())
         var validation = ValidateQuotation(dto);
         if (!validation.IsValid) return (false, validation.Message);
 
+        var alternativeValidation = await ValidateSelectedAlternativesAsync(dto.Items);
+        if (!alternativeValidation.IsValid) return (false, alternativeValidation.Message);
+
         var existingDiscountAmount = quotation.DiscountAmount ?? 0m;
         var oldTotalAmount = quotation.TotalAmount;
         var oldOpportunityId = quotation.OpportunityId;
@@ -887,6 +915,7 @@ if (canViewCost && quoteIds.Any())
                         row.Quantity = item.Quantity;
                         row.UnitPrice = item.UnitPrice;
                         row.TotalAmount = item.TotalAmount;
+                        row.SelectedAlternativeId = item.SelectedAlternativeId;
                         row.PricingTier = existingRowTier;
                         row.Notes = BuildDetailNotes(existingRowTier, item.Notes);
                         continue;
@@ -902,6 +931,7 @@ if (canViewCost && quoteIds.Any())
                     Quantity = item.Quantity,
                     UnitPrice = item.UnitPrice,
                     TotalAmount = item.TotalAmount,
+                    SelectedAlternativeId = item.SelectedAlternativeId,
                     PricingTier = effectiveTier,
                     Notes = BuildDetailNotes(effectiveTier, item.Notes)
                 });
@@ -1095,13 +1125,14 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
         // جلب الأصناف مع بيانات المنتج
         var dRows = await _db.QuotationDetails.AsNoTracking()
             .Where(d => d.QuotationId == quotationId)
-            .Select(d => new { d.ProductId, d.Quantity, d.UnitPrice, d.Notes, d.PricingTier })
+            .Select(d => new { d.ProductId, d.Quantity, d.UnitPrice, d.Notes, d.PricingTier, d.SelectedAlternativeId })
             .ToListAsync();
 
         if (!dRows.Any())
             return (false, "لا توجد أصناف في عرض السعر.", null);
 
         var productIds = dRows.Select(d => d.ProductId).Distinct().ToList();
+        var selectedAlternativeIds = dRows.Where(d => d.SelectedAlternativeId.HasValue).Select(d => d.SelectedAlternativeId!.Value).Distinct().ToList();
         var products = await _db.Products.AsNoTracking()
             .Where(p => productIds.Contains(p.ProductId))
             .Select(p => new
@@ -1119,6 +1150,11 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
             })
             .ToListAsync();
         var prodDict = products.ToDictionary(p => p.ProductId);
+        var alternativesDict = selectedAlternativeIds.Any()
+            ? await _db.ProductFactoryAlternatives.AsNoTracking()
+                .Where(a => selectedAlternativeIds.Contains(a.AlternativeId))
+                .ToDictionaryAsync(a => a.AlternativeId)
+            : new Dictionary<int, ProductFactoryAlternative>();
 
         // تأكد من المخزن
         var warehouseId = quotation.WarehouseId;
@@ -1141,7 +1177,13 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
 
         var invoiceDateValue = invoiceDate?.Date ?? DateTime.Today;
         var maxProductionDays = dRows
-            .Select(d => prodDict.TryGetValue(d.ProductId, out var p) ? (p?.Period ?? 0) : 0)
+            .Select(d =>
+            {
+                if (d.SelectedAlternativeId.HasValue && alternativesDict.TryGetValue(d.SelectedAlternativeId.Value, out var altPeriod))
+                    return altPeriod.Period ?? (prodDict.TryGetValue(d.ProductId, out var productRow) ? (productRow?.Period ?? 0) : 0);
+
+                return prodDict.TryGetValue(d.ProductId, out var fallbackProductRow) ? (fallbackProductRow?.Period ?? 0) : 0;
+            })
             .DefaultIfEmpty(0)
             .Max();
         var calculatedDueDate = invoiceDateValue.AddDays(maxProductionDays);
@@ -1173,6 +1215,7 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
             Items = dRows.Select(d =>
             {
                 prodDict.TryGetValue(d.ProductId, out var p);
+                alternativesDict.TryGetValue(d.SelectedAlternativeId ?? 0, out var alt);
                 var effectiveTier = string.IsNullOrWhiteSpace(d.PricingTier)
                     ? ExtractTier(d.Notes)
                     : d.PricingTier;
@@ -1181,10 +1224,13 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
                 {
                     ProductId = d.ProductId,
                     ProductName = p?.ProductName,
-                    ProductDescription = p?.ProductDescription,
+                    ProductDescription = alt?.SpecificationSummary ?? p?.ProductDescription,
                     Quantity = d.Quantity,
                     UnitPrice = Math.Round(d.UnitPrice, 0, MidpointRounding.AwayFromZero),
                     Notes = StripTierTag(d.Notes),
+                    SelectedAlternativeId = d.SelectedAlternativeId,
+                    SelectedAlternativeName = alt?.AlternativeName,
+                    SelectedAlternativeSummary = alt?.SpecificationSummary,
                     PricingTier = effectiveTier,
                     SalePriceCClass = p?.SuggestedSalePriceCClass,
                     SalePricePremium = p?.SuggestedSalePrice,
@@ -1192,7 +1238,14 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
                     PurchasePriceCClass = p?.PurchasePriceCClass,
                     PurchasePricePremium = p?.PurchasePrice,
                     PurchasePriceElite = p?.PurchasePriceElite,
-                    Period = p?.Period
+                    Period = alt?.Period ?? p?.Period,
+                    AlternativeSalePriceCClass = alt?.SuggestedSalePriceCClass,
+                    AlternativeSalePricePremium = alt?.SuggestedSalePricePremium,
+                    AlternativeSalePriceElite = alt?.SuggestedSalePriceElite,
+                    AlternativePurchasePriceCClass = alt?.PurchasePriceCClass,
+                    AlternativePurchasePricePremium = alt?.PurchasePricePremium,
+                    AlternativePurchasePriceElite = alt?.PurchasePriceElite,
+                    AlternativePeriod = alt?.Period
                 };
             }).ToList()
         };
@@ -1333,12 +1386,15 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
             Qty = (decimal?)d.Quantity,
             Price = (decimal?)d.UnitPrice,
             d.Notes,
-            d.PricingTier
+            d.PricingTier,
+            d.SelectedAlternativeId
         })
         .ToListAsync();
 
     var productIds = detailRows.Where(d => d.PrId.HasValue)
         .Select(d => d.PrId!.Value).Distinct().ToList();
+    var selectedAlternativeIds = detailRows.Where(d => d.SelectedAlternativeId.HasValue)
+        .Select(d => d.SelectedAlternativeId!.Value).Distinct().ToList();
 
     var productsDict = new Dictionary<int, (string? Name, string? Desc, decimal? SaleC, decimal? SaleP, decimal? SaleE, decimal? PurchC, decimal? PurchP, decimal? PurchE, int? Period)>();
     if (productIds.Any())
@@ -1361,18 +1417,30 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
             productsDict[p.ProductId] = (p.ProductName, p.ProductDescription, p.SuggestedSalePriceCClass, p.SuggestedSalePrice, p.SuggestedSalePriceElite, p.PurchasePriceCClass, p.PurchasePrice, p.PurchasePriceElite, p.Period);
     }
 
+    var alternativesDict = new Dictionary<int, ProductFactoryAlternative>();
+    if (selectedAlternativeIds.Any())
+    {
+        alternativesDict = await _db.ProductFactoryAlternatives.AsNoTracking()
+            .Where(a => selectedAlternativeIds.Contains(a.AlternativeId))
+            .ToDictionaryAsync(a => a.AlternativeId);
+    }
+
     var items = detailRows.Select(d =>
     {
         productsDict.TryGetValue(d.PrId ?? 0, out var p);
+        alternativesDict.TryGetValue(d.SelectedAlternativeId ?? 0, out var alt);
         return new QuotationItemDto
         {
             QuotationDetailId = d.DId ?? 0,
             ProductId = d.PrId ?? 0,
             ProductName = p.Name,
-            ProductDescription = p.Desc,
+            ProductDescription = alt?.SpecificationSummary ?? p.Desc,
             Quantity = d.Qty ?? 0,
             UnitPrice = d.Price ?? 0,
             Notes = StripTierTag(d.Notes),
+            SelectedAlternativeId = d.SelectedAlternativeId,
+            SelectedAlternativeName = alt?.AlternativeName,
+            SelectedAlternativeSummary = alt?.SpecificationSummary,
             PricingTier = NormalizePricingTier(d.PricingTier, d.Notes),
             SalePriceCClass = p.SaleC,
             SalePricePremium = p.SaleP,
@@ -1380,7 +1448,14 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
             PurchasePriceCClass = p.PurchC,
             PurchasePricePremium = p.PurchP,
             PurchasePriceElite = p.PurchE,
-            Period = p.Period
+            Period = alt?.Period ?? p.Period,
+            AlternativeSalePriceCClass = alt?.SuggestedSalePriceCClass,
+            AlternativeSalePricePremium = alt?.SuggestedSalePricePremium,
+            AlternativeSalePriceElite = alt?.SuggestedSalePriceElite,
+            AlternativePurchasePriceCClass = alt?.PurchasePriceCClass,
+            AlternativePurchasePricePremium = alt?.PurchasePricePremium,
+            AlternativePurchasePriceElite = alt?.PurchasePriceElite,
+            AlternativePeriod = alt?.Period
         };
     }).ToList();
 
@@ -1549,6 +1624,38 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
         {
             _logger.LogWarning(ex, "Failed to notify quotation creator about discount update for {Id}", quotation.QuotationId);
         }
+    }
+
+    private async Task<(bool IsValid, string Message)> ValidateSelectedAlternativesAsync(IEnumerable<QuotationItemDto> items)
+    {
+        var selectedRows = items
+            .Where(i => i.SelectedAlternativeId.HasValue)
+            .Select(i => new { i.ProductId, AlternativeId = i.SelectedAlternativeId!.Value })
+            .Distinct()
+            .ToList();
+
+        if (!selectedRows.Any())
+            return (true, "");
+
+        var alternativeIds = selectedRows.Select(x => x.AlternativeId).Distinct().ToList();
+        var alternatives = await _db.ProductFactoryAlternatives.AsNoTracking()
+            .Where(a => alternativeIds.Contains(a.AlternativeId))
+            .Select(a => new { a.AlternativeId, a.ProductId, a.Status, a.IsPrimary, a.AlternativeName })
+            .ToDictionaryAsync(a => a.AlternativeId);
+
+        foreach (var row in selectedRows)
+        {
+            if (!alternatives.TryGetValue(row.AlternativeId, out var alternative))
+                return (false, "يوجد بديل مختار غير موجود.");
+
+            if (alternative.ProductId != row.ProductId)
+                return (false, $"البديل '{alternative.AlternativeName}' لا يخص المنتج المختار.");
+
+            if (alternative.Status != ProductFactoryAlternativeStatuses.Approved && !alternative.IsPrimary)
+                return (false, $"البديل '{alternative.AlternativeName}' غير معتمد ولا يمكن استخدامه في عرض السعر.");
+        }
+
+        return (true, "");
     }
 
     private static (bool IsValid, string Message) ValidateQuotation(QuotationFormDto dto)

@@ -26,5 +26,6 @@ public static class LeadsCrmPermissions
     user.IsInRole("Admin")
     || user.IsInRole("SalesManager")
     || user.IsInRole("SocialView")
+    || user.IsInRole("GeneralManager")
     || user.IsInRole("SocialManager");
 }

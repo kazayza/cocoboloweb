@@ -11,6 +11,7 @@ public static class ComplaintPermissions
     private const string RoleAdmin           = "Admin";
     private const string RoleAccountManager  = "AccountManager";
     private const string RoleSalesManager    = "SalesManager";   // ⭐ مدير المبيعات
+    private const string RoleGeneralManager  = "GeneralManager"; // ⭐ مدير  العام
     private const string RoleSales           = "Sales";
     private const string RoleAccount         = "Account";
     private const string RoleUser            = "User";
@@ -37,6 +38,7 @@ public static class ComplaintPermissions
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleAccountManager)
         || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleGeneralManager)
         || user.IsInRole(RoleSales)
         || user.HasClaim("Permission", PermAdd);
 
@@ -45,6 +47,7 @@ public static class ComplaintPermissions
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleAccountManager)
         || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleGeneralManager)
         || user.HasClaim("Permission", PermEdit);
 
     /// <summary>هل يقدر يحذف شكوى؟</summary>
@@ -57,6 +60,7 @@ public static class ComplaintPermissions
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleAccountManager)
         || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleGeneralManager)
         || user.HasClaim("Permission", PermAssign);
 
     /// <summary>هل يقدر يغير الحالة (يحل/يرفض/يقفل)؟</summary>
@@ -64,6 +68,7 @@ public static class ComplaintPermissions
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleAccountManager)
         || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleGeneralManager)
         || user.HasClaim("Permission", PermClose);
 
     /// <summary>هل يقدر يصعّد شكوى؟</summary>
@@ -71,6 +76,7 @@ public static class ComplaintPermissions
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleAccountManager)
         || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleGeneralManager)
         || user.HasClaim("Permission", PermEscalate);
 
     /// <summary>هل يقدر يضيف متابعة (Follow-up)؟</summary>
@@ -78,24 +84,28 @@ public static class ComplaintPermissions
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleAccountManager)
         || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleGeneralManager)
         || user.IsInRole(RoleSales)
         || user.IsInRole(RoleAccount);
 
     /// <summary>هل يقدر يدير الأنواع (التصنيفات)؟</summary>
     public static bool CanManageTypes(ClaimsPrincipal user) =>
         user.IsInRole(RoleAdmin)
-        || user.IsInRole(RoleSalesManager);
+        || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleGeneralManager);
 
     /// <summary>هل يقدر يصدّر Excel؟</summary>
     public static bool CanExport(ClaimsPrincipal user) =>
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleAccountManager)
-        || user.IsInRole(RoleSalesManager);
+        || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleGeneralManager);
 
     /// <summary>هل يشوف كل الشكاوى ولا اللي عاملها بس؟</summary>
     public static bool CanViewAll(ClaimsPrincipal user) =>
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleAccountManager)
         || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleGeneralManager)
         || user.IsInRole(RoleAccount);
 }

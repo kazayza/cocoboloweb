@@ -19,6 +19,8 @@ public partial class TransactionDetail
 
     public string? Notes { get; set; }
 
+    public int? SelectedAlternativeId { get; set; }
+
     public string PricingTier { get; set; } = null!;
 
     public virtual Product Product { get; set; } = null!;

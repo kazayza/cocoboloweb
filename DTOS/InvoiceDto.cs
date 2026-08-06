@@ -103,6 +103,10 @@ public class InvoiceItemDto
     public string? Notes { get; set; }
     public int? AvailableStock { get; set; }
 
+    public int? SelectedAlternativeId { get; set; }
+    public string? SelectedAlternativeName { get; set; }
+    public string? SelectedAlternativeSummary { get; set; }
+
     // Pricing Tier
     public string PricingTier { get; set; } = PricingTiers.Premium;
 
@@ -114,6 +118,15 @@ public class InvoiceItemDto
     public decimal? PurchasePricePremium { get; set; }
     public decimal? PurchasePriceElite { get; set; }
     public int? Period { get; set; }
+
+    // أسعار البديل المختار إن وجد
+    public decimal? AlternativeSalePriceCClass { get; set; }
+    public decimal? AlternativeSalePricePremium { get; set; }
+    public decimal? AlternativeSalePriceElite { get; set; }
+    public decimal? AlternativePurchasePriceCClass { get; set; }
+    public decimal? AlternativePurchasePricePremium { get; set; }
+    public decimal? AlternativePurchasePriceElite { get; set; }
+    public int? AlternativePeriod { get; set; }
 }
 
 // ============================
@@ -374,6 +387,8 @@ public static class SystemRoles
     public const string SalesManager = "SalesManager";
     public const string Sales = "Sales";
     public const string AccountManager = "AccountManager";
+
+    public const string GeneralManager = "GeneralManager";
     public const string HrManager = "HrManager";
     public const string Account = "Account";
 }

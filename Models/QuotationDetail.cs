@@ -19,6 +19,8 @@ public partial class QuotationDetail
 
     public string? Notes { get; set; }
 
+    public int? SelectedAlternativeId { get; set; }
+
     public string PricingTier { get; set; } = null!;
 
     public virtual Quotation Quotation { get; set; } = null!;

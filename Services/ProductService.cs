@@ -1,4 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Components.Forms;
+using Microsoft.AspNetCore.Hosting;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
 
@@ -8,11 +10,13 @@ public class ProductService : IProductService
 {
     private readonly db24804Context _context;
     private readonly IAuditService _auditService;
+    private readonly IWebHostEnvironment _env;
 
-    public ProductService(db24804Context context, IAuditService auditService)
+    public ProductService(db24804Context context, IAuditService auditService, IWebHostEnvironment env)
     {
         _context = context;
         _auditService = auditService;
+        _env = env;
     }
 
         public async Task<List<ProductListDto>> GetProductsAsync(string? search)
@@ -328,7 +332,7 @@ public class ProductService : IProductService
 
     await _context.SaveChangesAsync();
     await transaction.CommitAsync();
-}
+} 
 public async Task ApproveSalePriceChangeAsync(
     int ProductId,
     string currentUsername)
@@ -817,4 +821,391 @@ public async Task RejectPeriodChangeAsync(
 
     await _context.SaveChangesAsync();
 }
+
+public async Task<List<ProductFactoryAlternativeDto>> GetFactoryAlternativesAsync(int productId)
+{
+    return await _context.ProductFactoryAlternatives
+        .AsNoTracking()
+        .Where(x => x.ProductId == productId)
+        .OrderByDescending(x => x.IsPrimary)
+        .ThenByDescending(x => x.CreatedAt)
+        .Select(x => new ProductFactoryAlternativeDto
+        {
+            AlternativeId = x.AlternativeId,
+            ProductId = x.ProductId,
+            AlternativeName = x.AlternativeName,
+            SpecificationSummary = x.SpecificationSummary,
+            ManufacturingDescription = x.ManufacturingDescription,
+            Period = x.Period,
+            PurchasePriceCClass = x.PurchasePriceCClass,
+            PurchasePricePremium = x.PurchasePricePremium,
+            PurchasePriceElite = x.PurchasePriceElite,
+            SuggestedSalePriceCClass = x.SuggestedSalePriceCClass,
+            SuggestedSalePricePremium = x.SuggestedSalePricePremium,
+            SuggestedSalePriceElite = x.SuggestedSalePriceElite,
+            Status = x.Status,
+            IsPrimary = x.IsPrimary,
+            CreatedBy = x.CreatedBy,
+            CreatedAt = x.CreatedAt,
+            ReviewedBy = x.ReviewedBy,
+            ReviewedAt = x.ReviewedAt,
+            Images = x.Images
+                .OrderByDescending(i => i.IsPrimary)
+                .ThenBy(i => i.AlternativeImageId)
+                .Select(i => new ProductFactoryAlternativeImageDto
+                {
+                    AlternativeImageId = i.AlternativeImageId,
+                    AlternativeId = i.AlternativeId,
+                    ImagePath = i.ImagePath,
+                    Caption = i.Caption,
+                    IsPrimary = i.IsPrimary,
+                    CreatedAt = i.CreatedAt
+                }).ToList()
+        })
+        .ToListAsync();
+}
+
+public async Task<(bool Success, string Message, int? AlternativeId)> SaveFactoryAlternativeAsync(ProductFactoryAlternativeDto dto, IReadOnlyList<IBrowserFile> files, string currentUsername)
+{
+    if (dto.ProductId <= 0)
+        return (false, "احفظ المنتج أولاً قبل إضافة البدائل.", null);
+
+    if (string.IsNullOrWhiteSpace(dto.AlternativeName))
+        return (false, "اسم البديل مطلوب.", null);
+
+    if (!dto.Period.HasValue || dto.Period.Value <= 0)
+        return (false, "مدة التصنيع للبديل مطلوبة ويجب أن تكون أكبر من صفر.", null);
+
+    var hasAnyCost = (dto.PurchasePriceCClass ?? 0) > 0 || (dto.PurchasePricePremium ?? 0) > 0 || (dto.PurchasePriceElite ?? 0) > 0;
+    if (!hasAnyCost)
+        return (false, "أدخل تكلفة واحدة على الأقل للبديل.", null);
+
+    var product = await _context.Products.FirstOrDefaultAsync(x => x.ProductId == dto.ProductId);
+    if (product == null)
+        return (false, "المنتج غير موجود.", null);
+
+    var margin = await _context.PricingMargins
+        .AsNoTracking()
+        .Where(m => m.IsActive)
+        .OrderByDescending(m => m.MarginId)
+        .FirstOrDefaultAsync();
+
+    if (margin == null)
+        return (false, "لا توجد نسب ربح مفعلة.", null);
+
+    ProductFactoryAlternative entity;
+    var isNew = dto.AlternativeId == 0;
+
+    if (isNew)
+    {
+        entity = new ProductFactoryAlternative
+        {
+            ProductId = dto.ProductId,
+            CreatedBy = currentUsername,
+            CreatedAt = DateTime.Now,
+            Status = ProductFactoryAlternativeStatuses.Proposed
+        };
+        _context.ProductFactoryAlternatives.Add(entity);
+    }
+    else
+    {
+        var existingEntity = await _context.ProductFactoryAlternatives
+            .Include(x => x.Images)
+            .FirstOrDefaultAsync(x => x.AlternativeId == dto.AlternativeId && x.ProductId == dto.ProductId);
+
+        if (existingEntity == null)
+            return (false, "البديل غير موجود.", null);
+
+        entity = existingEntity;
+
+        if (entity.Status == ProductFactoryAlternativeStatuses.Approved)
+            return (false, "لا يمكن تعديل بديل معتمد. أنشئ بديلًا جديدًا أو غيّر حالته أولاً.", null);
+    }
+
+    entity.AlternativeName = dto.AlternativeName.Trim();
+    entity.SpecificationSummary = string.IsNullOrWhiteSpace(dto.SpecificationSummary) ? null : dto.SpecificationSummary.Trim();
+    entity.ManufacturingDescription = string.IsNullOrWhiteSpace(dto.ManufacturingDescription) ? null : dto.ManufacturingDescription.Trim();
+    entity.Period = dto.Period;
+    entity.PurchasePriceCClass = NormalizePrice(dto.PurchasePriceCClass);
+    entity.PurchasePricePremium = NormalizePrice(dto.PurchasePricePremium);
+    entity.PurchasePriceElite = NormalizePrice(dto.PurchasePriceElite);
+    entity.SuggestedSalePriceCClass = CalculateSuggestedSale(entity.PurchasePriceCClass, margin.CClassMargin);
+    entity.SuggestedSalePricePremium = CalculateSuggestedSale(entity.PurchasePricePremium, margin.PremiumMargin);
+    entity.SuggestedSalePriceElite = CalculateSuggestedSale(entity.PurchasePriceElite, margin.EliteMargin);
+    entity.Status = entity.Status == ProductFactoryAlternativeStatuses.Rejected
+        ? ProductFactoryAlternativeStatuses.Proposed
+        : entity.Status;
+
+    await _context.SaveChangesAsync();
+
+    if (files != null && files.Count > 0)
+    {
+        var webRoot = _env.WebRootPath ?? Path.Combine(AppContext.BaseDirectory, "wwwroot");
+        var relativeFolder = Path.Combine("uploads", "product-alternative-images", entity.ProductId.ToString(), entity.AlternativeId.ToString());
+        var absoluteFolder = Path.Combine(webRoot, relativeFolder);
+        Directory.CreateDirectory(absoluteFolder);
+
+        var hasPrimary = await _context.ProductFactoryAlternativeImages.AnyAsync(i => i.AlternativeId == entity.AlternativeId && i.IsPrimary);
+
+        foreach (var file in files.Take(6))
+        {
+            if (file.Size <= 0)
+                continue;
+
+            if (file.Size > 5 * 1024 * 1024)
+                return (false, $"الصورة {file.Name} تتجاوز الحد الأقصى 5MB", entity.AlternativeId);
+
+            var ext = Path.GetExtension(file.Name);
+            var storedName = $"{Guid.NewGuid():N}{ext}";
+            var absolutePath = Path.Combine(absoluteFolder, storedName);
+
+            await using var source = file.OpenReadStream(5 * 1024 * 1024);
+            await using var target = new FileStream(absolutePath, FileMode.Create, FileAccess.Write, FileShare.None);
+            await source.CopyToAsync(target);
+
+            _context.ProductFactoryAlternativeImages.Add(new ProductFactoryAlternativeImage
+            {
+                AlternativeId = entity.AlternativeId,
+                ImagePath = "/" + relativeFolder.Replace('\\', '/') + "/" + storedName,
+                Caption = null,
+                IsPrimary = !hasPrimary,
+                CreatedAt = DateTime.Now
+            });
+
+            hasPrimary = true;
+        }
+
+        await _context.SaveChangesAsync();
+    }
+
+    foreach (var role in new[] { "Admin", "SalesManager", "AccountManager", "Sales" })
+    {
+        _context.Notifications.Add(new Notification
+        {
+            Title = isNew ? "بديل مصنع جديد" : "تحديث بديل مصنع",
+            Message = isNew
+                ? $"أضاف المصنع بديلاً جديدًا للمنتج {product.ProductName}: {entity.AlternativeName}"
+                : $"تم تحديث بديل المصنع للمنتج {product.ProductName}: {entity.AlternativeName}",
+            RelatedTable = "Products",
+            RelatedId = entity.ProductId,
+            RecipientUser = role,
+            CreatedBy = currentUsername,
+            CreatedAt = DateTime.Now,
+            FormName = "products/form"
+        });
+    }
+    await _context.SaveChangesAsync();
+
+    return (true, isNew ? "تم حفظ البديل بنجاح." : "تم تحديث البديل بنجاح.", entity.AlternativeId);
+}
+
+public async Task<(bool Success, string Message)> ApproveFactoryAlternativeAsync(int alternativeId, string currentUsername)
+{
+    var alternative = await _context.ProductFactoryAlternatives
+        .FirstOrDefaultAsync(x => x.AlternativeId == alternativeId);
+
+    if (alternative == null)
+        return (false, "البديل غير موجود.");
+
+    var product = await _context.Products.FirstOrDefaultAsync(x => x.ProductId == alternative.ProductId);
+    if (product == null)
+        return (false, "المنتج الأساسي غير موجود.");
+
+    var oldProduct = new ProductApprovalSnapshot(
+        product.PurchasePriceCClass,
+        product.PurchasePrice,
+        product.PurchasePriceElite,
+        product.SuggestedSalePriceCClass,
+        product.SuggestedSalePrice,
+        product.SuggestedSalePriceElite,
+        product.Period,
+        product.ManufacturingDescription);
+
+    var siblings = await _context.ProductFactoryAlternatives
+        .Where(x => x.ProductId == alternative.ProductId)
+        .ToListAsync();
+
+    foreach (var item in siblings)
+    {
+        item.IsPrimary = item.AlternativeId == alternativeId;
+        if (item.AlternativeId != alternativeId && item.Status == ProductFactoryAlternativeStatuses.Approved)
+            item.Status = ProductFactoryAlternativeStatuses.Proposed;
+    }
+
+    alternative.Status = ProductFactoryAlternativeStatuses.Approved;
+    alternative.IsPrimary = true;
+    alternative.ReviewedBy = currentUsername;
+    alternative.ReviewedAt = DateTime.Now;
+
+    product.PurchasePriceCClass = alternative.PurchasePriceCClass;
+    product.PurchasePrice = alternative.PurchasePricePremium;
+    product.PurchasePriceElite = alternative.PurchasePriceElite;
+    product.SuggestedSalePriceCClass = alternative.SuggestedSalePriceCClass;
+    product.SuggestedSalePrice = alternative.SuggestedSalePricePremium;
+    product.SuggestedSalePriceElite = alternative.SuggestedSalePriceElite;
+    product.Period = alternative.Period;
+    product.ManufacturingDescription = BuildApprovedManufacturingNotes(alternative);
+    product.PricingStatusId = 3;
+
+    TrackAlternativeApprovalHistory(product.ProductId, oldProduct, product, currentUsername, alternative.AlternativeName);
+
+    _context.Notifications.Add(new Notification
+    {
+        Title = "تم اعتماد بديل مصنع",
+        Message = $"تم اعتماد البديل {alternative.AlternativeName} للمنتج {product.ProductName}. وأصبح جاهزًا للاستخدام وأمر التشغيل الحالي سيعكس هذا الاعتماد.",
+        RelatedTable = "Products",
+        RelatedId = product.ProductId,
+        RecipientUser = product.CreatedBy ?? "Admin",
+        CreatedBy = currentUsername,
+        CreatedAt = DateTime.Now,
+        FormName = "products/form"
+    });
+
+    await _auditService.LogAsync<object>(
+        "Products",
+        "اعتماد بديل مصنع",
+        product.ProductId.ToString(),
+        oldProduct,
+        new
+        {
+            product.PurchasePriceCClass,
+            product.PurchasePrice,
+            product.PurchasePriceElite,
+            product.SuggestedSalePriceCClass,
+            product.SuggestedSalePrice,
+            product.SuggestedSalePriceElite,
+            product.Period,
+            product.ManufacturingDescription,
+            ApprovedAlternative = alternative.AlternativeName
+        },
+        currentUsername);
+
+    await _context.SaveChangesAsync();
+    return (true, "تم اعتماد البديل وتحديث المنتج الأساسي بنجاح.");
+}
+
+public async Task<(bool Success, string Message)> RejectFactoryAlternativeAsync(int alternativeId, string currentUsername, string? reason = null)
+{
+    var alternative = await _context.ProductFactoryAlternatives.FirstOrDefaultAsync(x => x.AlternativeId == alternativeId);
+    if (alternative == null)
+        return (false, "البديل غير موجود.");
+
+    alternative.Status = ProductFactoryAlternativeStatuses.Rejected;
+    alternative.IsPrimary = false;
+    alternative.ReviewedBy = currentUsername;
+    alternative.ReviewedAt = DateTime.Now;
+
+    if (await _context.Products.Where(p => p.ProductId == alternative.ProductId).Select(p => p.CreatedBy).FirstOrDefaultAsync() is string creator && !string.IsNullOrWhiteSpace(creator))
+    {
+        _context.Notifications.Add(new Notification
+        {
+            Title = "تم رفض بديل مصنع",
+            Message = string.IsNullOrWhiteSpace(reason)
+                ? $"تم رفض البديل {alternative.AlternativeName}."
+                : $"تم رفض البديل {alternative.AlternativeName}. السبب: {reason}",
+            RelatedTable = "ProductFactoryAlternatives",
+            RelatedId = alternative.AlternativeId,
+            RecipientUser = creator,
+            CreatedBy = currentUsername,
+            CreatedAt = DateTime.Now,
+            FormName = "products/form"
+        });
+    }
+
+    await _context.SaveChangesAsync();
+    return (true, "تم رفض البديل.");
+}
+
+public async Task<(bool Success, string Message)> DeleteFactoryAlternativeAsync(int alternativeId, string currentUsername)
+{
+    var alternative = await _context.ProductFactoryAlternatives
+        .Include(x => x.Images)
+        .FirstOrDefaultAsync(x => x.AlternativeId == alternativeId);
+
+    if (alternative == null)
+        return (false, "البديل غير موجود.");
+
+    if (alternative.Status == ProductFactoryAlternativeStatuses.Approved || alternative.IsPrimary)
+        return (false, "لا يمكن حذف بديل معتمد. قم برفضه أولاً أو اعتمد بديلًا آخر.");
+
+    _context.ProductFactoryAlternativeImages.RemoveRange(alternative.Images);
+    _context.ProductFactoryAlternatives.Remove(alternative);
+    await _context.SaveChangesAsync();
+
+    return (true, "تم حذف البديل.");
+}
+
+private static decimal? NormalizePrice(decimal? value)
+    => value.HasValue && value.Value > 0 ? value.Value : null;
+
+private static decimal? CalculateSuggestedSale(decimal? cost, decimal marginPercent)
+{
+    if (!cost.HasValue || cost.Value <= 0)
+        return null;
+
+    var raw = cost.Value * (1 + marginPercent / 100m);
+    return Math.Ceiling(raw / 100m) * 100m;
+}
+
+private static string? BuildApprovedManufacturingNotes(ProductFactoryAlternative alternative)
+{
+    var parts = new List<string>();
+    if (!string.IsNullOrWhiteSpace(alternative.SpecificationSummary))
+        parts.Add($"المواصفة المعتمدة: {alternative.SpecificationSummary.Trim()}");
+    if (!string.IsNullOrWhiteSpace(alternative.ManufacturingDescription))
+        parts.Add($"ملاحظات التصنيع: {alternative.ManufacturingDescription.Trim()}");
+    return parts.Count == 0 ? null : string.Join(Environment.NewLine, parts);
+}
+
+private void TrackAlternativeApprovalHistory(int productId, ProductApprovalSnapshot oldProduct, Product product, string currentUsername, string alternativeName)
+{
+    void Add(string priceType, decimal? oldValue, decimal? newValue)
+    {
+        if (oldValue == newValue)
+            return;
+
+        _context.PriceHistories.Add(new PriceHistory
+        {
+            ProductId = productId,
+            PriceType = priceType,
+            OldPrice = oldValue ?? 0m,
+            NewPrice = newValue ?? 0m,
+            ChangedBy = currentUsername,
+            ChangedAt = DateTime.Now,
+            ChangeReason = $"اعتماد بديل مصنع: {alternativeName}"
+        });
+    }
+
+    Add("Alternative_CClass_Cost", oldProduct.PurchasePriceCClass, product.PurchasePriceCClass);
+    Add("Alternative_Premium_Cost", oldProduct.PurchasePrice, product.PurchasePrice);
+    Add("Alternative_Elite_Cost", oldProduct.PurchasePriceElite, product.PurchasePriceElite);
+    Add("Alternative_CClass_Sale", oldProduct.SuggestedSalePriceCClass, product.SuggestedSalePriceCClass);
+    Add("Alternative_Premium_Sale", oldProduct.SuggestedSalePrice, product.SuggestedSalePrice);
+    Add("Alternative_Elite_Sale", oldProduct.SuggestedSalePriceElite, product.SuggestedSalePriceElite);
+
+    if (oldProduct.Period != product.Period)
+    {
+        _context.PriceHistories.Add(new PriceHistory
+        {
+            ProductId = productId,
+            PriceType = "Alternative_Manufacturing_Period",
+            OldPrice = oldProduct.Period ?? 0m,
+            NewPrice = product.Period ?? 0m,
+            ChangedBy = currentUsername,
+            ChangedAt = DateTime.Now,
+            ChangeReason = $"اعتماد بديل مصنع: {alternativeName}"
+        });
+    }
+}
+
+private sealed record ProductApprovalSnapshot(
+    decimal? PurchasePriceCClass,
+    decimal? PurchasePrice,
+    decimal? PurchasePriceElite,
+    decimal? SuggestedSalePriceCClass,
+    decimal? SuggestedSalePrice,
+    decimal? SuggestedSalePriceElite,
+    int? Period,
+    string? ManufacturingDescription);
+
 }

@@ -1,11 +1,14 @@
 @inherits LayoutComponentBase
+@implements IDisposable
 
 @using Microsoft.AspNetCore.Components.Authorization
+@using COCOBOLOERPNEW.Models
 @using COCOBOLOERPNEW.Services
 
 @inject AuthenticationStateProvider AuthProvider
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject NotificationService NotificationService
 
 <MudThemeProvider />
 <MudPopoverProvider />
@@ -25,9 +28,51 @@
         <nav class="b2b-nav">
             <button type="button" class="b2b-nav-btn" @onclick='() => Navigation.NavigateTo("/b2b/dashboard")'>الرئيسية</button>
             <button type="button" class="b2b-nav-btn" @onclick='() => Navigation.NavigateTo("/b2b/requests")'>طلباتي</button>
+            <button type="button" class="b2b-nav-btn" @onclick='() => Navigation.NavigateTo("/b2b/notifications")'>الإشعارات</button>
         </nav>
 
         <div class="b2b-user-box">
+            <div class='b2b-bell-wrap @(_notificationsOpen ? "open" : "")'>
+                <button type="button" class="b2b-bell-btn" @onclick="ToggleNotifications" title="إشعارات البوابة">
+                    <MudIcon Icon="@Icons.Material.Filled.Notifications" Size="Size.Small" />
+                    @if (_portalUnreadCount > 0)
+                    {
+                        <span class="b2b-bell-badge">@_portalUnreadCount</span>
+                    }
+                </button>
+
+                @if (_notificationsOpen)
+                {
+                    <div class="b2b-bell-panel">
+                        <div class="b2b-bell-head">
+                            <strong>إشعارات البوابة</strong>
+                            <button type="button" class="b2b-link-btn" @onclick="MarkAllReadAsync">تعليم الكل</button>
+                        </div>
+
+                        @if (_portalNotifications.Any())
+                        {
+                            <div class="b2b-bell-list">
+                                @foreach (var item in _portalNotifications.Take(5))
+                                {
+                                    <button type="button" class='b2b-bell-item @(item.IsRead ? "" : "unread")' @onclick='() => OpenNotificationAsync(item)'>
+                                        <strong>@item.Title</strong>
+                                        <small>@item.Message</small>
+                                    </button>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="b2b-bell-empty">لا توجد إشعارات حالياً</div>
+                        }
+
+                        <div class="b2b-bell-foot">
+                            <button type="button" class="b2b-link-btn" @onclick='() => Navigation.NavigateTo("/b2b/notifications")'>عرض الكل</button>
+                        </div>
+                    </div>
+                }
+            </div>
+
             <div class="b2b-user-info">
                 <strong>@_displayName</strong>
                 <small>@_userName</small>
@@ -49,9 +94,22 @@
     .b2b-brand strong { display:block; font-size:1rem; }
     .b2b-brand span { display:block; font-size:.72rem; color:#cbd5e1; }
     .b2b-nav { display:flex; gap:.5rem; flex-wrap:wrap; }
-    .b2b-nav-btn, .b2b-logout-btn { border:1px solid rgba(255,255,255,.16); background:rgba(255,255,255,.06); color:#fff; border-radius:10px; padding:.5rem .9rem; font-family:inherit; font-weight:700; cursor:pointer; transition:all .18s ease; }
-    .b2b-nav-btn:hover, .b2b-logout-btn:hover { background:rgba(255,255,255,.12); }
+    .b2b-nav-btn, .b2b-logout-btn, .b2b-bell-btn { border:1px solid rgba(255,255,255,.16); background:rgba(255,255,255,.06); color:#fff; border-radius:10px; padding:.5rem .9rem; font-family:inherit; font-weight:700; cursor:pointer; transition:all .18s ease; }
+    .b2b-nav-btn:hover, .b2b-logout-btn:hover, .b2b-bell-btn:hover { background:rgba(255,255,255,.12); }
     .b2b-user-box { display:flex; align-items:center; gap:.75rem; }
+    .b2b-bell-wrap { position:relative; }
+    .b2b-bell-btn { position:relative; display:flex; align-items:center; justify-content:center; padding:.55rem .8rem; }
+    .b2b-bell-badge { position:absolute; top:-8px; left:-8px; min-width:20px; height:20px; padding:0 6px; border-radius:999px; background:#ef4444; color:#fff; font-size:.7rem; font-weight:800; display:flex; align-items:center; justify-content:center; }
+    .b2b-bell-panel { position:absolute; top:calc(100% + 10px); left:0; width:min(360px, 92vw); background:#fff; color:#0f172a; border-radius:16px; box-shadow:0 18px 45px rgba(15,23,42,.18); border:1px solid #e2e8f0; overflow:hidden; z-index:20; }
+    .b2b-bell-head, .b2b-bell-foot { display:flex; align-items:center; justify-content:space-between; padding:.85rem 1rem; background:#f8fafc; border-bottom:1px solid #e2e8f0; }
+    .b2b-bell-foot { border-top:1px solid #e2e8f0; border-bottom:none; }
+    .b2b-link-btn { border:none; background:transparent; color:#2563eb; font-family:inherit; font-weight:700; cursor:pointer; }
+    .b2b-bell-list { display:flex; flex-direction:column; max-height:360px; overflow:auto; }
+    .b2b-bell-item { width:100%; text-align:right; border:none; background:#fff; padding:.9rem 1rem; border-bottom:1px solid #f1f5f9; font-family:inherit; cursor:pointer; display:flex; flex-direction:column; gap:.25rem; }
+    .b2b-bell-item.unread { background:#fffbeb; }
+    .b2b-bell-item strong { color:#0f172a; font-size:.86rem; }
+    .b2b-bell-item small { color:#64748b; line-height:1.5; }
+    .b2b-bell-empty { padding:1rem; text-align:center; color:#64748b; }
     .b2b-user-info { text-align:left; }
     .b2b-user-info small { color:#cbd5e1; display:block; }
     .b2b-main { padding:1rem 1.5rem 2rem; max-width:1400px; margin:0 auto; }
@@ -65,6 +123,12 @@
 @code {
     private string _displayName = "عميل B2B";
     private string _userName = "";
+    private int? _portalUserId;
+    private string _portalRecipientKey = string.Empty;
+    private int _portalUnreadCount;
+    private bool _notificationsOpen;
+    private List<Notification> _portalNotifications = new();
+    private System.Threading.Timer? _refreshTimer;
 
     protected override async Task OnInitializedAsync()
     {
@@ -79,6 +143,68 @@
 
         _displayName = B2BPermissions.GetPortalDisplayName(user);
         _userName = user.Identity?.Name ?? "";
+        _portalUserId = B2BPermissions.GetPortalUserId(user);
+
+        if (_portalUserId.HasValue)
+        {
+            _portalRecipientKey = B2BPermissions.GetPortalRecipientKey(_portalUserId.Value);
+            await LoadPortalNotificationsAsync();
+        }
+
+        _refreshTimer = new System.Threading.Timer(async _ =>
+        {
+            try
+            {
+                await InvokeAsync(async () =>
+                {
+                    await LoadPortalNotificationsAsync();
+                    StateHasChanged();
+                });
+            }
+            catch { }
+        }, null, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
+    }
+
+    private async Task LoadPortalNotificationsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_portalRecipientKey))
+            return;
+
+        _portalUnreadCount = await NotificationService.GetUnreadCountAsync(_portalRecipientKey, new List<string>());
+        _portalNotifications = await NotificationService.GetLatestAsync(_portalRecipientKey, new List<string>(), 10);
+    }
+
+    private void ToggleNotifications() => _notificationsOpen = !_notificationsOpen;
+
+    private async Task MarkAllReadAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_portalRecipientKey))
+            return;
+
+        await NotificationService.MarkAllAsReadForUserAsync(_portalRecipientKey, new List<string>());
+        await LoadPortalNotificationsAsync();
+        _notificationsOpen = false;
+    }
+
+    private async Task OpenNotificationAsync(Notification item)
+    {
+        await NotificationService.MarkAsReadAsync(item.NotificationId);
+        await LoadPortalNotificationsAsync();
+        _notificationsOpen = false;
+
+        if (string.Equals(item.RelatedTable, "B2BRequests", StringComparison.OrdinalIgnoreCase) && item.RelatedId.HasValue)
+        {
+            Navigation.NavigateTo($"/b2b/requests/{item.RelatedId.Value}");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.FormName))
+        {
+            Navigation.NavigateTo("/" + item.FormName.Trim().TrimStart('/'));
+            return;
+        }
+
+        Navigation.NavigateTo("/b2b/notifications");
     }
 
     private async Task LogoutAsync()
@@ -86,4 +212,6 @@
         await JS.InvokeVoidAsync("cocoboloB2BAuth.logout");
         Navigation.NavigateTo("/b2b/login", forceLoad: true);
     }
+
+    public void Dispose() => _refreshTimer?.Dispose();
 }

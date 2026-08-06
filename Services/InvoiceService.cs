@@ -225,28 +225,69 @@ public class InvoiceService : IInvoiceService
                     .Select(e => e.FullName).FirstOrDefaultAsync();
         }
 
-        var items = await (from d in _db.TransactionDetails.AsNoTracking()
-                           join p in _db.Products.AsNoTracking() on d.ProductId equals p.ProductId
-                           where d.TransactionId == transactionId
-                           select new InvoiceItemDto
-                           {
-                               DetailId = d.DetailId,
-                               ProductId = d.ProductId,
-                               ProductName = p.ProductName,
-                               ProductDescription = p.ProductDescription,
-                               ProductImagePath = null,
-                               Quantity = d.Quantity,
-                               UnitPrice = d.UnitPrice,
-                               Notes = d.Notes,
-                               PricingTier = d.PricingTier,
-                               SalePriceCClass = p.SuggestedSalePriceCClass,
-                               SalePricePremium = p.SuggestedSalePrice,
-                               SalePriceElite = p.SuggestedSalePriceElite,
-                               PurchasePriceCClass = p.PurchasePriceCClass,
-                               PurchasePricePremium = p.PurchasePrice,
-                               PurchasePriceElite = p.PurchasePriceElite,
-                               Period = p.Period
-                           }).ToListAsync();
+        var rawItems = await (from d in _db.TransactionDetails.AsNoTracking()
+                              join p in _db.Products.AsNoTracking() on d.ProductId equals p.ProductId
+                              where d.TransactionId == transactionId
+                              select new
+                              {
+                                  d.DetailId,
+                                  d.ProductId,
+                                  ProductName = p.ProductName,
+                                  ProductDescription = p.ProductDescription,
+                                  d.Quantity,
+                                  d.UnitPrice,
+                                  d.Notes,
+                                  d.PricingTier,
+                                  d.SelectedAlternativeId,
+                                  p.SuggestedSalePriceCClass,
+                                  p.SuggestedSalePrice,
+                                  p.SuggestedSalePriceElite,
+                                  p.PurchasePriceCClass,
+                                  p.PurchasePrice,
+                                  p.PurchasePriceElite,
+                                  p.Period
+                              }).ToListAsync();
+
+        var itemAlternativeIds = rawItems.Where(x => x.SelectedAlternativeId.HasValue).Select(x => x.SelectedAlternativeId!.Value).Distinct().ToList();
+        var itemAlternatives = itemAlternativeIds.Any()
+            ? await _db.ProductFactoryAlternatives.AsNoTracking()
+                .Where(a => itemAlternativeIds.Contains(a.AlternativeId))
+                .ToDictionaryAsync(a => a.AlternativeId)
+            : new Dictionary<int, ProductFactoryAlternative>();
+
+        var items = rawItems.Select(d =>
+        {
+            itemAlternatives.TryGetValue(d.SelectedAlternativeId ?? 0, out var alt);
+            return new InvoiceItemDto
+            {
+                DetailId = d.DetailId,
+                ProductId = d.ProductId,
+                ProductName = d.ProductName,
+                ProductDescription = alt?.SpecificationSummary ?? d.ProductDescription,
+                ProductImagePath = null,
+                Quantity = d.Quantity,
+                UnitPrice = d.UnitPrice,
+                Notes = d.Notes,
+                SelectedAlternativeId = d.SelectedAlternativeId,
+                SelectedAlternativeName = alt?.AlternativeName,
+                SelectedAlternativeSummary = alt?.SpecificationSummary,
+                PricingTier = d.PricingTier,
+                SalePriceCClass = d.SuggestedSalePriceCClass,
+                SalePricePremium = d.SuggestedSalePrice,
+                SalePriceElite = d.SuggestedSalePriceElite,
+                PurchasePriceCClass = d.PurchasePriceCClass,
+                PurchasePricePremium = d.PurchasePrice,
+                PurchasePriceElite = d.PurchasePriceElite,
+                Period = d.Period,
+                AlternativeSalePriceCClass = alt?.SuggestedSalePriceCClass,
+                AlternativeSalePricePremium = alt?.SuggestedSalePricePremium,
+                AlternativeSalePriceElite = alt?.SuggestedSalePriceElite,
+                AlternativePurchasePriceCClass = alt?.PurchasePriceCClass,
+                AlternativePurchasePricePremium = alt?.PurchasePricePremium,
+                AlternativePurchasePriceElite = alt?.PurchasePriceElite,
+                AlternativePeriod = alt?.Period
+            };
+        }).ToList();
 
         foreach (var item in items)
         {
@@ -543,6 +584,7 @@ public class InvoiceService : IInvoiceService
                     Quantity = item.Quantity,
                     UnitPrice = purchasePrice,
                     TotalAmount = Math.Round(item.Quantity * purchasePrice, 2),
+                    SelectedAlternativeId = item.SelectedAlternativeId,
                     PricingTier = effectiveTier,
                     Notes = $"[{effectiveTier}] - مقابل بيع {dto.ReferenceNumber}"
                 };
@@ -570,6 +612,7 @@ public class InvoiceService : IInvoiceService
                     Quantity = item.Quantity,
                     UnitPrice = item.UnitPrice,
                     TotalAmount = item.TotalAmount,
+                    SelectedAlternativeId = item.SelectedAlternativeId,
                     PricingTier = effectiveTier,
                     Notes = string.IsNullOrEmpty(item.Notes)
                         ? $"[{effectiveTier}]"
@@ -1396,6 +1439,16 @@ await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, actor,
 
     private static decimal GetPurchasePriceByTier(InvoiceItemDto item, string tier)
     {
+        if (item.SelectedAlternativeId.HasValue)
+        {
+            return tier switch
+            {
+                var t when t == PricingTiers.CClass => item.AlternativePurchasePriceCClass ?? 0m,
+                var t when t == PricingTiers.Elite => item.AlternativePurchasePriceElite ?? item.AlternativePurchasePricePremium ?? 0m,
+                _ => item.AlternativePurchasePricePremium ?? 0m
+            };
+        }
+
         return tier switch
         {
             var t when t == PricingTiers.CClass => item.PurchasePriceCClass ?? 0m,

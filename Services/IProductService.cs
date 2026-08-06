@@ -1,4 +1,5 @@
 using COCOBOLOERPNEW.DTOs;
+using Microsoft.AspNetCore.Components.Forms;
 
 public interface IProductService
 {
@@ -37,23 +38,26 @@ public interface IProductService
         decimal? newPremiumCost,
         decimal? newEliteCost,
         string currentUsername);
-    // ============================
-// ✅ دوال مدة التصنيع وملاحظات التصنيع
-// ============================
 
-Task RequestPeriodChangeAsync(
-    int productId,
-    int? newPeriod,
-    string? newManufacturingNotes,
-    string reason,
-    string currentUsername);
+    Task RequestPeriodChangeAsync(
+        int productId,
+        int? newPeriod,
+        string? newManufacturingNotes,
+        string reason,
+        string currentUsername);
 
-Task ApprovePeriodChangeAsync(
-    int productId,
-    string currentUsername);
+    Task ApprovePeriodChangeAsync(
+        int productId,
+        string currentUsername);
 
-Task RejectPeriodChangeAsync(
-    int productId,
-    string currentUsername,
-    string? rejectReason = null);
+    Task RejectPeriodChangeAsync(
+        int productId,
+        string currentUsername,
+        string? rejectReason = null);
+
+    Task<List<ProductFactoryAlternativeDto>> GetFactoryAlternativesAsync(int productId);
+    Task<(bool Success, string Message, int? AlternativeId)> SaveFactoryAlternativeAsync(ProductFactoryAlternativeDto dto, IReadOnlyList<IBrowserFile> files, string currentUsername);
+    Task<(bool Success, string Message)> ApproveFactoryAlternativeAsync(int alternativeId, string currentUsername);
+    Task<(bool Success, string Message)> RejectFactoryAlternativeAsync(int alternativeId, string currentUsername, string? reason = null);
+    Task<(bool Success, string Message)> DeleteFactoryAlternativeAsync(int alternativeId, string currentUsername);
 }
