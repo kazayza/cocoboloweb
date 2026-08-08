@@ -116,7 +116,7 @@ public class InteractionService : IInteractionService
             var oldStageId = opp.StageId;
             var newStageId = dto.StageAfterId ?? oldStageId;
 
-            if (newStageId != 3 && newStageId != 4)
+            if (newStageId != 3 && newStageId != 4 && newStageId != 5)
             {
                 if (!dto.TaskTypeId.HasValue)
                     return (false, "برجاء اختيار نوع مهمة المتابعة القادمة (اتصال، اجتماع، إلخ)");

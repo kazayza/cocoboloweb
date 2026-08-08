@@ -1,0 +1,313 @@
+@page "/crm/opportunities/closure-requests"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
+
+@attribute [Authorize]
+
+@inject IOpportunityService OppService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+<PageTitle>طلبات إغلاق الفرص</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="loading-wrap">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل الطلبات...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+        غير مسموح لك بعرض طلبات الإغلاق.
+    </MudAlert>
+}
+else
+{
+    <div class="closure-requests-page" dir="rtl">
+        <div class="page-header">
+            <div class="header-bg"></div>
+            <div class="header-content">
+                <div class="title-wrap">
+                    <div class="title-icon">
+                        <MudIcon Icon="@Icons.Material.Filled.PendingActions" />
+                    </div>
+                    <div>
+                        <h1>طلبات إغلاق الفرص</h1>
+                        <p>اعتماد أو رفض تحويل الفرص إلى خسارة / غير مهتم</p>
+                    </div>
+                </div>
+                <MudButton Variant="Variant.Outlined" Color="Color.Inherit" OnClick="RefreshAsync"
+                           StartIcon="@Icons.Material.Filled.Refresh" Class="refresh-btn">
+                    تحديث
+                </MudButton>
+            </div>
+        </div>
+
+        <div class="stats-row">
+            <div class="stat-card">
+                <span class="stat-label">إجمالي</span>
+                <strong>@_requests.Count</strong>
+            </div>
+            <div class="stat-card stat-pending">
+                <span class="stat-label">معلقة</span>
+                <strong>@_requests.Count(x => x.Status == OpportunityClosureApprovalStatuses.Pending)</strong>
+            </div>
+            <div class="stat-card stat-approved">
+                <span class="stat-label">معتمدة</span>
+                <strong>@_requests.Count(x => x.Status == OpportunityClosureApprovalStatuses.Approved)</strong>
+            </div>
+            <div class="stat-card stat-rejected">
+                <span class="stat-label">مرفوضة</span>
+                <strong>@_requests.Count(x => x.Status == OpportunityClosureApprovalStatuses.Rejected)</strong>
+            </div>
+        </div>
+
+        <div class="filter-row">
+            <MudChipSet T="string" Mandatory="true" SelectedValue="@_selectedStatusFilter" SelectedValueChanged="OnFilterChanged">
+                <MudChip T="string" Value='@("all")' Color="Color.Default" Variant="Variant.Filled">الكل</MudChip>
+<MudChip T="string" Value='@("Pending")' Color="Color.Warning" Variant="Variant.Filled">معلقة</MudChip>
+<MudChip T="string" Value='@("Approved")' Color="Color.Success" Variant="Variant.Filled">معتمدة</MudChip>
+<MudChip T="string" Value='@("Rejected")' Color="Color.Error" Variant="Variant.Filled">مرفوضة</MudChip>
+            </MudChipSet>
+        </div>
+
+        <MudPaper Class="table-shell" Elevation="0">
+            <MudTable Items="FilteredRequests" Dense="true" Hover="true" Striped="true" Breakpoint="Breakpoint.Md" Elevation="0">
+                <HeaderContent>
+                    <MudTh>الفرصة</MudTh>
+                    <MudTh>العميل</MudTh>
+                    <MudTh>من</MudTh>
+                    <MudTh>إلى</MudTh>
+                    <MudTh>سبب الإغلاق</MudTh>
+                    <MudTh>مقدم الطلب</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh>إجراءات</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <strong>#@context.OpportunityId</strong>
+                        <div class="sub-meta">@context.RequestedAt.ToString("yyyy/MM/dd HH:mm")</div>
+                    </MudTd>
+                    <MudTd>
+                        <div class="client-cell">
+                            <strong>@context.ClientName</strong>
+                            @if (!string.IsNullOrWhiteSpace(context.RequestReasonNotes))
+                            {
+                                <small>@context.RequestReasonNotes</small>
+                            }
+                        </div>
+                    </MudTd>
+                    <MudTd>@(context.CurrentStageName ?? "—")</MudTd>
+                    <MudTd>@(context.RequestedStageName ?? "—")</MudTd>
+                    <MudTd>@(context.LostReasonName ?? "—")</MudTd>
+                    <MudTd>@context.RequestedBy</MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(context.Status)" Variant="Variant.Filled">
+                            @GetStatusText(context.Status)
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>
+                        <div class="row-actions">
+                            <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                           Color="Color.Primary"
+                                           Size="Size.Small"
+                                           OnClick="@(() => OpenOpportunity(context.OpportunityId))"
+                                           Title="فتح الفرصة" />
+
+                            @if (_canManage && context.Status == OpportunityClosureApprovalStatuses.Pending)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.CheckCircle"
+                                               Color="Color.Success"
+                                               Size="Size.Small"
+                                               OnClick="@(() => ApproveAsync(context.RequestId))"
+                                               Title="اعتماد" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Cancel"
+                                               Color="Color.Error"
+                                               Size="Size.Small"
+                                               OnClick="@(() => OpenRejectDialog(context.RequestId))"
+                                               Title="رفض" />
+                            }
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="empty-box">
+                        <MudIcon Icon="@Icons.Material.Filled.RuleFolder" Size="Size.Large" />
+                        <span>لا توجد طلبات مطابقة.</span>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    </div>
+}
+
+<MudDialog @bind-Visible="_showRejectDialog" Options="_dialogOptions">
+    <TitleContent>
+        <div class="dialog-title-wrap">
+            <MudIcon Icon="@Icons.Material.Filled.Cancel" Color="Color.Error" />
+            <MudText Typo="Typo.h6">رفض طلب الإغلاق</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudTextField T="string"
+                      @bind-Value="_reviewNotes"
+                      Label="ملاحظات الرفض"
+                      Variant="Variant.Outlined"
+                      Lines="3"
+                      FullWidth="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="CloseRejectDialog">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="RejectAsync">تأكيد الرفض</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .closure-requests-page { padding: 0 1rem 2rem; }
+    .loading-wrap { min-height: 50vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    .page-header { position:relative; border-radius:22px; overflow:hidden; margin-bottom:1rem; box-shadow:0 10px 30px rgba(15,23,42,.12); }
+    .header-bg { position:absolute; inset:0; background:linear-gradient(135deg,#78350f 0%,#92400e 40%,#b45309 100%); }
+    .header-content { position:relative; z-index:1; padding:1.5rem 1.75rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; color:#fff; }
+    .title-wrap { display:flex; align-items:center; gap:1rem; }
+    .title-icon { width:54px; height:54px; border-radius:16px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); }
+    .title-icon .mud-icon-root { font-size:1.7rem !important; }
+    .title-wrap h1 { margin:0; font-size:1.45rem; font-weight:900; }
+    .title-wrap p { margin:.2rem 0 0; opacity:.82; }
+    .refresh-btn { color:#fff !important; border-color:rgba(255,255,255,.35) !important; }
+
+    .stats-row { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:.75rem; margin-bottom:1rem; }
+    .stat-card { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-lines-default); border-radius:16px; padding:1rem 1.1rem; display:flex; align-items:center; justify-content:space-between; box-shadow:0 2px 10px rgba(0,0,0,.04); }
+    .stat-card strong { font-size:1.25rem; }
+    .stat-label { color:var(--mud-palette-text-secondary); font-weight:700; }
+    .stat-pending strong { color:#d97706; }
+    .stat-approved strong { color:#059669; }
+    .stat-rejected strong { color:#dc2626; }
+
+    .filter-row { margin-bottom:1rem; }
+    .table-shell { border-radius:18px; border:1px solid var(--mud-palette-lines-default); overflow:hidden; background:var(--mud-palette-surface); box-shadow:0 4px 16px rgba(0,0,0,.04); }
+    .client-cell { display:flex; flex-direction:column; gap:.12rem; }
+    .client-cell small, .sub-meta { color:var(--mud-palette-text-secondary); font-size:.75rem; }
+    .row-actions { display:flex; align-items:center; gap:.25rem; }
+    .empty-box { padding:2rem; display:flex; flex-direction:column; gap:.5rem; align-items:center; justify-content:center; color:var(--mud-palette-text-secondary); }
+    .dialog-title-wrap { display:flex; align-items:center; gap:.5rem; }
+
+    @@media (max-width: 900px) {
+        .stats-row { grid-template-columns: 1fr; }
+        .page-header .header-content { padding:1.25rem 1rem; }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _canView;
+    private bool _canManage;
+    private string _selectedStatusFilter = "Pending";
+    private List<OpportunityClosureApprovalRequestDto> _requests = new();
+
+    private bool _showRejectDialog;
+    private int _rejectRequestId;
+    private string? _reviewNotes;
+
+    private readonly DialogOptions _dialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Small,
+        FullWidth = true,
+        CloseButton = true,
+        CloseOnEscapeKey = true
+    };
+
+    private IEnumerable<OpportunityClosureApprovalRequestDto> FilteredRequests => _selectedStatusFilter == "all"
+        ? _requests
+        : _requests.Where(x => x.Status == _selectedStatusFilter);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        _canView = user.IsInRole("Admin") || user.IsInRole(SystemRoles.SalesManager) || user.IsInRole(SystemRoles.GeneralManager);
+        _canManage = _canView;
+
+        if (!_canView)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        await RefreshAsync();
+        _isLoading = false;
+    }
+
+    private async Task RefreshAsync()
+    {
+        _requests = await OppService.GetClosureApprovalRequestsAsync();
+        StateHasChanged();
+    }
+
+    private Task OnFilterChanged(string value)
+    {
+        _selectedStatusFilter = value;
+        return Task.CompletedTask;
+    }
+
+    private async Task ApproveAsync(int requestId)
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var userName = auth.User.Identity?.Name ?? "System";
+        var (ok, msg) = await OppService.ApproveClosureApprovalAsync(requestId, userName, null);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await RefreshAsync();
+    }
+
+    private void OpenRejectDialog(int requestId)
+    {
+        _rejectRequestId = requestId;
+        _reviewNotes = null;
+        _showRejectDialog = true;
+    }
+
+    private void CloseRejectDialog()
+    {
+        _showRejectDialog = false;
+        _rejectRequestId = 0;
+        _reviewNotes = null;
+    }
+
+    private async Task RejectAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var userName = auth.User.Identity?.Name ?? "System";
+        var (ok, msg) = await OppService.RejectClosureApprovalAsync(_rejectRequestId, userName, _reviewNotes);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+        {
+            CloseRejectDialog();
+            await RefreshAsync();
+        }
+    }
+
+    private void OpenOpportunity(int opportunityId) => Navigation.NavigateTo($"/crm/opportunities/{opportunityId}");
+
+    private static Color GetStatusColor(string? status) => status switch
+    {
+        var s when s == OpportunityClosureApprovalStatuses.Pending => Color.Warning,
+        var s when s == OpportunityClosureApprovalStatuses.Approved => Color.Success,
+        var s when s == OpportunityClosureApprovalStatuses.Rejected => Color.Error,
+        _ => Color.Default
+    };
+
+    private static string GetStatusText(string? status) => status switch
+    {
+        var s when s == OpportunityClosureApprovalStatuses.Pending => "معلق",
+        var s when s == OpportunityClosureApprovalStatuses.Approved => "معتمد",
+        var s when s == OpportunityClosureApprovalStatuses.Rejected => "مرفوض",
+        _ => status ?? "—"
+    };
+}

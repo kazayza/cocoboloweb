@@ -1,0 +1,422 @@
+@page "/admin/branches"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
+
+@attribute [Authorize]
+
+@inject IBranchService BranchService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+<PageTitle>إدارة الفروع</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="loading-wrap">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل الفروع...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+        غير مسموح لك بعرض هذه الشاشة.
+    </MudAlert>
+}
+else
+{
+    <div class="branches-page" dir="rtl">
+        <div class="branches-header">
+            <div class="header-bg"></div>
+            <div class="header-content">
+                <div class="title-wrap">
+                    <div class="title-icon">
+                        <MudIcon Icon="@Icons.Material.Filled.Storefront" />
+                    </div>
+                    <div>
+                        <h1>إدارة الفروع</h1>
+                        <p>إضافة وتعديل وتفعيل وتعطيل فروع المعارض</p>
+                    </div>
+                </div>
+
+                @if (_canManage)
+                {
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.AddBusiness"
+                               OnClick="OpenAddDialog"
+                               Class="add-btn">
+                        إضافة فرع
+                    </MudButton>
+                }
+            </div>
+        </div>
+
+        <div class="stats-row">
+            <div class="stat-card">
+                <span class="stat-label">إجمالي الفروع</span>
+                <strong>@_branches.Count</strong>
+            </div>
+            <div class="stat-card stat-active">
+                <span class="stat-label">الفروع النشطة</span>
+                <strong>@_branches.Count(x => x.IsActive)</strong>
+            </div>
+            <div class="stat-card stat-inactive">
+                <span class="stat-label">الفروع المعطلة</span>
+                <strong>@_branches.Count(x => !x.IsActive)</strong>
+            </div>
+        </div>
+
+        <MudPaper Class="table-shell" Elevation="0">
+            <MudTable Items="_branches" Dense="true" Hover="true" Striped="true" Breakpoint="Breakpoint.Md" Elevation="0">
+                <HeaderContent>
+                    <MudTh>الكود</MudTh>
+                    <MudTh>اسم الفرع</MudTh>
+                    <MudTh>الاسم الإنجليزي</MudTh>
+                    <MudTh>المدير المسؤول</MudTh>
+                    <MudTh>الهاتف</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh>إجراءات</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <span class="code-badge">@context.BranchCode</span>
+                    </MudTd>
+                    <MudTd>
+                        <div class="branch-name-cell">
+                            <strong>@context.BranchNameAr</strong>
+                            @if (!string.IsNullOrWhiteSpace(context.Address))
+                            {
+                                <small>@context.Address</small>
+                            }
+                        </div>
+                    </MudTd>
+                    <MudTd>@(context.BranchNameEn ?? "—")</MudTd>
+                    <MudTd>@(context.ManagerEmployeeName ?? "—")</MudTd>
+                    <MudTd>@(context.Phone ?? "—")</MudTd>
+                    <MudTd>
+                        <MudChip T="string"
+                                 Size="Size.Small"
+                                 Color="@(context.IsActive ? Color.Success : Color.Error)"
+                                 Variant="Variant.Filled">
+                            @(context.IsActive ? "نشط" : "معطل")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>
+                        <div class="row-actions">
+                            @if (_canManage)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                               Color="Color.Primary"
+                                               Size="Size.Small"
+                                               OnClick="@(() => OpenEditDialog(context.BranchId))"
+                                               Title="تعديل" />
+
+                                <MudSwitch T="bool"
+                                           Value="@context.IsActive"
+                                           ValueChanged="@((bool v) => ToggleStatusAsync(context.BranchId, v))"
+                                           Color="Color.Success"
+                                           Size="Size.Small"
+                                           Class="status-switch" />
+                            }
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="empty-box">
+                        <MudIcon Icon="@Icons.Material.Filled.DomainDisabled" Size="Size.Large" />
+                        <span>لا توجد فروع بعد</span>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    </div>
+}
+
+<MudDialog @bind-Visible="_showDialog" Options="_dialogOptions">
+    <TitleContent>
+        <div class="dialog-title-wrap">
+            <MudIcon Icon="@(_editing.BranchId == 0 ? Icons.Material.Filled.AddBusiness : Icons.Material.Filled.Edit)" />
+            <MudText Typo="Typo.h6">@(_editing.BranchId == 0 ? "إضافة فرع" : "تعديل فرع")</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudGrid Spacing="2" Class="mt-1">
+            <MudItem xs="12" md="6">
+                <MudTextField T="string"
+                              @bind-Value="_editing.BranchCode"
+                              Label="كود الفرع *"
+                              Variant="Variant.Outlined"
+                              Immediate="true" />
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudTextField T="string"
+                              @bind-Value="_editing.BranchNameAr"
+                              Label="اسم الفرع بالعربي *"
+                              Variant="Variant.Outlined"
+                              Immediate="true" />
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudTextField T="string"
+                              @bind-Value="_editing.BranchNameEn"
+                              Label="اسم الفرع بالإنجليزي"
+                              Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudTextField T="string"
+                              @bind-Value="_editing.Phone"
+                              Label="الهاتف"
+                              Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField T="string"
+                              @bind-Value="_editing.Address"
+                              Label="العنوان"
+                              Variant="Variant.Outlined"
+                              Lines="2" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudSelect T="int?"
+                           @bind-Value="_editing.ManagerEmployeeId"
+                           Label="المدير المسؤول"
+                           Variant="Variant.Outlined"
+                           Clearable="true">
+                    @foreach (var emp in _managers)
+                    {
+                        <MudSelectItem T="int?" Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12">
+                <MudSwitch T="bool"
+                           @bind-Value="_editing.IsActive"
+                           Color="Color.Success"
+                           Label="الفرع نشط" />
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="CloseDialog">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   OnClick="SaveAsync"
+                   Disabled="@_isSaving">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="me-2" />
+            }
+            حفظ
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .branches-page { padding: 0 1rem 2rem; }
+    .loading-wrap { min-height: 50vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+
+    .branches-header {
+        position: relative;
+        border-radius: 22px;
+        overflow: hidden;
+        margin-bottom: 1rem;
+        box-shadow: 0 10px 30px rgba(15,23,42,.12);
+    }
+
+    .header-bg {
+        position:absolute; inset:0;
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #2563eb 100%);
+    }
+
+    .header-content {
+        position:relative; z-index:1;
+        padding: 1.5rem 1.75rem;
+        display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;
+        color:#fff;
+    }
+
+    .title-wrap { display:flex; align-items:center; gap:1rem; }
+    .title-icon {
+        width:54px; height:54px; border-radius:16px;
+        display:flex; align-items:center; justify-content:center;
+        background: rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18);
+    }
+    .title-icon .mud-icon-root { font-size:1.7rem !important; }
+    .title-wrap h1 { margin:0; font-size:1.45rem; font-weight:900; }
+    .title-wrap p { margin:.2rem 0 0; opacity:.82; }
+    .add-btn { font-weight:800 !important; }
+
+    .stats-row {
+        display:grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap:.75rem;
+        margin-bottom:1rem;
+    }
+
+    .stat-card {
+        background: var(--mud-palette-surface);
+        border:1px solid var(--mud-palette-lines-default);
+        border-radius:16px;
+        padding:1rem 1.1rem;
+        display:flex; align-items:center; justify-content:space-between;
+        box-shadow: 0 2px 10px rgba(0,0,0,.04);
+    }
+    .stat-card strong { font-size:1.25rem; }
+    .stat-label { color:var(--mud-palette-text-secondary); font-weight:700; }
+    .stat-active strong { color:#059669; }
+    .stat-inactive strong { color:#dc2626; }
+
+    .table-shell {
+        border-radius:18px;
+        border:1px solid var(--mud-palette-lines-default);
+        overflow:hidden;
+        background: var(--mud-palette-surface);
+        box-shadow: 0 4px 16px rgba(0,0,0,.04);
+    }
+
+    .code-badge {
+        display:inline-flex; align-items:center; justify-content:center;
+        padding:.28rem .7rem; border-radius:999px;
+        background:#eff6ff; color:#1d4ed8; font-weight:900; font-size:.75rem;
+        border:1px solid #bfdbfe;
+    }
+
+    .branch-name-cell { display:flex; flex-direction:column; gap:.12rem; }
+    .branch-name-cell small { color:var(--mud-palette-text-secondary); }
+
+    .row-actions { display:flex; align-items:center; gap:.3rem; }
+    .status-switch { margin-inline-start:.2rem; }
+
+    .empty-box {
+        padding:2rem; display:flex; flex-direction:column; gap:.5rem; align-items:center; justify-content:center;
+        color:var(--mud-palette-text-secondary);
+    }
+
+    .dialog-title-wrap { display:flex; align-items:center; gap:.5rem; }
+
+    @@media (max-width: 900px) {
+        .stats-row { grid-template-columns: 1fr; }
+        .branches-header .header-content { padding:1.25rem 1rem; }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _isSaving;
+    private bool _canView;
+    private bool _canManage;
+    private bool _showDialog;
+
+    private List<BranchListDto> _branches = new();
+    private List<Employee> _managers = new();
+    private BranchFormDto _editing = new();
+
+    private readonly DialogOptions _dialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Medium,
+        FullWidth = true,
+        CloseButton = true,
+        CloseOnEscapeKey = true
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        _canView = user.IsInRole("Admin");
+        _canManage = user.IsInRole("Admin");
+
+        if (!_canView)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        await LoadAsync();
+        _isLoading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        _branches = await BranchService.GetBranchesAsync();
+        _managers = await BranchService.GetManagersAsync();
+    }
+
+    private void OpenAddDialog()
+    {
+        _editing = new BranchFormDto { IsActive = true };
+        _showDialog = true;
+    }
+
+    private async Task OpenEditDialog(int branchId)
+    {
+        var dto = await BranchService.GetBranchForEditAsync(branchId);
+        if (dto == null)
+        {
+            Snackbar.Add("الفرع غير موجود.", Severity.Error);
+            return;
+        }
+
+        _editing = dto;
+        _showDialog = true;
+    }
+
+    private void CloseDialog()
+    {
+        _showDialog = false;
+        _editing = new BranchFormDto();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_editing.BranchCode))
+        {
+            Snackbar.Add("كود الفرع مطلوب.", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_editing.BranchNameAr))
+        {
+            Snackbar.Add("اسم الفرع بالعربي مطلوب.", Severity.Warning);
+            return;
+        }
+
+        _isSaving = true;
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var userName = auth.User.Identity?.Name ?? "System";
+
+            var (ok, msg, _) = await BranchService.SaveBranchAsync(_editing, userName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok)
+            {
+                _showDialog = false;
+                await LoadAsync();
+            }
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task ToggleStatusAsync(int branchId, bool isActive)
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var userName = auth.User.Identity?.Name ?? "System";
+
+        var (ok, msg) = await BranchService.ToggleBranchStatusAsync(branchId, isActive, userName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+            await LoadAsync();
+    }
+}

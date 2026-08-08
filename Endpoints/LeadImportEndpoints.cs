@@ -295,6 +295,12 @@ public static class LeadImportEndpoints
     // Notifications
     // ═══════════════════════════════════════════════════════════
 
+    // ═══════════════════════════════════════════════════════════
+    // Notifications — FormName = Blazor SoT ("crm/leads")
+    // NotifyRoleAsync (after NotificationService patch) expands
+    // each role → every Username + optional FCM via Node API.
+    // Roles: Admin + SalesManager + GeneralManager
+    // ═══════════════════════════════════════════════════════════
     private static async Task NotifyNewLeadAsync(NotificationService notify, LeadsCrm lead)
     {
         try
@@ -304,15 +310,21 @@ public static class LeadImportEndpoints
                 ? string.Empty
                 : $" من حملة: {lead.CampaignName}";
 
-            var message = $"وصل Lead جديد: {lead.FullName} - {lead.Phone}{campaignPart}. برجاء المتابعة أو اتخاذ إجراء.";
+            var message =
+                $"وصل Lead جديد: {lead.FullName} - {lead.Phone}{campaignPart}. " +
+                "برجاء المتابعة أو اتخاذ إجراء.";
+
+            // Single-lead import: include RelatedId so mobile opens Lead details
+            const string formName = "crm/leads";
+            const string relatedTable = "LeadsCRM";
 
             await notify.NotifyRoleAsync(
                 title: title,
                 message: message,
                 role: SystemRoles.Admin,
                 createdBy: "MetaIntegration",
-                formName: "crm/leads",
-                relatedTable: "LeadsCRM",
+                formName: formName,
+                relatedTable: relatedTable,
                 relatedId: lead.LeadId);
 
             await notify.NotifyRoleAsync(
@@ -320,8 +332,8 @@ public static class LeadImportEndpoints
                 message: message,
                 role: SystemRoles.SalesManager,
                 createdBy: "MetaIntegration",
-                formName: "crm/leads",
-                relatedTable: "LeadsCRM",
+                formName: formName,
+                relatedTable: relatedTable,
                 relatedId: lead.LeadId);
 
             await notify.NotifyRoleAsync(
@@ -329,18 +341,21 @@ public static class LeadImportEndpoints
                 message: message,
                 role: SystemRoles.GeneralManager,
                 createdBy: "MetaIntegration",
-                formName: "crm/leads",
-                relatedTable: "LeadsCRM",
+                formName: formName,
+                relatedTable: relatedTable,
                 relatedId: lead.LeadId);
         }
         catch (Exception ex)
         {
             // لا نوقف الاستيراد لو الإشعار فشل
-            Console.WriteLine($"[WARN] Failed to send new lead notification. LeadId={lead.LeadId}. Error={ex.Message}");
+            Console.WriteLine(
+                $"[WARN] Failed to send new lead notification. LeadId={lead.LeadId}. Error={ex.Message}");
         }
     }
 
-    private static async Task NotifyBatchImportSummaryAsync(NotificationService notify, BatchLeadImportResult result)
+    private static async Task NotifyBatchImportSummaryAsync(
+        NotificationService notify,
+        BatchLeadImportResult result)
     {
         if (result.TotalCreated <= 0) return;
 
@@ -352,34 +367,38 @@ public static class LeadImportEndpoints
                 $"المكرر: {result.TotalDuplicates}، الفاشل: {result.TotalFailed}. " +
                 "برجاء مراجعة قائمة Leads واتخاذ إجراء.";
 
+            // Batch summary: open leads list (no single RelatedId)
+            const string formName = "crm/leads";
+            const string relatedTable = "LeadsCRM";
+
             await notify.NotifyRoleAsync(
                 title: title,
                 message: message,
                 role: SystemRoles.Admin,
                 createdBy: "MetaIntegration",
-                formName: "crm/leads",
-                relatedTable: "LeadsCRM");
+                formName: formName,
+                relatedTable: relatedTable);
 
             await notify.NotifyRoleAsync(
                 title: title,
                 message: message,
                 role: SystemRoles.SalesManager,
                 createdBy: "MetaIntegration",
-                formName: "crm/leads",
-                relatedTable: "LeadsCRM");
-            
+                formName: formName,
+                relatedTable: relatedTable);
+
             await notify.NotifyRoleAsync(
                 title: title,
                 message: message,
                 role: SystemRoles.GeneralManager,
                 createdBy: "MetaIntegration",
-                formName: "crm/leads",
-                relatedTable: "LeadsCRM");
+                formName: formName,
+                relatedTable: relatedTable);
         }
         catch (Exception ex)
         {
-            // لا نوقف الاستيراد لو الإشعار فشل
-            Console.WriteLine($"[WARN] Failed to send batch lead notification. Error={ex.Message}");
+            Console.WriteLine(
+                $"[WARN] Failed to send batch lead notification. Error={ex.Message}");
         }
     }
 

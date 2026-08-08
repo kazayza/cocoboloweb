@@ -38,4 +38,6 @@ public class KanbanCardDto
     public int TasksCount { get; set; }
     public bool IsOverdue { get; set; }
     public DateTime CreatedAt { get; set; }
+    public DateTime? ClosedAt { get; set; }
+    public int LifecycleDays { get; set; }
 }

@@ -31,6 +31,7 @@ public class OpportunityService : IOpportunityService
         var items = await query.Skip((filter.PageNumber - 1) * filter.PageSize).Take(filter.PageSize)
             .Select(o => MapToListDto(o)).ToListAsync();
         await EnrichCounts(items);
+        await EnrichLifecycleDataAsync(items);
         return new PagedResult<OpportunityListDto> { Items = items, TotalCount = totalCount, PageNumber = filter.PageNumber, PageSize = filter.PageSize };
     }
 
@@ -42,7 +43,7 @@ public class OpportunityService : IOpportunityService
         var query = _db.SalesOpportunities.AsNoTracking().Where(o => o.IsActive);
         if (crmAccess.HasValue) query = query.Where(o => o.CreatedAt >= crmAccess.Value);
         query = ApplyOppFilters(query, filter);
-        var opps = await query.Select(o => new { o.OpportunityId, o.PartyId, o.StageId, o.ExpectedValue, o.EmployeeId, o.NextFollowUpDate, o.InterestedProduct, o.SourceId, o.CreatedAt }).ToListAsync();
+        var opps = await query.Select(o => new { o.OpportunityId, o.PartyId, o.StageId, o.ExpectedValue, o.EmployeeId, o.NextFollowUpDate, o.InterestedProduct, o.SourceId, o.CreatedAt, o.ClosedAt }).ToListAsync();
         var partyIds = opps.Select(o => o.PartyId).Distinct().ToList();
         var parties = partyIds.Any() ? (await _db.Parties.AsNoTracking().Where(p => partyIds.Contains(p.PartyId)).Select(p => new { p.PartyId, p.PartyName, p.Phone }).ToListAsync()).ToDictionary(p => p.PartyId, p => (p.PartyName, p.Phone)) : new();
         var empIds = opps.Where(o => o.EmployeeId.HasValue).Select(o => o.EmployeeId!.Value).Distinct().ToList();
@@ -53,7 +54,7 @@ public class OpportunityService : IOpportunityService
         var icDict = oppIds.Any() ? (await _db.CustomerInteractions.AsNoTracking().Where(ci => oppIds.Contains(ci.OpportunityId)).GroupBy(ci => ci.OpportunityId).Select(g => new { g.Key, Count = g.Count() }).ToListAsync()).ToDictionary(x => x.Key, x => x.Count) : new();
         var tcDict = oppIds.Any() ? (await _db.CrmTasks.AsNoTracking().Where(t => t.OpportunityId != null && oppIds.Contains(t.OpportunityId.Value)).GroupBy(t => t.OpportunityId!.Value).Select(g => new { g.Key, Count = g.Count() }).ToListAsync()).ToDictionary(x => x.Key, x => x.Count) : new();
         var today = DateTime.Today;
-        return new KanbanBoardDto { Columns = stages.Select(s => { var cards = opps.Where(o => o.StageId == s.StageId).Select(o => { parties.TryGetValue(o.PartyId, out var p); emps.TryGetValue(o.EmployeeId ?? 0, out var en); srcs.TryGetValue(o.SourceId ?? 0, out var sn); return new KanbanCardDto { OpportunityId = o.OpportunityId, PartyId = o.PartyId, ClientName = p.PartyName ?? "—", Phone = p.Phone, ExpectedValue = o.ExpectedValue, EmployeeId = o.EmployeeId, EmployeeName = en, InterestedProduct = o.InterestedProduct, SourceId = o.SourceId, SourceName = sn, NextFollowUpDate = o.NextFollowUpDate, StageId = s.StageId, InteractionsCount = icDict.TryGetValue(o.OpportunityId, out var ic) ? ic : 0, TasksCount = tcDict.TryGetValue(o.OpportunityId, out var tc) ? tc : 0, CreatedAt = o.CreatedAt,IsOverdue = o.NextFollowUpDate.HasValue && o.NextFollowUpDate.Value < today }; }).ToList(); return new KanbanColumnDto { StageId = s.StageId, StageName = s.StageName ?? "", StageNameAr = s.StageNameAr ?? s.StageName ?? "", StageColor = s.StageColor ?? "#94a3b8", StageOrder = s.StageOrder, Count = cards.Count, Value = cards.Sum(c => c.ExpectedValue ?? 0), Cards = cards }; }).ToList() };
+        return new KanbanBoardDto { Columns = stages.Select(s => { var cards = opps.Where(o => o.StageId == s.StageId).Select(o => { parties.TryGetValue(o.PartyId, out var p); emps.TryGetValue(o.EmployeeId ?? 0, out var en); srcs.TryGetValue(o.SourceId ?? 0, out var sn); return new KanbanCardDto { OpportunityId = o.OpportunityId, PartyId = o.PartyId, ClientName = p.PartyName ?? "—", Phone = p.Phone, ExpectedValue = o.ExpectedValue, EmployeeId = o.EmployeeId, EmployeeName = en, InterestedProduct = o.InterestedProduct, SourceId = o.SourceId, SourceName = sn, NextFollowUpDate = o.NextFollowUpDate, StageId = s.StageId, InteractionsCount = icDict.TryGetValue(o.OpportunityId, out var ic) ? ic : 0, TasksCount = tcDict.TryGetValue(o.OpportunityId, out var tc) ? tc : 0, CreatedAt = o.CreatedAt, ClosedAt = o.ClosedAt, LifecycleDays = CalculateLifecycleDays(o.CreatedAt, o.ClosedAt), IsOverdue = o.NextFollowUpDate.HasValue && o.NextFollowUpDate.Value < today }; }).ToList(); return new KanbanColumnDto { StageId = s.StageId, StageName = s.StageName ?? "", StageNameAr = s.StageNameAr ?? s.StageName ?? "", StageColor = s.StageColor ?? "#94a3b8", StageOrder = s.StageOrder, Count = cards.Count, Value = cards.Sum(c => c.ExpectedValue ?? 0), Cards = cards }; }).ToList() };
     }
 
     // ════════════════════ MOVE STAGE ════════════════════
@@ -63,11 +64,16 @@ public class OpportunityService : IOpportunityService
     {
         var opp = await _db.SalesOpportunities.FindAsync(opportunityId);
         if (opp == null) return (false, "الفرصة غير موجودة");
+
+        if (IsExitStageId(newStageId) && !CanDirectCloseOpportunities())
+            return (false, "تحويل الفرصة إلى خسارة أو غير مهتم يحتاج طلب موافقة من مدير المبيعات من داخل شاشة الفرصة.");
         var oldStageId = opp.StageId;
         if (oldStageId == newStageId) return (true, "لم يتغير شيء");
         var oldStage = await _db.SalesStages.FindAsync(oldStageId);
         var newStage = await _db.SalesStages.FindAsync(newStageId);
-        opp.StageId = newStageId; opp.LastUpdatedBy = userName; opp.LastUpdatedAt = DateTime.Now; opp.LastContactDate = DateTime.Now;
+        var now = DateTime.Now;
+        opp.StageId = newStageId; opp.LastUpdatedBy = userName; opp.LastUpdatedAt = now; opp.LastContactDate = now;
+        ApplyClosureState(opp, oldStageId, newStageId, userName, now);
 
         var stages = await _db.SalesStages.AsNoTracking().ToListAsync();
         var wonIds = stages.Where(s => WonKeywords.Any(k => (s.StageNameAr ?? "").Contains(k) || (s.StageName ?? "").Contains(k))).Select(s => s.StageId).ToHashSet();
@@ -90,9 +96,9 @@ public class OpportunityService : IOpportunityService
         }
 
         opp.NextFollowUpDate = wonIds.Contains(newStageId) ? DateTime.Today.AddDays(7) : (!opp.NextFollowUpDate.HasValue || opp.NextFollowUpDate.Value < DateTime.Today ? DateTime.Today.AddDays(3) : opp.NextFollowUpDate);
-        _db.CustomerInteractions.Add(new CustomerInteraction { OpportunityId = opportunityId, PartyId = opp.PartyId, StageBeforeId = oldStageId, StageAfterId = newStageId, Summary = $"نقل تلقائي: {(oldStage?.StageNameAr ?? "—")} → {(newStage?.StageNameAr ?? "—")}", InteractionDate = DateTime.Now, CreatedBy = userName, CreatedAt = DateTime.Now, NextFollowUpDate = opp.NextFollowUpDate });
+        _db.CustomerInteractions.Add(new CustomerInteraction { OpportunityId = opportunityId, PartyId = opp.PartyId, StageBeforeId = oldStageId, StageAfterId = newStageId, Summary = $"نقل تلقائي: {(oldStage?.StageNameAr ?? "—")} → {(newStage?.StageNameAr ?? "—")}", InteractionDate = now, CreatedBy = userName, CreatedAt = now, NextFollowUpDate = opp.NextFollowUpDate });
         var party = await _db.Parties.FindAsync(opp.PartyId);
-        if (party != null) party.LastContactDate = DateTime.Now;
+        if (party != null) party.LastContactDate = now;
         await _db.SaveChangesAsync();
         return (true, $"تم النقل إلى {(newStage?.StageNameAr ?? newStage?.StageName ?? "—")}");
     }
@@ -147,6 +153,7 @@ public class OpportunityService : IOpportunityService
     if (opp == null) return null;
 
     var dto = MapToListDto(opp);
+    await EnrichLifecycleDataAsync(new List<OpportunityListDto> { dto });
 
     var sourceLead = await _db.LeadsCRMs
         .AsNoTracking()
@@ -312,15 +319,43 @@ if (f.DateTo.HasValue)
             if (!dto.SourceId.HasValue)
                 return (false, "برجاء تحديد طريقة / مصدر التواصل أولاً", 0);
 
-            if (dto.StageId != 3 && dto.StageId != 4)
+            if (!IsClosedStageId(dto.StageId))
             {
                 if (!dto.NextFollowUpDate.HasValue)
                     return (false, "تاريخ المتابعة القادم إجباري لهذه المرحلة", 0);
             }
 
+            if (IsExitStageId(dto.StageId) && !CanDirectCloseOpportunities())
+            {
+                if (dto.OpportunityId <= 0)
+                    return (false, "لا يمكن إرسال طلب إغلاق قبل حفظ الفرصة أولاً.", 0);
+
+                var requestResult = await CreateClosureApprovalRequestInternalAsync(
+                    dto.OpportunityId,
+                    dto.PartyId,
+                    0,
+                    dto.StageId,
+                    dto.LostReasonId,
+                    dto.LostNotes,
+                    "OpportunityDetail",
+                    userName);
+
+                if (!requestResult.Success || requestResult.Request == null)
+                    return (false, requestResult.Message, dto.OpportunityId);
+
+                if (requestResult.IsNewRequest)
+                {
+                    await NotifyClosureApprovalRequestedAsync(requestResult.Request, requestResult.ClientName, requestResult.RequestedStageName, userName);
+                }
+
+                return (true, requestResult.Message, dto.OpportunityId);
+            }
+
             SalesOpportunity opp;
             bool isNew = dto.OpportunityId == 0;
             int? oldEmployeeId = null;
+            int oldStageId = 0;
+            var now = DateTime.Now;
 
             if (isNew)
             {
@@ -328,18 +363,21 @@ if (f.DateTo.HasValue)
                 {
                     PartyId = dto.PartyId,
                     CreatedBy = userName,
-                    CreatedAt = DateTime.Now,
+                    CreatedAt = now,
                     IsActive = true
                 };
                 _db.SalesOpportunities.Add(opp);
             }
             else
             {
-                opp = await _db.SalesOpportunities.FindAsync(dto.OpportunityId);
-                if (opp == null) return (false, "الفرصة غير موجودة", 0);
+                var existingOpp = await _db.SalesOpportunities.FindAsync(dto.OpportunityId);
+                if (existingOpp == null) return (false, "الفرصة غير موجودة", 0);
+
+                opp = existingOpp;
                 oldEmployeeId = opp.EmployeeId;
+                oldStageId = opp.StageId;
                 opp.LastUpdatedBy = userName;
-                opp.LastUpdatedAt = DateTime.Now;
+                opp.LastUpdatedAt = now;
             }
 
             opp.EmployeeId = dto.EmployeeId;
@@ -358,6 +396,7 @@ if (f.DateTo.HasValue)
             opp.Notes = dto.Notes;
             opp.Guidance = dto.Guidance;
             opp.IsActive = dto.IsActive;
+            ApplyClosureState(opp, isNew ? 0 : oldStageId, dto.StageId, userName, now);
 
             var stages = await _db.SalesStages.AsNoTracking().ToListAsync();
             var wonIds = stages.Where(s => WonKeywords.Any(k => (s.StageNameAr ?? "").Contains(k) || (s.StageName ?? "").Contains(k))).Select(s => s.StageId).ToHashSet();
@@ -380,7 +419,7 @@ if (f.DateTo.HasValue)
             if (dto.NextFollowUpDate.HasValue)
             {
                 var party = await _db.Parties.FindAsync(dto.PartyId);
-                if (party != null) party.LastContactDate = DateTime.Now;
+                if (party != null) party.LastContactDate = now;
             }
 
             await _db.SaveChangesAsync();
@@ -432,6 +471,209 @@ if (f.DateTo.HasValue)
     public async Task<List<AdType>> GetAdTypesAsync() => await _db.AdTypes.AsNoTracking().ToListAsync();
     public async Task<List<Employee>> GetActiveEmployeesAsync() => await _db.Employees.AsNoTracking().Where(e => e.Status == "نشط").Select(e => new Employee { EmployeeId = e.EmployeeId, FullName = e.FullName, Department = e.Department }).ToListAsync();
 
+    public async Task<(bool Success, string Message, int? RequestId)> RequestClosureApprovalAsync(OpportunityClosureApprovalCreateDto dto, string userName)
+    {
+        var result = await CreateClosureApprovalRequestInternalAsync(
+            dto.OpportunityId,
+            dto.PartyId,
+            dto.CurrentStageId,
+            dto.RequestedStageId,
+            dto.LostReasonId,
+            dto.RequestReasonNotes,
+            dto.RequestSource,
+            userName);
+
+        if (!result.Success || result.Request == null)
+            return (false, result.Message, result.Request?.RequestId);
+
+        if (result.IsNewRequest)
+            await NotifyClosureApprovalRequestedAsync(result.Request, result.ClientName, result.RequestedStageName, userName);
+
+        return (true, result.Message, result.Request.RequestId);
+    }
+
+    public async Task<List<OpportunityClosureApprovalRequestDto>> GetClosureApprovalRequestsAsync(string? status = null)
+    {
+        var query = _db.OpportunityClosureApprovalRequests
+            .AsNoTracking()
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(status))
+            query = query.Where(r => r.Status == status);
+
+        return await query
+            .OrderBy(r => r.Status == OpportunityClosureApprovalStatuses.Pending ? 0 : 1)
+            .ThenByDescending(r => r.RequestedAt)
+            .Select(r => new OpportunityClosureApprovalRequestDto
+            {
+                RequestId = r.RequestId,
+                OpportunityId = r.OpportunityId,
+                PartyId = r.PartyId,
+                ClientName = r.Party.PartyName ?? "",
+                CurrentStageId = r.CurrentStageId,
+                CurrentStageName = r.CurrentStage.StageNameAr ?? r.CurrentStage.StageName,
+                RequestedStageId = r.RequestedStageId,
+                RequestedStageName = r.RequestedStage.StageNameAr ?? r.RequestedStage.StageName,
+                LostReasonId = r.LostReasonId,
+                LostReasonName = r.LostReason != null ? (r.LostReason.ReasonNameAr ?? r.LostReason.ReasonName) : null,
+                RequestReasonNotes = r.RequestReasonNotes,
+                RequestSource = r.RequestSource,
+                Status = r.Status,
+                RequestedBy = r.RequestedBy,
+                RequestedAt = r.RequestedAt,
+                ReviewedBy = r.ReviewedBy,
+                ReviewedAt = r.ReviewedAt,
+                ReviewNotes = r.ReviewNotes
+            })
+            .ToListAsync();
+    }
+
+    public async Task<OpportunityClosureApprovalRequestDto?> GetPendingClosureApprovalByOpportunityAsync(int opportunityId)
+    {
+        if (opportunityId <= 0) return null;
+
+        return await _db.OpportunityClosureApprovalRequests
+            .AsNoTracking()
+            .Where(r => r.OpportunityId == opportunityId && r.Status == OpportunityClosureApprovalStatuses.Pending)
+            .OrderByDescending(r => r.RequestedAt)
+            .Select(r => new OpportunityClosureApprovalRequestDto
+            {
+                RequestId = r.RequestId,
+                OpportunityId = r.OpportunityId,
+                PartyId = r.PartyId,
+                ClientName = r.Party.PartyName ?? "",
+                CurrentStageId = r.CurrentStageId,
+                CurrentStageName = r.CurrentStage.StageNameAr ?? r.CurrentStage.StageName,
+                RequestedStageId = r.RequestedStageId,
+                RequestedStageName = r.RequestedStage.StageNameAr ?? r.RequestedStage.StageName,
+                LostReasonId = r.LostReasonId,
+                LostReasonName = r.LostReason != null ? (r.LostReason.ReasonNameAr ?? r.LostReason.ReasonName) : null,
+                RequestReasonNotes = r.RequestReasonNotes,
+                RequestSource = r.RequestSource,
+                Status = r.Status,
+                RequestedBy = r.RequestedBy,
+                RequestedAt = r.RequestedAt,
+                ReviewedBy = r.ReviewedBy,
+                ReviewedAt = r.ReviewedAt,
+                ReviewNotes = r.ReviewNotes
+            })
+            .FirstOrDefaultAsync();
+    }
+
+    public async Task<(bool Success, string Message)> ApproveClosureApprovalAsync(int requestId, string userName, string? reviewNotes = null)
+    {
+        if (!CanApproveClosureRequests())
+            return (false, "ليست لديك صلاحية اعتماد طلبات الإغلاق.");
+
+        var request = await _db.OpportunityClosureApprovalRequests
+            .FirstOrDefaultAsync(r => r.RequestId == requestId && r.Status == OpportunityClosureApprovalStatuses.Pending);
+
+        if (request == null)
+            return (false, "طلب الموافقة غير موجود أو تم التعامل معه بالفعل.");
+
+        var opp = await _db.SalesOpportunities.FindAsync(request.OpportunityId);
+        if (opp == null)
+            return (false, "الفرصة المرتبطة بالطلب غير موجودة.");
+
+        if (opp.StageId != request.CurrentStageId)
+            return (false, "لا يمكن اعتماد الطلب لأن مرحلة الفرصة تغيرت بعد إنشاء الطلب. راجع الفرصة أولاً.");
+
+        var now = DateTime.Now;
+        var requestedStageName = await _db.SalesStages.AsNoTracking()
+            .Where(s => s.StageId == request.RequestedStageId)
+            .Select(s => s.StageNameAr ?? s.StageName)
+            .FirstOrDefaultAsync() ?? "الحالة المطلوبة";
+
+        var currentStageName = await _db.SalesStages.AsNoTracking()
+            .Where(s => s.StageId == request.CurrentStageId)
+            .Select(s => s.StageNameAr ?? s.StageName)
+            .FirstOrDefaultAsync() ?? "الحالة الحالية";
+
+        var clientName = await _db.Parties.AsNoTracking()
+            .Where(p => p.PartyId == request.PartyId)
+            .Select(p => p.PartyName)
+            .FirstOrDefaultAsync() ?? $"عميل #{request.PartyId}";
+
+        ApplyClosureState(opp, request.CurrentStageId, request.RequestedStageId, userName, now);
+        opp.StageId = request.RequestedStageId;
+        opp.LostReasonId = request.LostReasonId;
+        opp.LostNotes = request.RequestReasonNotes;
+        opp.NextFollowUpDate = null;
+        opp.LastContactDate = now;
+        opp.LastUpdatedBy = userName;
+        opp.LastUpdatedAt = now;
+
+        request.Status = OpportunityClosureApprovalStatuses.Approved;
+        request.ReviewedBy = userName;
+        request.ReviewedAt = now;
+        request.ReviewNotes = string.IsNullOrWhiteSpace(reviewNotes) ? null : reviewNotes.Trim();
+
+        _db.CustomerInteractions.Add(new CustomerInteraction
+        {
+            OpportunityId = opp.OpportunityId,
+            PartyId = opp.PartyId,
+            EmployeeId = opp.EmployeeId,
+            SourceId = opp.SourceId,
+            StatusId = opp.StatusId,
+            InteractionDate = now,
+            Summary = $"تم اعتماد طلب تحويل الفرصة من {currentStageName} إلى {requestedStageName} بواسطة {userName}",
+            StageBeforeId = request.CurrentStageId,
+            StageAfterId = request.RequestedStageId,
+            NextFollowUpDate = null,
+            Notes = string.IsNullOrWhiteSpace(request.RequestReasonNotes) ? "اعتماد مدير المبيعات" : request.RequestReasonNotes,
+            CreatedBy = userName,
+            CreatedAt = now
+        });
+
+        await CloseTasksForClosedOpportunityAsync(opp.OpportunityId, request.RequestedStageId, userName, now);
+        await SyncLeadStatusForExitStageAsync(opp.OpportunityId, request.RequestedStageId, userName, now);
+
+        var party = await _db.Parties.FindAsync(opp.PartyId);
+        if (party != null)
+            party.LastContactDate = now;
+
+        await _db.SaveChangesAsync();
+
+        if (!string.IsNullOrWhiteSpace(request.RequestedBy) && !string.Equals(request.RequestedBy, userName, StringComparison.OrdinalIgnoreCase))
+            await NotifyClosureApprovalDecisionAsync(request.RequestedBy, opp.OpportunityId, clientName, requestedStageName, true, userName, request.ReviewNotes);
+
+        return (true, $"تم اعتماد طلب تحويل الفرصة إلى {requestedStageName}.");
+    }
+
+    public async Task<(bool Success, string Message)> RejectClosureApprovalAsync(int requestId, string userName, string? reviewNotes = null)
+    {
+        if (!CanApproveClosureRequests())
+            return (false, "ليست لديك صلاحية رفض طلبات الإغلاق.");
+
+        var request = await _db.OpportunityClosureApprovalRequests
+            .FirstOrDefaultAsync(r => r.RequestId == requestId && r.Status == OpportunityClosureApprovalStatuses.Pending);
+
+        if (request == null)
+            return (false, "طلب الموافقة غير موجود أو تم التعامل معه بالفعل.");
+
+        var requestedStageName = await _db.SalesStages.AsNoTracking()
+            .Where(s => s.StageId == request.RequestedStageId)
+            .Select(s => s.StageNameAr ?? s.StageName)
+            .FirstOrDefaultAsync() ?? "الحالة المطلوبة";
+
+        var clientName = await _db.Parties.AsNoTracking()
+            .Where(p => p.PartyId == request.PartyId)
+            .Select(p => p.PartyName)
+            .FirstOrDefaultAsync() ?? $"عميل #{request.PartyId}";
+
+        request.Status = OpportunityClosureApprovalStatuses.Rejected;
+        request.ReviewedBy = userName;
+        request.ReviewedAt = DateTime.Now;
+        request.ReviewNotes = string.IsNullOrWhiteSpace(reviewNotes) ? null : reviewNotes.Trim();
+
+        await _db.SaveChangesAsync();
+
+        if (!string.IsNullOrWhiteSpace(request.RequestedBy) && !string.Equals(request.RequestedBy, userName, StringComparison.OrdinalIgnoreCase))
+            await NotifyClosureApprovalDecisionAsync(request.RequestedBy, request.OpportunityId, clientName, requestedStageName, false, userName, request.ReviewNotes);
+
+        return (true, "تم رفض طلب الإغلاق.");
+    }
+
     // ════════════════════ PRIVATE HELPERS ════════════════════
     private static IQueryable<VwSalesOpportunity> ApplyVwFilters(IQueryable<VwSalesOpportunity> q, OpportunityFilterDto f)
     {
@@ -482,13 +724,35 @@ if (f.DateTo.HasValue)
         return q;
     }
     private static IQueryable<VwSalesOpportunity> ApplySorting(IQueryable<VwSalesOpportunity> q, OpportunityFilterDto f) => f.SortBy switch { "ClientName" => f.SortDescending ? q.OrderByDescending(o => o.ClientName) : q.OrderBy(o => o.ClientName), "ExpectedValue" => f.SortDescending ? q.OrderByDescending(o => o.ExpectedValue ?? 0) : q.OrderBy(o => o.ExpectedValue ?? 0), "NextFollowUpDate" => f.SortDescending ? q.OrderByDescending(o => o.NextFollowUpDate ?? DateTime.MinValue) : q.OrderBy(o => o.NextFollowUpDate ?? DateTime.MinValue), _ => f.SortDescending ? q.OrderByDescending(o => o.CreatedAt) : q.OrderBy(o => o.CreatedAt) };
-    private static OpportunityListDto MapToListDto(VwSalesOpportunity o) => new() { OpportunityId = o.OpportunityId, PartyId = o.PartyId, ClientName = o.ClientName ?? "", Phone = o.Phone1, Phone2 = o.Phone2, Address = o.Address, EmployeeId = o.EmployeeId, EmployeeName = o.EmployeeName, SourceId = o.SourceId, SourceName = o.SourceName, SourceIcon = o.SourceIcon, StageId = o.StageId, StageName = o.StageName ?? "", StageNameAr = o.StageNameAr, StageColor = o.StageColor, StageOrder = o.StageOrder ?? 0, StatusId = o.StatusId, StatusName = o.StatusName, CategoryId = o.CategoryId, CategoryName = o.CategoryName, InterestedProduct = o.InterestedProduct, ExpectedValue = o.ExpectedValue, Location = o.Location, FirstContactDate = o.FirstContactDate, NextFollowUpDate = o.NextFollowUpDate, LastContactDate = o.LastContactDate, LostReasonId = o.LostReasonId, LostReasonName = o.LostReasonName, LostNotes = o.LostNotes, Notes = o.Notes, Guidance = o.Guidance, QuotationId = o.QuotationId, TransactionId = o.TransactionId, IsActive = o.IsActive, CreatedBy = o.CreatedBy, CreatedAt = o.CreatedAt, DaysSinceFirstContact = o.DaysSinceFirstContact ?? 0, FollowUpStatus = o.FollowUpStatus ?? "" };
+    private static OpportunityListDto MapToListDto(VwSalesOpportunity o) => new() { OpportunityId = o.OpportunityId, PartyId = o.PartyId, ClientName = o.ClientName ?? "", Phone = o.Phone1, Phone2 = o.Phone2, Address = o.Address, EmployeeId = o.EmployeeId, EmployeeName = o.EmployeeName, SourceId = o.SourceId, SourceName = o.SourceName, SourceIcon = o.SourceIcon, StageId = o.StageId, StageName = o.StageName ?? "", StageNameAr = o.StageNameAr, StageColor = o.StageColor, StageOrder = o.StageOrder ?? 0, StatusId = o.StatusId, StatusName = o.StatusName, CategoryId = o.CategoryId, CategoryName = o.CategoryName, InterestedProduct = o.InterestedProduct, ExpectedValue = o.ExpectedValue, Location = o.Location, FirstContactDate = o.FirstContactDate, NextFollowUpDate = o.NextFollowUpDate, LastContactDate = o.LastContactDate, LostReasonId = o.LostReasonId, LostReasonName = o.LostReasonName, LostNotes = o.LostNotes, Notes = o.Notes, Guidance = o.Guidance, QuotationId = o.QuotationId, TransactionId = o.TransactionId, IsActive = o.IsActive, CreatedBy = o.CreatedBy, CreatedAt = o.CreatedAt, DaysSinceFirstContact = o.DaysSinceFirstContact ?? 0, LifecycleDays = 0, FollowUpStatus = o.FollowUpStatus ?? "" };
     private async Task EnrichCounts(List<OpportunityListDto> items)
     {
         var oppIds = items.Select(i => i.OpportunityId).ToList(); if (!oppIds.Any()) return;
         var ic = (await _db.CustomerInteractions.AsNoTracking().Where(ci => oppIds.Contains(ci.OpportunityId)).GroupBy(ci => ci.OpportunityId).Select(g => new { g.Key, Count = g.Count() }).ToListAsync()).ToDictionary(x => x.Key, x => x.Count);
         var tc = (await _db.CrmTasks.AsNoTracking().Where(t => t.OpportunityId != null && oppIds.Contains(t.OpportunityId.Value)).GroupBy(t => t.OpportunityId!.Value).Select(g => new { g.Key, Count = g.Count() }).ToListAsync()).ToDictionary(x => x.Key, x => x.Count);
         foreach (var item in items) { item.InteractionsCount = ic.TryGetValue(item.OpportunityId, out var a) ? a : 0; item.TasksCount = tc.TryGetValue(item.OpportunityId, out var b) ? b : 0; }
+    }
+
+    private async Task EnrichLifecycleDataAsync(List<OpportunityListDto> items)
+    {
+        var oppIds = items.Select(i => i.OpportunityId).Distinct().ToList();
+        if (!oppIds.Any()) return;
+
+        var closureMap = await _db.SalesOpportunities.AsNoTracking()
+            .Where(o => oppIds.Contains(o.OpportunityId))
+            .Select(o => new { o.OpportunityId, o.ClosedAt, o.ClosedBy })
+            .ToDictionaryAsync(x => x.OpportunityId, x => new { x.ClosedAt, x.ClosedBy });
+
+        foreach (var item in items)
+        {
+            if (closureMap.TryGetValue(item.OpportunityId, out var closure))
+            {
+                item.ClosedAt = closure.ClosedAt;
+                item.ClosedBy = closure.ClosedBy;
+            }
+
+            item.LifecycleDays = CalculateLifecycleDays(item.CreatedAt, item.ClosedAt);
+        }
     }
 
         public async Task<List<ContactStatus>> GetContactStatusesAsync()
@@ -679,7 +943,9 @@ if (f.DateTo.HasValue)
             return (false, "برجاء تحديد طريقة / مصدر التواصل أولاً", 0);
 
         var targetStageId = dto.StageId ?? 1;
-        if (targetStageId != 3 && targetStageId != 4)
+        var requiresClosureApproval = IsExitStageId(targetStageId) && !CanDirectCloseOpportunities();
+
+        if (!IsClosedStageId(targetStageId) && !requiresClosureApproval)
         {
             if (!dto.TaskTypeId.HasValue)
                 return (false, "برجاء اختيار نوع مهمة المتابعة القادمة (اتصال، اجتماع، إلخ)", 0);
@@ -736,7 +1002,7 @@ if (f.DateTo.HasValue)
                     EmployeeId = dto.EmployeeId,
                     SourceId = dto.SourceId,
                     AdTypeId = dto.AdTypeId,
-                    StageId = dto.StageId ?? 1,
+                    StageId = requiresClosureApproval ? 1 : dto.StageId ?? 1,
                     StatusId = dto.StatusId,
                     CategoryId = dto.CategoryId,
                     InterestedProduct = dto.InterestedProduct,
@@ -744,14 +1010,15 @@ if (f.DateTo.HasValue)
                     NextFollowUpDate = dto.NextFollowUpDate,
                     ExpectedValue = dto.ExpectedValue,
                     Location = dto.Location,
-                    LostReasonId = dto.LostReasonId,
-                    LostNotes = dto.LostNotes,
+                    LostReasonId = requiresClosureApproval ? null : dto.LostReasonId,
+                    LostNotes = requiresClosureApproval ? null : dto.LostNotes,
                     Notes = dto.Summary,
                     Guidance = dto.Guidance,
                     IsActive = true,
                     CreatedBy = userName,
                     CreatedAt = now
                 };
+                ApplyClosureState(newOpp, 0, newOpp.StageId, userName, now);
                 _db.SalesOpportunities.Add(newOpp);
                 await _db.SaveChangesAsync();
                 opportunityId = newOpp.OpportunityId;
@@ -766,11 +1033,14 @@ if (f.DateTo.HasValue)
                 stageBefore = opp.StageId;
                 var oldEmployeeId = opp.EmployeeId;
 
-                if (dto.StageId.HasValue) opp.StageId = dto.StageId.Value;
+                if (dto.StageId.HasValue && !requiresClosureApproval) opp.StageId = dto.StageId.Value;
                 opp.StatusId = dto.StatusId ?? opp.StatusId;
                 opp.ExpectedValue = dto.ExpectedValue ?? opp.ExpectedValue;
-                opp.LostReasonId = dto.LostReasonId;
-                opp.LostNotes = dto.LostNotes;
+                if (!requiresClosureApproval)
+                {
+                    opp.LostReasonId = dto.LostReasonId;
+                    opp.LostNotes = dto.LostNotes;
+                }
                 opp.CategoryId = dto.CategoryId ?? opp.CategoryId;
                 opp.InterestedProduct = dto.InterestedProduct ?? opp.InterestedProduct;
                 opp.NextFollowUpDate = dto.NextFollowUpDate;
@@ -780,6 +1050,7 @@ if (f.DateTo.HasValue)
                 opp.LastUpdatedBy = userName;
                 opp.LastUpdatedAt = now;
                 opp.EmployeeId = dto.EmployeeId ?? opp.EmployeeId;
+                ApplyClosureState(opp, stageBefore, opp.StageId, userName, now);
 
                 await _db.SaveChangesAsync();
                 opportunityId = opp.OpportunityId;
@@ -798,6 +1069,47 @@ if (f.DateTo.HasValue)
 
                     await NotifyOpportunityReassignedAsync(opportunityId, partyId, oldEmployeeId, opp.EmployeeId.Value, userName);
                 }
+            }
+
+            if (requiresClosureApproval)
+            {
+                var currentStageForRequest = stageBefore == 0
+                    ? await _db.SalesOpportunities.AsNoTracking()
+                        .Where(o => o.OpportunityId == opportunityId)
+                        .Select(o => o.StageId)
+                        .FirstAsync()
+                    : stageBefore;
+
+                var partyForApproval = await _db.Parties.FindAsync(partyId);
+                if (partyForApproval != null)
+                    partyForApproval.LastContactDate = now;
+
+                await _db.SaveChangesAsync();
+
+                var requestResult = await CreateClosureApprovalRequestInternalAsync(
+                    opportunityId,
+                    partyId,
+                    currentStageForRequest,
+                    targetStageId,
+                    dto.LostReasonId,
+                    dto.LostNotes ?? dto.Summary,
+                    "OpportunityForm",
+                    userName);
+
+                if (!requestResult.Success || requestResult.Request == null)
+                {
+                    await transaction.RollbackAsync();
+                    return (false, requestResult.Message, opportunityId);
+                }
+
+                await transaction.CommitAsync();
+
+                if (requestResult.IsNewRequest)
+                {
+                    await NotifyClosureApprovalRequestedAsync(requestResult.Request, requestResult.ClientName, requestResult.RequestedStageName, userName);
+                }
+
+                return (true, requestResult.Message, opportunityId);
             }
 
             // ═══ 3. إضافة سجل التواصل (فقط للإضافات الجديدة، أو عند تغيير المرحلة/الملخص) ═══
@@ -831,7 +1143,7 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
             // ═══ 5. إدارة المهام ═══
             var stageId = dto.StageId ?? 0;
 
-            if (stageId == 4 || stageId == 5)
+            if (IsExitStageId(stageId))
             {
                 // Lost / Not Interested → إلغاء كل المهام
                 var reasonText = stageId == 4 ? "Lost" : "Not Interested";
@@ -1074,6 +1386,224 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
                 "Failed to send opportunity reassignment notification. OpportunityId={OpportunityId}, NewEmployeeId={EmployeeId}",
                 opportunityId,
                 newEmployeeId);
+        }
+    }
+
+    private async Task<(bool Success, string Message, OpportunityClosureApprovalRequest? Request, string ClientName, string RequestedStageName, bool IsNewRequest)> CreateClosureApprovalRequestInternalAsync(
+        int opportunityId,
+        int partyId,
+        int currentStageId,
+        int requestedStageId,
+        int? lostReasonId,
+        string? requestReasonNotes,
+        string? requestSource,
+        string userName)
+    {
+        if (opportunityId <= 0)
+            return (false, "الفرصة غير موجودة.", null, string.Empty, string.Empty, false);
+
+        if (!IsExitStageId(requestedStageId))
+            return (false, "طلبات الموافقة متاحة فقط لخسارة أو غير مهتم.", null, string.Empty, string.Empty, false);
+
+        if (!lostReasonId.HasValue)
+            return (false, "سبب الإغلاق مطلوب قبل إرسال طلب الموافقة.", null, string.Empty, string.Empty, false);
+
+        if (string.IsNullOrWhiteSpace(requestReasonNotes))
+            return (false, "ملاحظات الإغلاق مطلوبة قبل إرسال طلب الموافقة.", null, string.Empty, string.Empty, false);
+
+        var opp = await _db.SalesOpportunities.AsNoTracking()
+            .Where(o => o.OpportunityId == opportunityId)
+            .Select(o => new { o.OpportunityId, o.PartyId, o.StageId, ClientName = o.Party.PartyName })
+            .FirstOrDefaultAsync();
+
+        if (opp == null)
+            return (false, "الفرصة غير موجودة.", null, string.Empty, string.Empty, false);
+
+        var requestedStageName = await _db.SalesStages.AsNoTracking()
+            .Where(s => s.StageId == requestedStageId)
+            .Select(s => s.StageNameAr ?? s.StageName)
+            .FirstOrDefaultAsync() ?? "الحالة المطلوبة";
+
+        var existingPending = await _db.OpportunityClosureApprovalRequests
+            .FirstOrDefaultAsync(r => r.OpportunityId == opportunityId && r.Status == OpportunityClosureApprovalStatuses.Pending);
+
+        if (existingPending != null)
+        {
+            var existingRequestedStageName = await _db.SalesStages.AsNoTracking()
+                .Where(s => s.StageId == existingPending.RequestedStageId)
+                .Select(s => s.StageNameAr ?? s.StageName)
+                .FirstOrDefaultAsync() ?? requestedStageName;
+
+            return (true, $"يوجد بالفعل طلب موافقة معلق لتحويل الفرصة إلى {existingRequestedStageName}.", existingPending, opp.ClientName ?? $"عميل #{opp.PartyId}", existingRequestedStageName, false);
+        }
+
+        var entity = new OpportunityClosureApprovalRequest
+        {
+            OpportunityId = opportunityId,
+            PartyId = partyId > 0 ? partyId : opp.PartyId,
+            CurrentStageId = currentStageId > 0 ? currentStageId : opp.StageId,
+            RequestedStageId = requestedStageId,
+            LostReasonId = lostReasonId,
+            RequestReasonNotes = requestReasonNotes.Trim(),
+            RequestSource = string.IsNullOrWhiteSpace(requestSource) ? null : requestSource.Trim(),
+            Status = OpportunityClosureApprovalStatuses.Pending,
+            RequestedBy = userName,
+            RequestedAt = DateTime.Now
+        };
+
+        _db.OpportunityClosureApprovalRequests.Add(entity);
+        await _db.SaveChangesAsync();
+
+        return (true, $"تم إرسال طلب موافقة إلى مدير المبيعات لتحويل الفرصة إلى {requestedStageName}.", entity, opp.ClientName ?? $"عميل #{opp.PartyId}", requestedStageName, true);
+    }
+
+    private async Task NotifyClosureApprovalRequestedAsync(OpportunityClosureApprovalRequest request, string clientName, string requestedStageName, string actor)
+    {
+        try
+        {
+            var message = $"طلب {actor} تحويل الفرصة #{request.OpportunityId} الخاصة بالعميل {clientName} إلى {requestedStageName}.";
+            if (!string.IsNullOrWhiteSpace(request.RequestReasonNotes))
+                message += $"\nالسبب: {request.RequestReasonNotes}";
+
+            await _notify.NotifyRoleAsync(
+                title: "🛑 طلب موافقة إغلاق فرصة",
+                message: message,
+                role: SystemRoles.SalesManager,
+                createdBy: actor,
+                formName: "crm/opportunities",
+                relatedTable: "SalesOpportunities",
+                relatedId: request.OpportunityId);
+
+            await _notify.NotifyRoleAsync(
+                title: "🛑 طلب موافقة إغلاق فرصة",
+                message: message,
+                role: SystemRoles.GeneralManager,
+                createdBy: actor,
+                formName: "crm/opportunities",
+                relatedTable: "SalesOpportunities",
+                relatedId: request.OpportunityId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to notify sales manager about closure approval request. OpportunityId={OpportunityId}", request.OpportunityId);
+        }
+    }
+
+    private async Task NotifyClosureApprovalDecisionAsync(string recipientUser, int opportunityId, string clientName, string requestedStageName, bool approved, string reviewer, string? reviewNotes)
+    {
+        try
+        {
+            var title = approved ? "✅ تم اعتماد طلب إغلاق الفرصة" : "❌ تم رفض طلب إغلاق الفرصة";
+            var message = approved
+                ? $"وافق {reviewer} على تحويل الفرصة #{opportunityId} الخاصة بالعميل {clientName} إلى {requestedStageName}."
+                : $"رفض {reviewer} طلب تحويل الفرصة #{opportunityId} الخاصة بالعميل {clientName} إلى {requestedStageName}.";
+
+            if (!string.IsNullOrWhiteSpace(reviewNotes))
+                message += $"\nملاحظات المراجعة: {reviewNotes}";
+
+            await _notify.AddAsync(
+                title: title,
+                message: message,
+                recipientUser: recipientUser,
+                createdBy: reviewer,
+                formName: "crm/opportunities",
+                relatedTable: "SalesOpportunities",
+                relatedId: opportunityId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to notify requester about closure approval decision. OpportunityId={OpportunityId}", opportunityId);
+        }
+    }
+
+    private async Task CloseTasksForClosedOpportunityAsync(int opportunityId, int stageId, string userName, DateTime now)
+    {
+        var tasks = await _db.CrmTasks
+            .Where(t => t.OpportunityId == opportunityId && (t.Status == "Pending" || t.Status == "In Progress"))
+            .ToListAsync();
+
+        if (!tasks.Any())
+            return;
+
+        var note = stageId == 4
+            ? "تم الإغلاق بعد موافقة مدير المبيعات — خسارة"
+            : "تم الإغلاق بعد موافقة مدير المبيعات — غير مهتم";
+
+        foreach (var task in tasks)
+        {
+            task.Status = "Completed";
+            task.CompletedDate = now;
+            task.CompletedBy = userName;
+            task.CompletionNotes = note;
+        }
+    }
+
+    private async Task SyncLeadStatusForExitStageAsync(int opportunityId, int stageId, string userName, DateTime now)
+    {
+        var linkedLead = await _db.LeadsCRMs
+            .FirstOrDefaultAsync(l => l.ConvertedOpportunityId == opportunityId);
+
+        if (linkedLead == null || linkedLead.LeadStatus != "محول")
+            return;
+
+        var reasonText = stageId == 4 ? "خسارة" : "غير مهتم";
+        var oldLeadStatus = linkedLead.LeadStatus;
+
+        linkedLead.LeadStatus = "مرفوض";
+        linkedLead.RejectedReason = $"الفرصة المرتبطة أصبحت {reasonText} بعد موافقة مدير المبيعات";
+
+        _db.LeadInteractions.Add(new LeadInteraction
+        {
+            LeadId = linkedLead.LeadId,
+            EmployeeId = linkedLead.AssignedEmployeeId,
+            InteractionType = "رفض",
+            InteractionDate = now,
+            Summary = $"تم تحديث حالة الـ Lead تلقائياً — الفرصة #{opportunityId} أصبحت {reasonText} بعد موافقة مدير المبيعات",
+            Notes = linkedLead.RejectedReason,
+            OldLeadStatus = oldLeadStatus,
+            NewLeadStatus = "مرفوض",
+            IsSystemGenerated = true,
+            CreatedBy = userName,
+            CreatedAt = now
+        });
+    }
+
+    private bool CanDirectCloseOpportunities()
+    {
+        var user = _http.HttpContext?.User;
+        if (user == null) return false;
+        return user.IsInRole("Admin")
+            || user.IsInRole(SystemRoles.SalesManager)
+            || user.IsInRole(SystemRoles.GeneralManager);
+    }
+
+    private bool CanApproveClosureRequests() => CanDirectCloseOpportunities();
+
+    private static bool IsExitStageId(int stageId) => stageId == 4 || stageId == 5;
+    private static bool IsClosedStageId(int stageId) => stageId == 3 || stageId == 4 || stageId == 5;
+
+    private static int CalculateLifecycleDays(DateTime createdAt, DateTime? closedAt)
+    {
+        var endDate = (closedAt ?? DateTime.Today).Date;
+        return Math.Max(0, (endDate - createdAt.Date).Days);
+    }
+
+    private static void ApplyClosureState(SalesOpportunity opp, int oldStageId, int newStageId, string userName, DateTime now)
+    {
+        var wasClosed = IsClosedStageId(oldStageId);
+        var isClosed = IsClosedStageId(newStageId);
+
+        if (!wasClosed && isClosed)
+        {
+            opp.ClosedAt = now;
+            opp.ClosedBy = userName;
+            return;
+        }
+
+        if (wasClosed && !isClosed)
+        {
+            opp.ClosedAt = null;
+            opp.ClosedBy = null;
         }
     }
 

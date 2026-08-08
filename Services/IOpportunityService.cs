@@ -28,4 +28,9 @@ public interface IOpportunityService
     Task<List<PartySearchDto>> SearchPartiesAsync(string searchText);
     Task<bool> CheckPhoneExistsAsync(string phone);
     Task<(bool Success, string Message, int OpportunityId)> SaveWorkflowAsync(OpportunityWorkflowDto dto, string userName);
+    Task<(bool Success, string Message, int? RequestId)> RequestClosureApprovalAsync(OpportunityClosureApprovalCreateDto dto, string userName);
+    Task<List<OpportunityClosureApprovalRequestDto>> GetClosureApprovalRequestsAsync(string? status = null);
+    Task<OpportunityClosureApprovalRequestDto?> GetPendingClosureApprovalByOpportunityAsync(int opportunityId);
+    Task<(bool Success, string Message)> ApproveClosureApprovalAsync(int requestId, string userName, string? reviewNotes = null);
+    Task<(bool Success, string Message)> RejectClosureApprovalAsync(int requestId, string userName, string? reviewNotes = null);
 }

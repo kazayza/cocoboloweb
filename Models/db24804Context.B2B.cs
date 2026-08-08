@@ -10,6 +10,8 @@ public partial class db24804Context
     public virtual DbSet<B2BRequestAttachment> B2BRequestAttachments { get; set; }
     public virtual DbSet<ProductFactoryAlternative> ProductFactoryAlternatives { get; set; }
     public virtual DbSet<ProductFactoryAlternativeImage> ProductFactoryAlternativeImages { get; set; }
+    public virtual DbSet<OpportunityClosureApprovalRequest> OpportunityClosureApprovalRequests { get; set; }
+    public virtual DbSet<Branch> Branches { get; set; }
 
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder)
     {
@@ -188,6 +190,88 @@ public partial class db24804Context
                 .HasForeignKey(e => e.AlternativeId)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("FK_ProductFactoryAlternativeImages_Alternatives");
+        });
+
+        modelBuilder.Entity<OpportunityClosureApprovalRequest>(entity =>
+        {
+            entity.HasKey(e => e.RequestId);
+            entity.ToTable("OpportunityClosureApprovalRequests");
+
+            entity.HasIndex(e => e.OpportunityId);
+            entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => e.RequestedAt);
+
+            entity.Property(e => e.RequestId).HasColumnName("RequestID");
+            entity.Property(e => e.OpportunityId).HasColumnName("OpportunityID");
+            entity.Property(e => e.PartyId).HasColumnName("PartyID");
+            entity.Property(e => e.CurrentStageId).HasColumnName("CurrentStageID");
+            entity.Property(e => e.RequestedStageId).HasColumnName("RequestedStageID");
+            entity.Property(e => e.LostReasonId).HasColumnName("LostReasonID");
+            entity.Property(e => e.RequestReasonNotes).HasMaxLength(2000);
+            entity.Property(e => e.RequestSource).HasMaxLength(50);
+            entity.Property(e => e.Status).HasMaxLength(30).HasDefaultValue("Pending");
+            entity.Property(e => e.RequestedBy).HasMaxLength(100);
+            entity.Property(e => e.RequestedAt).HasColumnType("datetime");
+            entity.Property(e => e.ReviewedBy).HasMaxLength(100);
+            entity.Property(e => e.ReviewedAt).HasColumnType("datetime");
+            entity.Property(e => e.ReviewNotes).HasMaxLength(1000);
+
+            entity.HasOne(e => e.Opportunity)
+                .WithMany()
+                .HasForeignKey(e => e.OpportunityId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_OpportunityClosureApprovalRequests_Opportunity");
+
+            entity.HasOne(e => e.Party)
+                .WithMany()
+                .HasForeignKey(e => e.PartyId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_OpportunityClosureApprovalRequests_Party");
+
+            entity.HasOne(e => e.CurrentStage)
+                .WithMany()
+                .HasForeignKey(e => e.CurrentStageId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_OpportunityClosureApprovalRequests_CurrentStage");
+
+            entity.HasOne(e => e.RequestedStage)
+                .WithMany()
+                .HasForeignKey(e => e.RequestedStageId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_OpportunityClosureApprovalRequests_RequestedStage");
+
+            entity.HasOne(e => e.LostReason)
+                .WithMany()
+                .HasForeignKey(e => e.LostReasonId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_OpportunityClosureApprovalRequests_LostReason");
+        });
+
+        modelBuilder.Entity<Branch>(entity =>
+        {
+            entity.HasKey(e => e.BranchId);
+            entity.ToTable("Branches");
+
+            entity.HasIndex(e => e.BranchCode).IsUnique();
+            entity.HasIndex(e => e.IsActive);
+            entity.HasIndex(e => e.ManagerEmployeeId);
+
+            entity.Property(e => e.BranchId).HasColumnName("BranchID");
+            entity.Property(e => e.BranchCode).HasMaxLength(30);
+            entity.Property(e => e.BranchNameAr).HasMaxLength(150);
+            entity.Property(e => e.BranchNameEn).HasMaxLength(150);
+            entity.Property(e => e.Address).HasMaxLength(300);
+            entity.Property(e => e.Phone).HasMaxLength(50);
+            entity.Property(e => e.ManagerEmployeeId).HasColumnName("ManagerEmployeeID");
+            entity.Property(e => e.IsActive).HasDefaultValue(true);
+            entity.Property(e => e.CreatedAt).HasColumnType("datetime");
+            entity.Property(e => e.CreatedBy).HasMaxLength(100);
+
+            entity.HasOne(e => e.ManagerEmployee)
+                .WithMany()
+                .HasForeignKey(e => e.ManagerEmployeeId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_Branches_Employees_Manager");
         });
     }
 }

@@ -52,9 +52,12 @@ public class OpportunityListDto
     public bool IsActive { get; set; }
     public string? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
+    public DateTime? ClosedAt { get; set; }
+    public string? ClosedBy { get; set; }
 
     // Computed
     public int DaysSinceFirstContact { get; set; }
+    public int LifecycleDays { get; set; }
     public string FollowUpStatus { get; set; } = ""; // Overdue, Today, Upcoming, None
     public int InteractionsCount { get; set; }
     public int TasksCount { get; set; }

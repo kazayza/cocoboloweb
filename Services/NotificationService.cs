@@ -142,19 +142,94 @@ namespace COCOBOLOERPNEW.Services
         // إرسال إشعار لدور معين (زي Admin, Sales, etc.)
         public async Task NotifyRoleAsync(string title, string message, string role, string createdBy, string? formName = null, string? relatedTable = null, int? relatedId = null)
         {
-            var notification = new Notification
+            // Expand role → each active username (Flutter needs RecipientUser = username)
+            var roleNorm = (role ?? string.Empty).Replace(" ", "").ToLowerInvariant();
+
+            var users = await _db.Users
+                .AsNoTracking()
+                .Where(u => u.IsActive != false && u.Role != null && u.Username != null)
+                .Select(u => new { u.Username, u.Role })
+                .ToListAsync();
+
+            var recipients = users
+                .Where(u =>
+                {
+                    var r = (u.Role ?? string.Empty).Replace(" ", "").ToLowerInvariant();
+                    return r == roleNorm
+                           || string.Equals(u.Role, role, StringComparison.OrdinalIgnoreCase);
+                })
+                .Select(u => u.Username!)
+                .Where(u => !string.IsNullOrWhiteSpace(u))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (recipients.Count == 0)
             {
-                Title = title,
-                Message = message,
-                RecipientUser = role, // هنخزن اسم الدور هنا
-                CreatedBy = createdBy,
-                FormName = formName,
-                RelatedTable = relatedTable,
-                RelatedId = relatedId,
-                CreatedAt = DateTime.Now
-            };
-            _db.Notifications.Add(notification);
+                // legacy fallback: single role row (web still matches via roles.Contains)
+                _db.Notifications.Add(new Notification
+                {
+                    Title = title,
+                    Message = message,
+                    RecipientUser = role,
+                    CreatedBy = createdBy,
+                    FormName = formName,
+                    RelatedTable = relatedTable,
+                    RelatedId = relatedId,
+                    CreatedAt = DateTime.Now
+                });
+                await _db.SaveChangesAsync();
+                return;
+            }
+
+            foreach (var username in recipients)
+            {
+                if (string.Equals(username, createdBy, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                _db.Notifications.Add(new Notification
+                {
+                    Title = title,
+                    Message = message,
+                    RecipientUser = username,
+                    CreatedBy = createdBy,
+                    FormName = formName,
+                    RelatedTable = relatedTable,
+                    RelatedId = relatedId,
+                    CreatedAt = DateTime.Now
+                });
+            }
+
             await _db.SaveChangesAsync();
+
+            // Optional FCM via mobile Node API
+            try
+            {
+                var apiBase = Environment.GetEnvironmentVariable("MOBILE_API_BASE_URL");
+                if (string.IsNullOrWhiteSpace(apiBase)) return;
+
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+                foreach (var username in recipients)
+                {
+                    if (string.Equals(username, createdBy, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var payload = new
+                    {
+                        title,
+                        message,
+                        recipientUser = username,
+                        relatedTable,
+                        relatedId,
+                        formName,
+                        createdBy
+                    };
+                    await http.PostAsJsonAsync($"{apiBase.TrimEnd('/')}/api/notifications", payload);
+                }
+            }
+            catch
+            {
+                // never break business flow
+            }
         }
 
         private IQueryable<Notification> BuildUserQuery(string username, List<string> roles)

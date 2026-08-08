@@ -346,10 +346,10 @@
                             <div class="opp-lost-section">
                                 <div class="opp-lost-header">
                                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                                    <span>سيتم إلغاء جميع المهام المعلقة تلقائياً</span>
+                                    <span>@(_canDirectCloseOpportunity ? "سيتم إلغاء جميع المهام المعلقة تلقائياً" : "لن يتم الإغلاق مباشرة — سيتم إرسال طلب موافقة إلى مدير المبيعات")</span>
                                 </div>
                                 <div class="opp-grid-2">
-                                    <MudSelect T="int?" Label="⚠️ سبب الخسارة *" @bind-Value="_model.LostReasonId" Clearable="true" Dense="true"
+                                    <MudSelect T="int?" Label="⚠️ سبب الإغلاق *" @bind-Value="_model.LostReasonId" Clearable="true" Dense="true"
                                                Variant="MudVariant.Outlined">
                                         @foreach (var r in _lostReasons) { <MudSelectItem Value="@((int?)r.LostReasonId)">@(r.ReasonNameAr ?? r.ReasonName)</MudSelectItem> }
                                     </MudSelect>
@@ -784,6 +784,7 @@
     [SupplyParameterFromQuery(Name = "partyId")] public int? PartyIdFromQuery { get; set; }
 
     private bool _isLoading = true, _isSaving, _isEdit, _saveSuccess, _isSearching;
+    private bool _canDirectCloseOpportunity;
     private int _savedOpportunityId;
     private decimal _savedExpectedValue;
     private string? _savedClientName, _currentUserName, _editPartyName, _editPartyPhone, _clientName, _clientPhone;
@@ -813,6 +814,7 @@
             _canView = user.HasClaim("Permission","frmNewInteraction:View")||user.IsInRole("Admin");
             _canAdd = user.HasClaim("Permission","frmNewInteraction:Add")||user.IsInRole("Admin");
             _canEdit = user.HasClaim("Permission","frmNewInteraction:Edit")||user.IsInRole("Admin");
+            _canDirectCloseOpportunity = user.IsInRole("Admin") || user.IsInRole(SystemRoles.SalesManager) || user.IsInRole(SystemRoles.GeneralManager);
             if(!_canView){ Navigation.NavigateTo("/"); return; }
             if(Id==0&&!_canAdd){ Snackbar.Add("غير مصرح بإضافة فرصة",Severity.Error); Navigation.NavigateTo("/crm/opportunities"); return; }
             if(Id>0&&!_canEdit){ Snackbar.Add("غير مصرح بتعديل الفرصة",Severity.Error); Navigation.NavigateTo("/crm/opportunities"); return; }
@@ -957,9 +959,9 @@
         if(!_model.StatusId.HasValue){ Snackbar.Add("اختر حالة التواصل",Severity.Warning); return false; }
         if(!_model.FirstContactDate.HasValue){ Snackbar.Add("أدخل تاريخ أول تواصل",Severity.Warning); return false; }
         if(!_model.StageId.HasValue){ Snackbar.Add("اختر المرحلة",Severity.Warning); return false; }
-        if(_showLostFields&&!_model.LostReasonId.HasValue){ Snackbar.Add("اختر سبب الخسارة",Severity.Warning); return false; }
+        if(_showLostFields&&!_model.LostReasonId.HasValue){ Snackbar.Add("اختر سبب الإغلاق",Severity.Warning); return false; }
         if(string.IsNullOrWhiteSpace(_model.Summary)){ Snackbar.Add("اكتب ملخص التواصل",Severity.Warning); return false; }
-        if (_model.StageId != 3 && _model.StageId != 4)
+        if (_model.StageId != 3 && _model.StageId != 4 && _model.StageId != 5)
         {
             if (!_model.TaskTypeId.HasValue)
             {
@@ -983,11 +985,20 @@
         _isSaving = true; StateHasChanged();
         try
         {
+            var isApprovalRequestFlow = _showLostFields && !_canDirectCloseOpportunity;
             var (ok,msg,oppId) = await OppService.SaveWorkflowAsync(_model,_currentUserName!);
             if(ok){
                 _savedOpportunityId = oppId;
                 _savedClientName = _clientName??_model.NewClientName;
                 _savedExpectedValue = _model.ExpectedValue ?? 0;
+
+                if(isApprovalRequestFlow)
+                {
+                    Snackbar.Add(msg,Severity.Success);
+                    Navigation.NavigateTo($"/crm/opportunities/{oppId}");
+                    return;
+                }
+
                 if(andNew){ Snackbar.Add(msg,Severity.Success); ResetForm(); }
                 else _saveSuccess = true;
             }

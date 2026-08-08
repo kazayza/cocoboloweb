@@ -143,6 +143,7 @@ builder.Services.AddScoped<ISalesDeliveryStatusService, SalesDeliveryStatusServi
 builder.Services.AddScoped<IComplaintService, ComplaintService>();
 builder.Services.AddScoped<IPasswordService, PasswordService>();
 builder.Services.AddScoped<ICompanyInfoService, CompanyInfoService>();
+builder.Services.AddScoped<IBranchService, BranchService>();
 builder.Services.AddScoped<GlobalSearchService>();
 builder.Services.AddScoped<ICrmDashboardService, CrmDashboardService>();
 builder.Services.AddScoped<IOpportunityService, OpportunityService>();
@@ -773,16 +774,6 @@ try
         title: title,
         message: message,
         role: "Admin",
-        createdBy: "Customer",
-        formName: "quotations",
-        relatedTable: "Quotations",
-        relatedId: quotationId);
-
-    // إشعار للمدير العام
-    await notify.NotifyRoleAsync(
-        title: title,
-        message: message,
-        role: "GeneralManager",
         createdBy: "Customer",
         formName: "quotations",
         relatedTable: "Quotations",

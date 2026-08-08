@@ -56,6 +56,10 @@ public partial class SalesOpportunity
 
     public DateTime? LastUpdatedAt { get; set; }
 
+    public DateTime? ClosedAt { get; set; }
+
+    public string? ClosedBy { get; set; }
+
     public virtual AdType? AdType { get; set; }
 
     public virtual InterestCategory? Category { get; set; }
