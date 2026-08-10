@@ -115,6 +115,21 @@ public class InteractionService : IInteractionService
 
             var oldStageId = opp.StageId;
             var newStageId = dto.StageAfterId ?? oldStageId;
+            var now = DateTime.Now;
+            OpportunityClosureApprovalRequest? approvedClosureRequest = null;
+
+            if ((newStageId == 4 || newStageId == 5) && !CanDirectCloseOpportunities())
+            {
+                approvedClosureRequest = await GetApprovedClosureExecutionRequestAsync(dto.OpportunityId, newStageId, userName, oldStageId);
+                if (approvedClosureRequest == null)
+                    return (false, "هذا الإجراء يحتاج إرسال طلب موافقة إلى مدير المبيعات أو المدير العام.");
+
+                if (!dto.LostReasonId.HasValue && approvedClosureRequest.LostReasonId.HasValue)
+                    dto.LostReasonId = approvedClosureRequest.LostReasonId;
+
+                if (string.IsNullOrWhiteSpace(dto.LostNotes))
+                    dto.LostNotes = approvedClosureRequest.RequestReasonNotes;
+            }
 
             if (newStageId != 3 && newStageId != 4 && newStageId != 5)
             {
@@ -136,9 +151,9 @@ public class InteractionService : IInteractionService
                 StageAfterId = dto.StageAfterId ?? oldStageId,
                 NextFollowUpDate = dto.NextFollowUpDate,
                 Notes = dto.Notes,
-                InteractionDate = DateTime.Now,
+                InteractionDate = now,
                 CreatedBy = userName,
-                CreatedAt = DateTime.Now
+                CreatedAt = now
             };
             _db.CustomerInteractions.Add(interaction);
 
@@ -152,7 +167,7 @@ public class InteractionService : IInteractionService
                 foreach (var t in tasks)
                 {
                     t.Status = "Completed";
-                    t.CompletedDate = DateTime.Now;
+                    t.CompletedDate = now;
                     t.CompletedBy = userName;
                     t.CompletionNotes = $"تم الإلغاء تلقائياً - العميل {label}";
                 }
@@ -165,7 +180,7 @@ public class InteractionService : IInteractionService
                 foreach (var t in tasks)
                 {
                     t.Status = "Completed";
-                    t.CompletedDate = DateTime.Now;
+                    t.CompletedDate = now;
                     t.CompletedBy = userName;
                     t.CompletionNotes = "تم الإغلاق تلقائياً - تم البيع بنجاح";
                 }
@@ -178,7 +193,7 @@ public class InteractionService : IInteractionService
                 foreach (var t in oldTasks)
                 {
                     t.Status = "Completed";
-                    t.CompletedDate = DateTime.Now;
+                    t.CompletedDate = now;
                     t.CompletedBy = userName;
                     t.CompletionNotes = "تمت المتابعة وجدولة موعد جديد";
                 }
@@ -197,7 +212,7 @@ public class InteractionService : IInteractionService
                     ReminderEnabled = true,
                     IsActive = true,
                     CreatedBy = userName,
-                    CreatedAt = DateTime.Now
+                    CreatedAt = now
                 };
                 _db.CrmTasks.Add(newTask);
             }
@@ -205,6 +220,8 @@ public class InteractionService : IInteractionService
             // Update opportunity stage + followup + lost info
             if (dto.StageAfterId.HasValue && dto.StageAfterId != oldStageId)
                 opp.StageId = dto.StageAfterId.Value;
+
+            ApplyClosureState(opp, oldStageId, newStageId, userName, now);
 
             if (dto.NextFollowUpDate.HasValue)
                 opp.NextFollowUpDate = dto.NextFollowUpDate.Value;
@@ -215,13 +232,25 @@ public class InteractionService : IInteractionService
             if (!string.IsNullOrWhiteSpace(dto.LostNotes))
                 opp.LostNotes = dto.LostNotes;
 
-            opp.LastContactDate = DateTime.Now;
+            if (!string.IsNullOrWhiteSpace(dto.Summary))
+                opp.Notes = dto.Summary;
+
+            if (!string.IsNullOrWhiteSpace(dto.Notes))
+                opp.Guidance = dto.Notes;
+
+            opp.LastContactDate = now;
             opp.LastUpdatedBy = userName;
-            opp.LastUpdatedAt = DateTime.Now;
+            opp.LastUpdatedAt = now;
+
+            if (newStageId == 4 || newStageId == 5)
+                await SyncLeadStatusForExitStageAsync(dto.OpportunityId, newStageId, userName, now);
+
+            if (approvedClosureRequest != null)
+                approvedClosureRequest.Status = OpportunityClosureApprovalStatuses.Executed;
 
             // Update party
             var party = await _db.Parties.FindAsync(dto.PartyId);
-            if (party != null) party.LastContactDate = DateTime.Now;
+            if (party != null) party.LastContactDate = now;
 
             await _db.SaveChangesAsync();
             return (true, "تم إضافة التفاعل بنجاح");
@@ -230,5 +259,80 @@ public class InteractionService : IInteractionService
         {
             return (false, $"خطأ: {ex.InnerException?.Message ?? ex.Message}");
         }
+    }
+
+    private async Task<OpportunityClosureApprovalRequest?> GetApprovedClosureExecutionRequestAsync(int opportunityId, int requestedStageId, string userName, int currentStageId)
+    {
+        if (opportunityId <= 0 || requestedStageId <= 0 || currentStageId <= 0 || string.IsNullOrWhiteSpace(userName))
+            return null;
+
+        return await _db.OpportunityClosureApprovalRequests
+            .Where(r => r.OpportunityId == opportunityId
+                && r.Status == OpportunityClosureApprovalStatuses.Approved
+                && r.RequestedStageId == requestedStageId
+                && r.CurrentStageId == currentStageId
+                && r.RequestedBy == userName)
+            .OrderByDescending(r => r.ReviewedAt ?? r.RequestedAt)
+            .FirstOrDefaultAsync();
+    }
+
+    private async Task SyncLeadStatusForExitStageAsync(int opportunityId, int stageId, string userName, DateTime now)
+    {
+        var linkedLead = await _db.LeadsCRMs
+            .FirstOrDefaultAsync(l => l.ConvertedOpportunityId == opportunityId);
+
+        if (linkedLead == null || linkedLead.LeadStatus != "محول")
+            return;
+
+        var reasonText = stageId == 4 ? "خسارة" : "غير مهتم";
+        var oldLeadStatus = linkedLead.LeadStatus;
+
+        linkedLead.LeadStatus = "مرفوض";
+        linkedLead.RejectedReason = $"الفرصة المرتبطة أصبحت {reasonText} بعد تنفيذ الإغلاق المعتمد";
+
+        _db.LeadInteractions.Add(new LeadInteraction
+        {
+            LeadId = linkedLead.LeadId,
+            EmployeeId = linkedLead.AssignedEmployeeId,
+            InteractionType = "رفض",
+            InteractionDate = now,
+            Summary = $"تم تحديث حالة الـ Lead تلقائياً — الفرصة #{opportunityId} أصبحت {reasonText} بعد تنفيذ الإغلاق",
+            Notes = linkedLead.RejectedReason,
+            OldLeadStatus = oldLeadStatus,
+            NewLeadStatus = "مرفوض",
+            IsSystemGenerated = true,
+            CreatedBy = userName,
+            CreatedAt = now
+        });
+    }
+
+    private static bool IsClosedStageId(int stageId) => stageId == 3 || stageId == 4 || stageId == 5;
+
+    private static void ApplyClosureState(SalesOpportunity opp, int oldStageId, int newStageId, string userName, DateTime now)
+    {
+        var wasClosed = IsClosedStageId(oldStageId);
+        var isClosed = IsClosedStageId(newStageId);
+
+        if (!wasClosed && isClosed)
+        {
+            opp.ClosedAt = now;
+            opp.ClosedBy = userName;
+            return;
+        }
+
+        if (wasClosed && !isClosed)
+        {
+            opp.ClosedAt = null;
+            opp.ClosedBy = null;
+        }
+    }
+
+    private bool CanDirectCloseOpportunities()
+    {
+        var user = _http.HttpContext?.User;
+        if (user == null) return false;
+        return user.IsInRole("Admin")
+            || user.IsInRole(SystemRoles.SalesManager)
+            || user.IsInRole(SystemRoles.GeneralManager);
     }
 }

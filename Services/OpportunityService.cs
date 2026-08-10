@@ -330,25 +330,34 @@ if (f.DateTo.HasValue)
                 if (dto.OpportunityId <= 0)
                     return (false, "لا يمكن إرسال طلب إغلاق قبل حفظ الفرصة أولاً.", 0);
 
-                var requestResult = await CreateClosureApprovalRequestInternalAsync(
-                    dto.OpportunityId,
-                    dto.PartyId,
-                    0,
-                    dto.StageId,
-                    dto.LostReasonId,
-                    dto.LostNotes,
-                    "OpportunityDetail",
-                    userName);
+                var currentStageId = await _db.SalesOpportunities
+                    .AsNoTracking()
+                    .Where(o => o.OpportunityId == dto.OpportunityId)
+                    .Select(o => o.StageId)
+                    .FirstOrDefaultAsync();
 
-                if (!requestResult.Success || requestResult.Request == null)
-                    return (false, requestResult.Message, dto.OpportunityId);
-
-                if (requestResult.IsNewRequest)
+                if (currentStageId != dto.StageId)
                 {
-                    await NotifyClosureApprovalRequestedAsync(requestResult.Request, requestResult.ClientName, requestResult.RequestedStageName, userName);
-                }
+                    var requestResult = await CreateClosureApprovalRequestInternalAsync(
+                        dto.OpportunityId,
+                        dto.PartyId,
+                        0,
+                        dto.StageId,
+                        dto.LostReasonId,
+                        dto.LostNotes,
+                        "OpportunityDetail",
+                        userName);
 
-                return (true, requestResult.Message, dto.OpportunityId);
+                    if (!requestResult.Success || requestResult.Request == null)
+                        return (false, requestResult.Message, dto.OpportunityId);
+
+                    if (requestResult.IsNewRequest)
+                    {
+                        await NotifyClosureApprovalRequestedAsync(requestResult.Request, requestResult.ClientName, requestResult.RequestedStageName, userName);
+                    }
+
+                    return (true, requestResult.Message, dto.OpportunityId);
+                }
             }
 
             SalesOpportunity opp;
@@ -594,15 +603,6 @@ if (f.DateTo.HasValue)
             .Select(p => p.PartyName)
             .FirstOrDefaultAsync() ?? $"عميل #{request.PartyId}";
 
-        ApplyClosureState(opp, request.CurrentStageId, request.RequestedStageId, userName, now);
-        opp.StageId = request.RequestedStageId;
-        opp.LostReasonId = request.LostReasonId;
-        opp.LostNotes = request.RequestReasonNotes;
-        opp.NextFollowUpDate = null;
-        opp.LastContactDate = now;
-        opp.LastUpdatedBy = userName;
-        opp.LastUpdatedAt = now;
-
         request.Status = OpportunityClosureApprovalStatuses.Approved;
         request.ReviewedBy = userName;
         request.ReviewedAt = now;
@@ -612,32 +612,27 @@ if (f.DateTo.HasValue)
         {
             OpportunityId = opp.OpportunityId,
             PartyId = opp.PartyId,
-            EmployeeId = opp.EmployeeId,
-            SourceId = opp.SourceId,
-            StatusId = opp.StatusId,
+            EmployeeId = null,
+            SourceId = null,
+            StatusId = null,
             InteractionDate = now,
             Summary = $"تم اعتماد طلب تحويل الفرصة من {currentStageName} إلى {requestedStageName} بواسطة {userName}",
-            StageBeforeId = request.CurrentStageId,
-            StageAfterId = request.RequestedStageId,
+            StageBeforeId = null,
+            StageAfterId = null,
             NextFollowUpDate = null,
-            Notes = string.IsNullOrWhiteSpace(request.RequestReasonNotes) ? "اعتماد مدير المبيعات" : request.RequestReasonNotes,
+            Notes = string.IsNullOrWhiteSpace(request.ReviewNotes)
+                ? "تم اعتماد الطلب وبانتظار تنفيذ الإغلاق بواسطة مقدم الطلب"
+                : request.ReviewNotes,
             CreatedBy = userName,
             CreatedAt = now
         });
-
-        await CloseTasksForClosedOpportunityAsync(opp.OpportunityId, request.RequestedStageId, userName, now);
-        await SyncLeadStatusForExitStageAsync(opp.OpportunityId, request.RequestedStageId, userName, now);
-
-        var party = await _db.Parties.FindAsync(opp.PartyId);
-        if (party != null)
-            party.LastContactDate = now;
 
         await _db.SaveChangesAsync();
 
         if (!string.IsNullOrWhiteSpace(request.RequestedBy) && !string.Equals(request.RequestedBy, userName, StringComparison.OrdinalIgnoreCase))
             await NotifyClosureApprovalDecisionAsync(request.RequestedBy, opp.OpportunityId, clientName, requestedStageName, true, userName, request.ReviewNotes);
 
-        return (true, $"تم اعتماد طلب تحويل الفرصة إلى {requestedStageName}.");
+        return (true, $"تم اعتماد طلب تحويل الفرصة إلى {requestedStageName} وإرسال إشعار إلى مقدم الطلب لاستكمال الإغلاق.");
     }
 
     public async Task<(bool Success, string Message)> RejectClosureApprovalAsync(int requestId, string userName, string? reviewNotes = null)
@@ -665,6 +660,31 @@ if (f.DateTo.HasValue)
         request.ReviewedBy = userName;
         request.ReviewedAt = DateTime.Now;
         request.ReviewNotes = string.IsNullOrWhiteSpace(reviewNotes) ? null : reviewNotes.Trim();
+
+        var opportunity = await _db.SalesOpportunities.AsNoTracking()
+            .Where(o => o.OpportunityId == request.OpportunityId)
+            .Select(o => new { o.PartyId, o.EmployeeId, o.SourceId, o.StatusId })
+            .FirstOrDefaultAsync();
+
+        if (opportunity != null)
+        {
+            _db.CustomerInteractions.Add(new CustomerInteraction
+            {
+                OpportunityId = request.OpportunityId,
+                PartyId = opportunity.PartyId,
+                EmployeeId = null,
+                SourceId = null,
+                StatusId = null,
+                InteractionDate = DateTime.Now,
+                Summary = $"تم رفض طلب تحويل الفرصة إلى {requestedStageName} بواسطة {userName}",
+                StageBeforeId = null,
+                StageAfterId = null,
+                NextFollowUpDate = null,
+                Notes = string.IsNullOrWhiteSpace(request.ReviewNotes) ? "رفض طلب الإغلاق" : request.ReviewNotes,
+                CreatedBy = userName,
+                CreatedAt = DateTime.Now
+            });
+        }
 
         await _db.SaveChangesAsync();
 
@@ -1452,6 +1472,24 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
         };
 
         _db.OpportunityClosureApprovalRequests.Add(entity);
+
+        _db.CustomerInteractions.Add(new CustomerInteraction
+        {
+            OpportunityId = opportunityId,
+            PartyId = partyId > 0 ? partyId : opp.PartyId,
+            EmployeeId = null,
+            SourceId = null,
+            StatusId = null,
+            InteractionDate = DateTime.Now,
+            Summary = $"تم إرسال طلب موافقة لتحويل الفرصة إلى {requestedStageName} بواسطة {userName}",
+            StageBeforeId = null,
+            StageAfterId = null,
+            NextFollowUpDate = null,
+            Notes = requestReasonNotes.Trim(),
+            CreatedBy = userName,
+            CreatedAt = DateTime.Now
+        });
+
         await _db.SaveChangesAsync();
 
         return (true, $"تم إرسال طلب موافقة إلى مدير المبيعات لتحويل الفرصة إلى {requestedStageName}.", entity, opp.ClientName ?? $"عميل #{opp.PartyId}", requestedStageName, true);
@@ -1470,18 +1508,18 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
                 message: message,
                 role: SystemRoles.SalesManager,
                 createdBy: actor,
-                formName: "crm/opportunities",
-                relatedTable: "SalesOpportunities",
-                relatedId: request.OpportunityId);
+                formName: "crm/opportunities/closure-requests",
+                relatedTable: "OpportunityClosureApprovalRequests",
+                relatedId: request.RequestId);
 
             await _notify.NotifyRoleAsync(
                 title: "🛑 طلب موافقة إغلاق فرصة",
                 message: message,
                 role: SystemRoles.GeneralManager,
                 createdBy: actor,
-                formName: "crm/opportunities",
-                relatedTable: "SalesOpportunities",
-                relatedId: request.OpportunityId);
+                formName: "crm/opportunities/closure-requests",
+                relatedTable: "OpportunityClosureApprovalRequests",
+                relatedId: request.RequestId);
         }
         catch (Exception ex)
         {
@@ -1495,7 +1533,7 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
         {
             var title = approved ? "✅ تم اعتماد طلب إغلاق الفرصة" : "❌ تم رفض طلب إغلاق الفرصة";
             var message = approved
-                ? $"وافق {reviewer} على تحويل الفرصة #{opportunityId} الخاصة بالعميل {clientName} إلى {requestedStageName}."
+                ? $"وافق {reviewer} على تحويل الفرصة #{opportunityId} الخاصة بالعميل {clientName} إلى {requestedStageName}. برجاء فتح الفرصة واستكمال الإغلاق بنفسك."
                 : $"رفض {reviewer} طلب تحويل الفرصة #{opportunityId} الخاصة بالعميل {clientName} إلى {requestedStageName}.";
 
             if (!string.IsNullOrWhiteSpace(reviewNotes))

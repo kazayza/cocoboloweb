@@ -5,6 +5,7 @@ public static class OpportunityClosureApprovalStatuses
     public const string Pending = "Pending";
     public const string Approved = "Approved";
     public const string Rejected = "Rejected";
+    public const string Executed = "Executed";
 }
 
 public class OpportunityClosureApprovalCreateDto

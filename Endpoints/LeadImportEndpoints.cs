@@ -321,7 +321,7 @@ public static class LeadImportEndpoints
             await notify.NotifyRoleAsync(
                 title: title,
                 message: message,
-                role: SystemRoles.Admin,
+                role: SystemRoles.SocialManager,
                 createdBy: "MetaIntegration",
                 formName: formName,
                 relatedTable: relatedTable,

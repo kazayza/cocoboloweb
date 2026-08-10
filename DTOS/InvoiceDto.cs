@@ -386,6 +386,7 @@ public static class SystemRoles
     public const string Admin = "Admin";
     public const string SalesManager = "SalesManager";
     public const string GeneralManager = "GeneralManager";
+    public const string SocialManager = "SocialManager";
     public const string Sales = "Sales";
     public const string AccountManager = "AccountManager";
     public const string HrManager = "HrManager";

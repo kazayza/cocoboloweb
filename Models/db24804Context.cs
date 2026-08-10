@@ -1905,6 +1905,7 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .HasMaxLength(50)
                 .HasDefaultValue("Premium");
             entity.Property(e => e.ProductId).HasColumnName("ProductID");
+            entity.Property(e => e.SelectedAlternativeId).HasColumnName("SelectedAlternativeID");
             entity.Property(e => e.Quantity).HasColumnType("decimal(18, 3)");
             entity.Property(e => e.TotalAmount)
                 .HasComputedColumnSql("([Quantity]*[UnitPrice])", true)

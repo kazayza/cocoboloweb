@@ -1810,6 +1810,7 @@ else
     private string? _guidanceText;
     private int _stageBeforeId;
     private bool _canReassignOpportunity;
+    private bool _canDirectCloseOpportunity;
     private bool _showConfirmLossDialog;
     private int _pendingStageId;
     private bool _showEditDialog;
@@ -1903,6 +1904,7 @@ else
             _canViewQuotations = user.HasClaim("Permission", "frmQuotationsList:View") || user.IsInRole("Admin");
             _canViewInvoices = user.HasClaim("Permission", "frm_PartiesInvoices:View") || user.IsInRole("Admin");
             _canReassignOpportunity = user.IsInRole("Admin") || user.IsInRole(SystemRoles.SalesManager) || user.IsInRole(SystemRoles.GeneralManager);
+            _canDirectCloseOpportunity = user.IsInRole("Admin") || user.IsInRole(SystemRoles.SalesManager) || user.IsInRole(SystemRoles.GeneralManager);
 
             if (!_canView) { Navigation.NavigateTo("/"); return; }
 
@@ -1984,6 +1986,17 @@ else
         BuildCompletedTaskLookup();
         await LoadSourceLeadAsync();
         await LoadRelatedDocumentsAsync();
+    }
+
+    private async Task<bool> HasApprovedClosureRequestForCurrentUserAsync(int requestedStageId)
+    {
+        var approvedRequests = await OppService.GetClosureApprovalRequestsAsync(OpportunityClosureApprovalStatuses.Approved);
+
+        return approvedRequests.Any(r =>
+            r.OpportunityId == Id
+            && r.RequestedStageId == requestedStageId
+            && r.CurrentStageId == _stageBeforeId
+            && string.Equals(r.RequestedBy, _currentUserName, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -2186,6 +2199,52 @@ else
             }
         }
 
+        var executingApprovedClosure = false;
+
+        if (ShowLostFields && !_canDirectCloseOpportunity)
+        {
+            executingApprovedClosure = await HasApprovedClosureRequestForCurrentUserAsync(_newInteraction.StageAfterId!.Value);
+
+            if (!executingApprovedClosure)
+            {
+                _addingInteraction = true;
+                try
+                {
+                    _newInteraction.StageBeforeId = _stageBeforeId;
+
+                    var requestDto = new OpportunityClosureApprovalCreateDto
+                    {
+                        OpportunityId = Id,
+                        PartyId = _opp.PartyId,
+                        CurrentStageId = _stageBeforeId,
+                        RequestedStageId = _newInteraction.StageAfterId!.Value,
+                        LostReasonId = _newInteraction.LostReasonId,
+                        RequestReasonNotes = _newInteraction.LostNotes,
+                        RequestSource = "OpportunityDetail"
+                    };
+
+                    var (ok, msg, _) = await OppService.RequestClosureApprovalAsync(requestDto, _currentUserName!);
+                    Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+                    if (ok)
+                    {
+                        InitInteractionForm();
+                        await ReloadData();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+                }
+                finally
+                {
+                    _addingInteraction = false;
+                }
+
+                return;
+            }
+        }
+
         _addingInteraction = true;
         try
         {
@@ -2197,16 +2256,19 @@ else
             var (ok, msg) = await InteractionService.AddQuickAsync(_newInteraction, _currentUserName!);
             if (!ok) { Snackbar.Add(msg, Severity.Error); return; }
 
-            var formDto = await OppService.GetOpportunityForEditAsync(Id);
-            if (formDto != null)
+            if (!(executingApprovedClosure && ShowLostFields && !_canDirectCloseOpportunity))
             {
-                formDto.StageId = _newInteraction.StageAfterId.Value;
-                formDto.NextFollowUpDate = ShowLostFields ? null : _newInteraction.NextFollowUpDate;
-                formDto.LostReasonId = _newInteraction.LostReasonId;
-                formDto.LostNotes = _newInteraction.LostNotes;
-                formDto.Notes = _newInteraction.Summary;
-                formDto.Guidance = _guidanceText;
-                await OppService.SaveOpportunityAsync(formDto, _currentUserName!);
+                var formDto = await OppService.GetOpportunityForEditAsync(Id);
+                if (formDto != null)
+                {
+                    formDto.StageId = _newInteraction.StageAfterId.Value;
+                    formDto.NextFollowUpDate = ShowLostFields ? null : _newInteraction.NextFollowUpDate;
+                    formDto.LostReasonId = _newInteraction.LostReasonId;
+                    formDto.LostNotes = _newInteraction.LostNotes;
+                    formDto.Notes = _newInteraction.Summary;
+                    formDto.Guidance = _guidanceText;
+                    await OppService.SaveOpportunityAsync(formDto, _currentUserName!);
+                }
             }
 
             var stageId = _newInteraction.StageAfterId.Value;

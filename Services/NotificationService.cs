@@ -221,7 +221,10 @@ namespace COCOBOLOERPNEW.Services
                         relatedTable,
                         relatedId,
                         formName,
-                        createdBy
+                        createdBy,
+                        // بلازور حفظ الإشعار في قاعدة البيانات بالفعل
+                        // فنخبر الـ Node API ألا يحفظه مرة أخرى (نفس الـ DB)
+                        skipSave = true
                     };
                     await http.PostAsJsonAsync($"{apiBase.TrimEnd('/')}/api/notifications", payload);
                 }
