@@ -1,0 +1,493 @@
+@page "/production/job-orders"
+@page "/factory/job-orders"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject NotificationService NotifyService
+
+<PageTitle>أوامر التشغيل</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="job-orders-loading">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل أوامر التشغيل...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+        ليس لديك صلاحية الوصول إلى أوامر التشغيل.
+    </MudAlert>
+}
+else
+{
+    <div class="job-orders-page" dir="rtl">
+        <div class="jo-header">
+            <div class="jo-header-bg"></div>
+            <div class="jo-header-content">
+                <div>
+                    <div class="jo-badge">Production Queue</div>
+                    <h1>أوامر التشغيل</h1>
+                    <p>الافتراضي: عرض أوامر التشغيل التي لم يتم التسليم بعد مع إمكانية البحث والتصفية</p>
+                </div>
+                <div class="jo-header-actions">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                               StartIcon="@Icons.Material.Filled.Refresh"
+                               OnClick="LoadAsync">
+                        تحديث
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+
+        <div class="jo-stats-row">
+            <div class="jo-stat-card">
+                <span class="jo-stat-label">النتائج المعروضة</span>
+                <strong class="jo-stat-value">@_items.Count</strong>
+            </div>
+            <div class="jo-stat-card">
+                <span class="jo-stat-label">لم يتم التسليم بعد</span>
+                <strong class="jo-stat-value">@_items.Count(x => !x.IsDelivered)</strong>
+            </div>
+            <div class="jo-stat-card">
+                <span class="jo-stat-label">بها بدائل مختارة</span>
+                <strong class="jo-stat-value">@_items.Count(x => x.AlternativeItemsCount > 0)</strong>
+            </div>
+        </div>
+
+        <MudPaper Class="jo-filter-box" Elevation="0">
+            <div class="jo-filter-grid single-row">
+                <MudTextField T="string"
+                              @bind-Value="_searchText"
+                              Label="بحث باسم العميل / رقم الفاتورة / التليفون"
+                              Variant="Variant.Outlined"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Clearable="true"
+                              Class="jo-search-field" />
+
+                <MudSelect T="string" @bind-Value="_deliveryFilter" Label="حالة التسليم" Variant="Variant.Outlined">
+                    <MudSelectItem T="string" Value='@("undelivered")'>لم يتم التسليم بعد</MudSelectItem>
+                    <MudSelectItem T="string" Value='@("delivered")'>تم التسليم</MudSelectItem>
+                    <MudSelectItem T="string" Value='@("all")'>الكل</MudSelectItem>
+                </MudSelect>
+
+                <MudDatePicker T="DateTime?" @bind-Date="_dueDateFrom" Label="من تاريخ التسليم" Variant="Variant.Outlined" />
+                <MudDatePicker T="DateTime?" @bind-Date="_dueDateTo" Label="إلى تاريخ التسليم" Variant="Variant.Outlined" />
+
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Search"
+                           OnClick="LoadAsync">
+                    بحث
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                           StartIcon="@Icons.Material.Filled.Clear"
+                           OnClick="ClearSearch">
+                    مسح
+                </MudButton>
+            </div>
+        </MudPaper>
+
+        <MudPaper Class="jo-table-shell" Elevation="0">
+            <MudTable T="JobOrderRowVm" Items="_items" Dense="true" Hover="true" Striped="true" Breakpoint="Breakpoint.Md" Elevation="0">
+                <HeaderContent>
+                    <MudTh>رقم الفاتورة</MudTh>
+                    <MudTh>العميل</MudTh>
+                    <MudTh>التليفون</MudTh>
+                    <MudTh>تاريخ الفاتورة</MudTh>
+                    <MudTh>التسليم المتوقع</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh>عدد البنود</MudTh>
+                    <MudTh>بدائل مختارة</MudTh>
+                    <MudTh>الإجمالي</MudTh>
+                    <MudTh>إجراءات</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <div class="jo-cell-primary">
+                            <strong>@context.ReferenceNumber</strong>
+                            <small>#@context.TransactionId</small>
+                        </div>
+                    </MudTd>
+                    <MudTd>
+                        <div class="jo-cell-primary">
+                            <strong>@context.PartyName</strong>
+                            @if (!string.IsNullOrWhiteSpace(context.EmpName))
+                            {
+                                <small>الموظف: @context.EmpName</small>
+                            }
+                        </div>
+                    </MudTd>
+                    <MudTd>@(string.IsNullOrWhiteSpace(context.Phone) ? "—" : context.Phone)</MudTd>
+                    <MudTd>@context.TransactionDate.ToString("yyyy/MM/dd")</MudTd>
+                    <MudTd>@(context.DueDate?.ToString("yyyy/MM/dd") ?? "—")</MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(context.IsDelivered ? Color.Success : Color.Warning)"
+                                 Variant="Variant.Filled">
+                            @(context.IsDelivered ? "تم التسليم" : "لم يتم التسليم بعد")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled">
+                            @context.ItemsCount
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(context.AlternativeItemsCount > 0 ? Color.Success : Color.Default)"
+                                 Variant="@(context.AlternativeItemsCount > 0 ? Variant.Filled : Variant.Outlined)">
+                            @context.AlternativeItemsCount
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>
+                        @if (_canSeeAmounts)
+                        {
+                            <strong>@context.GrandTotal.ToString("N2")</strong>
+                        }
+                        else
+                        {
+                            <span>—</span>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <div class="jo-row-actions">
+                            <MudTooltip Text="فتح أمر التشغيل">
+                                <MudIconButton Icon="@Icons.Material.Filled.Factory"
+                                               Color="Color.Primary"
+                                               Size="Size.Small"
+                                               OnClick="@(() => OpenJobOrder(context.TransactionId))" />
+                            </MudTooltip>
+                            <MudTooltip Text="طباعة أمر التشغيل">
+                                <MudIconButton Icon="@Icons.Material.Filled.Print"
+                                               Color="Color.Info"
+                                               Size="Size.Small"
+                                               OnClick="@(() => OpenJobOrderPrint(context.TransactionId))" />
+                            </MudTooltip>
+                            <MudTooltip Text="ملف تشغيل العميل">
+                                <MudIconButton Icon="@Icons.Material.Filled.FolderShared"
+                                               Color="Color.Warning"
+                                               Size="Size.Small"
+                                               OnClick="@(() => OpenCustomerJobOrder(context.PartyId))" />
+                            </MudTooltip>
+                            @if (_canEditDueDate && !context.IsDelivered)
+                            {
+                                <MudTooltip Text="تعديل تاريخ التسليم">
+                                    <MudIconButton Icon="@Icons.Material.Filled.EditCalendar"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => OpenDueDateDialog(context))" />
+                                </MudTooltip>
+                            }
+                            @if (_canOpenInvoices)
+                            {
+                                <MudTooltip Text="فتح الفاتورة">
+                                    <MudIconButton Icon="@Icons.Material.Filled.ReceiptLong"
+                                                   Color="Color.Success"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => OpenInvoice(context.TransactionId))" />
+                                </MudTooltip>
+                            }
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="jo-empty-box">
+                        <MudIcon Icon="@Icons.Material.Filled.Inventory" Size="Size.Large" />
+                        <span>لا توجد أوامر تشغيل مطابقة.</span>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    </div>
+}
+
+<MudDialog @bind-Visible="_showDueDateDialog">
+    <TitleContent>
+        <div style="display:flex;align-items:center;gap:.6rem;">
+            <MudIcon Icon="@Icons.Material.Filled.EditCalendar" Color="Color.Secondary" />
+            <MudText Typo="Typo.h6">تعديل تاريخ التسليم المتوقع</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3">الفاتورة: <strong>@_editReferenceNumber</strong></MudText>
+        <MudDatePicker T="DateTime?" @bind-Date="_editDueDate" Label="تاريخ التسليم الجديد" Variant="Variant.Outlined" />
+        <MudTextField T="string" @bind-Value="_editDueDateNotes" Label="ملاحظات التعديل" Variant="Variant.Outlined" Lines="3" Class="mt-3" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Outlined" OnClick="CloseDueDateDialog">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="SaveDueDateAsync" Disabled="@_isSavingDueDate">حفظ</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .job-orders-page { padding: 0 1rem 2rem; }
+    .job-orders-loading { min-height: 60vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    .jo-header { position:relative; border-radius:22px; overflow:hidden; margin-bottom:1rem; box-shadow:0 10px 30px rgba(15,23,42,.12); }
+    .jo-header-bg { position:absolute; inset:0; background:linear-gradient(135deg,#0f172a 0%, #1e3a8a 55%, #3b82f6 100%); }
+    .jo-header-content { position:relative; z-index:1; padding:1.5rem 1.75rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; color:#fff; }
+    .jo-badge { display:inline-block; margin-bottom:.45rem; padding:.28rem .7rem; border-radius:999px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); font-size:.72rem; font-weight:800; }
+    .jo-header-content h1 { margin:0; font-size:1.45rem; font-weight:900; }
+    .jo-header-content p { margin:.25rem 0 0; opacity:.86; }
+
+    .jo-stats-row { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.75rem; margin-bottom:1rem; }
+    .jo-stat-card { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-lines-default); border-radius:16px; padding:1rem 1.1rem; box-shadow:0 2px 10px rgba(0,0,0,.04); }
+    .jo-stat-label { display:block; color:var(--mud-palette-text-secondary); font-size:.8rem; font-weight:700; }
+    .jo-stat-value { display:block; color:var(--mud-palette-text-primary); font-size:1.35rem; font-weight:900; margin-top:.15rem; }
+
+    .jo-filter-box { border-radius:18px; border:1px solid var(--mud-palette-lines-default); padding:1rem; margin-bottom:1rem; }
+    .jo-filter-grid { display:grid; gap:.75rem; align-items:center; }
+    .jo-filter-grid.single-row { grid-template-columns:minmax(260px,2fr) minmax(170px,1fr) minmax(170px,1fr) minmax(170px,1fr) auto auto; }
+    .jo-search-field { min-width:0; }
+
+    .jo-table-shell { border-radius:18px; border:1px solid var(--mud-palette-lines-default); overflow:hidden; background:var(--mud-palette-surface); box-shadow:0 4px 16px rgba(0,0,0,.04); }
+    .jo-cell-primary { display:flex; flex-direction:column; gap:.12rem; }
+    .jo-cell-primary small { color:var(--mud-palette-text-secondary); font-size:.74rem; }
+    .jo-row-actions { display:flex; align-items:center; gap:.2rem; }
+    .jo-empty-box { padding:2rem; display:flex; flex-direction:column; gap:.5rem; align-items:center; justify-content:center; color:var(--mud-palette-text-secondary); }
+
+    @@media (max-width: 900px) {
+        .jo-stats-row { grid-template-columns:1fr; }
+        .jo-filter-grid.single-row { grid-template-columns:1fr; }
+        .jo-header-content { padding:1.25rem 1rem; }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _canView;
+    private bool _canOpenInvoices;
+    private bool _canSeeAmounts;
+    private bool _canEditDueDate;
+    private string _deliveryFilter = "undelivered";
+    private DateTime? _dueDateFrom;
+    private DateTime? _dueDateTo;
+    private string? _searchText;
+    private bool _showDueDateDialog;
+    private bool _isSavingDueDate;
+    private int _editTransactionId;
+    private string _editReferenceNumber = "";
+    private DateTime? _editDueDate;
+    private string? _editDueDateNotes;
+    private List<JobOrderRowVm> _items = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        _canView = user.IsInRole(SystemRoles.Admin)
+                   || user.IsInRole(SystemRoles.SalesManager)
+                   || user.IsInRole(SystemRoles.Sales)
+                   || user.IsInRole(SystemRoles.AccountManager)
+                   || user.IsInRole(SystemRoles.HrManager)
+                   || user.IsInRole(SystemRoles.ProductionManager)
+                   || user.IsInRole("factory");
+
+        _canOpenInvoices = user.IsInRole(SystemRoles.Admin)
+                           || user.HasClaim("Permission", "frm_PartiesInvoices:View");
+
+        _canSeeAmounts = user.IsInRole(SystemRoles.Admin)
+                         || user.IsInRole(SystemRoles.AccountManager)
+                         || user.IsInRole(SystemRoles.Account);
+
+        _canEditDueDate = user.IsInRole(SystemRoles.Admin)
+                          || user.IsInRole(SystemRoles.ProductionManager);
+
+        if (_canView)
+            await LoadAsync();
+
+        _isLoading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _isLoading = true;
+
+            var query = Db.Transactions
+                .AsNoTracking()
+                .Where(t => t.TransactionType == TransactionTypes.Sale && t.InvoiceStatus != InvoiceStatuses.Cancelled);
+
+            query = _deliveryFilter switch
+            {
+                "delivered" => query.Where(t => t.IsDelivered == true),
+                "all" => query,
+                _ => query.Where(t => t.IsDelivered != true)
+            };
+
+            if (_dueDateFrom.HasValue)
+                query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= _dueDateFrom.Value.Date);
+
+            if (_dueDateTo.HasValue)
+                query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value <= _dueDateTo.Value.Date.AddDays(1).AddTicks(-1));
+
+            var projected = query.Select(t => new JobOrderRowVm
+            {
+                TransactionId = t.TransactionId,
+                PartyId = t.PartyId,
+                ReferenceNumber = t.ReferenceNumber ?? $"#{t.TransactionId}",
+                TransactionDate = t.TransactionDate,
+                DueDate = t.DueDate,
+                IsDelivered = t.IsDelivered == true,
+                PartyName = Db.Parties.Where(p => p.PartyId == t.PartyId).Select(p => p.PartyName).FirstOrDefault() ?? "",
+                Phone = Db.Parties.Where(p => p.PartyId == t.PartyId).Select(p => p.Phone).FirstOrDefault(),
+                EmpName = t.EmpId == null ? null : Db.Employees.Where(e => e.EmployeeId == t.EmpId).Select(e => e.FullName).FirstOrDefault(),
+                GrandTotal = t.GrandTotal,
+                ItemsCount = Db.TransactionDetails.Count(d => d.TransactionId == t.TransactionId),
+                AlternativeItemsCount = Db.TransactionDetails.Count(d => d.TransactionId == t.TransactionId && d.SelectedAlternativeId != null)
+            });
+
+            var rows = await projected
+                .OrderByDescending(x => x.TransactionDate)
+                .ThenByDescending(x => x.TransactionId)
+                .Take(400)
+                .ToListAsync();
+
+            if (!string.IsNullOrWhiteSpace(_searchText))
+            {
+                var term = _searchText.Trim();
+                rows = rows.Where(x =>
+                        (x.ReferenceNumber ?? string.Empty).Contains(term, StringComparison.OrdinalIgnoreCase)
+                        || (x.PartyName ?? string.Empty).ContainsArabic(term)
+                        || (x.Phone ?? string.Empty).ContainsArabic(term))
+                    .ToList();
+            }
+
+            _items = rows;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ أثناء تحميل أوامر التشغيل: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OpenJobOrderPrint(int invoiceId)
+        => await JS.InvokeVoidAsync("open", $"/sales/invoices/{invoiceId}/job-order/print", "_blank");
+
+    private void OpenJobOrder(int invoiceId)
+        => Navigation.NavigateTo($"/sales/invoices/{invoiceId}/job-order");
+
+    private void OpenInvoice(int invoiceId)
+        => Navigation.NavigateTo($"/sales/invoices/{invoiceId}");
+
+    private void OpenCustomerJobOrder(int partyId)
+        => Navigation.NavigateTo($"/products/job-order/{partyId}");
+
+    private void OpenDueDateDialog(JobOrderRowVm row)
+    {
+        _editTransactionId = row.TransactionId;
+        _editReferenceNumber = row.ReferenceNumber;
+        _editDueDate = row.DueDate;
+        _editDueDateNotes = null;
+        _showDueDateDialog = true;
+    }
+
+    private void CloseDueDateDialog()
+    {
+        _showDueDateDialog = false;
+        _editTransactionId = 0;
+        _editReferenceNumber = string.Empty;
+        _editDueDate = null;
+        _editDueDateNotes = null;
+    }
+
+    private async Task SaveDueDateAsync()
+    {
+        if (!_canEditDueDate || _editTransactionId <= 0)
+            return;
+
+        _isSavingDueDate = true;
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var actor = auth.User.Identity?.Name ?? "System";
+
+            var transaction = await Db.Transactions.FirstOrDefaultAsync(t => t.TransactionId == _editTransactionId && t.TransactionType == TransactionTypes.Sale);
+            if (transaction == null)
+            {
+                Snackbar.Add("الفاتورة غير موجودة", Severity.Error);
+                return;
+            }
+
+            if (transaction.IsDelivered == true)
+            {
+                Snackbar.Add("لا يمكن تعديل تاريخ التسليم بعد تسليم الفاتورة", Severity.Warning);
+                return;
+            }
+
+            var oldDueDate = transaction.DueDate;
+            transaction.DueDate = _editDueDate;
+            await Db.SaveChangesAsync();
+
+            var partyName = await Db.Parties
+                .Where(p => p.PartyId == transaction.PartyId)
+                .Select(p => p.PartyName)
+                .FirstOrDefaultAsync() ?? "غير محدد";
+
+            var noteText = string.IsNullOrWhiteSpace(_editDueDateNotes) ? string.Empty : $"\nملاحظات: {_editDueDateNotes}";
+            var message = $"تم تعديل تاريخ التسليم المتوقع للفاتورة {transaction.ReferenceNumber} للعميل {partyName} بواسطة {actor}.\nمن: {(oldDueDate.HasValue ? oldDueDate.Value.ToString("yyyy/MM/dd") : "—")}\nإلى: {(_editDueDate.HasValue ? _editDueDate.Value.ToString("yyyy/MM/dd") : "—")}{noteText}";
+
+            await NotifyService.NotifyRoleAsync("📅 تعديل تاريخ تسليم فاتورة", message, SystemRoles.Admin, actor,
+                "sales/invoices", "Transactions", transaction.TransactionId);
+            await NotifyService.NotifyRoleAsync("📅 تعديل تاريخ تسليم فاتورة", message, SystemRoles.AccountManager, actor,
+                "sales/invoices", "Transactions", transaction.TransactionId);
+
+            Snackbar.Add("تم تعديل تاريخ التسليم وإرسال الإشعارات", Severity.Success);
+            CloseDueDateDialog();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSavingDueDate = false;
+        }
+    }
+
+    private async Task ClearSearch()
+    {
+        _searchText = null;
+        _deliveryFilter = "undelivered";
+        _dueDateFrom = null;
+        _dueDateTo = null;
+        await LoadAsync();
+    }
+
+    private sealed class JobOrderRowVm
+    {
+        public int TransactionId { get; set; }
+        public int PartyId { get; set; }
+        public string ReferenceNumber { get; set; } = "";
+        public DateTime TransactionDate { get; set; }
+        public DateTime? DueDate { get; set; }
+        public bool IsDelivered { get; set; }
+        public string PartyName { get; set; } = "";
+        public string? Phone { get; set; }
+        public string? EmpName { get; set; }
+        public decimal GrandTotal { get; set; }
+        public int ItemsCount { get; set; }
+        public int AlternativeItemsCount { get; set; }
+    }
+}

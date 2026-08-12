@@ -150,6 +150,9 @@ public class InvoiceService : IInvoiceService
                 EditReason = t.EditReason,
                 EditBy = t.EditBy,
                 EditAt = t.EditAt,
+                EditReviewedBy = t.EditReviewedBy,
+                EditReviewedAt = t.EditReviewedAt,
+                EditReviewNotes = t.EditReviewNotes,
                 EditStatus = t.EditStatus,
                 EditRequestDate = t.EditRequestDate,
                 EditDone = t.EditDone
@@ -368,6 +371,9 @@ public class InvoiceService : IInvoiceService
             EditReason = t.EditReason,
             EditBy = t.EditBy,
             EditAt = t.EditAt,
+            EditReviewedBy = t.EditReviewedBy,
+            EditReviewedAt = t.EditReviewedAt,
+            EditReviewNotes = t.EditReviewNotes,
             EditStatus = t.EditStatus,
             EditRequestDate = t.EditRequestDate,
             EditDone = t.EditDone,
@@ -741,8 +747,9 @@ public class InvoiceService : IInvoiceService
             await _audit.LogAsync("Transactions", "Insert",
                 mirrorPurchase.TransactionId.ToString(), null, mirrorPurchase, currentUserName);
 
-            // ⭐ إشعارات للأدمن ومدير المبيعات
+            // ⭐ إشعارات الإدارة + الإنتاج
             await SendInvoiceNotificationsAsync(saleTransaction, currentUserName, "تم إنشاء فاتورة جديدة");
+            await SendProductionStartNotificationAsync(saleTransaction, currentUserName);
 
             return (true,
                 $"تم إنشاء الفاتورة {saleTransaction.ReferenceNumber} مع فاتورة الشراء المرآة {mirrorRefNumber}.",
@@ -830,6 +837,10 @@ public class InvoiceService : IInvoiceService
         transaction.EditReason = reason;
         transaction.EditBy = currentUserName;
         transaction.EditRequestDate = DateTime.Now;
+        transaction.EditReviewedBy = null;
+        transaction.EditReviewedAt = null;
+        transaction.EditReviewNotes = null;
+        transaction.EditDone = null;
 
         await _db.SaveChangesAsync();
 
@@ -850,8 +861,9 @@ public class InvoiceService : IInvoiceService
         if (transaction == null) return (false, "الفاتورة غير موجودة.");
 
         var now = DateTime.Now;
-        transaction.EditAt = now;
-        transaction.EditBy = currentUserName;
+        transaction.EditReviewedBy = currentUserName;
+        transaction.EditReviewedAt = now;
+        transaction.EditReviewNotes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
 
         string actionMessage = approve 
             ? $"تمت الموافقة على طلب تعديل الفاتورة رقم {transaction.ReferenceNumber}" 
@@ -876,7 +888,9 @@ public class InvoiceService : IInvoiceService
 
         await _db.SaveChangesAsync();
 
-        // ⭐ إشعار للأدمن ومدير الحسابات (لأن NotifyUserAsync غير موجود)
+        await SendInvoiceEditDecisionNotificationToRequesterAsync(transaction, approve, currentUserName, notes);
+
+        // ⭐ إشعار للأدمن ومدير الحسابات
         await SendInvoiceNotificationsAsync(transaction, currentUserName, actionMessage);
 
         return (true, approve ? "تمت الموافقة على فتح الفاتورة للتعديل." : "تم رفض طلب التعديل.");
@@ -1398,17 +1412,87 @@ public class InvoiceService : IInvoiceService
             var message = $"{action}: {transaction.ReferenceNumber} للعميل {partyName} " +
                           $"بقيمة {transaction.GrandTotal:N2} ج بواسطة {actor}";
 
-            // إشعار للأدمن
-await _notify.NotifyRoleAsync(title, message, SystemRoles.Admin, actor,
-    "sales/invoices", "Transactions", transaction.TransactionId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.Admin, actor,
+                "sales/invoices", "Transactions", transaction.TransactionId);
 
-// إشعار لمدير الحسابات
-await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, actor,
-    "sales/invoices", "Transactions", transaction.TransactionId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, actor,
+                "sales/invoices", "Transactions", transaction.TransactionId);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[InvoiceService.Notify] {ex.Message}");
+        }
+    }
+
+    private async Task SendProductionStartNotificationAsync(Transaction transaction, string actor)
+    {
+        try
+        {
+            if (transaction.TransactionType != TransactionTypes.Sale)
+                return;
+
+            var partyName = await _db.Parties
+                .Where(p => p.PartyId == transaction.PartyId)
+                .Select(p => p.PartyName)
+                .FirstOrDefaultAsync() ?? "غير محدد";
+
+            var title = "🏭 أمر تصنيع جديد";
+            var message = $"تم إنشاء فاتورة بيع {transaction.ReferenceNumber} للعميل {partyName}. برجاء بدء التصنيع أو تحديد تاريخ الاستلام.";
+
+            if (transaction.DueDate.HasValue)
+                message += $"\nتاريخ الاستحقاق/الاستلام المتوقع: {transaction.DueDate.Value:yyyy/MM/dd}";
+
+            await _notify.NotifyRoleAsync(
+                title: title,
+                message: message,
+                role: SystemRoles.ProductionManager,
+                createdBy: actor,
+                formName: $"sales/invoices/{transaction.TransactionId}/job-order",
+                relatedTable: "Transactions");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[InvoiceService.ProductionNotify] {ex.Message}");
+        }
+    }
+
+    private async Task SendInvoiceEditDecisionNotificationToRequesterAsync(Transaction transaction, bool approved, string reviewer, string? reviewNotes)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(transaction.EditBy))
+                return;
+
+            if (string.Equals(transaction.EditBy, reviewer, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var partyName = await _db.Parties
+                .Where(p => p.PartyId == transaction.PartyId)
+                .Select(p => p.PartyName)
+                .FirstOrDefaultAsync() ?? "غير محدد";
+
+            var title = approved ? "✅ تمت الموافقة على طلب تعديل الفاتورة" : "❌ تم رفض طلب تعديل الفاتورة";
+            var message = approved
+                ? $"تمت الموافقة بواسطة {reviewer} على طلب تعديل الفاتورة {transaction.ReferenceNumber} للعميل {partyName}. يمكنك الآن فتح الفاتورة واستكمال التعديل."
+                : $"تم رفض طلب تعديل الفاتورة {transaction.ReferenceNumber} للعميل {partyName} بواسطة {reviewer}.";
+
+            if (!string.IsNullOrWhiteSpace(reviewNotes))
+                message += approved
+                    ? $"\nملاحظات المراجعة: {reviewNotes}"
+                    : $"\nسبب / ملاحظات الرفض: {reviewNotes}";
+
+            await _notify.AddAsync(
+                title: title,
+                message: message,
+                recipientUser: transaction.EditBy,
+                createdBy: reviewer,
+                formName: "sales/invoices",
+                relatedTable: "Transactions",
+                relatedId: transaction.TransactionId);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[InvoiceService.EditDecisionNotify] {ex.Message}");
         }
     }
 

@@ -443,9 +443,10 @@ if (f.DateTo.HasValue)
                     dto.SourceId,
                     dto.StatusId,
                     dto.NextFollowUpDate,
-                    userName);
+                    userName,
+                    dto.ReassignmentComment);
 
-                await NotifyOpportunityReassignedAsync(opp.OpportunityId, dto.PartyId, oldEmployeeId, dto.EmployeeId.Value, userName);
+                await NotifyOpportunityReassignedAsync(opp.OpportunityId, dto.PartyId, oldEmployeeId, dto.EmployeeId.Value, userName, dto.ReassignmentComment);
             }
 
             return (true, isNew ? "تم إضافة الفرصة بنجاح" : "تم تعديل الفرصة بنجاح", opp.OpportunityId);
@@ -1085,9 +1086,10 @@ if (f.DateTo.HasValue)
                         opp.SourceId,
                         opp.StatusId,
                         opp.NextFollowUpDate,
-                        userName);
+                        userName,
+                        null);
 
-                    await NotifyOpportunityReassignedAsync(opportunityId, partyId, oldEmployeeId, opp.EmployeeId.Value, userName);
+                    await NotifyOpportunityReassignedAsync(opportunityId, partyId, oldEmployeeId, opp.EmployeeId.Value, userName, null);
                 }
             }
 
@@ -1309,7 +1311,8 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
         int? sourceId,
         int? statusId,
         DateTime? nextFollowUpDate,
-        string actor)
+        string actor,
+        string? reassignmentComment)
     {
         var employeeIds = new List<int>();
         if (oldEmployeeId.HasValue) employeeIds.Add(oldEmployeeId.Value);
@@ -1341,7 +1344,7 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
             StageBeforeId = null,
             StageAfterId = null,
             NextFollowUpDate = nextFollowUpDate,
-            Notes = "إعادة إسناد داخلي",
+            Notes = string.IsNullOrWhiteSpace(reassignmentComment) ? "إعادة إسناد داخلي" : reassignmentComment.Trim(),
             CreatedBy = actor,
             CreatedAt = DateTime.Now
         });
@@ -1349,7 +1352,7 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
         await _db.SaveChangesAsync();
     }
 
-    private async Task NotifyOpportunityReassignedAsync(int opportunityId, int partyId, int? oldEmployeeId, int newEmployeeId, string actor)
+    private async Task NotifyOpportunityReassignedAsync(int opportunityId, int partyId, int? oldEmployeeId, int newEmployeeId, string actor, string? reassignmentComment)
     {
         try
         {
@@ -1390,6 +1393,10 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
 
             var title = "🎯 تم تحويل فرصة إليك";
             var message = $"تم تغيير الفرصة #{opportunityId} الخاصة بالعميل {partyName} من {oldEmployeeName} إليك بواسطة {actor}.";
+            if (!string.IsNullOrWhiteSpace(reassignmentComment))
+                message += $"\nتعليمات / ملاحظة: {reassignmentComment.Trim()}";
+            if (!string.IsNullOrWhiteSpace(reassignmentComment))
+                message += $"\nتعليمات / ملاحظة: {reassignmentComment.Trim()}";
 
             await _notify.AddAsync(
                 title: title,

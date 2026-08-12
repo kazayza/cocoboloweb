@@ -1,3 +1,4 @@
+using System;
 using COCOBOLOERPNEW.Models;
 
 namespace COCOBOLOERPNEW.DTOs;
@@ -79,6 +80,10 @@ public class TaskListDto
     public bool IsActive { get; set; }
     public string? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
+    public string? AssignmentSource { get; set; }
+    public string? TaskScope { get; set; }
+    public bool IsGeneralTask => string.Equals(TaskScope, TaskScopes.General, StringComparison.OrdinalIgnoreCase);
+    public bool IsGeneralManagerAssignment => string.Equals(AssignmentSource, "GeneralManager", StringComparison.OrdinalIgnoreCase);
     public string TaskDueStatus { get; set; } = "";
     public int? DaysUntilDue { get; set; }
 }
@@ -107,14 +112,45 @@ public class QuickInteractionDto
 // ═══════════════════════════════════════════════════════════════
 // Quick Task
 // ═══════════════════════════════════════════════════════════════
+public static class TaskScopes
+{
+    public const string Opportunity = "Opportunity";
+    public const string General = "General";
+}
+
 public class QuickTaskDto
 {
      public int? OpportunityId { get; set; }
     public int? PartyId { get; set; }
     public int AssignedTo { get; set; }
-    public int? TaskTypeId { get; set; }          // ← جديد
+    public int? TaskTypeId { get; set; }
     public string? TaskDescription { get; set; }
     public DateTime DueDate { get; set; } = DateTime.Today.AddDays(1);
+    public TimeOnly? DueTime { get; set; }
+    public string Priority { get; set; } = "Medium";
+    public string? AssignmentSource { get; set; }
+    public string? TaskScope { get; set; }
+}
+
+public class GeneralManagerOpportunityTaskDto
+{
+    public int OpportunityId { get; set; }
+    public int PartyId { get; set; }
+    public int AssignedTo { get; set; }
+    public int? TaskTypeId { get; set; }
+    public string? TaskDescription { get; set; }
+    public DateTime DueDate { get; set; } = DateTime.Today.AddDays(1);
+    public TimeOnly? DueTime { get; set; }
+    public string Priority { get; set; } = "Medium";
+}
+
+public class GeneralEmployeeTaskDto
+{
+    public int AssignedTo { get; set; }
+    public int? TaskTypeId { get; set; }
+    public string? TaskDescription { get; set; }
+    public DateTime DueDate { get; set; } = DateTime.Today.AddDays(1);
+    public TimeOnly? DueTime { get; set; }
     public string Priority { get; set; } = "Medium";
 }
 
@@ -153,6 +189,8 @@ public class TaskFilterDto
     public int? TaskTypeId { get; set; }
     public string? Status { get; set; }
     public string? Priority { get; set; }
+    public string? TaskScope { get; set; }
+    public string? CreatedBy { get; set; }
     public bool? IsOverdue { get; set; }
     public DateTime? DateFrom { get; set; }
     public DateTime? DateTo { get; set; }

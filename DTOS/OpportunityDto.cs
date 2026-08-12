@@ -153,6 +153,7 @@ public class OpportunityFormDto
     public string? LostNotes { get; set; }
     public string? Notes { get; set; }
     public string? Guidance { get; set; }
+    public string? ReassignmentComment { get; set; }
     public bool IsActive { get; set; } = true;
     public string? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }

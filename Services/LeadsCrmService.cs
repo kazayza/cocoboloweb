@@ -527,6 +527,7 @@ public async Task<(bool Success, string Message)> AddLeadInteractionAsync(
 
     // 3) تحديث الموظف المسؤول
     var assignmentChanged = oldAssignedEmployeeId != dto.AssignedEmployeeId;
+    var assignmentComment = string.IsNullOrWhiteSpace(dto.AssignmentComment) ? null : dto.AssignmentComment.Trim();
 
     lead.AssignedEmployeeId = dto.AssignedEmployeeId;
 
@@ -545,6 +546,7 @@ public async Task<(bool Success, string Message)> AddLeadInteractionAsync(
             InteractionType = LeadInteractionTypes.Assigned,
             InteractionDate = now,
             Summary = "تم إسناد الـ Lead إلى موظف مسؤول.",
+            Notes = assignmentComment,
             OldLeadStatus = statusBeforeAssignment,
             NewLeadStatus = lead.LeadStatus,
             IsSystemGenerated = true,
@@ -583,12 +585,12 @@ public async Task<(bool Success, string Message)> AddLeadInteractionAsync(
     // 7) إشعار الموظف الجديد لو تم الإسناد
     if (assignmentChanged && dto.AssignedEmployeeId.HasValue)
     {
-        await NotifyLeadAssignedAsync(lead, dto.AssignedEmployeeId.Value, userName);
+        await NotifyLeadAssignedAsync(lead, dto.AssignedEmployeeId.Value, userName, assignmentComment);
     }
 
     return (true, "تم التحديث بنجاح");
 }
-private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string assignedBy)
+private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string assignedBy, string? assignmentComment = null)
 {
     try
     {
@@ -621,6 +623,9 @@ private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string
         var message =
             $"تم إسناد Lead لك: {lead.FullName} - {lead.Phone}{campaignPart}. " +
             "برجاء المتابعة واتخاذ إجراء.";
+
+        if (!string.IsNullOrWhiteSpace(assignmentComment))
+            message += $"\nتعليمات / ملاحظة: {assignmentComment}";
 
         await _notify.AddAsync(
             title: title,
@@ -696,60 +701,92 @@ private async Task NotifyOpportunityAssignedFromLeadConversionAsync(LeadsCrm lea
         if (string.IsNullOrWhiteSpace(lead.FullName) || string.IsNullOrWhiteSpace(lead.Phone))
             return (false, "بيانات الـ Lead ناقصة (الاسم أو الموبايل)", 0, 0);
 
-        var phoneExists = await _db.Parties.AnyAsync(p => p.Phone == lead.Phone);
-        if (phoneExists)
-            return (false, "رقم الهاتف موجود بالفعل في العملاء", 0, 0);
+        var candidatePhones = new[] { lead.Phone?.Trim(), lead.Phone2?.Trim() }
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct()
+            .ToList();
 
         await using var transaction = await _db.Database.BeginTransactionAsync();
         try
         {
             var now = DateTime.Now;
             var oldLeadStatus = lead.LeadStatus;
-            
 
-var initialStageId = await _db.SalesStages
-    .AsNoTracking()
-    .Where(s => s.IsActive &&
-           (s.StageName == "Potential" || s.StageNameAr == "مهتم"))
-    .OrderBy(s => s.StageOrder)
-    .Select(s => s.StageId)
-    .FirstOrDefaultAsync();
+            var initialStageId = await _db.SalesStages
+                .AsNoTracking()
+                .Where(s => s.IsActive && s.StageId == 1)
+                .Select(s => s.StageId)
+                .FirstOrDefaultAsync();
 
-if (initialStageId == 0)
-{
-    initialStageId = await _db.SalesStages
-        .AsNoTracking()
-        .Where(s => s.IsActive)
-        .OrderBy(s => s.StageOrder)
-        .Select(s => s.StageId)
-        .FirstOrDefaultAsync();
-}
+            if (initialStageId == 0)
+                return (false, "مرحلة البداية رقم 1 غير موجودة أو غير مفعّلة.", 0, 0);
 
-if (initialStageId == 0)
-    return (false, "لا توجد مراحل بيع مفعّلة.", 0, 0);
+            var openFollowUps = await _db.LeadInteractions
+                .Where(i => i.LeadId == lead.LeadId && i.NextFollowUpDate != null && !i.IsCompleted)
+                .ToListAsync();
 
-            // 1. إنشاء العميل
-            var party = new Party
+            foreach (var open in openFollowUps)
+            {
+                open.IsCompleted = true;
+                open.CompletedByEmployeeId = dto.EmployeeId ?? lead.AssignedEmployeeId;
+                open.CompletedDate = now;
+                open.Notes = string.IsNullOrWhiteSpace(open.Notes)
+                    ? "أغلقت تلقائياً بسبب تحويل الـ Lead إلى فرصة"
+                    : (open.Notes + " | أغلقت تلقائياً بسبب تحويل الـ Lead إلى فرصة");
+            }
+
+            int? resolvedSourceId = dto.SourceId;
+            if (!resolvedSourceId.HasValue
+                && string.Equals(lead.FormName, "manual", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(lead.FormId, out var parsedManualSourceId))
+            {
+                resolvedSourceId = parsedManualSourceId;
+            }
+
+            int? resolvedAdTypeId = dto.AdTypeId;
+            if (!resolvedAdTypeId.HasValue
+                && string.Equals(lead.FormName, "manual", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(lead.CampaignId, out var parsedLeadAdTypeId))
+            {
+                resolvedAdTypeId = parsedLeadAdTypeId;
+            }
+
+            var existingParty = candidatePhones.Count > 0
+                ? await _db.Parties
+                    .FirstOrDefaultAsync(p =>
+                        (p.Phone != null && candidatePhones.Contains(p.Phone)) ||
+                        (p.Phone2 != null && candidatePhones.Contains(p.Phone2)))
+                : null;
+
+            var isExistingParty = existingParty != null;
+
+            // 1. استخدام العميل الموجود أو إنشاء عميل جديد
+            var party = existingParty ?? new Party
             {
                 PartyName = lead.FullName.Trim(),
                 Phone = lead.Phone.Trim(),
+                Phone2 = lead.Phone2?.Trim(),
                 Address = lead.Address?.Trim(),
                 PartyType = 1,
                 IsActive = true,
-                ReferralSourceId = dto.SourceId ?? 2,
+                ReferralSourceId = resolvedSourceId ?? 2,
                 CreatedBy = userName,
                 CreatedAt = now
             };
-            _db.Parties.Add(party);
-            await _db.SaveChangesAsync();
+
+            if (!isExistingParty)
+            {
+                _db.Parties.Add(party);
+                await _db.SaveChangesAsync();
+            }
 
             // 2. إنشاء فرصة بيع
             var opportunity = new SalesOpportunity
             {
                 PartyId = party.PartyId,
                 EmployeeId = dto.EmployeeId,
-                SourceId = dto.SourceId,
-                AdTypeId = dto.AdTypeId,
+                SourceId = resolvedSourceId,
+                AdTypeId = resolvedAdTypeId,
                 //StageId = 1,
                 StageId = initialStageId,
                 CategoryId = dto.CategoryId,
@@ -767,14 +804,19 @@ if (initialStageId == 0)
             await _db.SaveChangesAsync();
 
             // 3. إنشاء سجل تواصل
+            var sourceLabel = string.IsNullOrWhiteSpace(lead.Platform) ? "غير محدد" : lead.Platform;
+            var campaignLabel = string.IsNullOrWhiteSpace(lead.CampaignName) ? null : lead.CampaignName;
+
             var interaction = new CustomerInteraction
             {
                 OpportunityId = opportunity.OpportunityId,
                 PartyId = party.PartyId,
                 EmployeeId = dto.EmployeeId,
-                SourceId = dto.SourceId,
+                SourceId = resolvedSourceId,
                 InteractionDate = now,
-                Summary = $"تحويل Lead من إعلان Meta - كامبين: {lead.CampaignName ?? "غير محدد"}",
+                Summary = campaignLabel == null
+                    ? $"تحويل Lead إلى فرصة بيع — المصدر: {sourceLabel}"
+                    : $"تحويل Lead إلى فرصة بيع — المصدر: {sourceLabel} — الحملة: {campaignLabel}",
                 StageBeforeId = null,
                 //StageAfterId = 1,
                 StageAfterId = initialStageId,
@@ -794,7 +836,9 @@ if (initialStageId == 0)
                     PartyId = party.PartyId,
                     AssignedTo = dto.EmployeeId.Value,
                     TaskTypeId = dto.TaskTypeId,
-                    TaskDescription = $"متابعة عميل جديد من Meta: {lead.FullName}",
+                    TaskDescription = isExistingParty
+                        ? $"متابعة فرصة جديدة لعميل موجود: {lead.FullName}"
+                        : $"متابعة عميل جديد محول من Lead: {lead.FullName}",
                     DueDate = now.AddDays(1),
                     Priority = "Normal",
                     Status = "Pending",
@@ -820,7 +864,9 @@ if (initialStageId == 0)
     EmployeeId = dto.EmployeeId ?? lead.AssignedEmployeeId,
     InteractionType = LeadInteractionTypes.Converted,
     InteractionDate = now,
-    Summary = $"تم تحويل الـ Lead إلى فرصة بيع #{opportunity.OpportunityId}",
+    Summary = isExistingParty
+        ? $"تم تحويل الـ Lead إلى فرصة بيع جديدة #{opportunity.OpportunityId} على عميل موجود #{party.PartyId}"
+        : $"تم تحويل الـ Lead إلى عميل جديد #{party.PartyId} وفرصة بيع #{opportunity.OpportunityId}",
     Notes = dto.Notes ?? lead.Notes,
     OldLeadStatus = oldLeadStatus,
     NewLeadStatus = "محول",
@@ -1987,77 +2033,141 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
         if (string.IsNullOrWhiteSpace(dto.Phone))
             return (false, "رقم الهاتف مطلوب", 0);
 
+        if (!dto.SourceId.HasValue)
+            return (false, "مصدر الـ Lead مطلوب", 0);
+
+        if (!dto.NextFollowUpDate.HasValue)
+            return (false, "تاريخ المتابعة مطلوب", 0);
+
+        var phone = dto.Phone.Trim();
+
         // التحقق من التكرار بناءً على رقم الهاتف
         var existingPhone = await _db.LeadsCRMs
-            .AnyAsync(l => l.Phone == dto.Phone.Trim());
+            .AnyAsync(l => l.Phone == phone);
         if (existingPhone)
             return (false, "رقم الهاتف موجود بالفعل في الـ Leads", 0);
 
-        var now = DateTime.Now;
-        var lead = new LeadsCrm
+        var source = await _db.ContactSources.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.SourceId == dto.SourceId.Value && s.IsActive);
+        if (source == null)
+            return (false, "المصدر المختار غير موجود أو غير مفعل", 0);
+
+        AdType? adType = null;
+        if (dto.AdTypeId.HasValue)
         {
-            FullName = dto.FullName.Trim(),
-            Phone = dto.Phone.Trim(),
-            Phone2 = dto.Phone2?.Trim(),
-            Email = dto.Email?.Trim(),
-            City = dto.City?.Trim(),
-            Area = dto.Area?.Trim(),
-            Address = dto.Address?.Trim(),
-            ProjectType = dto.ProjectType?.Trim(),
-            ProjectStage = dto.ProjectStage?.Trim(),
-            Budget = dto.Budget?.Trim(),
-            DecisionMaker = dto.DecisionMaker?.Trim(),
-            NextAction = dto.NextAction?.Trim(),
-            BestTimeToReach = dto.BestTimeToReach?.Trim(),
-            AssignedEmployeeId = dto.AssignedEmployeeId,
-            Notes = dto.Notes?.Trim(),
-            LeadStatus = "جديد",
-            IsDuplicate = false,
-            IsConverted = false,
-            Platform = "manual",
-            CreatedAt = now,
-            CreatedBy = userName
-        };
+            adType = await _db.AdTypes.AsNoTracking()
+                .FirstOrDefaultAsync(a => a.AdTypeId == dto.AdTypeId.Value && a.IsActive);
 
-        _db.LeadsCRMs.Add(lead);
-        await _db.SaveChangesAsync();
-
-        await _audit.LogAsync("LeadsCRM", "Create",
-            lead.LeadId.ToString(), null, dto, userName);
-
-        // إرسال إشعار للموظف المسؤول
-        if (lead.AssignedEmployeeId.HasValue)
-        {
-            try
-            {
-                var emp = await _db.Employees.FindAsync(lead.AssignedEmployeeId.Value);
-                if (emp != null)
-                {
-                    var user = await _db.Users.AsNoTracking()
-                        .FirstOrDefaultAsync(u => u.EmployeeId == emp.EmployeeId);
-
-                    if (user != null)
-                    {
-                        await _notify.AddAsync(
-                            title: "📌 تم إسناد Lead جديد لك",
-                            message: $"تم إسناد Lead لك: {lead.FullName} - {lead.Phone}. برجاء المتابعة واتخاذ إجراء.",
-                            recipientUser: user.Username,
-                            createdBy: userName,
-                            formName: "crm/leads/my",
-                            relatedTable: "LeadsCRM",
-                            relatedId: lead.LeadId);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to send lead assignment notification. LeadId={LeadId}",
-                    lead.LeadId);
-            }
+            if (adType == null)
+                return (false, "الحملة المختارة غير موجودة أو غير مفعلة", 0);
         }
 
-        return (true, "تم إنشاء الـ Lead بنجاح", lead.LeadId);
+        var now = DateTime.Now;
+        var followUpDate = dto.NextFollowUpDate.Value;
+
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            var lead = new LeadsCrm
+            {
+                FullName = dto.FullName.Trim(),
+                Phone = phone,
+                Phone2 = dto.Phone2?.Trim(),
+                Email = dto.Email?.Trim(),
+                City = dto.City?.Trim(),
+                Area = dto.Area?.Trim(),
+                Address = dto.Address?.Trim(),
+                FormId = source.SourceId.ToString(),
+                FormName = "manual",
+                Platform = string.IsNullOrWhiteSpace(source.SourceNameAr)
+                    ? source.SourceName?.Trim()
+                    : source.SourceNameAr!.Trim(),
+                CampaignId = adType?.AdTypeId.ToString(),
+                CampaignName = string.IsNullOrWhiteSpace(adType?.AdTypeNameAr)
+                    ? adType?.AdTypeName?.Trim()
+                    : adType!.AdTypeNameAr!.Trim(),
+                ProjectType = dto.ProjectType?.Trim(),
+                ProjectStage = dto.ProjectStage?.Trim(),
+                Budget = dto.Budget?.Trim(),
+                DecisionMaker = dto.DecisionMaker?.Trim(),
+                NextAction = dto.NextAction?.Trim(),
+                BestTimeToReach = dto.BestTimeToReach?.Trim(),
+                AssignedEmployeeId = dto.AssignedEmployeeId,
+                Notes = dto.Notes?.Trim(),
+                LeadDate = now,
+                LeadStatus = "جديد",
+                IsDuplicate = false,
+                IsConverted = false,
+                CreatedAt = now,
+                CreatedBy = userName
+            };
+
+            _db.LeadsCRMs.Add(lead);
+            await _db.SaveChangesAsync();
+
+            var initialFollowUp = new LeadInteraction
+            {
+                LeadId = lead.LeadId,
+                EmployeeId = dto.AssignedEmployeeId,
+                InteractionType = LeadInteractionTypes.FollowUp,
+                InteractionDate = now,
+                Summary = "تحديد متابعة أولية عند إنشاء الـ Lead",
+                Notes = "تم إنشاء متابعة أولية تلقائياً من شاشة إضافة الـ Leads.",
+                OldLeadStatus = lead.LeadStatus,
+                NewLeadStatus = null,
+                NextFollowUpDate = followUpDate,
+                IsCompleted = false,
+                IsSystemGenerated = true,
+                CreatedBy = userName,
+                CreatedAt = now
+            };
+
+            _db.LeadInteractions.Add(initialFollowUp);
+            await _db.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            await _audit.LogAsync("LeadsCRM", "Create",
+                lead.LeadId.ToString(), null, dto, userName);
+
+            // إرسال إشعار للموظف المسؤول
+            if (lead.AssignedEmployeeId.HasValue)
+            {
+                try
+                {
+                    var emp = await _db.Employees.FindAsync(lead.AssignedEmployeeId.Value);
+                    if (emp != null)
+                    {
+                        var user = await _db.Users.AsNoTracking()
+                            .FirstOrDefaultAsync(u => u.EmployeeId == emp.EmployeeId);
+
+                        if (user != null)
+                        {
+                            await _notify.AddAsync(
+                                title: "📌 تم إسناد Lead جديد لك",
+                                message: $"تم إسناد Lead لك: {lead.FullName} - {lead.Phone}. موعد المتابعة: {followUpDate:yyyy/MM/dd}.",
+                                recipientUser: user.Username,
+                                createdBy: userName,
+                                formName: "crm/leads/my",
+                                relatedTable: "LeadsCRM",
+                                relatedId: lead.LeadId);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Failed to send lead assignment notification. LeadId={LeadId}",
+                        lead.LeadId);
+                }
+            }
+
+            return (true, "تم إنشاء الـ Lead بنجاح", lead.LeadId);
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
     }
     
 

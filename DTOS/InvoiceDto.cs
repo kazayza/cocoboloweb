@@ -33,6 +33,9 @@ public class InvoiceListDto
     public string? EditReason { get; set; }
     public string? EditBy { get; set; }
     public DateTime? EditAt { get; set; }
+    public string? EditReviewedBy { get; set; }
+    public DateTime? EditReviewedAt { get; set; }
+    public string? EditReviewNotes { get; set; }
     public int? EditStatus { get; set; }
     public DateTime? EditRequestDate { get; set; }
     public string? EditDone { get; set; }
@@ -75,6 +78,9 @@ public class InvoiceFormDto
     public string? EditReason { get; set; }
     public string? EditBy { get; set; }
     public DateTime? EditAt { get; set; }
+    public string? EditReviewedBy { get; set; }
+    public DateTime? EditReviewedAt { get; set; }
+    public string? EditReviewNotes { get; set; }
     public int? EditStatus { get; set; }
     public DateTime? EditRequestDate { get; set; }
     public string? EditDone { get; set; }
@@ -386,11 +392,13 @@ public static class SystemRoles
     public const string Admin = "Admin";
     public const string SalesManager = "SalesManager";
     public const string GeneralManager = "GeneralManager";
-    public const string SocialManager = "SocialManager";
     public const string Sales = "Sales";
     public const string AccountManager = "AccountManager";
     public const string HrManager = "HrManager";
     public const string Account = "Account";
+
+    public const string SocialManager = "SocialManager";
+    public const string ProductionManager = "ProductionManager";
 }
 // === قائمة الرسوم ===
 public class AdditionalChargeListDto

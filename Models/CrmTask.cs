@@ -41,6 +41,10 @@ public partial class CrmTask
 
     public DateTime CreatedAt { get; set; }
 
+    public string? AssignmentSource { get; set; }
+
+    public string? TaskScope { get; set; }
+
     public virtual Employee AssignedToNavigation { get; set; } = null!;
 
     public virtual SalesOpportunity? Opportunity { get; set; }

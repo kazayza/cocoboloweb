@@ -1,0 +1,428 @@
+@page "/sales/invoices/{InvoiceId:int}/job-order"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<PageTitle>أمر تشغيل الفاتورة</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="ijo-loading">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل أمر التشغيل...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error">ليس لديك صلاحية الوصول إلى أمر التشغيل.</MudAlert>
+}
+else if (_invoice == null)
+{
+    <MudAlert Severity="Severity.Warning">الفاتورة غير موجودة.</MudAlert>
+}
+else
+{
+    <div class="ijo-page" dir="rtl">
+        <div class="ijo-header">
+            <div class="ijo-header-bg"></div>
+            <div class="ijo-header-content">
+                <div>
+                    <div class="ijo-badge">Invoice Job Order</div>
+                    <h1>أمر تشغيل الفاتورة</h1>
+                    <p>@_invoice.ReferenceNumber — @_invoice.PartyName</p>
+                </div>
+                <div class="ijo-header-actions">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
+                               StartIcon="@Icons.Material.Filled.ArrowForward"
+                               OnClick="GoBackToJobOrders">
+                        رجوع لأوامر التشغيل
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Print"
+                               OnClick="OpenPrintPageAsync">
+                        طباعة أمر التشغيل
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+
+        <div class="ijo-stats-row">
+            <div class="ijo-stat-card">
+                <span class="ijo-stat-label">عدد البنود</span>
+                <strong class="ijo-stat-value">@_items.Count</strong>
+            </div>
+            <div class="ijo-stat-card">
+                <span class="ijo-stat-label">أكبر مدة تصنيع</span>
+                <strong class="ijo-stat-value">@_maxPeriodDays يوم</strong>
+            </div>
+            <div class="ijo-stat-card">
+                <span class="ijo-stat-label">بدائل مختارة</span>
+                <strong class="ijo-stat-value">@_items.Count(x => x.HasAlternative)</strong>
+            </div>
+        </div>
+
+        <MudPaper Class="ijo-summary-box" Elevation="0">
+            <div class="ijo-summary-grid">
+                <div class="ijo-summary-item"><span>العميل</span><strong>@_invoice.PartyName</strong></div>
+                <div class="ijo-summary-item"><span>التاريخ</span><strong>@_invoice.TransactionDate.ToString("yyyy/MM/dd")</strong></div>
+                <div class="ijo-summary-item"><span>الموظف</span><strong>@(_invoice.EmpName ?? "-")</strong></div>
+                <div class="ijo-summary-item"><span>تاريخ التنفيذ المتوقع</span><strong>@(_invoice.DueDate?.ToString("yyyy/MM/dd") ?? "-")</strong></div>
+            </div>
+        </MudPaper>
+
+        <div class="ijo-items-list">
+            @foreach (var item in _items)
+            {
+                <div class="ijo-item-card">
+                    <div class="ijo-item-top">
+                        <div class="ijo-item-visual">
+                            @if (!string.IsNullOrWhiteSpace(item.DisplayImagePath))
+                            {
+                                <button type="button" class="ijo-hero-image-btn" @onclick='() => OpenImage(item.DisplayImagePath!, item.ProductName)'>
+                                    <img src="@item.DisplayImagePath" alt="@item.ProductName" class="ijo-hero-image" />
+                                </button>
+                            }
+                            else
+                            {
+                                <div class="ijo-image-placeholder">📦</div>
+                            }
+                        </div>
+
+                        <div class="ijo-item-main">
+                            <div class="ijo-item-title-row">
+                                <div>
+                                    <strong>@item.ProductName</strong>
+                                    <div class="ijo-item-subline">كود المنتج: #@item.ProductId</div>
+                                </div>
+                                <div class="ijo-item-badges">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled">
+                                        @GetTierText(item.PricingTier)
+                                    </MudChip>
+                                    @if (item.HasAlternative)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">بديل مختار</MudChip>
+                                    }
+                                    else
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">الأصلي الحالي</MudChip>
+                                    }
+                                </div>
+                            </div>
+
+                            <div class="ijo-item-grid">
+                                <div class="ijo-metric"><span>الكمية</span><strong>@item.Quantity</strong></div>
+                                <div class="ijo-metric"><span>مدة التصنيع</span><strong>@(item.Period.HasValue ? $"{item.Period} يوم" : "—")</strong></div>
+                                <div class="ijo-metric"><span>المواصفة المختارة</span><strong>@(item.SelectedAlternativeName ?? "الأصلي الحالي")</strong></div>
+                            </div>
+
+                            <div class="ijo-notes-grid">
+                                <div class="ijo-note-box">
+                                    <span>وصف البند</span>
+                                    <p>@(string.IsNullOrWhiteSpace(item.ProductDescription) ? "لا يوجد وصف." : item.ProductDescription)</p>
+                                </div>
+                                <div class="ijo-note-box">
+                                    <span>ملاحظات التصنيع</span>
+                                    <p>@(string.IsNullOrWhiteSpace(item.ManufacturingDescription) ? "لا توجد ملاحظات تصنيع." : item.ManufacturingDescription)</p>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(item.Notes))
+                                {
+                                    <div class="ijo-note-box full">
+                                        <span>ملاحظات البند</span>
+                                        <p>@item.Notes</p>
+                                    </div>
+                                }
+                            </div>
+
+                            <div class="ijo-item-actions">
+                                @if (item.HasPdf)
+                                {
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.PictureAsPdf"
+                                               OnClick='() => OpenPdfAsync(item)'>فتح PDF</MudButton>
+                                }
+                                <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                                           StartIcon="@Icons.Material.Filled.OpenInNew"
+                                           OnClick='() => Navigation.NavigateTo($"/products/form/{item.ProductId}")'>فتح المنتج</MudButton>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@if (_showImagePreview && !string.IsNullOrWhiteSpace(_previewImageUrl))
+{
+    <div class="ijo-image-overlay" @onclick="CloseImage">
+        <div class="ijo-image-card" @onclick:stopPropagation="true">
+            <div class="ijo-image-head">
+                <strong>@_previewImageTitle</strong>
+                <button type="button" class="ijo-image-close" @onclick="CloseImage">إغلاق</button>
+            </div>
+            <img src="@_previewImageUrl" alt="@_previewImageTitle" class="ijo-image-full" />
+        </div>
+    </div>
+}
+
+<style>
+    .ijo-page { padding: 0 1.25rem 2rem; max-width: 1500px; margin: 0 auto; }
+    .ijo-loading { min-height: 60vh; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    .ijo-header { position: relative; overflow: hidden; border-radius: 24px; margin-bottom: 1rem; }
+    .ijo-header-bg { position:absolute; inset:0; background: linear-gradient(135deg,#0f172a 0%, #1e3a8a 55%, #3b82f6 100%); }
+    .ijo-header-content { position:relative; z-index:1; display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; flex-wrap:wrap; color:#fff; padding:1.75rem 2rem; }
+    .ijo-badge { display:inline-block; margin-bottom:.5rem; padding:.28rem .7rem; border-radius:999px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); font-size:.72rem; font-weight:800; }
+    .ijo-header h1 { margin:0; font-size:1.75rem; font-weight:900; }
+    .ijo-header p { margin:.35rem 0 0; color:rgba(255,255,255,.82); }
+    .ijo-header-actions { display:flex; gap:.55rem; flex-wrap:wrap; }
+
+    .ijo-stats-row { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.75rem; margin-bottom:1rem; }
+    .ijo-stat-card { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:16px; padding:1rem 1.1rem; box-shadow:0 2px 10px rgba(0,0,0,.04); }
+    .ijo-stat-label { display:block; color:var(--mud-palette-text-secondary); font-size:.78rem; font-weight:700; }
+    .ijo-stat-value { display:block; color:var(--mud-palette-text-primary); font-size:1.4rem; font-weight:900; margin-top:.2rem; }
+
+    .ijo-summary-box { border-radius:16px; border:1px solid var(--mud-palette-divider); padding:1rem 1.1rem; margin-bottom:1rem; }
+    .ijo-summary-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.75rem; }
+    .ijo-summary-item { background:#f8fafc; border:1px solid #e2e8f0; border-radius:14px; padding:.8rem .9rem; display:flex; flex-direction:column; gap:.15rem; }
+    .ijo-summary-item span { color:#64748b; font-size:.75rem; }
+    .ijo-summary-item strong { color:#0f172a; font-size:.9rem; }
+
+    .ijo-items-list { display:flex; flex-direction:column; gap:1rem; }
+    .ijo-item-card { background:#fff; border:1px solid #e2e8f0; border-radius:22px; padding:1rem; box-shadow:0 8px 20px rgba(15,23,42,.05); }
+    .ijo-item-top { display:grid; grid-template-columns:180px 1fr; gap:1rem; align-items:start; }
+    .ijo-item-visual { min-width:0; }
+    .ijo-hero-image-btn { padding:0; border:none; background:transparent; cursor:pointer; width:100%; }
+    .ijo-hero-image { width:100%; height:180px; object-fit:cover; border-radius:18px; border:1px solid #dbe5f0; }
+    .ijo-image-placeholder { width:100%; height:180px; display:flex; align-items:center; justify-content:center; font-size:3rem; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:18px; }
+    .ijo-item-title-row { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:.75rem; }
+    .ijo-item-title-row strong { color:#0f172a; font-size:1.02rem; }
+    .ijo-item-subline { color:#64748b; font-size:.75rem; margin-top:.15rem; }
+    .ijo-item-badges { display:flex; gap:.35rem; flex-wrap:wrap; }
+    .ijo-item-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.65rem; margin-bottom:.75rem; }
+    .ijo-metric { background:#f8fafc; border:1px solid #edf2f7; border-radius:14px; padding:.75rem; display:flex; flex-direction:column; gap:.15rem; }
+    .ijo-metric span { color:#64748b; font-size:.73rem; }
+    .ijo-metric strong { color:#0f172a; font-size:.88rem; }
+    .ijo-notes-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+    .ijo-note-box { background:#f8fafc; border:1px solid #edf2f7; border-radius:14px; padding:.8rem; }
+    .ijo-note-box.full { grid-column:1/-1; }
+    .ijo-note-box span { display:block; color:#64748b; font-size:.75rem; margin-bottom:.2rem; font-weight:700; }
+    .ijo-note-box p { margin:0; color:#334155; font-size:.84rem; line-height:1.75; white-space:pre-wrap; }
+    .ijo-item-actions { display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.8rem; }
+
+    .ijo-image-overlay { position:fixed; inset:0; background:rgba(15,23,42,.72); display:flex; align-items:center; justify-content:center; padding:1rem; z-index:2000; }
+    .ijo-image-card { width:min(92vw,760px); background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,.25); }
+    .ijo-image-head { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 1.1rem; border-bottom:1px solid #e2e8f0; }
+    .ijo-image-close { border:none; background:#eff6ff; color:#1d4ed8; padding:.45rem .85rem; border-radius:10px; font-family:inherit; font-weight:800; cursor:pointer; }
+    .ijo-image-full { display:block; width:100%; max-height:78vh; object-fit:contain; background:#f8fafc; }
+
+    @@media (max-width: 960px) {
+        .ijo-page { padding: 0 .75rem 1.5rem; }
+        .ijo-header-content { padding:1.25rem; }
+        .ijo-stats-row, .ijo-summary-grid, .ijo-item-grid, .ijo-notes-grid { grid-template-columns:1fr; }
+        .ijo-item-top { grid-template-columns:1fr; }
+    }
+</style>
+
+@code {
+    [Parameter] public int InvoiceId { get; set; }
+
+    private bool _isLoading = true;
+    private bool _canView;
+    private InvoiceFormDto? _invoice;
+    private List<InvoiceJobOrderItemVm> _items = new();
+    private int _maxPeriodDays;
+    private bool _showImagePreview;
+    private string? _previewImageUrl;
+    private string _previewImageTitle = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _canView = user.IsInRole(SystemRoles.Admin)
+                   || user.IsInRole(SystemRoles.SalesManager)
+                   || user.IsInRole(SystemRoles.Sales)
+                   || user.IsInRole(SystemRoles.AccountManager)
+                   || user.IsInRole(SystemRoles.HrManager)
+                   || user.IsInRole(SystemRoles.ProductionManager)
+                   || user.IsInRole("factory");
+
+        if (!_canView)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        await LoadAsync();
+        _isLoading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        var details = await (from t in Db.Transactions.AsNoTracking()
+                             join p in Db.Parties.AsNoTracking() on t.PartyId equals p.PartyId
+                             where t.TransactionId == InvoiceId && t.TransactionType == TransactionTypes.Sale
+                             select new InvoiceFormDto
+                             {
+                                 TransactionId = t.TransactionId,
+                                 ReferenceNumber = t.ReferenceNumber,
+                                 TransactionDate = t.TransactionDate,
+                                 PartyId = t.PartyId,
+                                 PartyName = p.PartyName,
+                                 EmpId = t.EmpId,
+                                 EmpName = t.EmpId == null ? null : Db.Employees.Where(e => e.EmployeeId == t.EmpId).Select(e => e.FullName).FirstOrDefault(),
+                                 DueDate = t.DueDate,
+                                 Notes = t.Notes,
+                                 InvoiceStatus = t.InvoiceStatus,
+                                 TransactionType = t.TransactionType
+                             }).FirstOrDefaultAsync();
+
+        _invoice = details;
+        if (_invoice == null) return;
+
+        var items = await (from d in Db.TransactionDetails.AsNoTracking()
+                           join pr in Db.Products.AsNoTracking() on d.ProductId equals pr.ProductId
+                           where d.TransactionId == InvoiceId
+                           select new
+                           {
+                               d.DetailId,
+                               d.ProductId,
+                               pr.ProductName,
+                               pr.ProductDescription,
+                               BaseManufacturingDescription = pr.ManufacturingDescription,
+                               BasePeriod = pr.Period,
+                               pr.PdfPath,
+                               HasOldPdf = pr.Pdffile != null,
+                               d.Quantity,
+                               d.UnitPrice,
+                               d.Notes,
+                               d.PricingTier,
+                               d.SelectedAlternativeId
+                           }).ToListAsync();
+
+        var alternativeIds = items.Where(x => x.SelectedAlternativeId.HasValue).Select(x => x.SelectedAlternativeId!.Value).Distinct().ToList();
+        var alternatives = alternativeIds.Any()
+            ? await Db.ProductFactoryAlternatives.AsNoTracking()
+                .Where(a => alternativeIds.Contains(a.AlternativeId))
+                .ToDictionaryAsync(a => a.AlternativeId)
+            : new Dictionary<int, ProductFactoryAlternative>();
+
+        var altImages = alternativeIds.Any()
+            ? await Db.ProductFactoryAlternativeImages.AsNoTracking()
+                .Where(i => alternativeIds.Contains(i.AlternativeId))
+                .OrderByDescending(i => i.IsPrimary)
+                .ThenBy(i => i.AlternativeImageId)
+                .ToListAsync()
+            : new List<ProductFactoryAlternativeImage>();
+
+        _items = items.Select(x =>
+        {
+            alternatives.TryGetValue(x.SelectedAlternativeId ?? 0, out var alt);
+            var altPrimaryImage = x.SelectedAlternativeId.HasValue
+                ? altImages.FirstOrDefault(i => i.AlternativeId == x.SelectedAlternativeId.Value)
+                : null;
+
+            return new InvoiceJobOrderItemVm
+            {
+                DetailId = x.DetailId,
+                ProductId = x.ProductId,
+                ProductName = x.ProductName,
+                ProductDescription = alt?.SpecificationSummary ?? x.ProductDescription,
+                ManufacturingDescription = alt?.ManufacturingDescription ?? x.BaseManufacturingDescription,
+                Period = alt?.Period ?? x.BasePeriod,
+                PdfPath = x.PdfPath,
+                HasOldPdf = x.HasOldPdf,
+                Quantity = x.Quantity,
+                UnitPrice = x.UnitPrice,
+                Notes = x.Notes,
+                PricingTier = x.PricingTier,
+                SelectedAlternativeId = x.SelectedAlternativeId,
+                SelectedAlternativeName = alt?.AlternativeName,
+                SelectedAlternativeSummary = alt?.SpecificationSummary,
+                AlternativeImagePath = altPrimaryImage?.ImagePath
+            };
+        }).ToList();
+
+        _maxPeriodDays = _items.Where(x => x.Period.HasValue).Select(x => x.Period!.Value).DefaultIfEmpty(0).Max();
+    }
+
+    private async Task OpenPdfAsync(InvoiceJobOrderItemVm item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.PdfPath))
+        {
+            var path = item.PdfPath.Replace("\\", "/");
+            if (!path.StartsWith("http") && !path.StartsWith("/"))
+                path = "/" + path;
+
+            await JS.InvokeVoidAsync("open", Navigation.ToAbsoluteUri(path).ToString(), "_blank");
+            return;
+        }
+
+        if (item.HasOldPdf)
+        {
+            var fileBytes = await Db.Products.AsNoTracking()
+                .Where(p => p.ProductId == item.ProductId)
+                .Select(p => p.Pdffile)
+                .FirstOrDefaultAsync();
+
+            if (fileBytes?.Length > 0)
+            {
+                var base64 = Convert.ToBase64String(fileBytes);
+                await JS.InvokeVoidAsync("openPdfBase64", base64);
+            }
+        }
+    }
+
+    private void GoBackToJobOrders() => Navigation.NavigateTo("/production/job-orders");
+    private async Task OpenPrintPageAsync() => await JS.InvokeVoidAsync("open", $"/sales/invoices/{InvoiceId}/job-order/print", "_blank");
+
+    private void OpenImage(string imageUrl, string? title)
+    {
+        _previewImageUrl = imageUrl;
+        _previewImageTitle = string.IsNullOrWhiteSpace(title) ? "صورة البند" : title;
+        _showImagePreview = true;
+    }
+
+    private void CloseImage()
+    {
+        _showImagePreview = false;
+        _previewImageUrl = null;
+        _previewImageTitle = string.Empty;
+    }
+
+    private static string GetTierText(string? tier)
+        => PricingTiers.All.TryGetValue(tier ?? string.Empty, out var value) ? value : (tier ?? "-");
+
+    private sealed class InvoiceJobOrderItemVm
+    {
+        public int DetailId { get; set; }
+        public int ProductId { get; set; }
+        public string ProductName { get; set; } = "";
+        public string? ProductDescription { get; set; }
+        public string? ManufacturingDescription { get; set; }
+        public int? Period { get; set; }
+        public string? PdfPath { get; set; }
+        public bool HasOldPdf { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal UnitPrice { get; set; }
+        public string? Notes { get; set; }
+        public string PricingTier { get; set; } = PricingTiers.Premium;
+        public int? SelectedAlternativeId { get; set; }
+        public string? SelectedAlternativeName { get; set; }
+        public string? SelectedAlternativeSummary { get; set; }
+        public string? AlternativeImagePath { get; set; }
+        public bool HasAlternative => SelectedAlternativeId.HasValue;
+        public string? DisplayImagePath => !string.IsNullOrWhiteSpace(AlternativeImagePath) ? AlternativeImagePath : $"/api/product-images/{ProductId}";
+        public bool HasPdf => !string.IsNullOrWhiteSpace(PdfPath) || HasOldPdf;
+    }
+}

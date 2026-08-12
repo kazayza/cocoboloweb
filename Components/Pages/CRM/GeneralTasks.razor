@@ -1,0 +1,397 @@
+@page "/crm/general-tasks"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using MudColor = MudBlazor.Color
+@using MudVariant = MudBlazor.Variant
+
+@attribute [Authorize]
+
+@inject ITaskService TaskService
+@inject IOpportunityService OppService
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+
+<PageTitle>التكليفات العامة</PageTitle>
+
+@if (_loading)
+{
+    <MudPaper Class="pa-6 ma-4" Elevation="0">
+        <MudStack AlignItems="AlignItems.Center" Spacing="2">
+            <MudProgressCircular Indeterminate="true" Color="MudColor.Primary" />
+            <MudText Typo="Typo.h6">جاري تحميل التكليفات العامة...</MudText>
+        </MudStack>
+    </MudPaper>
+}
+else
+{
+    <MudContainer MaxWidth="MaxWidth.False" Class="pa-4" Style="direction:rtl;">
+        <MudStack Spacing="3">
+            <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #e5e7eb;border-radius:18px;">
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2">
+                    <div>
+                        <MudText Typo="Typo.h4" Style="font-weight:800;">المهام العامة</MudText>
+                        <MudText Typo="Typo.body2" Class="mt-1"> </MudText>
+                    </div>
+                    @if (_canCreateGeneralTasks)
+                    {
+                        <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" StartIcon="@Icons.Material.Rounded.AddTask" OnClick="ToggleCreatePanel">
+                            @(_showCreatePanel ? "إخفاء نموذج التكليف" : "إضافة مهمة عامة")
+                        </MudButton>
+                    }
+                </MudStack>
+
+                <MudStack Row="true" Class="mt-4" Spacing="2" Wrap="Wrap.Wrap">
+                    <MudChip T="string" Color="MudColor.Primary" Variant="Variant.Filled">الإجمالي: @_allTasks.Count</MudChip>
+                    <MudChip T="string" Color="MudColor.Warning" Variant="Variant.Outlined">المطلوبة مني: @AssignedToMeTasks.Count()</MudChip>
+                    <MudChip T="string" Color="MudColor.Info" Variant="Variant.Outlined">المرسلة مني: @CreatedByMeTasks.Count()</MudChip>
+                    @if (_canCreateGeneralTasks)
+                    {
+                        <MudChip T="string" Color="MudColor.Success" Variant="Variant.Outlined">المتأخرة: @_allTasks.Count(t => t.Status != "Completed" && t.DueDate.Date < DateTime.Today)</MudChip>
+                    }
+                </MudStack>
+            </MudPaper>
+
+            @if (_canCreateGeneralTasks && _showCreatePanel)
+            {
+                <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #dbeafe;border-radius:18px;background:#f8fbff;">
+                    <MudText Typo="Typo.h6" Style="font-weight:800;">إرسال مهمة عامة جديدة</MudText>
+                    <MudGrid Class="mt-3" Spacing="2">
+                        <MudItem xs="12" md="4">
+                            <MudSelect T="int?" Label="الموظف المكلف *" Variant="MudVariant.Outlined" Dense="true" @bind-Value="_selectedAssignedTo">
+                                @foreach (var emp in _employees)
+                                {
+                                    <MudSelectItem T="int?" Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="4">
+                            <MudSelect T="int?" Label="نوع المهمة" Variant="MudVariant.Outlined" Dense="true" @bind-Value="_newGeneralTask.TaskTypeId" Clearable="true">
+                                @foreach (var tt in _taskTypes)
+                                {
+                                    <MudSelectItem T="int?" Value="@((int?)tt.TaskTypeId)">@(tt.TaskTypeNameAr ?? tt.TaskTypeName)</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="4">
+                            <MudSelect T="string" Label="الأولوية" Variant="MudVariant.Outlined" Dense="true" @bind-Value="_newGeneralTask.Priority">
+                                <MudSelectItem T="string" Value='@("High")'>عاجلة</MudSelectItem>
+                                <MudSelectItem T="string" Value='@("Medium")'>متوسطة</MudSelectItem>
+                                <MudSelectItem T="string" Value='@("Low")'>منخفضة</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="8">
+                            <MudTextField T="string" Label="وصف المهمة *" Variant="MudVariant.Outlined" Dense="true" Lines="3" @bind-Value="_newGeneralTask.TaskDescription" />
+                        </MudItem>
+                        <MudItem xs="12" md="2">
+                            <MudDatePicker T="DateTime?" Label="تاريخ التنفيذ *" Variant="MudVariant.Outlined" Date="_newGeneralTask.DueDate" DateChanged="@(d => _newGeneralTask.DueDate = d ?? _newGeneralTask.DueDate)" />
+                        </MudItem>
+                        <MudItem xs="12" md="2">
+                            <MudTimePicker Label="الوقت" Variant="MudVariant.Outlined" Time="_newGeneralTaskDueTime" TimeChanged="@(t => _newGeneralTaskDueTime = t ?? new TimeSpan(10, 0, 0))" />
+                        </MudItem>
+                    </MudGrid>
+                    <MudStack Row="true" Justify="Justify.FlexEnd" Class="mt-3" Spacing="2">
+                        <MudButton Variant="MudVariant.Text" OnClick="ToggleCreatePanel">إلغاء</MudButton>
+                        <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" OnClick="SaveGeneralTaskAsync" Disabled="_saving" StartIcon="@Icons.Material.Rounded.Send">
+                            @(_saving ? "جاري الإرسال..." : "إرسال المهمة")
+                        </MudButton>
+                    </MudStack>
+                </MudPaper>
+            }
+
+            <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #e5e7eb;border-radius:18px;">
+                <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+                    <MudButton Variant="@(IsTab("mine") ? MudVariant.Filled : MudVariant.Outlined)" Color="MudColor.Warning" OnClick='() => SetTab("mine")'>المطلوبة مني</MudButton>
+                    <MudButton Variant="@(IsTab("created") ? MudVariant.Filled : MudVariant.Outlined)" Color="MudColor.Info" OnClick='() => SetTab("created")'>المرسلة مني</MudButton>
+                    @if (_canCreateGeneralTasks)
+                    {
+                        <MudButton Variant="@(IsTab("all") ? MudVariant.Filled : MudVariant.Outlined)" Color="MudColor.Success" OnClick='() => SetTab("all")'>كل التكليفات</MudButton>
+                    }
+                    <MudSpacer />
+                    <MudSelect T="string" Label="الحالة" Variant="MudVariant.Outlined" Dense="true" Style="min-width:180px" @bind-Value="_statusFilter">
+                        <MudSelectItem T="string" Value='@("open")'>المفتوحة فقط</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("completed")'>المكتملة فقط</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("all")'>الكل</MudSelectItem>
+                    </MudSelect>
+                    <MudTextField T="string" Label="بحث" Variant="MudVariant.Outlined" Dense="true" Style="min-width:240px" @bind-Value="_searchText" />
+                </MudStack>
+            </MudPaper>
+
+            @if (!FilteredTasks.Any())
+            {
+                <MudPaper Class="pa-6" Elevation="0" Style="border:1px dashed #cbd5e1;border-radius:18px;text-align:center;">
+                    <MudIcon Icon="@Icons.Material.Rounded.AssignmentLate" Size="MudBlazor.Size.Large" Color="MudColor.Info" />
+                    <MudText Typo="Typo.h6" Class="mt-2">لا توجد مهام مطابقة</MudText>
+                </MudPaper>
+            }
+            else
+            {
+                <MudGrid Spacing="2">
+                    @foreach (var task in FilteredTasks)
+                    {
+                        <MudItem xs="12" md="6" lg="4">
+                            <MudPaper Class="pa-4" Elevation="0" Style="height:100%;border:1px solid #e5e7eb;border-radius:18px;">
+                                <MudStack Spacing="2">
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Start">
+                                        <MudText Typo="Typo.h6" Style="font-weight:800;line-height:1.5;">@(string.IsNullOrWhiteSpace(task.TaskDescription) ? "مهمة عامة" : task.TaskDescription)</MudText>
+                                        <MudChip T="string" Color="@GetStatusColor(task)" Variant="Variant.Filled">@GetStatusText(task.Status)</MudChip>
+                                    </MudStack>
+
+                                    <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+                                        <MudChip T="string" Color="@GetPriorityColor(task.Priority)" Variant="Variant.Outlined">@GetPriorityText(task.Priority)</MudChip>
+                                        <MudChip T="string" Color="MudColor.Secondary" Variant="Variant.Outlined">@GetSourceText(task.AssignmentSource)</MudChip>
+                                        @if (!string.IsNullOrWhiteSpace(task.TaskTypeNameAr) || !string.IsNullOrWhiteSpace(task.TaskTypeName))
+                                        {
+                                            <MudChip T="string" Color="MudColor.Info" Variant="Variant.Outlined">@(task.TaskTypeNameAr ?? task.TaskTypeName)</MudChip>
+                                        }
+                                    </MudStack>
+
+                                    <MudDivider />
+
+                                    <MudText Typo="Typo.body2"><b>المكلف:</b> @(task.AssignedToName ?? "غير محدد")</MudText>
+                                    <MudText Typo="Typo.body2"><b>أنشئت بواسطة:</b> @(task.CreatedBy ?? "—")</MudText>
+                                    <MudText Typo="Typo.body2"><b>التنفيذ خلال:</b> @task.DueDate.ToString("yyyy/MM/dd") @if (task.DueTime.HasValue) { <span>— @task.DueTime.Value.ToString("HH:mm")</span> }</MudText>
+
+                                    @if (!string.IsNullOrWhiteSpace(task.CompletionNotes) && task.Status == "Completed")
+                                    {
+                                        <MudAlert Severity="Severity.Success" Dense="true">@task.CompletionNotes</MudAlert>
+                                    }
+
+                                    <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
+                                        @if (CanStartTask(task))
+                                        {
+                                            <MudButton Variant="MudVariant.Outlined" Color="MudColor.Info" OnClick="@(() => StartTaskAsync(task.TaskId))">بدء التنفيذ</MudButton>
+                                        }
+                                        @if (CanCompleteTask(task))
+                                        {
+                                            <MudButton Variant="MudVariant.Filled" Color="MudColor.Success" OnClick="@(() => CompleteTaskAsync(task.TaskId))">تم التنفيذ</MudButton>
+                                        }
+                                    </MudStack>
+                                </MudStack>
+                            </MudPaper>
+                        </MudItem>
+                    }
+                </MudGrid>
+            }
+        </MudStack>
+    </MudContainer>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _saving;
+    private bool _showCreatePanel;
+    private bool _canCreateGeneralTasks;
+    private string _currentUserName = "system";
+    private int? _currentEmployeeId;
+    private string _activeTab = "mine";
+    private string _statusFilter = "open";
+    private string _searchText = string.Empty;
+    private int? _selectedAssignedTo;
+    private TimeSpan _newGeneralTaskDueTime = new(10, 0, 0);
+    private GeneralEmployeeTaskDto _newGeneralTask = new();
+    private List<Employee> _employees = new();
+    private List<TaskType> _taskTypes = new();
+    private List<TaskListDto> _allTasks = new();
+
+    private IEnumerable<TaskListDto> AssignedToMeTasks => _currentEmployeeId.HasValue
+        ? _allTasks.Where(t => t.AssignedTo == _currentEmployeeId.Value)
+        : Enumerable.Empty<TaskListDto>();
+
+    private IEnumerable<TaskListDto> CreatedByMeTasks => _allTasks.Where(t => string.Equals(t.CreatedBy, _currentUserName, StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<TaskListDto> FilteredTasks
+    {
+        get
+        {
+            IEnumerable<TaskListDto> query = _activeTab switch
+            {
+                "created" => CreatedByMeTasks,
+                "all" when _canCreateGeneralTasks => _allTasks,
+                _ => AssignedToMeTasks
+            };
+
+            query = _statusFilter switch
+            {
+                "completed" => query.Where(t => t.Status == "Completed"),
+                "open" => query.Where(t => t.Status != "Completed" && t.Status != "Cancelled"),
+                _ => query
+            };
+
+            if (!string.IsNullOrWhiteSpace(_searchText))
+            {
+                var s = _searchText.Trim();
+                query = query.Where(t =>
+                    (t.TaskDescription?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (t.AssignedToName?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (t.CreatedBy?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false));
+            }
+
+            return query
+                .OrderBy(t => t.Status == "Completed" ? 1 : 0)
+                .ThenBy(t => t.DueDate)
+                .ThenBy(t => t.DueTime ?? new TimeOnly(23, 59))
+                .ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            _currentUserName = user.Identity?.Name ?? "system";
+            _canCreateGeneralTasks = user.IsInRole(SystemRoles.GeneralManager) || user.IsInRole(SystemRoles.AccountManager) || user.IsInRole(SystemRoles.Admin) || user.IsInRole("Admin");
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _currentEmployeeId = await db.Users.AsNoTracking()
+                .Where(u => u.Username == _currentUserName && u.EmployeeId != null)
+                .Select(u => u.EmployeeId)
+                .FirstOrDefaultAsync();
+
+            _employees = (await OppService.GetActiveEmployeesAsync())
+                .OrderBy(e => e.FullName)
+                .ToList();
+
+            if (!_currentEmployeeId.HasValue && _canCreateGeneralTasks)
+                _activeTab = "all";
+
+            _taskTypes = await OppService.GetTaskTypesAsync();
+            ResetNewTask();
+            await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("خطأ: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadDataAsync()
+    {
+        _allTasks = await TaskService.GetGeneralTasksAsync(_currentUserName);
+    }
+
+    private void ToggleCreatePanel() => _showCreatePanel = !_showCreatePanel;
+    private void SetTab(string key) => _activeTab = key;
+    private bool IsTab(string key) => string.Equals(_activeTab, key, StringComparison.OrdinalIgnoreCase);
+
+    private void ResetNewTask()
+    {
+        _selectedAssignedTo = null;
+        _newGeneralTask = new GeneralEmployeeTaskDto
+        {
+            DueDate = DateTime.Today.AddDays(1),
+            Priority = "Medium"
+        };
+        _newGeneralTaskDueTime = new TimeSpan(10, 0, 0);
+    }
+
+    private async Task SaveGeneralTaskAsync()
+    {
+        if (!_selectedAssignedTo.HasValue || _selectedAssignedTo.Value <= 0)
+        {
+            Snackbar.Add("اختر الموظف المكلف", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_newGeneralTask.TaskDescription))
+        {
+            Snackbar.Add("اكتب وصف المهمة", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            _saving = true;
+            _newGeneralTask.AssignedTo = _selectedAssignedTo.Value;
+            _newGeneralTask.DueTime = TimeOnly.FromTimeSpan(_newGeneralTaskDueTime);
+
+            var (ok, msg, _) = await TaskService.AddGeneralEmployeeTaskAsync(_newGeneralTask, _currentUserName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+
+            if (ok)
+            {
+                ResetNewTask();
+                _showCreatePanel = false;
+                await LoadDataAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("خطأ: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private bool CanStartTask(TaskListDto task)
+        => _currentEmployeeId.HasValue && task.AssignedTo == _currentEmployeeId.Value && task.Status == "Pending";
+
+    private bool CanCompleteTask(TaskListDto task)
+        => _currentEmployeeId.HasValue && task.AssignedTo == _currentEmployeeId.Value && task.Status != "Completed" && task.Status != "Cancelled";
+
+    private async Task StartTaskAsync(int taskId)
+    {
+        var (ok, msg) = await TaskService.StartAsync(taskId, string.Empty, _currentUserName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadDataAsync();
+    }
+
+    private async Task CompleteTaskAsync(int taskId)
+    {
+        var (ok, msg) = await TaskService.CompleteAsync(taskId, string.Empty, _currentUserName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await LoadDataAsync();
+    }
+
+    private static MudColor GetStatusColor(TaskListDto task) => task.Status switch
+    {
+        "Completed" => MudColor.Success,
+        "In Progress" => MudColor.Info,
+        _ when task.DueDate.Date < DateTime.Today => MudColor.Error,
+        _ => MudColor.Warning
+    };
+
+    private static string GetStatusText(string? status) => status switch
+    {
+        "Completed" => "مكتملة",
+        "In Progress" => "جاري التنفيذ",
+        "Cancelled" => "ملغية",
+        _ => "معلقة"
+    };
+
+    private static MudColor GetPriorityColor(string? priority) => priority switch
+    {
+        "High" => MudColor.Error,
+        "Low" => MudColor.Info,
+        _ => MudColor.Warning
+    };
+
+    private static string GetPriorityText(string? priority) => priority switch
+    {
+        "High" => "عاجلة",
+        "Low" => "منخفضة",
+        _ => "متوسطة"
+    };
+
+    private static string GetSourceText(string? assignmentSource) => assignmentSource switch
+    {
+        SystemRoles.GeneralManager => "المدير العام",
+        SystemRoles.AccountManager => "مدير الحسابات",
+        SystemRoles.HrManager => "مدير الموارد البشرية",
+        SystemRoles.ProductionManager    => "مدير الانتاج",
+        SystemRoles.Admin => "الإدارة",
+        _ => assignmentSource ?? "الإدارة"
+    };
+}

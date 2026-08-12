@@ -59,6 +59,12 @@ public partial class Transaction
 
     public DateTime? EditAt { get; set; }
 
+    public string? EditReviewedBy { get; set; }
+
+    public DateTime? EditReviewedAt { get; set; }
+
+    public string? EditReviewNotes { get; set; }
+
     public string? EditDone { get; set; }
 
     public bool? IsDelivered { get; set; }

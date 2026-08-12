@@ -459,13 +459,13 @@ else
                                         @foreach (var task in _crmUpcomingTasks.Take(5))
                                         {
                                             <button type="button" class='crm-followup-item @GetCrmFollowupClass(task)' @onclick='() => Navigation.NavigateTo(GetCrmItemLink(task))'>
-                                                <div class='crm-followup-icon @(task.IsLeadTask ? "lead" : "client")'>
-                                                    <MudIcon Icon="@(task.IsLeadTask ? Icons.Material.Filled.Campaign : Icons.Material.Filled.Groups)" Size="MudBlazor.Size.Small" />
+                                                <div class='crm-followup-icon @GetCrmTaskIconClass(task)'>
+                                                    <MudIcon Icon="@GetCrmTaskIcon(task)" Size="MudBlazor.Size.Small" />
                                                 </div>
                                                 <div class="crm-followup-text">
                                                     <div class="crm-followup-title-row">
-                                                        <strong>@(task.ClientName ?? "غير محدد")</strong>
-                                                        <span class="crm-followup-type">@(task.IsLeadTask ? "ليد" : "عميل")</span>
+                                                        <strong>@GetCrmTaskTitle(task)</strong>
+                                                        <span class="crm-followup-type">@GetCrmTaskTypeLabel(task)</span>
                                                     </div>
                                                     <small>@GetCrmTaskSummary(task)</small>
                                                 </div>
@@ -1684,6 +1684,10 @@ else
         background: rgba(236,72,153,.12);
         color: #db2777;
     }
+    .crm-followup-icon.general {
+        background: rgba(16,185,129,.12);
+        color: #059669;
+    }
     .crm-followup-title-row {
         display: flex;
         align-items: center;
@@ -2536,8 +2540,10 @@ else
                 ViewLeads      = user.HasClaim("Permission", "frm_LeadsCRM:View")        || user.IsInRole("Admin"),
                 ViewComplaints = user.HasClaim("Permission", "frm_Complaints_Main:View") || user.IsInRole("Admin"),
                 ViewDeliveryTracking = DeliveryPermissions.CanView(user),
-                ViewCrmTeamSummary = user.IsInRole("Admin") || user.IsInRole("SalesManager") || user.IsInRole("GeneralManager"),
+                ViewJobOrders = user.IsInRole("Admin") || user.IsInRole(SystemRoles.ProductionManager),
+                ViewCrmTeamSummary = user.IsInRole("Admin") || user.IsInRole("SalesManager"),
                 ViewB2BManagement = user.HasClaim("Permission", "B2B:View") || user.IsInRole("Admin"),
+                ViewGeneralTasks = user.IsInRole("Admin") || user.IsInRole(SystemRoles.GeneralManager) || user.IsInRole(SystemRoles.AccountManager),
                 AddCustomer    = user.HasClaim("Permission", "frm_Parties:Add")          || user.IsInRole("Admin"),
                 AddProduct     = user.HasClaim("Permission", "frm_ProductList:Add")      || user.IsInRole("Admin"),
                 AddQuote       = user.HasClaim("Permission", "frmQuotationsList:Add")    || user.IsInRole("Admin"),
@@ -2622,7 +2628,8 @@ else
         if (_p.ViewTasks)     links.Add(new("مهامي وجدولي", "/crm/my-calendar", Icons.Material.Rounded.CalendarMonth, "#3b82f6"));
         if (_p.ViewQuotes)     links.Add(new("عروض الأسعار", "/quotations",         Icons.Material.Rounded.RequestQuote,         "#06b6d4"));
         if (_p.ViewSales)      links.Add(new("الفواتير",     "/sales/invoices",     Icons.Material.Rounded.Receipt,              "#f59e0b"));
-        if (_p.ViewPurchases)  links.Add(new("المشتريات",    "/factory/purchases",          Icons.Material.Rounded.ShoppingCart,         "#8b5cf6"));
+        if (_p.ViewPurchases)  links.Add(new("المشتريات",    "/factory/purchases",  Icons.Material.Rounded.ShoppingCart,         "#8b5cf6"));
+        if (_p.ViewJobOrders)  links.Add(new("أوامر التشغيل", "/production/job-orders", Icons.Material.Rounded.Factory,           "#2563eb"));
         if (_p.ViewCashBox)    links.Add(new("الخزنة",       "/cashbox/dashboard",  Icons.Material.Rounded.AccountBalance,       "#d4af37"));
         if (_p.ViewExpenses)   links.Add(new("المصروفات",    "/expenses",           Icons.Material.Rounded.AccountBalanceWallet, "#f97316"));
         if (_p.ViewEmployees)  links.Add(new("الموظفين",     "/employees",          Icons.Material.Rounded.Badge,                "#ec4899"));
@@ -2630,6 +2637,7 @@ else
         if (_p.ViewSales)      links.Add(new("المدفوعات",    "/payments",           Icons.Material.Rounded.Payments,             "#3b82f6"));
         if (_p.ViewDeliveryTracking) links.Add(new("متابعة التسليمات", "/sales-delivery-status", Icons.Material.Rounded.LocalShipping, "#14b8a6"));
         if (_p.ViewB2BManagement) links.Add(new("طلبات B2B", "/admin/b2b/requests", Icons.Material.Rounded.StoreMallDirectory, "#0ea5e9"));
+        if (_p.ViewGeneralTasks) links.Add(new("التكليفات العامة", "/crm/general-tasks", Icons.Material.Rounded.AssignmentTurnedIn, "#059669"));
         return links;
     }
 
@@ -3155,9 +3163,19 @@ if (_p.ViewQuotes)
                 SortDescending = false
             });
 
-            var allTasks = result.Items
+            var crmTasks = result.Items
                 .Where(t => t.IsActive && t.Status != "Completed" && t.Status != "Cancelled")
                 .Where(t => (_p.ViewTasks && !t.IsLeadTask) || (_p.ViewLeads && t.IsLeadTask))
+                .ToList();
+
+            var generalTasks = _p.ViewTasks && !string.IsNullOrWhiteSpace(_currentUserName)
+                ? await TaskService.GetGeneralTasksAsync(_currentUserName)
+                : new List<TaskListDto>();
+
+            var allTasks = crmTasks
+                .Concat(generalTasks.Where(t => t.IsActive && t.Status != "Completed" && t.Status != "Cancelled"))
+                .GroupBy(t => t.TaskId)
+                .Select(g => g.First())
                 .OrderBy(t => t.DueDate.Date)
                 .ThenBy(t => t.DueTime ?? new TimeOnly(23, 59))
                 .ToList();
@@ -3171,7 +3189,7 @@ if (_p.ViewQuotes)
                 _crmWidget.OverdueCount = myTasks.Count(t => t.DueDate.Date < today);
                 _crmWidget.WeekCount = myTasks.Count(t => t.DueDate.Date >= today && t.DueDate.Date < endOfWeek);
                 _crmWidget.LeadCount = myTasks.Count(t => t.IsLeadTask);
-                _crmWidget.ClientCount = myTasks.Count(t => !t.IsLeadTask);
+                _crmWidget.ClientCount = myTasks.Count(t => !t.IsLeadTask && !t.IsGeneralTask);
 
                 _crmUpcomingTasks = myTasks.Take(5).ToList();
             }
@@ -3483,14 +3501,36 @@ if (_p.ViewQuotes)
         if (task.OpportunityId.HasValue)
             return $"/crm/opportunities/{task.OpportunityId.Value}";
 
+        if (task.IsGeneralTask)
+            return "/crm/general-tasks";
+
         return GetCrmMainRoute();
     }
+
+    private string GetCrmTaskTitle(TaskListDto task)
+    {
+        if (task.IsGeneralTask)
+            return string.IsNullOrWhiteSpace(task.AssignedToName) ? "تكليف عام" : $"تكليف عام — {task.AssignedToName}";
+
+        return task.ClientName ?? "غير محدد";
+    }
+
+    private string GetCrmTaskTypeLabel(TaskListDto task)
+        => task.IsLeadTask ? "ليد" : task.IsGeneralTask ? "عام" : "عميل";
+
+    private string GetCrmTaskIcon(TaskListDto task)
+        => task.IsLeadTask ? Icons.Material.Filled.Campaign
+         : task.IsGeneralTask ? Icons.Material.Filled.AssignmentInd
+         : Icons.Material.Filled.Groups;
+
+    private string GetCrmTaskIconClass(TaskListDto task)
+        => task.IsLeadTask ? "lead" : task.IsGeneralTask ? "general" : "client";
 
     private string GetCrmTaskSummary(TaskListDto task)
     {
         var text = task.TaskDescription;
         if (string.IsNullOrWhiteSpace(text))
-            return task.IsLeadTask ? "متابعة ليد مستحقة" : "متابعة عميل مستحقة";
+            return task.IsLeadTask ? "متابعة ليد مستحقة" : task.IsGeneralTask ? "مهمة عامة مستحقة" : "متابعة عميل مستحقة";
 
         return text.Length > 70 ? text[..70] + "..." : text;
     }
@@ -3586,7 +3626,7 @@ if (_p.ViewQuotes)
     {
         public bool ViewSales, ViewQuotes, ViewCustomers, ViewCashBox, ViewPurchases;
         public bool ViewProducts, ViewEmployees, ViewExpenses, ViewLeads, ViewAttendance;
-        public bool ViewTasks, ViewDeliveryTracking, ViewCrmTeamSummary, ViewB2BManagement;
+        public bool ViewTasks, ViewDeliveryTracking, ViewCrmTeamSummary, ViewB2BManagement, ViewJobOrders, ViewGeneralTasks;
         public bool AddCustomer, AddProduct, AddQuote, AddInvoice;
         public bool AddCashBox, AddComplaint, AddInspection;
         public bool ViewComplaints;
@@ -3691,3 +3731,4 @@ if (_p.ViewQuotes)
     private record WidgetMetric(string Label, string Value, string Tone);
     private record PriorityItem(string Title, int Count, string Description, string Link, string Icon, string Color, string Severity, int Rank);
 }
+

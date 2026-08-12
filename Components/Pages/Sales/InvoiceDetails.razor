@@ -28,6 +28,12 @@ else if (_details == null)
 else
 {
     var inv = _details.Invoice;
+    var isPurchase = inv.TransactionType == TransactionTypes.Purchase;
+    var documentTitle = isPurchase ? "فاتورة شراء" : "فاتورة بيع";
+    var partyLabel = isPurchase ? "المورد" : "العميل";
+    var relatedPartyLabel = isPurchase ? "العميل المرتبط" : "الموظف";
+    var dueLabel = isPurchase ? "تاريخ الاستحقاق" : "تاريخ التسليم";
+    var deliveryLabel = isPurchase ? "حالة الاستلام" : "حالة التسليم";
     var remaining = inv.GrandTotal - inv.PaidAmount;
     var paidPct = inv.GrandTotal == 0 ? 0 : Math.Round((inv.PaidAmount / inv.GrandTotal) * 100, 1);
     var isOverdue = inv.DueDate.HasValue && inv.DueDate.Value.Date < DateTime.Today && remaining > 0;
@@ -43,7 +49,7 @@ else
                     <div>
                         <h1>
                             <MudIcon Icon="@Icons.Material.Filled.ReceiptLong" />
-                            فاتورة @inv.ReferenceNumber
+                            @documentTitle @inv.ReferenceNumber
                         </h1>
                         <p>
                             <MudChip T="string" Size="Size.Small" Color="@GetStatusColor(inv.InvoiceStatus)">
@@ -58,7 +64,7 @@ else
                             }
                             @if (!string.IsNullOrEmpty(inv.EmpName))
                             {
-                                <span> • الموظف: @inv.EmpName</span>
+                                <span> • @(isPurchase ? "العميل المرتبط" : "الموظف"): @inv.EmpName</span>
                             }
                         </p>
                     </div>
@@ -70,19 +76,19 @@ else
                     {
                         <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="OpenPrintPage"
                                    StartIcon="@Icons.Material.Filled.Print" Class="print-btn">طباعة</MudButton>
-                        @if (inv.InvoiceStatus != InvoiceStatuses.Cancelled && inv.EditStatus != InvoiceEditStatuses.Pending && inv.EditStatus != InvoiceEditStatuses.Approved)
+                        @if (!isPurchase && inv.InvoiceStatus != InvoiceStatuses.Cancelled && inv.EditStatus != InvoiceEditStatuses.Pending && inv.EditStatus != InvoiceEditStatuses.Approved)
                         {
                             <MudButton Variant="Variant.Outlined" Color="Color.Warning"
                                        StartIcon="@Icons.Material.Filled.EditNote"
                                        OnClick="OpenEditRequestDialog">طلب تعديل</MudButton>
                         }
-                        @if ((inv.EditStatus == InvoiceEditStatuses.Approved || (_canApproveEdit && inv.EditStatus != InvoiceEditStatuses.Pending)) && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
+                        @if (!isPurchase && (inv.EditStatus == InvoiceEditStatuses.Approved || (_canApproveEdit && inv.EditStatus != InvoiceEditStatuses.Pending)) && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
                         {
                             <MudButton Variant="Variant.Filled" Color="Color.Warning"
                                        StartIcon="@Icons.Material.Filled.Edit"
                                        OnClick="GoToEditInvoice">تعديل الفاتورة</MudButton>
                         }
-                        @if (_canEdit && inv.InvoiceStatus != InvoiceStatuses.Cancelled && remaining > 0)
+                        @if (!isPurchase && _canEdit && inv.InvoiceStatus != InvoiceStatuses.Cancelled && remaining > 0)
                         {
                             <MudButton Variant="Variant.Filled" Color="Color.Success"
                                        StartIcon="@Icons.Material.Filled.Payment"
@@ -97,7 +103,7 @@ else
                 <div class="summary-pill">
                     <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
                     <div>
-                        <span>العميل</span>
+                        <span>@partyLabel</span>
                         <strong>@inv.PartyName</strong>
                     </div>
                 </div>
@@ -185,12 +191,12 @@ else
                         <div style="display: flex; gap: 0.5rem;">
                             <MudButton Variant="Variant.Filled" Color="Color.Success"
                                        StartIcon="@Icons.Material.Filled.CheckCircle"
-                                       OnClick="@(() => ProcessEditRequest(true))" Disabled="@_isProcessingEdit">
+                                       OnClick="@(() => OpenEditReviewDialog(true))" Disabled="@_isProcessingEdit">
                                 موافقة وفتح للتعديل
                             </MudButton>
                             <MudButton Variant="Variant.Filled" Color="Color.Error"
                                        StartIcon="@Icons.Material.Filled.Cancel"
-                                       OnClick="@(() => ProcessEditRequest(false))" Disabled="@_isProcessingEdit">
+                                       OnClick="@(() => OpenEditReviewDialog(false))" Disabled="@_isProcessingEdit">
                                 رفض الطلب
                             </MudButton>
                         </div>
@@ -201,19 +207,37 @@ else
         else if (inv.EditStatus == InvoiceEditStatuses.Approved && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
         {
             <MudAlert Severity="Severity.Success" Class="mb-3" Icon="@Icons.Material.Filled.LockOpen" Variant="Variant.Filled">
-                🔓 تمت الموافقة على فتح هذه الفاتورة للتعديل. @(inv.EditDone)
+                <div>🔓 تمت الموافقة على فتح هذه الفاتورة للتعديل.</div>
+                <div class="mt-1">مراجع الطلب: <strong>@(inv.EditReviewedBy ?? "غير محدد")</strong> @(inv.EditReviewedAt.HasValue ? $"بتاريخ {inv.EditReviewedAt.Value:yyyy/MM/dd hh:mm tt}" : "")</div>
+                @if (!string.IsNullOrWhiteSpace(inv.EditReviewNotes))
+                {
+                    <div class="mt-1">ملاحظات المراجعة: <strong>@inv.EditReviewNotes</strong></div>
+                }
+                @if (!string.IsNullOrWhiteSpace(inv.EditDone))
+                {
+                    <div class="mt-1">@inv.EditDone</div>
+                }
             </MudAlert>
         }
         else if (inv.EditStatus == InvoiceEditStatuses.Rejected && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
         {
             <MudAlert Severity="Severity.Warning" Class="mb-3" Icon="@Icons.Material.Filled.Block" Variant="Variant.Outlined">
-                ❌ تم رفض طلب تعديل هذه الفاتورة. @(inv.EditDone)
+                <div>❌ تم رفض طلب تعديل هذه الفاتورة.</div>
+                <div class="mt-1">مراجع الطلب: <strong>@(inv.EditReviewedBy ?? "غير محدد")</strong> @(inv.EditReviewedAt.HasValue ? $"بتاريخ {inv.EditReviewedAt.Value:yyyy/MM/dd hh:mm tt}" : "")</div>
+                @if (!string.IsNullOrWhiteSpace(inv.EditReviewNotes))
+                {
+                    <div class="mt-1">سبب / ملاحظات الرفض: <strong>@inv.EditReviewNotes</strong></div>
+                }
+                @if (!string.IsNullOrWhiteSpace(inv.EditDone))
+                {
+                    <div class="mt-1">@inv.EditDone</div>
+                }
             </MudAlert>
         }
         else if (inv.EditStatus == InvoiceEditStatuses.Edited && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
         {
             <MudAlert Severity="Severity.Info" Class="mb-3" Icon="@Icons.Material.Filled.Edit" Variant="Variant.Outlined">
-                📝 تم تعديل هذه الفاتورة سابقاً. @(inv.EditDone)
+                📝 تم تنفيذ طلب التعديل على هذه الفاتورة. @(inv.EditDone)
             </MudAlert>
         }
 
@@ -250,7 +274,7 @@ else
                                 <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
                             </div>
                             <div>
-                                <span>العميل</span>
+                                <span>@partyLabel</span>
                                 <strong>@inv.PartyName</strong>
                             </div>
                         </div>
@@ -259,7 +283,7 @@ else
                                 <MudIcon Icon="@Icons.Material.Filled.Badge" Size="Size.Small" />
                             </div>
                             <div>
-                                <span>الموظف</span>
+                                <span>@relatedPartyLabel</span>
                                 <strong>@(inv.EmpName ?? "-")</strong>
                             </div>
                         </div>
@@ -268,10 +292,10 @@ else
                                 <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" />
                             </div>
                             <div>
-                                <span>تاريخ التسليم</span>
+                                <span>@dueLabel</span>
                                 <strong>
                                     @(inv.DueDate?.ToString("yyyy/MM/dd") ?? "-")
-                                    @if (inv.DueDate.HasValue && inv.Items.Any(i => i.Period.HasValue && i.Period > 0))
+                                    @if (!isPurchase && inv.DueDate.HasValue && inv.Items.Any(i => i.Period.HasValue && i.Period > 0))
                                     {
                                         var maxPeriod = inv.Items.Where(i => i.Period.HasValue).Max(i => i.Period.Value);
                                         <span class="period-hint">(أكبر فترة: @maxPeriod يوم)</span>
@@ -293,15 +317,15 @@ else
                                 <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Size="Size.Small" />
                             </div>
                             <div>
-                                <span>حالة التسليم</span>
+                                <span>@deliveryLabel</span>
                                 <strong>
                                     @if (inv.IsDelivered == true)
                                     {
-                                        <MudChip T="string" Size="Size.Small" Color="Color.Success">تم التسليم</MudChip>
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Success">@(isPurchase ? "تم الاستلام" : "تم التسليم")</MudChip>
                                     }
                                     else
                                     {
-                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">قيد التسليم</MudChip>
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">@(isPurchase ? "قيد الاستلام" : "قيد التسليم")</MudChip>
                                     }
                                 </strong>
                             </div>
@@ -415,65 +439,68 @@ else
                     </MudPaper>
                 }
 
-                <!-- ================ سجل المدفوعات ================ -->
-                <MudPaper Class="info-section" Elevation="0">
-                    <div class="section-title">
-                        <MudIcon Icon="@Icons.Material.Filled.Payments" Size="Size.Small" />
-                        <h3>سجل المدفوعات (@_details.Payments.Count)</h3>
-                    </div>
-                    @if (!_details.Payments.Any())
-                    {
-                        <div class="empty-state">
-                            <MudIcon Icon="@Icons.Material.Filled.MoneyOff" Size="Size.Large"
-                                     Style="color:var(--mud-palette-text-secondary);" />
-                            <MudText Typo="Typo.body2" Class="text-muted mt-2">لا توجد مدفوعات بعد</MudText>
+                @if (!isPurchase)
+                {
+                    <!-- ================ سجل المدفوعات ================ -->
+                    <MudPaper Class="info-section" Elevation="0">
+                        <div class="section-title">
+                            <MudIcon Icon="@Icons.Material.Filled.Payments" Size="Size.Small" />
+                            <h3>سجل المدفوعات (@_details.Payments.Count)</h3>
                         </div>
-                    }
-                    else
-                    {
-                        <MudTable Items="_details.Payments" Dense="true" Hover="true"
-                                  Striped="true" Elevation="0">
-                            <HeaderContent>
-                                <MudTh>التاريخ</MudTh>
-                                <MudTh>المبلغ</MudTh>
-                                <MudTh>النسبة</MudTh>
-                                <MudTh>الطريقة</MudTh>
-                                <MudTh>الخزينة</MudTh>
-                                <MudTh>ملاحظات</MudTh>
-                                <MudTh>المستخدم</MudTh>
-                            </HeaderContent>
-                            <RowTemplate>
-                                <MudTd>
-                                    <div class="payment-date">
-                                        <MudIcon Icon="@Icons.Material.Filled.AccessTime"
-                                                 Size="Size.Small" Class="me-1" />
-                                        @context.PaymentDate.ToString("yyyy/MM/dd HH:mm")
-                                    </div>
-                                </MudTd>
-                                <MudTd>
-                                    <strong class="payment-amount">@FormatMoney(context.Amount) ج</strong>
-                                </MudTd>
-                                <MudTd>
-                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary"
-                                             Variant="Variant.Filled">@context.Percentage%</MudChip>
-                                </MudTd>
-                                <MudTd>
-                                    <MudChip T="string" Size="Size.Small" Color="Color.Default"
-                                             Variant="Variant.Outlined">
-                                        @GetPaymentMethodText(context.PaymentMethod)
-                                    </MudChip>
-                                </MudTd>
-                                <MudTd>@(context.CashBoxName ?? "-")</MudTd>
-                                <MudTd>
-                                    <span class="payment-notes">@(context.Notes ?? "-")</span>
-                                </MudTd>
-                                <MudTd>
-                                    <span class="payment-user">@(context.CreatedBy ?? "-")</span>
-                                </MudTd>
-                            </RowTemplate>
-                        </MudTable>
-                    }
-                </MudPaper>
+                        @if (!_details.Payments.Any())
+                        {
+                            <div class="empty-state">
+                                <MudIcon Icon="@Icons.Material.Filled.MoneyOff" Size="Size.Large"
+                                         Style="color:var(--mud-palette-text-secondary);" />
+                                <MudText Typo="Typo.body2" Class="text-muted mt-2">لا توجد مدفوعات بعد</MudText>
+                            </div>
+                        }
+                        else
+                        {
+                            <MudTable Items="_details.Payments" Dense="true" Hover="true"
+                                      Striped="true" Elevation="0">
+                                <HeaderContent>
+                                    <MudTh>التاريخ</MudTh>
+                                    <MudTh>المبلغ</MudTh>
+                                    <MudTh>النسبة</MudTh>
+                                    <MudTh>الطريقة</MudTh>
+                                    <MudTh>الخزينة</MudTh>
+                                    <MudTh>ملاحظات</MudTh>
+                                    <MudTh>المستخدم</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd>
+                                        <div class="payment-date">
+                                            <MudIcon Icon="@Icons.Material.Filled.AccessTime"
+                                                     Size="Size.Small" Class="me-1" />
+                                            @context.PaymentDate.ToString("yyyy/MM/dd HH:mm")
+                                        </div>
+                                    </MudTd>
+                                    <MudTd>
+                                        <strong class="payment-amount">@FormatMoney(context.Amount) ج</strong>
+                                    </MudTd>
+                                    <MudTd>
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Primary"
+                                                 Variant="Variant.Filled">@context.Percentage%</MudChip>
+                                    </MudTd>
+                                    <MudTd>
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Default"
+                                                 Variant="Variant.Outlined">
+                                            @GetPaymentMethodText(context.PaymentMethod)
+                                        </MudChip>
+                                    </MudTd>
+                                    <MudTd>@(context.CashBoxName ?? "-")</MudTd>
+                                    <MudTd>
+                                        <span class="payment-notes">@(context.Notes ?? "-")</span>
+                                    </MudTd>
+                                    <MudTd>
+                                        <span class="payment-user">@(context.CreatedBy ?? "-")</span>
+                                    </MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
+                    </MudPaper>
+                }
 
                 <!-- ================ ملاحظات ================ -->
                 @if (!string.IsNullOrEmpty(inv.Notes))
@@ -695,6 +722,44 @@ else
                 <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
             }
             إرسال الطلب
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- ================ Edit Review Dialog ================ -->
+<MudDialog @bind-Visible="_showEditReviewDialog" Options="_editRequestDialogOptions">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.75rem;">
+            <MudIcon Icon="@(_editReviewApprove ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Cancel)" Color="@(_editReviewApprove ? Color.Success : Color.Error)" />
+            <MudText Typo="Typo.h6">@(_editReviewApprove ? "موافقة على طلب تعديل الفاتورة" : "رفض طلب تعديل الفاتورة")</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudText>فاتورة: <strong>@(_details?.Invoice?.ReferenceNumber)</strong></MudText>
+
+        <MudText Typo="Typo.body2" Class="mt-2 mb-3" Style="color:var(--mud-palette-text-secondary);">
+            @(_editReviewApprove ? "أدخل ملاحظات الموافقة إن وجدت." : "أدخل سبب أو ملاحظات الرفض.")
+        </MudText>
+
+        <MudTextField @bind-Value="_editReviewNotes"
+                      Label="ملاحظات المراجعة"
+                      Variant="Variant.Outlined"
+                      Lines="3"
+                      Placeholder="اكتب الملاحظات هنا..." />
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="CloseEditReviewDialog" Variant="Variant.Outlined">
+            إلغاء
+        </MudButton>
+        <MudButton Color="@(_editReviewApprove ? Color.Success : Color.Error)" Variant="Variant.Filled"
+                   OnClick="ConfirmEditReview" Disabled="@_isProcessingEdit">
+            @if (_isProcessingEdit)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            @(_editReviewApprove ? "تأكيد الموافقة" : "تأكيد الرفض")
         </MudButton>
     </DialogActions>
 </MudDialog>
@@ -1152,6 +1217,9 @@ else
     private bool _showEditRequestDialog;
     private bool _isSendingEditRequest;
     private string? _editRequestReason;
+    private bool _showEditReviewDialog;
+    private bool _editReviewApprove;
+    private string? _editReviewNotes;
 
     private readonly DialogOptions _editRequestDialogOptions = new()
     {
@@ -1197,11 +1265,25 @@ else
         _details = await InvoiceService.GetInvoiceDetailsAsync(Id);
     }
 
-    private void GoBack() => Navigation.NavigateTo(_isFactory ? "/factory/purchases" : "/sales");
+    private void GoBack()
+    {
+        if (_details?.Invoice?.TransactionType == TransactionTypes.Purchase)
+        {
+            Navigation.NavigateTo("/factory/purchases");
+            return;
+        }
+
+        Navigation.NavigateTo(_isFactory ? "/factory/purchases" : "/sales");
+    }
 
     private void OpenPrintPage()
     {
         Navigation.NavigateTo($"/sales/invoices/{Id}/print");
+    }
+
+    private void OpenJobOrderPage()
+    {
+        Navigation.NavigateTo($"/sales/invoices/{Id}/job-order");
     }
 
     // ⭐ Image Preview
@@ -1279,20 +1361,37 @@ else
 
     private void GoToEditInvoice() => Navigation.NavigateTo($"/sales/invoices/{Id}/edit");
 
-    private async Task ProcessEditRequest(bool approve)
+    private void OpenEditReviewDialog(bool approve)
+    {
+        _editReviewApprove = approve;
+        _editReviewNotes = null;
+        _showEditReviewDialog = true;
+    }
+
+    private void CloseEditReviewDialog()
+    {
+        _showEditReviewDialog = false;
+        _editReviewNotes = null;
+    }
+
+    private async Task ConfirmEditReview()
     {
         _isProcessingEdit = true;
-        StateHasChanged(); // ← مهم جدًا عشان الزر يتحدث فورًا
+        StateHasChanged();
 
         try
         {
-            var notes = approve ? "موافق" : "مرفوض";
-            var (ok, msg) = await InvoiceService.ProcessInvoiceEditRequestAsync(Id, approve, notes, _currentUserName!);
+            var notes = string.IsNullOrWhiteSpace(_editReviewNotes)
+                ? (_editReviewApprove ? "موافقة على طلب التعديل" : "رفض طلب التعديل")
+                : _editReviewNotes!.Trim();
+
+            var (ok, msg) = await InvoiceService.ProcessInvoiceEditRequestAsync(Id, _editReviewApprove, notes, _currentUserName!);
 
             Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
 
             if (ok)
             {
+                CloseEditReviewDialog();
                 await LoadInvoice();
             }
         }
@@ -1303,7 +1402,7 @@ else
         finally
         {
             _isProcessingEdit = false;
-            StateHasChanged(); // ← عشان الزر يرجع نشيط
+            StateHasChanged();
         }
     }
 

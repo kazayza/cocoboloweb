@@ -224,6 +224,7 @@ public class LeadsCrmUpdateDto
     public int LeadId { get; set; }
     public string? LeadStatus { get; set; }
     public int? AssignedEmployeeId { get; set; }
+    public string? AssignmentComment { get; set; }
     public string? Feedback { get; set; }
     public string? RejectedReason { get; set; }
     public string? Notes { get; set; }
@@ -306,6 +307,9 @@ public class LeadsCrmCreateDto
     public string? City { get; set; }
     public string? Area { get; set; }
     public string? Address { get; set; }
+    public int? SourceId { get; set; }
+    public int? AdTypeId { get; set; }
+    public DateTime? NextFollowUpDate { get; set; } = DateTime.Today.AddDays(1);
     public string? ProjectType { get; set; }
     public string? ProjectStage { get; set; }
     public string? Budget { get; set; }

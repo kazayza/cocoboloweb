@@ -28,13 +28,14 @@ public static class TableNameTranslator
         // ─── الموظفين والـ HR ───
         ["Employees"]            = "الموظفين",
         ["EmployeeShifts"]       = "ورديات الموظفين",
-        ["Attendances"]          = "الحضور والانصراف",
+        ["Attendance"]          = "الحضور والانصراف",
         ["Payrolls"]             = "الرواتب",
         ["PayrollItems"]         = "تفاصيل الرواتب",
         ["EmployeeLoans"]        = "سُلف الموظفين",
         ["LoanInstallments"]     = "أقساط السُلف",
         ["ShortPermissions"]     = "أذونات الانصراف",
-        ["BiometricLogs"]        = "سجلات البصمة",
+        ["BiometricLog"]        = "سجلات البصمة",
+
 
         // ─── CRM ───
         ["CRM_Tasks"]            = "مهام المتابعة",
@@ -45,6 +46,9 @@ public static class TableNameTranslator
         ["CustomerSources"]      = "مصادر العملاء",
         ["Interests"]            = "فئات الاهتمام",
         ["Commissions"]          = "العمولات",
+        ["LeadIneractions"]         = "تواصلات العملاء المحتملين",
+        ["LeadsCRM"]          = "العملاء المحتملين",
+        
 
         // ─── المالية والخزينة ───
         ["Expenses"]             = "المصروفات",

@@ -521,6 +521,7 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
             entity.HasIndex(e => e.Status, "IX_CRM_Tasks_Status");
 
             entity.Property(e => e.TaskId).HasColumnName("TaskID");
+            entity.Property(e => e.AssignmentSource).HasMaxLength(50);
             entity.Property(e => e.CompletedBy).HasMaxLength(50);
             entity.Property(e => e.CompletedDate).HasColumnType("datetime");
             entity.Property(e => e.CompletionNotes).HasMaxLength(500);
@@ -542,6 +543,9 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
                 .HasMaxLength(20)
                 .HasDefaultValue("Pending");
             entity.Property(e => e.TaskDescription).HasMaxLength(500);
+            entity.Property(e => e.TaskScope)
+                .HasMaxLength(30)
+                .HasDefaultValue("Opportunity");
             entity.Property(e => e.TaskTypeId).HasColumnName("TaskTypeID");
 
             entity.HasOne(d => d.AssignedToNavigation).WithMany(p => p.CrmTasks)
@@ -1866,9 +1870,12 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.DueDate).HasColumnType("datetime");
             entity.Property(e => e.EditAt).HasColumnType("datetime");
             entity.Property(e => e.EditBy).HasMaxLength(50);
-            entity.Property(e => e.EditDone).HasMaxLength(50);
+            entity.Property(e => e.EditDone).HasMaxLength(500);
             entity.Property(e => e.EditReason).HasMaxLength(500);
             entity.Property(e => e.EditRequestDate).HasColumnType("datetime");
+            entity.Property(e => e.EditReviewedAt).HasColumnType("datetime");
+            entity.Property(e => e.EditReviewedBy).HasMaxLength(50);
+            entity.Property(e => e.EditReviewNotes).HasMaxLength(500);
             entity.Property(e => e.EditStatus).HasDefaultValue(0);
             entity.Property(e => e.GrandTotal).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.InvoiceStatus).HasMaxLength(50);

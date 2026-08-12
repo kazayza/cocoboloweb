@@ -814,12 +814,22 @@ else
                         المهام
                         <span class="count-badge">@_tasks.Count</span>
                     </h3>
-                    @if (_canEdit)
-                    {
-                        <button class="task-add-btn" @onclick="ToggleQuickTask">
-                            <MudIcon Icon="@(_showQuickTask ? Icons.Material.Rounded.ExpandLess : Icons.Material.Rounded.Add)" Style="font-size:1.1rem" />
-                        </button>
-                    }
+                    <div style="display:flex;gap:0.3rem;align-items:center;flex-wrap:wrap;">
+                        @if (_canAssignGeneralManagerTask && !IsExitStageId(_opp.StageId))
+                        {
+                            <MudButton Variant="MudVariant.Outlined" Color="MudColor.Info" Size="MudSize.Small"
+                                       StartIcon="@Icons.Material.Rounded.AssignmentInd"
+                                       OnClick="OpenGeneralManagerTaskDialog">
+                                تكليف المدير العام
+                            </MudButton>
+                        }
+                        @if (_canEdit)
+                        {
+                            <button class="task-add-btn" @onclick="ToggleQuickTask">
+                                <MudIcon Icon="@(_showQuickTask ? Icons.Material.Rounded.ExpandLess : Icons.Material.Rounded.Add)" Style="font-size:1.1rem" />
+                            </button>
+                        }
+                    </div>
                 </div>
                 <div class="card-body">
                     @if (_showQuickTask)
@@ -884,8 +894,8 @@ else
                         <div class="task-list">
                             @foreach (var t in _tasks.Where(t => t.Status != "Completed"))
                             {
-                                var priColor = t.Priority switch { "High" => "#ef4444", "Medium" => "#f59e0b", _ => "#3b82f6" };
-                                var priLabel = t.Priority switch { "High" => "عالية", "Medium" => "متوسطة", _ => "منخفضة" };
+                                var priColor = t.Priority switch { "High" => "#ef4444", "Medium" => "#f59e0b", "Normal" => "#f59e0b", _ => "#3b82f6" };
+                                var priLabel = t.Priority switch { "High" => "عاجلة", "Medium" => "متوسطة", "Normal" => "متوسطة", _ => "منخفضة" };
                                 <div class="task-row @(t.TaskDueStatus == "Overdue" ? "task-overdue" : "")">
                                     <div class="task-pri" style="background:@priColor"></div>
                                     <div class="task-content">
@@ -896,16 +906,28 @@ else
                                             {
                                                 <span class="task-chip task-type-chip">@t.TaskTypeName</span>
                                             }
+                                            @if (t.IsGeneralManagerAssignment)
+                                            {
+                                                <span class="task-chip task-gm-chip">تكليف المدير العام</span>
+                                            }
                                             @if (t.TaskDueStatus == "Overdue")
                                             {
                                                 <span class="task-chip task-overdue-chip">⚠️ متأخرة</span>
                                             }
-                                            <span class="task-meta-inline">👤 @t.AssignedToName · 📅 @FormatDateAr(t.DueDate)</span>
+                                            <span class="task-meta-inline">👤 @t.AssignedToName · 📅 @FormatDateAr(t.DueDate)@(t.DueTime.HasValue ? $" · ⏰ {t.DueTime.Value.ToString("HH:mm")}" : string.Empty)</span>
                                         </div>
                                     </div>
-                                    <button class="task-complete" @onclick="() => CompleteTask(t.TaskId)" title="إكمال">
-                                        <MudIcon Icon="@Icons.Material.Rounded.CheckCircle" Style="font-size:1.1rem" />
-                                    </button>
+                                    <div class="task-actions-inline">
+                                        @if (t.IsGeneralManagerAssignment && t.Status == "Pending")
+                                        {
+                                            <button class="task-start" @onclick="() => StartTask(t.TaskId)" title="بدء التنفيذ">
+                                                <MudIcon Icon="@Icons.Material.Rounded.PlayArrow" Style="font-size:1.1rem" />
+                                            </button>
+                                        }
+                                        <button class="task-complete" @onclick="() => CompleteTask(t.TaskId)" title="إكمال">
+                                            <MudIcon Icon="@Icons.Material.Rounded.CheckCircle" Style="font-size:1.1rem" />
+                                        </button>
+                                    </div>
                                 </div>
                             }
 
@@ -1023,11 +1045,59 @@ else
                             <MudSelectItem Value="@e.EmployeeId">@e.FullName</MudSelectItem>
                         }
                     </MudSelect>
+                    <MudTextField T="string" Label="تعليمات / ملاحظة للمحول إليه" Variant="MudVariant.Outlined" @bind-Value="_reassignComment" Lines="3" Class="mt-3" />
                 </div>
                 <div class="dlg-actions">
                     <MudButton Variant="MudVariant.Outlined" OnClick="() => _showReassignDialog = false">إلغاء</MudButton>
                     <MudButton Variant="MudVariant.Filled" Color="MudColor.Primary" OnClick="ConfirmReassign" StartIcon="@Icons.Material.Rounded.PersonAdd">
                         تحويل
+                    </MudButton>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_showGeneralManagerTaskDialog)
+    {
+        <div class="dlg-overlay" @onclick="CloseGeneralManagerTaskDialog">
+            <div class="dlg-box dlg-box-wide" @onclick:stopPropagation>
+                <div class="dlg-header" style="color:#0369a1;">
+                    <MudIcon Icon="@Icons.Material.Rounded.AssignmentInd" Style="font-size:1.3rem" />
+                    <h3>تكليف من المدير العام</h3>
+                </div>
+                <div class="dlg-body">
+                    <div class="dlg-form-grid">
+                        <MudSelect T="int" Label="الموظف المكلف" Variant="MudVariant.Outlined" @bind-Value="_generalManagerTask.AssignedTo" Dense="true">
+                            @foreach (var e in GeneralManagerAssignableEmployees)
+                            {
+                                <MudSelectItem Value="@e.EmployeeId">@e.FullName (@e.Department)</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="int?" Label="نوع المهمة" Variant="MudVariant.Outlined" @bind-Value="_generalManagerTask.TaskTypeId" Dense="true" Clearable="true">
+                            @foreach (var tt in _taskTypes)
+                            {
+                                <MudSelectItem Value="@((int?)tt.TaskTypeId)">@(tt.TaskTypeNameAr ?? tt.TaskTypeName)</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudDatePicker T="DateTime?" Label="التنفيذ خلال تاريخ" Variant="MudVariant.Outlined"
+                                       Date="_generalManagerTask.DueDate"
+                                       DateChanged="@(d => _generalManagerTask.DueDate = d ?? _generalManagerTask.DueDate)" />
+                        <MudTimePicker Label="التنفيذ خلال وقت" Variant="MudVariant.Outlined"
+                                       Time="_generalManagerTaskDueTime"
+                                       TimeChanged="@(t => _generalManagerTaskDueTime = t ?? new TimeSpan(10, 0, 0))" />
+                        <MudSelect T="string" Label="الأولوية" Variant="MudVariant.Outlined" @bind-Value="_generalManagerTask.Priority" Dense="true">
+                            <MudSelectItem Value='@("High")'>🔴 عاجلة</MudSelectItem>
+                            <MudSelectItem Value='@("Medium")'>🟡 متوسطة</MudSelectItem>
+                            <MudSelectItem Value='@("Low")'>🔵 منخفضة</MudSelectItem>
+                        </MudSelect>
+                        <div></div>
+                        <MudTextField T="string" Label="تعليمات المدير العام" Variant="MudVariant.Outlined" @bind-Value="_generalManagerTask.TaskDescription" Lines="4" Class="dlg-full-span" />
+                    </div>
+                </div>
+                <div class="dlg-actions">
+                    <MudButton Variant="MudVariant.Outlined" OnClick="CloseGeneralManagerTaskDialog">إلغاء</MudButton>
+                    <MudButton Variant="MudVariant.Filled" Color="MudColor.Info" OnClick="SaveGeneralManagerTaskAsync" Disabled="_assigningGeneralManagerTask" StartIcon="@Icons.Material.Rounded.Send">
+                        @(_assigningGeneralManagerTask ? "جاري الإرسال..." : "إرسال التكليف")
                     </MudButton>
                 </div>
             </div>
@@ -1677,16 +1747,25 @@ else
     .task-type-chip { background: var(--mud-palette-lines-default); color: var(--mud-palette-text-secondary); }
     .task-overdue-chip { background: #ef444412; color: #ef4444; }
     .task-done-chip { background: #10b98112; color: #10b981; }
+    .task-gm-chip { background: rgba(3,105,161,.12); color: #0369a1; }
     .task-meta-inline { font-size: 0.72rem; color: var(--mud-palette-text-secondary); display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
 
     .task-overdue { background: rgba(239,68,68,0.03); border-radius: 8px; padding-right: 0.4rem; }
     .task-done { opacity: 0.5; }
     .task-done .task-desc { text-decoration: line-through; }
+    .task-actions-inline { display:flex; align-items:center; gap:.35rem; }
 
+    .task-start,
     .task-complete {
-        width: 34px; height: 34px; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.2);
-        border-radius: 10px; color: #10b981; display: flex; align-items: center; justify-content: center;
+        width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
         cursor: pointer; transition: all 0.2s;
+    }
+    .task-start {
+        background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.2); color: #3b82f6;
+    }
+    .task-start:hover { background: rgba(59,130,246,0.18); transform: scale(1.12); }
+    .task-complete {
+        background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.2); color: #10b981;
     }
     .task-complete:hover { background: rgba(16,185,129,0.18); transform: scale(1.12); }
 
@@ -1811,12 +1890,18 @@ else
     private int _stageBeforeId;
     private bool _canReassignOpportunity;
     private bool _canDirectCloseOpportunity;
+    private bool _canAssignGeneralManagerTask;
     private bool _showConfirmLossDialog;
     private int _pendingStageId;
     private bool _showEditDialog;
     private bool _showReassignDialog;
+    private string? _reassignComment;
+    private bool _showGeneralManagerTaskDialog;
+    private bool _assigningGeneralManagerTask;
     private OpportunityFormDto? _editForm;
     private int _reassignEmployeeId;
+    private GeneralManagerOpportunityTaskDto _generalManagerTask = new();
+    private TimeSpan _generalManagerTaskDueTime = new(10, 0, 0);
 
     // ═══════════════════════════════════════════
     //           COMPUTED PROPERTIES
@@ -1825,6 +1910,10 @@ else
 
     private bool IsFirstInteraction => _interactions.Count == 0;
     private bool ShowLostFields => IsExitStageId(_newInteraction.StageAfterId ?? 0);
+    private List<Employee> GeneralManagerAssignableEmployees => _employees
+        .Where(e => e.Department == "المبيعات" || e.Department == "إدارة العلاقات العامة")
+        .OrderBy(e => e.FullName)
+        .ToList();
     private string PendingStageName => _stages.FirstOrDefault(s => s.StageId == _pendingStageId)?.StageNameAr
                                       ?? _stages.FirstOrDefault(s => s.StageId == _pendingStageId)?.StageName
                                       ?? "الحالة المطلوبة";
@@ -1905,6 +1994,7 @@ else
             _canViewInvoices = user.HasClaim("Permission", "frm_PartiesInvoices:View") || user.IsInRole("Admin");
             _canReassignOpportunity = user.IsInRole("Admin") || user.IsInRole(SystemRoles.SalesManager) || user.IsInRole(SystemRoles.GeneralManager);
             _canDirectCloseOpportunity = user.IsInRole("Admin") || user.IsInRole(SystemRoles.SalesManager) || user.IsInRole(SystemRoles.GeneralManager);
+            _canAssignGeneralManagerTask = user.IsInRole(SystemRoles.GeneralManager);
 
             if (!_canView) { Navigation.NavigateTo("/"); return; }
 
@@ -2340,6 +2430,66 @@ else
     // ═══════════════════════════════════════════
     //               TASKS
     // ═══════════════════════════════════════════
+    private void OpenGeneralManagerTaskDialog()
+    {
+        _generalManagerTask = new GeneralManagerOpportunityTaskDto
+        {
+            OpportunityId = Id,
+            PartyId = _opp.PartyId,
+            DueDate = DateTime.Today.AddDays(1),
+            Priority = "Medium"
+        };
+        _generalManagerTaskDueTime = new TimeSpan(10, 0, 0);
+        _showGeneralManagerTaskDialog = true;
+    }
+
+    private void CloseGeneralManagerTaskDialog()
+    {
+        _showGeneralManagerTaskDialog = false;
+        _assigningGeneralManagerTask = false;
+        _generalManagerTask = new();
+        _generalManagerTaskDueTime = new TimeSpan(10, 0, 0);
+    }
+
+    private async Task SaveGeneralManagerTaskAsync()
+    {
+        if (_generalManagerTask.AssignedTo <= 0)
+        {
+            Snackbar.Add("اختر الموظف المكلف", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_generalManagerTask.TaskDescription))
+        {
+            Snackbar.Add("اكتب تعليمات المدير العام", Severity.Warning);
+            return;
+        }
+
+        _assigningGeneralManagerTask = true;
+        try
+        {
+            _generalManagerTask.OpportunityId = Id;
+            _generalManagerTask.PartyId = _opp.PartyId;
+            _generalManagerTask.DueTime = TimeOnly.FromTimeSpan(_generalManagerTaskDueTime);
+
+            var (ok, msg, _) = await TaskService.AddGeneralManagerOpportunityTaskAsync(_generalManagerTask, _currentUserName!);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok)
+            {
+                CloseGeneralManagerTaskDialog();
+                await ReloadData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _assigningGeneralManagerTask = false;
+        }
+    }
+
     private async Task AddTask()
     {
         if (string.IsNullOrWhiteSpace(_newTask.TaskDescription)) { Snackbar.Add("اكتب وصف المهمة", Severity.Warning); return; }
@@ -2356,6 +2506,13 @@ else
         {
             _addingTask = false;
         }
+    }
+
+    private async Task StartTask(int taskId)
+    {
+        var (ok, msg) = await TaskService.StartAsync(taskId, "", _currentUserName!);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) await ReloadData();
     }
 
     private async Task CompleteTask(int taskId)
@@ -2533,6 +2690,7 @@ private static string GetLeadInteractionBg(string? type) => type switch
         }
 
         _reassignEmployeeId = _opp.EmployeeId ?? 0;
+        _reassignComment = null;
         _showReassignDialog = true;
     }
 
@@ -2556,6 +2714,7 @@ private static string GetLeadInteractionBg(string? type) => type switch
                 if (ok)
                 {
                     _showReassignDialog = false;
+                    _reassignComment = null;
                     await ReloadData();
                 }
             }
