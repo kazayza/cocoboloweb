@@ -141,6 +141,7 @@ builder.Services.AddSingleton<ShareTokenService>();
 builder.Services.AddScoped<IQuotationExportService, QuotationExportService>();
 builder.Services.AddScoped<ISalesDeliveryStatusService, SalesDeliveryStatusService>();
 builder.Services.AddScoped<IComplaintService, ComplaintService>();
+builder.Services.AddScoped<IMarketingDashboardService, MarketingDashboardService>();
 builder.Services.AddScoped<IPasswordService, PasswordService>();
 builder.Services.AddScoped<ICompanyInfoService, CompanyInfoService>();
 builder.Services.AddScoped<IBranchService, BranchService>();

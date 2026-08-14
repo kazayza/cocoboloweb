@@ -516,6 +516,8 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
 
             entity.HasIndex(e => e.DueDate, "IX_CRM_Tasks_DueDate");
 
+            entity.HasIndex(e => e.LeadId, "IX_CRM_Tasks_LeadID");
+
             entity.HasIndex(e => e.OpportunityId, "IX_CRM_Tasks_OpportunityID");
 
             entity.HasIndex(e => e.Status, "IX_CRM_Tasks_Status");
@@ -532,6 +534,7 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
             entity.Property(e => e.DueDate).HasColumnType("datetime");
             entity.Property(e => e.DueTime).HasPrecision(0);
             entity.Property(e => e.IsActive).HasDefaultValue(true);
+            entity.Property(e => e.LeadId).HasColumnName("LeadID");
             entity.Property(e => e.OpportunityId).HasColumnName("OpportunityID");
             entity.Property(e => e.PartyId).HasColumnName("PartyID");
             entity.Property(e => e.Priority)
@@ -539,6 +542,9 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
                 .HasDefaultValue("Normal");
             entity.Property(e => e.ReminderEnabled).HasDefaultValue(true);
             entity.Property(e => e.ReminderMinutes).HasDefaultValue(30);
+            entity.Property(e => e.StartedAt).HasColumnType("datetime");
+            entity.Property(e => e.StartedBy).HasMaxLength(50);
+            entity.Property(e => e.StartNotes).HasMaxLength(1000);
             entity.Property(e => e.Status)
                 .HasMaxLength(20)
                 .HasDefaultValue("Pending");

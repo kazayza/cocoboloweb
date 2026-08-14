@@ -577,6 +577,11 @@ public async Task<(bool Success, string Message)> AddLeadInteractionAsync(
     if (hasContactAction)
         lead.LastContactDate = now;
 
+    if (dto.LeadStatus == "مرفوض")
+    {
+        await CloseOpenLeadTasksAsync(lead.LeadId, userName, now, "تم إغلاق تكاليف الليد تلقائياً لأن حالة الليد أصبحت مرفوض.");
+    }
+
     await _db.SaveChangesAsync();
 
     await _audit.LogAsync("LeadsCRM", "Update",
@@ -590,6 +595,25 @@ public async Task<(bool Success, string Message)> AddLeadInteractionAsync(
 
     return (true, "تم التحديث بنجاح");
 }
+
+private async Task CloseOpenLeadTasksAsync(int leadId, string userName, DateTime now, string notes)
+{
+    var openTasks = await _db.CrmTasks
+        .Where(t => t.LeadId == leadId
+            && t.IsActive
+            && t.TaskScope == TaskScopes.Lead
+            && (t.Status == "Pending" || t.Status == "In Progress"))
+        .ToListAsync();
+
+    foreach (var task in openTasks)
+    {
+        task.Status = "Completed";
+        task.CompletedDate = now;
+        task.CompletedBy = userName;
+        task.CompletionNotes = notes;
+    }
+}
+
 private async Task NotifyLeadAssignedAsync(LeadsCrm lead, int employeeId, string assignedBy, string? assignmentComment = null)
 {
     try
@@ -734,6 +758,8 @@ private async Task NotifyOpportunityAssignedFromLeadConversionAsync(LeadsCrm lea
                     ? "أغلقت تلقائياً بسبب تحويل الـ Lead إلى فرصة"
                     : (open.Notes + " | أغلقت تلقائياً بسبب تحويل الـ Lead إلى فرصة");
             }
+
+            await CloseOpenLeadTasksAsync(lead.LeadId, userName, now, "تم إغلاق تكاليف الليد تلقائياً بسبب تحويل الليد إلى فرصة بيع.");
 
             int? resolvedSourceId = dto.SourceId;
             if (!resolvedSourceId.HasValue

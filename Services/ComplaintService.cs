@@ -10,17 +10,32 @@ public class ComplaintService : IComplaintService
     private readonly IDbContextFactory<db24804Context> _factory;
     private readonly IWebHostEnvironment              _env;
     private readonly ILogger<ComplaintService>        _logger;
+    private readonly NotificationService              _notify;
+    private readonly IAuditService                    _audit;
 
     private const string UploadFolder = "uploads/complaints";
+    private static readonly string[] ComplaintCreateNotifyRoles =
+    {
+        SystemRoles.GeneralManager,
+        SystemRoles.SalesManager,
+        "factory",
+        SystemRoles.HrManager,
+        SystemRoles.ProductionManager,
+        SystemRoles.Admin
+    };
 
     public ComplaintService(
         IDbContextFactory<db24804Context> factory,
         IWebHostEnvironment env,
-        ILogger<ComplaintService> logger)
+        ILogger<ComplaintService> logger,
+        NotificationService notify,
+        IAuditService audit)
     {
         _factory = factory;
         _env     = env;
         _logger  = logger;
+        _notify  = notify;
+        _audit   = audit;
     }
 
     // ═══════════════════════════════════════════════════════
@@ -235,6 +250,7 @@ public class ComplaintService : IComplaintService
         using var db = await _factory.CreateDbContextAsync();
         try
         {
+            var now = DateTime.Now;
             var entity = new Complaint
             {
                 PartyId       = dto.PartyId,
@@ -248,14 +264,44 @@ public class ComplaintService : IComplaintService
                 Status        = ComplaintStatus.New,
                 AssignedTo    = dto.AssignedTo,
                 CreatedBy     = currentUserName,
-                CreatedAt     = DateTime.Now,
-                ComplaintDate = DateTime.Now,
+                CreatedAt     = now,
+                ComplaintDate = now,
                 IsActive      = true,
                 Escalated     = false
             };
 
             db.Complaints.Add(entity);
             await db.SaveChangesAsync();
+
+            var clientName = await db.Parties.AsNoTracking()
+                .Where(p => p.PartyId == entity.PartyId)
+                .Select(p => p.PartyName)
+                .FirstOrDefaultAsync() ?? $"عميل #{entity.PartyId}";
+
+            await _audit.LogAsync("Complaints", "Create", entity.ComplaintId.ToString(), null,
+                new
+                {
+                    entity.ComplaintId,
+                    entity.PartyId,
+                    ClientName = clientName,
+                    entity.TypeId,
+                    entity.Subject,
+                    entity.Details,
+                    entity.Priority,
+                    entity.Status,
+                    entity.AssignedTo,
+                    entity.TransactionId,
+                    entity.ProductId,
+                    entity.OpportunityId,
+                    entity.CreatedBy,
+                    entity.CreatedAt
+                }, currentUserName);
+
+            await NotifyComplaintCreatedAsync(db, entity, clientName, currentUserName);
+
+            if (entity.AssignedTo.HasValue)
+                await NotifyComplaintAssignedToEmployeeAsync(db, entity, clientName, currentUserName, "تم إسناد الشكوى لك أثناء التسجيل.");
+
             return (true, "تم تسجيل الشكوى بنجاح", entity.ComplaintId);
         }
         catch (Exception ex)
@@ -280,6 +326,21 @@ public class ComplaintService : IComplaintService
 
         try
         {
+            var oldData = new
+            {
+                entity.ComplaintId,
+                entity.PartyId,
+                entity.TypeId,
+                entity.TransactionId,
+                entity.ProductId,
+                entity.OpportunityId,
+                entity.Subject,
+                entity.Details,
+                entity.Priority,
+                entity.AssignedTo,
+                entity.Status
+            };
+
             entity.PartyId       = dto.PartyId;
             entity.TypeId        = dto.TypeId;
             entity.TransactionId = dto.TransactionId;
@@ -291,6 +352,23 @@ public class ComplaintService : IComplaintService
             entity.AssignedTo    = dto.AssignedTo;
 
             await db.SaveChangesAsync();
+
+            await _audit.LogAsync("Complaints", "Update", entity.ComplaintId.ToString(), oldData,
+                new
+                {
+                    entity.ComplaintId,
+                    entity.PartyId,
+                    entity.TypeId,
+                    entity.TransactionId,
+                    entity.ProductId,
+                    entity.OpportunityId,
+                    entity.Subject,
+                    entity.Details,
+                    entity.Priority,
+                    entity.AssignedTo,
+                    entity.Status
+                }, currentUserName);
+
             return (true, "تم التحديث بنجاح");
         }
         catch (Exception ex)
@@ -346,6 +424,14 @@ public class ComplaintService : IComplaintService
 
         try
         {
+            var oldData = new
+            {
+                entity.ComplaintId,
+                OldStatus = entity.Status,
+                entity.SolvedDate,
+                entity.Solution
+            };
+
             entity.Status = dto.NewStatus;
 
             if (dto.NewStatus == ComplaintStatus.Resolved)
@@ -361,6 +447,16 @@ public class ComplaintService : IComplaintService
             }
 
             await db.SaveChangesAsync();
+
+            await _audit.LogAsync<object>("Complaints", "ChangeStatus", entity.ComplaintId.ToString(), oldData,
+                new
+                {
+                    entity.ComplaintId,
+                    NewStatus = entity.Status,
+                    entity.SolvedDate,
+                    entity.Solution
+                }, currentUserName);
+
             return (true, $"تم تغيير الحالة إلى '{ComplaintStatus.ToText(dto.NewStatus)}'");
         }
         catch (Exception ex)
@@ -380,6 +476,9 @@ public class ComplaintService : IComplaintService
 
         try
         {
+            var oldAssignedTo = entity.AssignedTo;
+            var oldStatus = entity.Status;
+
             entity.AssignedTo = dto.AssignedTo;
 
             // لو جديدة وتم إسنادها → قيد الحل
@@ -387,6 +486,22 @@ public class ComplaintService : IComplaintService
                 entity.Status = ComplaintStatus.InProgress;
 
             await db.SaveChangesAsync();
+
+            await _audit.LogAsync<object>("Complaints", "Assign", entity.ComplaintId.ToString(),
+                new { entity.ComplaintId, OldAssignedTo = oldAssignedTo, OldStatus = oldStatus },
+                new { entity.ComplaintId, NewAssignedTo = entity.AssignedTo, NewStatus = entity.Status },
+                currentUserName);
+
+            if (dto.AssignedTo.HasValue)
+            {
+                var clientName = await db.Parties.AsNoTracking()
+                    .Where(p => p.PartyId == entity.PartyId)
+                    .Select(p => p.PartyName)
+                    .FirstOrDefaultAsync() ?? $"عميل #{entity.PartyId}";
+
+                await NotifyComplaintAssignedToEmployeeAsync(db, entity, clientName, currentUserName, "تم إسناد الشكوى لك.");
+            }
+
             return (true, "تم الإسناد بنجاح");
         }
         catch (Exception ex)
@@ -409,6 +524,16 @@ public class ComplaintService : IComplaintService
 
         try
         {
+            var oldData = new
+            {
+                entity.ComplaintId,
+                entity.Escalated,
+                entity.EscalatedDate,
+                entity.EscalatedTo,
+                entity.EscalationReason,
+                entity.Status
+            };
+
             entity.Escalated        = true;
             entity.EscalatedDate    = DateTime.Now;
             entity.EscalatedTo      = dto.EscalatedTo.Trim();
@@ -417,6 +542,19 @@ public class ComplaintService : IComplaintService
             entity.Status           = ComplaintStatus.Escalated;
 
             await db.SaveChangesAsync();
+
+            await _audit.LogAsync<object>("Complaints", "Escalate", entity.ComplaintId.ToString(), oldData,
+                new
+                {
+                    entity.ComplaintId,
+                    entity.Escalated,
+                    entity.EscalatedDate,
+                    entity.EscalatedTo,
+                    entity.EscalationReason,
+                    entity.Status,
+                    entity.EscalatedBy
+                }, currentUserName);
+
             return (true, "تم تصعيد الشكوى");
         }
         catch (Exception ex)
@@ -778,6 +916,52 @@ public class ComplaintService : IComplaintService
     // ═══════════════════════════════════════════════════════
     //                      EXCEL EXPORT
     // ═══════════════════════════════════════════════════════
+
+    private async Task NotifyComplaintCreatedAsync(db24804Context db, Complaint complaint, string clientName, string actor)
+    {
+        var title = "🧾 شكوى جديدة";
+        var message = $"تم تسجيل شكوى جديدة للعميل {clientName}.\nالموضوع: {complaint.Subject}\nالأولوية: {ComplaintPriority.ToText(complaint.Priority)}\nرقم الشكوى: #{complaint.ComplaintId}";
+
+        foreach (var role in ComplaintCreateNotifyRoles.Distinct())
+        {
+            await _notify.NotifyRoleAsync(
+                title: title,
+                message: message,
+                role: role,
+                createdBy: actor,
+                formName: "complaints",
+                relatedTable: "Complaints",
+                relatedId: complaint.ComplaintId);
+        }
+    }
+
+    private async Task NotifyComplaintAssignedToEmployeeAsync(db24804Context db, Complaint complaint, string clientName, string actor, string prefix)
+    {
+        if (!complaint.AssignedTo.HasValue)
+            return;
+
+        var user = await db.Users.AsNoTracking()
+            .Where(u => u.EmployeeId == complaint.AssignedTo.Value && u.IsActive == true)
+            .Select(u => new { u.Username, u.FullName })
+            .FirstOrDefaultAsync();
+
+        if (user == null || string.IsNullOrWhiteSpace(user.Username))
+        {
+            _logger.LogWarning("Complaint {ComplaintId} assigned to Employee {EmployeeId}, but no active user is linked.", complaint.ComplaintId, complaint.AssignedTo.Value);
+            return;
+        }
+
+        var message = $"{prefix}\nالعميل: {clientName}\nالموضوع: {complaint.Subject}\nرقم الشكوى: #{complaint.ComplaintId}";
+
+        await _notify.AddAsync(
+            title: "📌 تم إسناد شكوى لك",
+            message: message,
+            recipientUser: user.Username,
+            createdBy: actor,
+            formName: "complaints",
+            relatedTable: "Complaints",
+            relatedId: complaint.ComplaintId);
+    }
 
     public async Task<byte[]> ExportToExcelAsync(ComplaintFilterDto filter)
     {

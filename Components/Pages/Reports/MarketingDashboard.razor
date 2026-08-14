@@ -1,0 +1,700 @@
+﻿@page "/reports/marketing"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using ApexCharts
+@using Microsoft.AspNetCore.Authorization
+@using System.Text
+
+@attribute [Authorize]
+
+@inject IMarketingDashboardService MarketingService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+
+<PageTitle>لوحة أداء التسويق | Marketing Performance Dashboard</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="mkd-ld"><MudProgressCircular Color="MudBlazor.Color.Primary" Size="MudBlazor.Size.Large" Indeterminate /></div>
+}
+else if (_noAccess)
+{
+    <div class="mkd-ld">
+        <MudIcon Icon="@Icons.Material.Filled.Lock" Size="MudBlazor.Size.Large" Style="color:#dc2626" />
+        <MudText Typo="Typo.h6" Class="mt-4">ليس لديك صلاحية</MudText>
+    </div>
+}
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="mkd-ld">
+        <MudText Typo="Typo.h6" Style="color:#dc2626">@_loadError</MudText>
+        <MudButton Variant="MudBlazor.Variant.Text" OnClick="@(() => LoadData())" Class="mt-2">إعادة المحاولة</MudButton>
+    </div>
+}
+else if (_data is not null)
+{
+<div dir="rtl" class="mkd">
+
+    @* ── HEADER ── *@
+    <header class="mkd-hdr">
+        <div class="mkd-hdr-l">
+            <div class="mkd-logo">C</div>
+            <span class="mkd-vdiv"></span>
+            <div class="mkd-hdr-txt">
+                <h1 class="mkd-title">Marketing Performance Dashboard</h1>
+                <p class="mkd-subtitle">لوحة أداء التسويق</p>
+            </div>
+        </div>
+        <div class="mkd-hdr-r">
+            <span class="mkd-gm">
+                <MudIcon Icon="@Icons.Material.Filled.Insights" Size="MudBlazor.Size.Small" />
+                <span class="mkd-gm-en">General Manager View</span>
+                <span class="mkd-gm-ar">عرض المدير العام</span>
+            </span>
+            <div class="mkd-user"><MudIcon Icon="@Icons.Material.Filled.Person" Size="MudBlazor.Size.Small" /></div>
+        </div>
+    </header>
+
+    @* ── FILTER / PERIOD BAR ── *@
+    <div class="mkd-filters">
+        <div class="mkd-fsec">
+            <span class="mkd-flbl"><MudIcon Icon="@Icons.Material.Filled.DateRange" Size="MudBlazor.Size.Small" /> الفترة</span>
+            <button class="mkd-fb @(_period==1?"on":"")" @onclick="()=>SetPeriod(1)">يوم</button>
+            <button class="mkd-fb @(_period==7?"on":"")" @onclick="()=>SetPeriod(7)">أسبوع</button>
+            <button class="mkd-fb @(_period==30?"on":"")" @onclick="()=>SetPeriod(30)">شهر</button>
+            <button class="mkd-fb @(_period==90?"on":"")" @onclick="()=>SetPeriod(90)">3 شهور</button>
+            <button class="mkd-fb @(_period==365?"on":"")" @onclick="()=>SetPeriod(365)">سنة</button>
+            <button class="mkd-fb @(_period==0?"on":"")" @onclick="()=>SetPeriod(0)">مخصص</button>
+        </div>
+        @if (_period == 0)
+        {
+            <div class="mkd-fsec">
+                <input type="date" class="mkd-fd" @bind="_dateFrom" @bind:after="()=>LoadData(true)" />
+                <span class="mkd-farw">→</span>
+                <input type="date" class="mkd-fd" @bind="_dateTo" @bind:after="()=>LoadData(true)" />
+            </div>
+        }
+        else
+        {
+            <div class="mkd-fsec mkd-range">
+                <MudIcon Icon="@Icons.Material.Filled.Event" Size="MudBlazor.Size.Small" />
+                <span>@_data.DateFrom.ToString("dd/MM/yyyy") – @_data.DateTo.ToString("dd/MM/yyyy")</span>
+            </div>
+        }
+        <div class="mkd-fsec">
+            <span class="mkd-flbl">القناة</span>
+            @foreach (var ch in _channels)
+            {
+                <button class="mkd-fb @(_channel==ch.Key?"on":"")" @onclick="()=>SetChannel(ch.Key)">@ch.Name</button>
+            }
+        </div>
+        <div class="mkd-fsec mkd-vsp">
+            <span class="mkd-vs-lbl">مقارنة بالفترة السابقة</span>
+            @if (_data.OverallDelta.HasValue)
+            {
+                <span class="mkd-vs @(_data.OverallDelta>=0?"up":"dn")">@(_data.OverallDelta>=0?"▲":"▼") @Math.Abs(_data.OverallDelta.Value).ToString("0.0")%</span>
+            }
+        </div>
+    </div>
+
+    @if (_isRefreshing) { <div class="mkd-prog"><div class="mkd-prog-fill"></div></div> }
+
+    @* ── KPI CARDS ── *@
+    <div class="mkd-kpis">
+        @foreach (var k in _data.Kpis)
+        {
+            var g = !k.Delta.HasValue || (k.Delta >= 0) == k.GoodWhenUp;
+            <div class="mkd-kpi" style="--kc:@k.Color">
+                <div class="mkd-kpi-ic"><MudIcon Icon="@KpiIcon(k.Key)" Size="MudBlazor.Size.Small" /></div>
+                <div class="mkd-kpi-lb">@k.Label</div>
+                <div class="mkd-kpi-v">@k.Value</div>
+                <div class="mkd-kpi-d @(g?"up":"dn")">
+                    @if (k.Delta.HasValue)
+                    {
+                        <span class="mkd-kpi-arrow">@(g?"▲":"▼") @Math.Abs(k.Delta.Value).ToString("0.0")%</span>
+                    }
+                    else
+                    {
+                        <span class="mkd-kpi-arrow muted">—</span>
+                    }
+                    <span class="mkd-kpi-cmp">مقارنة بالفترة السابقة</span>
+                </div>
+            </div>
+        }
+    </div>
+
+    @* ── MAIN GRID ── *@
+    <div class="mkd-grid3">
+
+        <section class="mkd-card mkd-funnel-card">
+            <div class="mkd-card-h">
+                <span class="mkd-dot" style="background:#2563eb"></span>
+                <span>القمع التسويقي</span>
+                <span class="mkd-sub-en">Marketing Funnel</span>
+            </div>
+            <div class="mkd-card-b mkd-funnel-b">
+                @((MarkupString)BuildFunnelSvg())
+            </div>
+        </section>
+
+        <div class="mkd-col">
+
+            <section class="mkd-card">
+                <div class="mkd-card-h">
+                    <span class="mkd-dot" style="background:#0891b2"></span>
+                    <span>أداء القنوات</span>
+                    <span class="mkd-sub-en">Channel Performance</span>
+                </div>
+                <div class="mkd-card-b mkd-scroll">
+                    <table class="mkd-tb">
+                        <thead>
+                            <tr>
+                                <th class="th-r">المصدر</th>
+                                <th>لييدز</th>
+                                <th>عملاء</th>
+                                <th>الإنفاق</th>
+                                <th>CPL</th>
+                                <th>CAC</th>
+                                
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var ch in _data.Channels)
+                            {
+                                <tr class="@(ch.IsTotal ? "tot" : "")">
+                                    <td class="th-r"><span class="mkd-cdot" style="background:@ch.Color"></span><b>@ch.Name</b></td>
+                                    <td>@ch.Leads.ToString("N0")</td>
+                                    <td>@ch.Customers.ToString("N0")</td>
+                                    <td>@FmtMoney(ch.Spend)</td>
+                                    <td>@FmtMoney(ch.Cpl)</td>
+                                    <td>@FmtMoney(ch.Cac)</td>
+                                    
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="mkd-note">* العملاء = فواتير مرتبطة بفرص البيع</div>
+                </div>
+            </section>
+
+            <section class="mkd-card">
+                <div class="mkd-card-h">
+                    <span class="mkd-dot" style="background:#f59e0b"></span>
+                    <span>أداء الحملات</span>
+                    <span class="mkd-sub-en">Campaign Performance</span>
+                    <div class="mkd-sp"></div>
+                    <div class="mkd-sw">
+                        <button class="mkd-swb @(_campaignTab==0?"on":"")" @onclick="()=>_campaignTab=0">أفضل 5</button>
+                        <button class="mkd-swb @(_campaignTab==1?"on":"")" @onclick="()=>_campaignTab=1">أسوأ 5</button>
+                    </div>
+                </div>
+                <div class="mkd-card-b">
+                    @if (CurrentCampaignRows.Count == 0)
+                    {
+                        <p class="mkd-empty">لا توجد حملات</p>
+                    }
+                    else
+                    {
+                        <table class="mkd-tb">
+                            <thead>
+                                <tr>
+                                    <th class="th-r">الحملة</th>
+                                    <th>لييدز</th>
+                                    <th>مؤهل</th>
+                                    <th>التحويل</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var cp in CurrentCampaignRows)
+                                {
+                                    <tr>
+                                        <td class="mkd-cp"><b>@cp.Name</b></td>
+                                        <td>@cp.Leads.ToString("N0")</td>
+                                        <td>@cp.Qualified.ToString("N0")</td>
+                                        <td>
+                                            <div class="mkd-rbar"><div class="mkd-rfill" style="width:@Math.Min(cp.Leads>0?cp.Qualified*100.0/cp.Leads:0,100)%;background:@(_campaignTab==0?"#10b981":"#f59e0b")"></div></div>
+                                            <span class="mkd-rpct @(_campaignTab==0?"ok":"br")">@(cp.Leads>0?cp.Qualified*100.0/cp.Leads:0).ToString("0.0")%</span>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            </section>
+
+        </div>
+
+        <div class="mkd-col">
+
+            <section class="mkd-card">
+                <div class="mkd-card-h">
+                    <span class="mkd-dot" style="background:#8b5cf6"></span>
+                    <span>المستهدف مقابل الفعلي</span>
+                    <span class="mkd-sub-en">Target vs Actual</span>
+                </div>
+                <div class="mkd-card-b">
+                    @foreach (var t in _data.Targets)
+                    {
+                        var pw = (int)Math.Round(Math.Min(t.Percent, 100));
+                        <div class="mkd-tgt">
+                            <div class="mkd-tgt-h">
+                                <span class="mkd-tgt-n">@t.Metric</span>
+                                <span class="mkd-tgt-b @(t.Achieved ? "ok" : "no")">
+                                    <MudIcon Icon="@(t.Achieved ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Cancel)" Size="MudBlazor.Size.Small" />
+                                    @t.Percent.ToString("0")%
+                                </span>
+                            </div>
+                            <div class="mkd-tgt-tr"><div class="mkd-tgt-f @(t.Achieved ? "ok" : "no")" style="width:@pw%"></div></div>
+                            <div class="mkd-tgt-v"><span>الفعلي: <b>@t.Actual</b></span><span>المستهدف: <b>@t.Target</b></span></div>
+                        </div>
+                    }
+                    <div class="mkd-st">
+                        <div class="mkd-st-t"><MudIcon Icon="@Icons.Material.Filled.Flag" Size="MudBlazor.Size.Small" Style="color:#b8860b" /> تارجيت المبيعات الشهري</div>
+                        <div class="mkd-st-r"><span>تارجيت الفريق</span><b>@FmtMoney(_data.MonthlySalesTarget)</b></div>
+                        <div class="mkd-st-r"><span>موظفو المبيعات</span><b>@_data.SalesEmployeeCount</b></div>
+                        <div class="mkd-st-r hl"><span>تارجيت الموظف</span><b>@FmtMoney(_data.PerEmployeeMonthlyTarget)</b></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mkd-card">
+                <div class="mkd-card-h">
+                    <span class="mkd-dot" style="background:#16a34a"></span>
+                    <span>التسويق مقابل المبيعات</span>
+                    <span class="mkd-sub-en">Marketing vs Sales</span>
+                </div>
+                <div class="mkd-card-b">
+                    <div class="mkd-vsf">
+                        <div class="mkd-vsf-row" style="width:100%"><span>لييدز التسويق</span><b>@_data.VsSales.Leads.ToString("N0")</b></div>
+                        <div class="mkd-vsf-row" style="width:80%"><span>تم التواصل</span><b>@_data.VsSales.Contacted.ToString("N0")</b></div>
+                        <div class="mkd-vsf-row" style="width:64%"><span>مؤهلين</span><b>@_data.VsSales.Qualified.ToString("N0")</b></div>
+                        <div class="mkd-vsf-row" style="width:36%"><span>فرص</span><b>@_data.VsSales.Opportunities.ToString("N0")</b></div>
+                        <div class="mkd-vsf-row" style="width:20%"><span>عملاء</span><b>@_data.VsSales.Customers.ToString("N0")</b></div>
+                    </div>
+                    <div class="mkd-vs-badge @_data.VsSales.StatusClass">
+                        <MudIcon Icon="@Icons.Material.Filled.Balance" Size="MudBlazor.Size.Small" />
+                        <div>
+                            <small>الوضع الحالي</small>
+                            <b>@_data.VsSales.StatusText</b>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </div>
+
+    @* ── PERFORMANCE TREND (4 charts) ── *@
+    <section class="mkd-card">
+        <div class="mkd-card-h">
+            <span class="mkd-dot" style="background:#2563eb"></span>
+            <span>اتجاه الأداء</span>
+            <span class="mkd-sub-en">Performance Trend</span>
+        </div>
+        <div class="mkd-card-b mkd-trends">
+            <div class="mkd-trend">
+                <div class="mkd-trend-h"><span>لييدز</span><span class="mkd-trend-b up">Leads Trend</span></div>
+                <ApexChart TItem="MarketingTrendDto" @key="@("t0"+_chartKey)" Options="_leadsOpts" Height="150">
+                    <ApexPointSeries TItem="MarketingTrendDto" Items="_data.LeadsTrend" Name="لييدز" SeriesType="SeriesType.Area" XValue="@(d => d.ChartLabel)" YValue="@(d => (decimal?)d.Value)" />
+                </ApexChart>
+            </div>
+            <div class="mkd-trend">
+                <div class="mkd-trend-h"><span>معدل التحويل</span><span class="mkd-trend-b up">Conversion</span></div>
+                <ApexChart TItem="MarketingTrendDto" @key="@("t1"+_chartKey)" Options="_convOpts" Height="150">
+                    <ApexPointSeries TItem="MarketingTrendDto" Items="_data.ConversionTrend" Name="التحويل" SeriesType="SeriesType.Area" XValue="@(d => d.ChartLabel)" YValue="@(d => (decimal?)d.Value)" />
+                </ApexChart>
+            </div>
+            <div class="mkd-trend">
+                <div class="mkd-trend-h"><span>تكلفة اللييد CPL</span><span class="mkd-trend-b dn">CPL</span></div>
+                <ApexChart TItem="MarketingTrendDto" @key="@("t2"+_chartKey)" Options="_cplOpts" Height="150">
+                    <ApexPointSeries TItem="MarketingTrendDto" Items="_data.CplTrend" Name="CPL" SeriesType="SeriesType.Area" XValue="@(d => d.ChartLabel)" YValue="@(d => (decimal?)d.Value)" />
+                </ApexChart>
+            </div>
+            <div class="mkd-trend">
+                <div class="mkd-trend-h"><span>العائد ROAS</span><span class="mkd-trend-b up">ROAS</span></div>
+                <ApexChart TItem="MarketingTrendDto" @key="@("t3"+_chartKey)" Options="_roasOpts" Height="150">
+                    <ApexPointSeries TItem="MarketingTrendDto" Items="_data.RoasTrend" Name="ROAS" SeriesType="SeriesType.Area" XValue="@(d => d.ChartLabel)" YValue="@(d => (decimal?)d.Value)" />
+                </ApexChart>
+            </div>
+        </div>
+    </section>
+
+    @* ── ALERTS + SCORE ── *@
+    <div class="mkd-grid2">
+
+        <section class="mkd-card">
+            <div class="mkd-card-h">
+                <span class="mkd-dot" style="background:#f97316"></span>
+                <span>تنبيهات الإدارة</span>
+                <span class="mkd-sub-en">Management Alerts</span>
+                <div class="mkd-sp"></div>
+                <MudIcon Icon="@Icons.Material.Filled.NotificationsActive" Size="MudBlazor.Size.Small" Style="color:#f97316" />
+            </div>
+            <div class="mkd-card-b mkd-alerts">
+                @foreach (var al in _data.Alerts)
+                {
+                    <div class="mkd-al al-@al.Type">
+                        <span class="mkd-al-dot"></span>
+                        <div><b>@al.Text</b><small>@al.Detail</small></div>
+                    </div>
+                }
+                @if (_data.Alerts.Count == 0)
+                {
+                    <p class="mkd-empty">لا توجد تنبيهات</p>
+                }
+            </div>
+        </section>
+
+        <section class="mkd-card">
+            <div class="mkd-card-h">
+                <span class="mkd-dot" style="background:#16a34a"></span>
+                <span>مؤشر الأداء التسويقي</span>
+                <span class="mkd-sub-en">Marketing Performance Score</span>
+            </div>
+            <div class="mkd-card-b mkd-score">
+                <div class="mkd-score-gauge">
+                    @((MarkupString)BuildGaugeSvg())
+                    <div class="mkd-score-lbl @_data.ScoreClass">@_data.ScoreLabel</div>
+                </div>
+                <div class="mkd-score-guide">
+                    <div class="mkd-guide-t">دليل النتيجة</div>
+                    <div class="mkd-guide"><i style="background:#16a34a"></i><span>9 – 10</span><b>ممتاز</b></div>
+                    <div class="mkd-guide"><i style="background:#4ade80"></i><span>8 – 8.9</span><b>جيد جدًا</b></div>
+                    <div class="mkd-guide"><i style="background:#84cc16"></i><span>7 – 7.9</span><b>جيد</b></div>
+                    <div class="mkd-guide"><i style="background:#d97706"></i><span>6 – 6.9</span><b>يحتاج تحسين</b></div>
+                    <div class="mkd-guide"><i style="background:#dc2626"></i><span>أقل من 6</span><b>ضعيف</b></div>
+                </div>
+            </div>
+        </section>
+
+    </div>
+
+    <footer class="mkd-ftr">
+        <div class="mkd-ftr-ar">تسويق أذكى = عملاء أكثر = تحويل أفضل = مبيعات أعلى</div>
+        <div class="mkd-ftr-en">Smart Marketing = More Leads = Better Conversion = Higher Revenue</div>
+    </footer>
+
+</div>
+}
+
+<style>
+.mkd{--bg:#f2f4f9;--card:#ffffff;--bdr:#e5e8f1;--t1:#0f1a2e;--t2:#47576d;--t3:#929db0;--navy:#0c2450;--navy2:#123a7a;padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--bg);min-height:100vh;direction:rtl}
+.mkd *{box-sizing:border-box;font-family:'Cairo','Inter','Segoe UI',Tahoma,sans-serif}
+.mkd-ld{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:70vh;background:var(--bg);gap:8px}
+.mkd-empty{text-align:center;color:var(--t3);padding:18px 0;font-size:12px;margin:0}
+
+.mkd-hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 20px;background:linear-gradient(135deg,#0a1f45 0%,#123a7a 70%,#174a94 100%);border-radius:12px;color:#fff;box-shadow:0 6px 22px rgba(12,36,80,.25);flex-wrap:wrap}
+.mkd-hdr-l{display:flex;align-items:center;gap:14px}
+.mkd-logo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#f59e0b,#fbbf24);color:#0a1f45;font-weight:900;font-size:21px;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(245,158,11,.35)}
+.mkd-vdiv{width:1px;height:34px;background:rgba(255,255,255,.22)}
+.mkd-hdr-txt{line-height:1.25}
+.mkd-title{margin:0;font-size:17px;font-weight:800;letter-spacing:.2px}
+.mkd-subtitle{margin:1px 0 0;font-size:11.5px;opacity:.72}
+.mkd-hdr-r{display:flex;align-items:center;gap:10px}
+.mkd-gm{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);padding:6px 14px;border-radius:20px;backdrop-filter:blur(2px)}
+.mkd-gm-en{font-size:11.5px;font-weight:700}
+.mkd-gm-ar{font-size:10.5px;opacity:.7}
+.mkd-user{width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center}
+
+.mkd-filters{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 16px;background:var(--card);border:1px solid var(--bdr);border-radius:11px;box-shadow:0 1px 4px rgba(16,24,40,.05)}
+.mkd-fsec{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.mkd-flbl{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;color:var(--t2);white-space:nowrap}
+.mkd-fb{border:1px solid var(--bdr);background:#fff;color:var(--t1);padding:4px 12px;border-radius:16px;font-size:11.5px;font-weight:600;cursor:pointer;transition:all .15s}
+.mkd-fb:hover{border-color:#c7d0e2}
+.mkd-fb.on{background:#f59e0b;border-color:#f59e0b;color:#fff;box-shadow:0 2px 8px rgba(245,158,11,.35)}
+.mkd-fd{border:1px solid var(--bdr);border-radius:6px;padding:3px 8px;font-size:12px;color:var(--t1);background:#fff}
+.mkd-farw{color:var(--t3);font-size:12px}
+.mkd-range{display:inline-flex;align-items:center;gap:6px;color:var(--t2);font-size:12px;font-weight:600;background:#f8fafc;border:1px solid var(--bdr);border-radius:8px;padding:4px 10px;white-space:nowrap}
+.mkd-vsp{margin-inline-start:auto;border-inline-start:1px solid var(--bdr);padding-inline-start:14px;flex-direction:column;align-items:flex-start;row-gap:2px}
+.mkd-vs-lbl{font-size:10px;color:var(--t3);font-weight:600}
+.mkd-vs{font-weight:800;font-size:13px}
+.mkd-vs.up{color:#16a34a}.mkd-vs.dn{color:#dc2626}
+
+.mkd-prog{height:4px;background:#eef1f7;border-radius:4px;overflow:hidden}
+.mkd-prog-fill{height:100%;width:40%;background:linear-gradient(90deg,#2563eb,#38bdf8);border-radius:4px;animation:mkd-shift 1s linear infinite}
+@@keyframes mkd-shift{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
+
+.mkd-kpis{display:grid;grid-template-columns:repeat(9,1fr);gap:10px}
+.mkd-kpi{background:var(--card);border:1px solid var(--bdr);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:6px;box-shadow:0 1px 3px rgba(16,24,40,.04);transition:box-shadow .18s,transform .18s;position:relative;overflow:hidden}
+.mkd-kpi:hover{box-shadow:0 8px 22px rgba(16,24,40,.1);transform:translateY(-2px)}
+.mkd-kpi-ic{width:30px;height:30px;border-radius:8px;background:color-mix(in srgb,var(--kc) 14%,#fff);color:var(--kc);display:flex;align-items:center;justify-content:center}
+.mkd-kpi-lb{font-size:10.5px;font-weight:600;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mkd-kpi-v{font-size:20px;font-weight:900;color:var(--t1);line-height:1.15;white-space:nowrap}
+.mkd-kpi-d{display:flex;align-items:baseline;gap:5px;flex-wrap:nowrap}
+.mkd-kpi-arrow{font-size:10.5px;font-weight:800;padding:1px 7px;border-radius:7px}
+.mkd-kpi-arrow.muted{color:var(--t3)}
+.mkd-kpi-d.up .mkd-kpi-arrow{background:#ecfdf5;color:#059669}
+.mkd-kpi-d.dn .mkd-kpi-arrow{background:#fef2f2;color:#dc2626}
+.mkd-kpi-cmp{font-size:8.5px;color:var(--t3);white-space:nowrap}
+
+.mkd-grid3{display:grid;grid-template-columns:34fr 34fr 32fr;gap:12px;align-items:stretch}
+.mkd-col{display:flex;flex-direction:column;gap:12px}
+.mkd-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:stretch}
+
+.mkd-card{background:var(--card);border:1px solid var(--bdr);border-radius:11px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 1px 3px rgba(16,24,40,.04)}
+.mkd-card-h{display:flex;align-items:center;gap:8px;padding:12px 16px;font-size:13px;font-weight:800;color:var(--t1);border-bottom:1px solid #f0f2f8;background:#fbfcfe}
+.mkd-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.mkd-sub-en{font-size:9.5px;font-weight:600;color:var(--t3);background:#eef1f7;padding:2px 7px;border-radius:5px}
+.mkd-card-b{padding:12px 16px}
+.mkd-sp{flex:1}
+.mkd-scroll{overflow-x:auto}
+
+.mkd-tb{width:100%;border-collapse:collapse;font-size:11.5px}
+.mkd-tb th{text-align:right;color:var(--t3);font-size:10px;font-weight:700;padding:6px 8px;border-bottom:1px solid var(--bdr);background:#f6f8fc;white-space:nowrap}
+.mkd-tb td{padding:7px 8px;border-bottom:1px solid #f2f4f9;color:var(--t2);white-space:nowrap}
+.mkd-tb tbody tr:nth-child(even){background:#fbfcfe}
+.mkd-tb tbody tr:hover td{background:#f2f6ff}
+.mkd-tb tr:last-child td{border-bottom:none}
+.mkd-tb .tot td{background:#f0f4ff;border-top:2px solid var(--bdr);font-weight:800;color:var(--t1)}
+.mkd-cdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-inline-end:6px}
+.th-r{text-align:right}
+.mkd-note{font-size:9.5px;color:var(--t3);margin-top:8px}
+.mkd-cp b{display:block;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mkd-rbar{width:54px;height:5px;background:#eef1f7;border-radius:4px;overflow:hidden;display:inline-block;vertical-align:middle}
+.mkd-rfill{height:100%;border-radius:4px}
+.mkd-rpct{font-size:10px;font-weight:800;margin-inline-start:6px}
+.mkd-rpct.ok{color:#059669}.mkd-rpct.br{color:#d97706}
+
+.mkd-sw{display:flex;gap:2px;background:#eef1f7;border-radius:8px;padding:2px}
+.mkd-swb{border:none;background:transparent;padding:3px 11px;border-radius:6px;font-size:10px;font-weight:700;color:var(--t3);cursor:pointer}
+.mkd-swb.on{background:#1e40af;color:#fff}
+
+.mkd-tgt{margin-bottom:12px}
+.mkd-tgt:last-of-type{margin-bottom:0}
+.mkd-tgt-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:12px}
+.mkd-tgt-h .mkd-tgt-n{color:var(--t2);font-weight:700}
+.mkd-tgt-b{font-size:10px;font-weight:800;padding:2px 8px;border-radius:8px;display:inline-flex;align-items:center;gap:4px}
+.mkd-tgt-b.ok{background:#ecfdf5;color:#059669}
+.mkd-tgt-b.no{background:#fef2f2;color:#dc2626}
+.mkd-tgt-tr{height:6px;background:#eef1f7;border-radius:4px;overflow:hidden}
+.mkd-tgt-f{height:100%;border-radius:4px}
+.mkd-tgt-f.ok{background:linear-gradient(90deg,#059669,#10b981)}
+.mkd-tgt-f.no{background:linear-gradient(90deg,#dc2626,#ef4444)}
+.mkd-tgt-v{display:flex;justify-content:space-between;font-size:10px;color:var(--t3);margin-top:3px}
+.mkd-tgt-v b{color:var(--t1)}
+
+.mkd-st{margin-top:14px;padding-top:12px;border-top:1px dashed var(--bdr)}
+.mkd-st-t{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:800;color:var(--t2);margin-bottom:8px}
+.mkd-st-r{display:flex;justify-content:space-between;padding:5px 10px;border-radius:7px;font-size:11px;margin-bottom:3px;background:#f6f8fc;color:var(--t3)}
+.mkd-st-r b{color:var(--t1)}
+.mkd-st-r.hl{background:rgba(184,134,11,.08);border:1px solid rgba(184,134,11,.18)}
+.mkd-st-r.hl b{color:#b8860b}
+
+.mkd-vsf{display:flex;flex-direction:column;gap:8px}
+.mkd-vsf-row{display:flex;justify-content:space-between;align-items:center;padding:7px 12px;border-radius:8px;background:linear-gradient(90deg,#eef4ff,#fbfcfe);border-inline-start:3px solid #2563eb;font-size:12px}
+.mkd-vsf-row span{color:var(--t2);font-weight:600}
+.mkd-vsf-row b{color:var(--t1);font-weight:800}
+.mkd-vs-badge{margin-top:12px;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534}
+.mkd-vs-badge small{display:block;font-size:9.5px;opacity:.75}
+.mkd-vs-badge b{font-size:13px}
+
+.mkd-funnel-b{overflow-x:auto}
+.mkd-trends{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.mkd-trend{background:#fbfcfe;border:1px solid var(--bdr);border-radius:9px;padding:8px 10px 4px}
+.mkd-trend-h{display:flex;justify-content:space-between;align-items:center;padding:0 2px 6px}
+.mkd-trend-h span{font-size:11.5px;font-weight:800;color:var(--t1)}
+.mkd-trend-b{font-size:9px;font-weight:800;padding:2px 7px;border-radius:6px}
+.mkd-trend-b.up{background:#ecfdf5;color:#059669}
+.mkd-trend-b.dn{background:#fef2f2;color:#dc2626}
+
+.mkd-alerts{display:flex;flex-direction:column;gap:7px}
+.mkd-al{display:flex;gap:10px;align-items:flex-start;padding:8px 11px;border-radius:9px;font-size:11.5px;border:1px solid transparent}
+.mkd-al-dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex-shrink:0}
+.mkd-al b{color:var(--t1);font-size:12px;display:block}
+.mkd-al small{color:var(--t3);font-size:10.5px}
+.al-good{background:#f0fdf4;border-color:#bbf7d0}.al-good .mkd-al-dot{background:#16a34a}
+.al-warn{background:#fffbeb;border-color:#fde68a}.al-warn .mkd-al-dot{background:#d97706}
+.al-bad{background:#fef2f2;border-color:#fecaca}.al-bad .mkd-al-dot{background:#dc2626}
+.al-info{background:#eff6ff;border-color:#bfdbfe}.al-info .mkd-al-dot{background:#2563eb}
+
+.mkd-score{display:flex;gap:18px;align-items:center;justify-content:center;flex-wrap:wrap}
+.mkd-score-gauge{display:flex;flex-direction:column;align-items:center;gap:4px}
+.mkd-score-lbl{font-size:13px;font-weight:900}
+.mkd-score-lbl.score-excellent{color:#059669}
+.mkd-score-lbl.score-needs{color:#d97706}
+.mkd-score-lbl.score-poor{color:#dc2626}
+.mkd-score-guide{min-width:170px}
+.mkd-guide-t{font-size:12px;font-weight:800;color:var(--t2);margin-bottom:8px}
+.mkd-guide{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11.5px}
+.mkd-guide i{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.mkd-guide span{color:var(--t3);width:52px}
+.mkd-guide b{color:var(--t1)}
+
+.mkd-ftr{padding:13px 16px;background:linear-gradient(135deg,#0a1f45 0%,#123a7a 100%);border-radius:12px;color:#fff;text-align:center;box-shadow:0 5px 18px rgba(12,36,80,.2)}
+.mkd-ftr-ar{font-size:13.5px;font-weight:800;letter-spacing:.3px}
+.mkd-ftr-en{font-size:10.5px;opacity:.72;margin-top:3px}
+
+@@media(max-width:1400px){.mkd-kpis{grid-template-columns:repeat(5,1fr)}}
+@@media(max-width:1150px){.mkd-kpis{grid-template-columns:repeat(3,1fr)}.mkd-grid3,.mkd-grid2{grid-template-columns:1fr}.mkd-trends{grid-template-columns:repeat(2,1fr)}}
+@@media(max-width:768px){.mkd-kpis{grid-template-columns:repeat(2,1fr)}.mkd-vsp{border-inline-start:none;padding-inline-start:0;margin-inline-start:0}.mkd-title{font-size:14px}.mkd{ padding:10px;gap:10px}}
+@@media(max-width:480px){.mkd-kpis{grid-template-columns:1fr}.mkd-trends{grid-template-columns:1fr}.mkd-score{flex-direction:column}}
+</style>
+
+@code {
+    private MarketingDashboardDto? _data;
+    private bool _isLoading = true;
+    private bool _isRefreshing;
+    private int _chartKey;
+    private bool _noAccess;
+    private string? _loadError;
+    private int _period = 30;
+    private DateTime _dateFrom = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime _dateTo = DateTime.Today;
+    private string _channel = "all";
+    private int _campaignTab;
+
+    // خيارات القنوات لأزرار الفلتر
+    private static readonly (string Key, string Name)[] _channels = new[]
+    {
+        ("all", "الكل"), ("fb", "فيسبوك"), ("ig", "انستجرام"),
+        ("google", "جوجل"), ("tiktok", "تيك توك"), ("other", "أخرى"),
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var u = auth.User;
+        if (!(u.IsInRole("Admin") || u.IsInRole("GeneralManager") || u.IsInRole("SalesManager") || u.IsInRole("SocialManager") || u.IsInRole("SocialView")))
+        { _noAccess = true; _isLoading = false; return; }
+        await LoadData();
+    }
+
+    private async Task LoadData(bool silent = false)
+    {
+        if (_dateFrom > _dateTo) { Snackbar.Add("تاريخ البداية أكبر من النهاية", MudBlazor.Severity.Warning); return; }
+        if (silent && _data != null) _isRefreshing = true; else { _isLoading = true; _loadError = null; }
+        StateHasChanged();
+        try { _data = await MarketingService.GetDashboardAsync(_dateFrom, _dateTo, _channel); _chartKey++; }
+        catch (Exception ex) { _loadError = ex.Message; }
+        finally { _isLoading = false; _isRefreshing = false; StateHasChanged(); }
+    }
+
+    private void SetPeriod(int d)
+    {
+        _period = d; var t = DateTime.Today; _dateTo = t;
+        _dateFrom = d switch
+        {
+            1 => t,
+            7 => t.AddDays(-6),
+            30 => new DateTime(t.Year, t.Month, 1),
+            90 => new DateTime(t.Year, t.Month, 1).AddMonths(-2),
+            365 => new DateTime(t.Year, t.Month, 1).AddMonths(-11),
+            _ => _dateFrom,
+        };
+        _ = LoadData(true);
+    }
+
+    private void SetChannel(string c) { _channel = c; _ = LoadData(true); }
+
+    private List<MarketingCampaignDto> CurrentCampaignRows => _campaignTab == 0 ? _data!.TopCampaigns : _data!.WorstCampaigns;
+    private static string FmtMoney(decimal v) => MarketingDashboardService.FmtMoney(v);
+
+    private static string KpiIcon(string k) => k switch
+    {
+        "spend" => Icons.Material.Filled.Payments,
+        "leads" => Icons.Material.Filled.GroupAdd,
+        "cpl" => Icons.Material.Filled.TrackChanges,
+        "qualified" => Icons.Material.Filled.FilterAlt,
+        "conv" => Icons.Material.Filled.Handshake,
+        "customers" => Icons.Material.Filled.Groups,
+        "cac" => Icons.Material.Filled.Paid,
+        "revenue" => Icons.Material.Filled.BarChart,
+        "roas" => Icons.Material.Filled.Campaign,
+        _ => Icons.Material.Filled.Insights,
+    };
+
+    // ═══ SVG الفنل مع شارات التسرب على اليمين ═══
+        private string BuildFunnelSvg()
+    {
+        if (_data == null || _data.Funnel.Count == 0) return "";
+        var sb = new StringBuilder();
+        var n = _data.Funnel.Count;
+        var stgH = 46.0; var gapH = 44.0; var w = 500.0;
+        var h = n * stgH + (n - 1) * gapH + 16;
+        var lw = 400.0; var cx = lw / 2; var maxHW = lw / 2 - 22;
+        var cols = new[] { "#2563eb", "#0ea5b7", "#10b981", "#f59e0b", "#f97316", "#ef4444", "#8b5cf6" };
+        var halfWs = _data.Funnel.Select(s => Math.Max(maxHW * 0.16, s.PercentOfFirst / 100.0 * maxHW)).ToList();
+
+        sb.Append($"<svg viewBox=\"0 0 {w} {h}\" style=\"width:100%;max-width:560px;display:block;margin:0 auto;\">");
+
+        for (int i = 0; i < n; i++)
+        {
+            var stg = _data.Funnel[i];
+            var y = i * (stgH + gapH);
+            var tHW = halfWs[i];
+            var bHW = i < n - 1 ? halfWs[i + 1] : tHW * 0.78;
+            var c = cols[i % cols.Length];
+            var mid = y + stgH / 2;
+
+            sb.Append($"<polygon points=\"{cx - tHW},{y} {cx + tHW},{y} {cx + bHW},{y + stgH} {cx - bHW},{y + stgH}\" fill=\"{c}\" stroke=\"rgba(255,255,255,.55)\" style=\"filter:drop-shadow(0 3px 5px rgba(15,23,42,.12))\"/>");
+            sb.Append($"<text x=\"{cx}\" y=\"{mid - 4}\" text-anchor=\"middle\" dominant-baseline=\"middle\" fill=\"#fff\" font-family=\"Cairo,sans-serif\" font-size=\"12\" font-weight=\"700\">{stg.Name}</text>");
+            sb.Append($"<text x=\"{cx}\" y=\"{mid + 14}\" text-anchor=\"middle\" dominant-baseline=\"middle\" fill=\"rgba(255,255,255,.95)\" font-family=\"Cairo,sans-serif\" font-size=\"13\" font-weight=\"900\">{stg.Count.ToString("N0")}</text>");
+
+            if (i < n - 1)
+            {
+                var nxt = _data.Funnel[i + 1];
+                var drop = stg.PercentOfFirst - nxt.PercentOfFirst;
+                var by = (y + stgH + gapH / 2) - 8;
+                var bx = lw + 16;
+                sb.Append($"<path d=\"M {cx - 6} {by + 8} q 6 8 12 0 M {cx + 6} {by + 8} q -6 8 -12 0\" fill=\"none\" stroke=\"#cbd5e1\" stroke-width=\"1.5\"/>");
+                sb.Append($"<rect x=\"{bx}\" y=\"{by}\" width=\"{w - bx - 12}\" height=\"18\" rx=\"9\" fill=\"#fee2e2\" stroke=\"#fecaca\"/>");
+                sb.Append($"<text x=\"{bx + 7}\" y=\"{by + 12}\" text-anchor=\"start\" fill=\"#b91c1c\" font-family=\"Cairo,sans-serif\" font-size=\"9.5\" font-weight=\"700\">تسرب {drop.ToString("0.0")}%</text>");
+            }
+        }
+        sb.Append("</svg>");
+        return sb.ToString();
+    }
+
+    // ═══ بناء SVG الـ Gauge ═══
+        private string BuildGaugeSvg()
+    {
+        if (_data == null) return "";
+        var sc = _data.PerformanceScore;
+        var pct = Math.Max(0, Math.Min(100, sc / 10.0 * 100));
+        var scC = _data.ScoreClass == "score-excellent" ? "#059669"
+                 : _data.ScoreClass == "score-needs" ? "#d97706" : "#dc2626";
+
+        const double cx = 100, cy = 86, R = 68;
+        double[] P(double deg)
+        {
+            var r = deg * Math.PI / 180;
+            return new[] { cx + R * Math.Cos(r), cy + R * Math.Sin(r) };
+        }
+        var s = P(-135); var e = P(45);
+        var nd = P(-135 + 270 * (pct / 100.0));
+        int la = pct > 50 ? 1 : 0;
+
+        var sb = new StringBuilder();
+        sb.Append("<svg viewBox=\"0 0 210 150\" style=\"width:178px;display:block;margin:0 auto;\">");
+        sb.Append($"<path d=\"M {s[0].ToString("0.0")} {s[1].ToString("0.0")} A {R} {R} 0 1 1 {e[0].ToString("0.0")} {e[1].ToString("0.0")}\" fill=\"none\" stroke=\"#e9edf4\" stroke-width=\"13\" stroke-linecap=\"round\"/>");
+        if (pct > 0.4)
+            sb.Append($"<path d=\"M {s[0].ToString("0.0")} {s[1].ToString("0.0")} A {R} {R} 0 {la} 1 {nd[0].ToString("0.0")} {nd[1].ToString("0.0")}\" fill=\"none\" stroke=\"{scC}\" stroke-width=\"13\" stroke-linecap=\"round\"/>");
+        sb.Append($"<text x=\"100\" y=\"94\" text-anchor=\"middle\" font-size=\"33\" font-weight=\"900\" fill=\"#0f172a\" font-family=\"Cairo,sans-serif\">{sc.ToString("0.0")}</text>");
+        sb.Append("<text x=\"100\" y=\"116\" text-anchor=\"middle\" font-size=\"11\" fill=\"#94a3b8\" font-family=\"Cairo,sans-serif\">من 10</text>");
+        sb.Append("</svg>");
+        return sb.ToString();
+    }
+
+    // ═══ ApexCharts Options ═══
+    private ApexChartOptions<MarketingTrendDto> _leadsOpts => Co("#7c3aed", "function(v){return v>=1000?(v/1000).toFixed(1)+'K':v.toFixed(0)}");
+    private ApexChartOptions<MarketingTrendDto> _convOpts => Co("#059669", "function(v){return v.toFixed(1)+'%'}");
+    private ApexChartOptions<MarketingTrendDto> _cplOpts => Co("#d97706", "function(v){return v>=1000?(v/1000).toFixed(1)+'K':v.toFixed(0)}");
+    private ApexChartOptions<MarketingTrendDto> _roasOpts => Co("#0891b2", "function(v){return v.toFixed(1)+'x'}");
+
+    private static ApexChartOptions<MarketingTrendDto> Co(string c, string f) => new()
+    {
+        Chart = new Chart { FontFamily = "Cairo,sans-serif", Toolbar = new Toolbar { Show = false }, Background = "transparent" },
+        Colors = new List<string> { c },
+        Fill = new Fill { Type = new List<FillType> { FillType.Gradient }, Gradient = new FillGradient { ShadeIntensity = 1, OpacityFrom = .35, OpacityTo = .02, Stops = new List<double> { 0, 100 } } },
+        Stroke = new Stroke { Curve = new List<Curve> { Curve.Smooth }, Width = new List<double> { 2.5 } },
+        DataLabels = new DataLabels { Enabled = false },
+        Grid = new Grid { BorderColor = "#f0f0f0", StrokeDashArray = 4 },
+        Xaxis = new XAxis { Labels = new XAxisLabels { Style = new AxisLabelStyle { FontFamily = "Cairo,sans-serif", FontSize = "10px", Colors = new List<string> { "#9ca3af" } }, HideOverlappingLabels = true }, AxisBorder = new AxisBorder { Show = false }, AxisTicks = new AxisTicks { Show = false } },
+        Yaxis = new List<YAxis> { new YAxis { Labels = new YAxisLabels { Style = new AxisLabelStyle { FontFamily = "Cairo,sans-serif", FontSize = "10px", Colors = new List<string> { "#9ca3af" } }, Formatter = f } } },
+        Tooltip = new Tooltip { Style = new TooltipStyle { FontSize = "12px", FontFamily = "Cairo,sans-serif" } },
+        Markers = new Markers { Size = new List<double> { 0 }, Hover = new MarkersHover { Size = 5 } }
+    };
+}

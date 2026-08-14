@@ -34,8 +34,8 @@ else
             <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #e5e7eb;border-radius:18px;">
                 <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2">
                     <div>
-                        <MudText Typo="Typo.h4" Style="font-weight:800;">المهام العامة</MudText>
-                        <MudText Typo="Typo.body2" Class="mt-1"> </MudText>
+                        <MudText Typo="Typo.h4" Style="font-weight:800;">التكليفات العامة</MudText>
+                        <MudText Typo="Typo.body2" Class="mt-1">مهام عامة للموظفين بعيدًا عن الفرص البيعية، بنفس سيناريو الإشعارات والمتابعة.</MudText>
                     </div>
                     @if (_canCreateGeneralTasks)
                     {
@@ -156,19 +156,24 @@ else
                                     <MudText Typo="Typo.body2"><b>أنشئت بواسطة:</b> @(task.CreatedBy ?? "—")</MudText>
                                     <MudText Typo="Typo.body2"><b>التنفيذ خلال:</b> @task.DueDate.ToString("yyyy/MM/dd") @if (task.DueTime.HasValue) { <span>— @task.DueTime.Value.ToString("HH:mm")</span> }</MudText>
 
+                                    @if (!string.IsNullOrWhiteSpace(task.StartNotes) && task.Status == "In Progress")
+                                    {
+                                        <MudAlert Severity="Severity.Info" Dense="true">بدأ التنفيذ: @task.StartNotes</MudAlert>
+                                    }
+
                                     @if (!string.IsNullOrWhiteSpace(task.CompletionNotes) && task.Status == "Completed")
                                     {
-                                        <MudAlert Severity="Severity.Success" Dense="true">@task.CompletionNotes</MudAlert>
+                                        <MudAlert Severity="Severity.Success" Dense="true">تم التنفيذ: @task.CompletionNotes</MudAlert>
                                     }
 
                                     <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
                                         @if (CanStartTask(task))
                                         {
-                                            <MudButton Variant="MudVariant.Outlined" Color="MudColor.Info" OnClick="@(() => StartTaskAsync(task.TaskId))">بدء التنفيذ</MudButton>
+                                            <MudButton Variant="MudVariant.Outlined" Color="MudColor.Info" OnClick="@(() => OpenStartDialog(task.TaskId))">بدء التنفيذ</MudButton>
                                         }
                                         @if (CanCompleteTask(task))
                                         {
-                                            <MudButton Variant="MudVariant.Filled" Color="MudColor.Success" OnClick="@(() => CompleteTaskAsync(task.TaskId))">تم التنفيذ</MudButton>
+                                            <MudButton Variant="MudVariant.Filled" Color="MudColor.Success" OnClick="@(() => OpenCompleteDialog(task.TaskId))">تم التنفيذ</MudButton>
                                         }
                                     </MudStack>
                                 </MudStack>
@@ -180,6 +185,27 @@ else
         </MudStack>
     </MudContainer>
 }
+
+<MudDialog @bind-Visible="_showTaskActionDialog"
+           Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true })">
+    <TitleContent>
+        <MudText Typo="Typo.h6">@_taskActionDialogTitle</MudText>
+    </TitleContent>
+    <DialogContent>
+        <div dir="rtl" style="display:flex;flex-direction:column;gap:1rem;">
+            <MudTextField T="string"
+                          Label="@_taskActionDialogLabel"
+                          Variant="MudVariant.Outlined"
+                          @bind-Value="_taskActionNotes"
+                          Dense="true"
+                          Lines="4" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="MudVariant.Text" OnClick="CloseTaskActionDialog">إلغاء</MudButton>
+        <MudButton Variant="MudVariant.Filled" Color="@_taskActionDialogColor" OnClick="SubmitTaskActionAsync">حفظ</MudButton>
+    </DialogActions>
+</MudDialog>
 
 @code {
     private bool _loading = true;
@@ -197,6 +223,13 @@ else
     private List<Employee> _employees = new();
     private List<TaskType> _taskTypes = new();
     private List<TaskListDto> _allTasks = new();
+    private bool _showTaskActionDialog;
+    private bool _taskActionIsComplete;
+    private int _taskActionTaskId;
+    private string _taskActionNotes = string.Empty;
+    private string _taskActionDialogTitle = "";
+    private string _taskActionDialogLabel = "";
+    private MudColor _taskActionDialogColor = MudColor.Primary;
 
     private IEnumerable<TaskListDto> AssignedToMeTasks => _currentEmployeeId.HasValue
         ? _allTasks.Where(t => t.AssignedTo == _currentEmployeeId.Value)
@@ -341,18 +374,54 @@ else
     private bool CanCompleteTask(TaskListDto task)
         => _currentEmployeeId.HasValue && task.AssignedTo == _currentEmployeeId.Value && task.Status != "Completed" && task.Status != "Cancelled";
 
-    private async Task StartTaskAsync(int taskId)
+    private void OpenStartDialog(int taskId)
     {
-        var (ok, msg) = await TaskService.StartAsync(taskId, string.Empty, _currentUserName);
-        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-        if (ok) await LoadDataAsync();
+        _taskActionTaskId = taskId;
+        _taskActionIsComplete = false;
+        _taskActionNotes = string.Empty;
+        _taskActionDialogTitle = "بدء تنفيذ المهمة";
+        _taskActionDialogLabel = "اكتب ماذا ستبدأ تنفيذه *";
+        _taskActionDialogColor = MudColor.Info;
+        _showTaskActionDialog = true;
     }
 
-    private async Task CompleteTaskAsync(int taskId)
+    private void OpenCompleteDialog(int taskId)
     {
-        var (ok, msg) = await TaskService.CompleteAsync(taskId, string.Empty, _currentUserName);
+        _taskActionTaskId = taskId;
+        _taskActionIsComplete = true;
+        _taskActionNotes = string.Empty;
+        _taskActionDialogTitle = "إتمام تنفيذ المهمة";
+        _taskActionDialogLabel = "اكتب ما الذي تم تنفيذه *";
+        _taskActionDialogColor = MudColor.Success;
+        _showTaskActionDialog = true;
+    }
+
+    private void CloseTaskActionDialog()
+    {
+        _showTaskActionDialog = false;
+        _taskActionTaskId = 0;
+        _taskActionNotes = string.Empty;
+    }
+
+    private async Task SubmitTaskActionAsync()
+    {
+        if (_taskActionTaskId <= 0) return;
+        if (string.IsNullOrWhiteSpace(_taskActionNotes))
+        {
+            Snackbar.Add(_taskActionIsComplete ? "اكتب ما الذي تم تنفيذه" : "اكتب ماذا ستبدأ تنفيذه", Severity.Warning);
+            return;
+        }
+
+        var (ok, msg) = _taskActionIsComplete
+            ? await TaskService.CompleteAsync(_taskActionTaskId, _taskActionNotes, _currentUserName)
+            : await TaskService.StartAsync(_taskActionTaskId, _taskActionNotes, _currentUserName);
+
         Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-        if (ok) await LoadDataAsync();
+        if (ok)
+        {
+            CloseTaskActionDialog();
+            await LoadDataAsync();
+        }
     }
 
     private static MudColor GetStatusColor(TaskListDto task) => task.Status switch
@@ -389,8 +458,6 @@ else
     {
         SystemRoles.GeneralManager => "المدير العام",
         SystemRoles.AccountManager => "مدير الحسابات",
-        SystemRoles.HrManager => "مدير الموارد البشرية",
-        SystemRoles.ProductionManager    => "مدير الانتاج",
         SystemRoles.Admin => "الإدارة",
         _ => assignmentSource ?? "الإدارة"
     };

@@ -915,16 +915,20 @@ else
                                                 <span class="task-chip task-overdue-chip">⚠️ متأخرة</span>
                                             }
                                             <span class="task-meta-inline">👤 @t.AssignedToName · 📅 @FormatDateAr(t.DueDate)@(t.DueTime.HasValue ? $" · ⏰ {t.DueTime.Value.ToString("HH:mm")}" : string.Empty)</span>
+                                            @if (!string.IsNullOrWhiteSpace(t.StartNotes) && t.Status == "In Progress")
+                                            {
+                                                <span class="task-meta-inline">🚀 بدأ التنفيذ: @t.StartNotes</span>
+                                            }
                                         </div>
                                     </div>
                                     <div class="task-actions-inline">
                                         @if (t.IsGeneralManagerAssignment && t.Status == "Pending")
                                         {
-                                            <button class="task-start" @onclick="() => StartTask(t.TaskId)" title="بدء التنفيذ">
+                                            <button class="task-start" @onclick="() => OpenTaskStartDialog(t.TaskId)" title="بدء التنفيذ">
                                                 <MudIcon Icon="@Icons.Material.Rounded.PlayArrow" Style="font-size:1.1rem" />
                                             </button>
                                         }
-                                        <button class="task-complete" @onclick="() => CompleteTask(t.TaskId)" title="إكمال">
+                                        <button class="task-complete" @onclick="() => OpenTaskCompleteDialog(t.TaskId)" title="إكمال">
                                             <MudIcon Icon="@Icons.Material.Rounded.CheckCircle" Style="font-size:1.1rem" />
                                         </button>
                                     </div>
@@ -1099,6 +1103,25 @@ else
                     <MudButton Variant="MudVariant.Filled" Color="MudColor.Info" OnClick="SaveGeneralManagerTaskAsync" Disabled="_assigningGeneralManagerTask" StartIcon="@Icons.Material.Rounded.Send">
                         @(_assigningGeneralManagerTask ? "جاري الإرسال..." : "إرسال التكليف")
                     </MudButton>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_showTaskActionDialog)
+    {
+        <div class="dlg-overlay" @onclick="CloseTaskActionDialog">
+            <div class="dlg-box" @onclick:stopPropagation>
+                <div class="dlg-header" style="color:@_taskActionDialogHeaderColor;">
+                    <MudIcon Icon="@_taskActionDialogIcon" Style="font-size:1.3rem" />
+                    <h3>@_taskActionDialogTitle</h3>
+                </div>
+                <div class="dlg-body">
+                    <MudTextField T="string" Label="@_taskActionDialogLabel" Variant="MudVariant.Outlined" @bind-Value="_taskActionNotes" Lines="4" />
+                </div>
+                <div class="dlg-actions">
+                    <MudButton Variant="MudVariant.Outlined" OnClick="CloseTaskActionDialog">إلغاء</MudButton>
+                    <MudButton Variant="MudVariant.Filled" Color="@_taskActionDialogColor" OnClick="SubmitTaskActionAsync">حفظ</MudButton>
                 </div>
             </div>
         </div>
@@ -1902,6 +1925,15 @@ else
     private int _reassignEmployeeId;
     private GeneralManagerOpportunityTaskDto _generalManagerTask = new();
     private TimeSpan _generalManagerTaskDueTime = new(10, 0, 0);
+    private bool _showTaskActionDialog;
+    private bool _taskActionIsComplete;
+    private int _taskActionTaskId;
+    private string _taskActionNotes = string.Empty;
+    private string _taskActionDialogTitle = "";
+    private string _taskActionDialogLabel = "";
+    private MudColor _taskActionDialogColor = MudColor.Primary;
+    private string _taskActionDialogHeaderColor = "#0369a1";
+    private string _taskActionDialogIcon = Icons.Material.Rounded.PlayArrow;
 
     // ═══════════════════════════════════════════
     //           COMPUTED PROPERTIES
@@ -2508,18 +2540,58 @@ else
         }
     }
 
-    private async Task StartTask(int taskId)
+    private void OpenTaskStartDialog(int taskId)
     {
-        var (ok, msg) = await TaskService.StartAsync(taskId, "", _currentUserName!);
-        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-        if (ok) await ReloadData();
+        _taskActionTaskId = taskId;
+        _taskActionIsComplete = false;
+        _taskActionNotes = string.Empty;
+        _taskActionDialogTitle = "بدء تنفيذ المهمة";
+        _taskActionDialogLabel = "اكتب ماذا ستبدأ تنفيذه *";
+        _taskActionDialogColor = MudColor.Info;
+        _taskActionDialogHeaderColor = "#0369a1";
+        _taskActionDialogIcon = Icons.Material.Rounded.PlayArrow;
+        _showTaskActionDialog = true;
     }
 
-    private async Task CompleteTask(int taskId)
+    private void OpenTaskCompleteDialog(int taskId)
     {
-        var (ok, msg) = await TaskService.CompleteAsync(taskId, "", _currentUserName!);
+        _taskActionTaskId = taskId;
+        _taskActionIsComplete = true;
+        _taskActionNotes = string.Empty;
+        _taskActionDialogTitle = "إتمام تنفيذ المهمة";
+        _taskActionDialogLabel = "اكتب ما الذي تم تنفيذه *";
+        _taskActionDialogColor = MudColor.Success;
+        _taskActionDialogHeaderColor = "#059669";
+        _taskActionDialogIcon = Icons.Material.Rounded.CheckCircle;
+        _showTaskActionDialog = true;
+    }
+
+    private void CloseTaskActionDialog()
+    {
+        _showTaskActionDialog = false;
+        _taskActionTaskId = 0;
+        _taskActionNotes = string.Empty;
+    }
+
+    private async Task SubmitTaskActionAsync()
+    {
+        if (_taskActionTaskId <= 0) return;
+        if (string.IsNullOrWhiteSpace(_taskActionNotes))
+        {
+            Snackbar.Add(_taskActionIsComplete ? "اكتب ما الذي تم تنفيذه" : "اكتب ماذا ستبدأ تنفيذه", Severity.Warning);
+            return;
+        }
+
+        var (ok, msg) = _taskActionIsComplete
+            ? await TaskService.CompleteAsync(_taskActionTaskId, _taskActionNotes, _currentUserName!)
+            : await TaskService.StartAsync(_taskActionTaskId, _taskActionNotes, _currentUserName!);
+
         Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-        if (ok) await ReloadData();
+        if (ok)
+        {
+            CloseTaskActionDialog();
+            await ReloadData();
+        }
     }
 
     // ═══════════════════════════════════════════

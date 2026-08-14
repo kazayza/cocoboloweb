@@ -72,6 +72,9 @@ public class TaskListDto
     public TimeOnly? DueTime { get; set; }
     public string Priority { get; set; } = "Medium";
     public string Status { get; set; } = "Pending";
+    public DateTime? StartedAt { get; set; }
+    public string? StartedBy { get; set; }
+    public string? StartNotes { get; set; }
     public DateTime? CompletedDate { get; set; }
     public string? CompletedBy { get; set; }
     public string? CompletionNotes { get; set; }
@@ -115,6 +118,7 @@ public class QuickInteractionDto
 public static class TaskScopes
 {
     public const string Opportunity = "Opportunity";
+    public const string Lead = "Lead";
     public const string General = "General";
 }
 
@@ -146,6 +150,17 @@ public class GeneralManagerOpportunityTaskDto
 
 public class GeneralEmployeeTaskDto
 {
+    public int AssignedTo { get; set; }
+    public int? TaskTypeId { get; set; }
+    public string? TaskDescription { get; set; }
+    public DateTime DueDate { get; set; } = DateTime.Today.AddDays(1);
+    public TimeOnly? DueTime { get; set; }
+    public string Priority { get; set; } = "Medium";
+}
+
+public class LeadTaskDto
+{
+    public int LeadId { get; set; }
     public int AssignedTo { get; set; }
     public int? TaskTypeId { get; set; }
     public string? TaskDescription { get; set; }

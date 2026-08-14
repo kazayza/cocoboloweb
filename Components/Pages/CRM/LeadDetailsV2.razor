@@ -5,6 +5,7 @@
 @using COCOBOLOERPNEW.Models
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
 @using Microsoft.JSInterop
 @using MudColor = MudBlazor.Color
 @using MudSize = MudBlazor.Size
@@ -14,6 +15,9 @@
 
 @inject ILeadsCrmService LeadsService
 @inject IInteractionService InteractionService
+@inject ITaskService TaskService
+@inject IOpportunityService OppService
+@inject IDbContextFactory<db24804Context> DbFactory
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthProvider
 @inject ISnackbar Snackbar
@@ -184,6 +188,16 @@ else
                         تحويل لفرصة
                     </MudButton>
                 }
+                @if (_canAssignLeadTasks && !_lead.IsConverted && _lead.LeadStatus != "محول" && _lead.LeadStatus != "مرفوض")
+                {
+                    <MudButton Variant="MudVariant.Outlined"
+                               Color="MudColor.Info"
+                               Size="MudSize.Small"
+                               StartIcon="@Icons.Material.Rounded.AssignmentTurnedIn"
+                               OnClick="OpenLeadTaskDialog">
+                        تكليف على الليد
+                    </MudButton>
+                }
 
                 @if (_lead.IsConverted && _lead.ConvertedOpportunityId.HasValue)
                 {
@@ -236,6 +250,73 @@ else
                     My Leads
                 </MudButton>
             </div>
+        </section>
+
+        <section class="ld2-section mt-3">
+            <div class="ld2-section-head" @onclick='() => _leadTasksExpanded = !_leadTasksExpanded'>
+                <div class="ld2-section-head-left">
+                    <div class="ld2-section-icon teal"><MudIcon Icon="@Icons.Material.Rounded.AssignmentTurnedIn" /></div>
+                    <div>
+                        <h3>مهام متعلقه بالعميل</h3>
+                        <p>مهام إدارية مرتبطة بهذا العميل</p>
+                    </div>
+                </div>
+                <MudChip T="string" Color="MudColor.Info" Variant="Variant.Outlined">@_leadTasks.Count</MudChip>
+            </div>
+
+            @if (_leadTasksExpanded)
+            {
+                <div class="ld2-section-body">
+                    @if (!_leadTasks.Any())
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true">لا توجد تكليفات مرتبطة بهذه الليد حتى الآن.</MudAlert>
+                    }
+                    else
+                    {
+                        <MudStack Spacing="2">
+                            @foreach (var task in _leadTasks.OrderByDescending(t => t.DueDate).ThenByDescending(t => t.TaskId))
+                            {
+                                <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #e5e7eb;border-radius:14px;">
+                                    <MudStack Spacing="1">
+                                        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                                            <MudText Typo="Typo.subtitle1" Style="font-weight:700;">@(string.IsNullOrWhiteSpace(task.TaskDescription) ? "تكليف على الليد" : task.TaskDescription)</MudText>
+                                            <MudChip T="string" Color="@GetLeadTaskStatusColor(task.Status)" Variant="Variant.Filled">@GetLeadTaskStatusText(task.Status)</MudChip>
+                                        </MudStack>
+                                        <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+                                            <MudChip T="string" Color="MudColor.Primary" Variant="Variant.Outlined">@(task.AssignedToName ?? "غير محدد")</MudChip>
+                                            <MudChip T="string" Color="@GetLeadTaskPriorityColor(task.Priority)" Variant="Variant.Outlined">@GetLeadTaskPriorityText(task.Priority)</MudChip>
+                                            @if (!string.IsNullOrWhiteSpace(task.TaskTypeNameAr) || !string.IsNullOrWhiteSpace(task.TaskTypeName))
+                                            {
+                                                <MudChip T="string" Color="MudColor.Secondary" Variant="Variant.Outlined">@(task.TaskTypeNameAr ?? task.TaskTypeName)</MudChip>
+                                            }
+                                        </MudStack>
+                                        <MudText Typo="Typo.body2"><b>التنفيذ خلال:</b> @task.DueDate.ToString("yyyy/MM/dd") @if (task.DueTime.HasValue) { <span>— @task.DueTime.Value.ToString("HH:mm")</span> }</MudText>
+                                        <MudText Typo="Typo.body2"><b>أنشئت بواسطة:</b> @(task.CreatedBy ?? "—")</MudText>
+                                        @if (!string.IsNullOrWhiteSpace(task.StartNotes) && task.Status == "In Progress")
+                                        {
+                                            <MudAlert Severity="Severity.Info" Dense="true">بدأ التنفيذ: @task.StartNotes</MudAlert>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(task.CompletionNotes) && task.Status == "Completed")
+                                        {
+                                            <MudAlert Severity="Severity.Success" Dense="true">تم التنفيذ: @task.CompletionNotes</MudAlert>
+                                        }
+                                        <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="1">
+                                            @if (CanStartLeadTask(task))
+                                            {
+                                                <MudButton Variant="MudVariant.Outlined" Color="MudColor.Info" Size="MudSize.Small" OnClick="@(() => OpenLeadTaskStartDialog(task.TaskId))">بدء التنفيذ</MudButton>
+                                            }
+                                            @if (CanCompleteLeadTask(task))
+                                            {
+                                                <MudButton Variant="MudVariant.Filled" Color="MudColor.Success" Size="MudSize.Small" OnClick="@(() => OpenLeadTaskCompleteDialog(task.TaskId))">تم التنفيذ</MudButton>
+                                            }
+                                        </MudStack>
+                                    </MudStack>
+                                </MudPaper>
+                            }
+                        </MudStack>
+                    }
+                </div>
+            }
         </section>
 
         @* ════════════════════════════════════════
@@ -843,6 +924,84 @@ else
     </DialogActions>
 </MudDialog>
 
+<MudDialog @bind-Visible="_showLeadTaskDialog"
+           Options="@(new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true })">
+    <TitleContent>
+        <div style="display:flex;align-items:center;gap:.5rem;">
+            <MudIcon Icon="@Icons.Material.Rounded.AssignmentTurnedIn" Color="MudColor.Info" />
+            <MudText Typo="Typo.h6">تكليف على الليد</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <div dir="rtl" style="display:flex;flex-direction:column;gap:1rem;">
+            <MudSelect T="int?" Label="الموظف المكلف *" Variant="MudVariant.Outlined" @bind-Value="_leadTaskAssignedTo" Dense="true">
+                @foreach (var emp in _assignableEmployees)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)emp.EmployeeId)">@emp.FullName (@(emp.Department ?? "—"))</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSelect T="int?" Label="نوع المهمة" Variant="MudVariant.Outlined" @bind-Value="_leadTask.TaskTypeId" Dense="true" Clearable="true">
+                @foreach (var tt in _taskTypes)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)tt.TaskTypeId)">@(tt.TaskTypeNameAr ?? tt.TaskTypeName)</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField T="string" Label="وصف المهمة *" Variant="MudVariant.Outlined" @bind-Value="_leadTask.TaskDescription" Dense="true" Lines="3" />
+
+            <MudGrid Spacing="2">
+                <MudItem xs="12" md="4">
+                    <MudDatePicker T="DateTime?" Label="تاريخ التنفيذ *" Variant="MudVariant.Outlined"
+                                   Date="_leadTask.DueDate"
+                                   DateChanged="@(d => _leadTask.DueDate = d ?? _leadTask.DueDate)" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTimePicker Label="وقت التنفيذ" Variant="MudVariant.Outlined"
+                                   Time="_leadTaskDueTime"
+                                   TimeChanged="@(t => _leadTaskDueTime = t ?? new TimeSpan(10, 0, 0))" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudSelect T="string" Label="الأولوية" Variant="MudVariant.Outlined" @bind-Value="_leadTask.Priority" Dense="true">
+                        <MudSelectItem T="string" Value='@("High")'>عاجلة</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("Medium")'>متوسطة</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("Low")'>منخفضة</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+            </MudGrid>
+        </div>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="MudVariant.Text" Color="MudColor.Default" OnClick="CloseLeadTaskDialog">إلغاء</MudButton>
+        <MudButton Variant="MudVariant.Filled" Color="MudColor.Info" Disabled="_assigningLeadTask" OnClick="SaveLeadTaskAsync">
+            @(_assigningLeadTask ? "جاري الإرسال..." : "إرسال التكليف")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<MudDialog @bind-Visible="_showLeadTaskActionDialog"
+           Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true })">
+    <TitleContent>
+        <MudText Typo="Typo.h6">@_leadTaskActionDialogTitle</MudText>
+    </TitleContent>
+    <DialogContent>
+        <div dir="rtl" style="display:flex;flex-direction:column;gap:1rem;">
+            <MudTextField T="string"
+                          Label="@_leadTaskActionDialogLabel"
+                          Variant="MudVariant.Outlined"
+                          @bind-Value="_leadTaskActionNotes"
+                          Dense="true"
+                          Lines="4" />
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="MudVariant.Text" Color="MudColor.Default" OnClick="CloseLeadTaskActionDialog">إلغاء</MudButton>
+        <MudButton Variant="MudVariant.Filled" Color="@_leadTaskActionDialogColor" OnClick="SubmitLeadTaskActionAsync">حفظ</MudButton>
+    </DialogActions>
+</MudDialog>
+
 <style>
     .ld2-page {
         padding: 1rem 1.5rem 3rem;
@@ -1321,7 +1480,9 @@ else
     // ─── State ───
     private bool _isLoading = true;
     private bool _canEdit;
+    private bool _canAssignLeadTasks;
     private string _currentUserName = "system";
+    private int? _currentEmployeeId;
     private string? _loadError;
     private LeadsCrmDetailDto? _lead;
     private bool _showConvertDialog = false;
@@ -1330,6 +1491,21 @@ else
     private decimal _convertExpectedValue = 0;
     private string? _convertNotes;
     private List<Employee> _assignableEmployees = new();
+    private List<TaskType> _taskTypes = new();
+    private List<TaskListDto> _leadTasks = new();
+    private bool _leadTasksExpanded = true;
+    private bool _showLeadTaskDialog;
+    private bool _assigningLeadTask;
+    private int? _leadTaskAssignedTo;
+    private TimeSpan _leadTaskDueTime = new(10, 0, 0);
+    private LeadTaskDto _leadTask = new();
+    private bool _showLeadTaskActionDialog;
+    private bool _leadTaskActionIsComplete;
+    private int _leadTaskActionTaskId;
+    private string _leadTaskActionNotes = string.Empty;
+    private string _leadTaskActionDialogTitle = "";
+    private string _leadTaskActionDialogLabel = "";
+    private MudColor _leadTaskActionDialogColor = MudColor.Primary;
     private List<LeadInteractionDto> _leadInteractions = new();
     private List<InteractionListDto> _opportunityInteractions = new();
 
@@ -1358,8 +1534,11 @@ else
             var user = auth.User;
             _currentUserName = user.Identity?.Name ?? "system";
             _canEdit = LeadsCrmPermissions.CanEdit(user);
+            _canAssignLeadTasks = user.IsInRole(SystemRoles.GeneralManager) || user.IsInRole(SystemRoles.AccountManager) || user.IsInRole(SystemRoles.Admin) || user.IsInRole("Admin");
 
+            await ResolveCurrentEmployeeIdAsync();
             await LoadAssignableEmployeesAsync();
+            await LoadTaskTypesAsync();
             await LoadLeadAsync();
         }
         catch (Exception ex)
@@ -1372,6 +1551,22 @@ else
         }
     }
 
+    private async Task ResolveCurrentEmployeeIdAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _currentEmployeeId = await db.Users.AsNoTracking()
+                .Where(u => u.Username == _currentUserName && u.EmployeeId != null)
+                .Select(u => u.EmployeeId)
+                .FirstOrDefaultAsync();
+        }
+        catch
+        {
+            _currentEmployeeId = null;
+        }
+    }
+
     private async Task LoadAssignableEmployeesAsync()
     {
         try
@@ -1381,6 +1576,18 @@ else
         catch
         {
             _assignableEmployees = new();
+        }
+    }
+
+    private async Task LoadTaskTypesAsync()
+    {
+        try
+        {
+            _taskTypes = await OppService.GetTaskTypesAsync();
+        }
+        catch
+        {
+            _taskTypes = new();
         }
     }
 
@@ -1397,6 +1604,10 @@ else
             _leadInteractions = _lead != null
                 ? await LeadsService.GetLeadInteractionsAsync(LeadId)
                 : new List<LeadInteractionDto>();
+
+            _leadTasks = _lead != null
+                ? await TaskService.GetByLeadAsync(LeadId)
+                : new List<TaskListDto>();
 
             if (_lead?.ConvertedOpportunityId.HasValue == true)
             {
@@ -1590,6 +1801,155 @@ else
             _isConverting = false;
         }
     }
+
+    private void OpenLeadTaskDialog()
+    {
+        if (_lead == null) return;
+
+        _leadTask = new LeadTaskDto
+        {
+            LeadId = _lead.LeadId,
+            DueDate = DateTime.Today.AddDays(1),
+            Priority = "Medium"
+        };
+        _leadTaskAssignedTo = _lead.AssignedEmployeeId;
+        _leadTaskDueTime = new TimeSpan(10, 0, 0);
+        _showLeadTaskDialog = true;
+    }
+
+    private void CloseLeadTaskDialog()
+    {
+        _showLeadTaskDialog = false;
+        _assigningLeadTask = false;
+        _leadTask = new();
+        _leadTaskAssignedTo = null;
+        _leadTaskDueTime = new TimeSpan(10, 0, 0);
+    }
+
+    private async Task SaveLeadTaskAsync()
+    {
+        if (_lead == null) return;
+        if (!_leadTaskAssignedTo.HasValue || _leadTaskAssignedTo.Value <= 0)
+        {
+            Snackbar.Add("اختر الموظف المكلف", Severity.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_leadTask.TaskDescription))
+        {
+            Snackbar.Add("اكتب وصف التكليف", Severity.Warning);
+            return;
+        }
+
+        _assigningLeadTask = true;
+        try
+        {
+            _leadTask.LeadId = _lead.LeadId;
+            _leadTask.AssignedTo = _leadTaskAssignedTo.Value;
+            _leadTask.DueTime = TimeOnly.FromTimeSpan(_leadTaskDueTime);
+
+            var (ok, msg, _) = await TaskService.AddLeadTaskAsync(_leadTask, _currentUserName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok)
+            {
+                CloseLeadTaskDialog();
+                await LoadLeadAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("خطأ: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _assigningLeadTask = false;
+        }
+    }
+
+    private bool CanStartLeadTask(TaskListDto task)
+        => _currentEmployeeId.HasValue && task.AssignedTo == _currentEmployeeId.Value && task.Status == "Pending";
+
+    private bool CanCompleteLeadTask(TaskListDto task)
+        => _currentEmployeeId.HasValue && task.AssignedTo == _currentEmployeeId.Value && task.Status != "Completed" && task.Status != "Cancelled";
+
+    private void OpenLeadTaskStartDialog(int taskId)
+    {
+        _leadTaskActionTaskId = taskId;
+        _leadTaskActionIsComplete = false;
+        _leadTaskActionNotes = string.Empty;
+        _leadTaskActionDialogTitle = "بدء تنفيذ تكليف الليد";
+        _leadTaskActionDialogLabel = "اكتب ماذا ستبدأ تنفيذه *";
+        _leadTaskActionDialogColor = MudColor.Info;
+        _showLeadTaskActionDialog = true;
+    }
+
+    private void OpenLeadTaskCompleteDialog(int taskId)
+    {
+        _leadTaskActionTaskId = taskId;
+        _leadTaskActionIsComplete = true;
+        _leadTaskActionNotes = string.Empty;
+        _leadTaskActionDialogTitle = "إتمام تنفيذ تكليف الليد";
+        _leadTaskActionDialogLabel = "اكتب ما الذي تم تنفيذه *";
+        _leadTaskActionDialogColor = MudColor.Success;
+        _showLeadTaskActionDialog = true;
+    }
+
+    private void CloseLeadTaskActionDialog()
+    {
+        _showLeadTaskActionDialog = false;
+        _leadTaskActionTaskId = 0;
+        _leadTaskActionNotes = string.Empty;
+    }
+
+    private async Task SubmitLeadTaskActionAsync()
+    {
+        if (_leadTaskActionTaskId <= 0) return;
+        if (string.IsNullOrWhiteSpace(_leadTaskActionNotes))
+        {
+            Snackbar.Add(_leadTaskActionIsComplete ? "اكتب ما الذي تم تنفيذه" : "اكتب ماذا ستبدأ تنفيذه", Severity.Warning);
+            return;
+        }
+
+        var (ok, msg) = _leadTaskActionIsComplete
+            ? await TaskService.CompleteAsync(_leadTaskActionTaskId, _leadTaskActionNotes, _currentUserName)
+            : await TaskService.StartAsync(_leadTaskActionTaskId, _leadTaskActionNotes, _currentUserName);
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+        {
+            CloseLeadTaskActionDialog();
+            await LoadLeadAsync();
+        }
+    }
+
+    private static MudColor GetLeadTaskStatusColor(string? status) => status switch
+    {
+        "Completed" => MudColor.Success,
+        "In Progress" => MudColor.Info,
+        "Cancelled" => MudColor.Default,
+        _ => MudColor.Warning
+    };
+
+    private static string GetLeadTaskStatusText(string? status) => status switch
+    {
+        "Completed" => "مكتملة",
+        "In Progress" => "جاري التنفيذ",
+        "Cancelled" => "ملغية",
+        _ => "معلقة"
+    };
+
+    private static MudColor GetLeadTaskPriorityColor(string? priority) => priority switch
+    {
+        "High" => MudColor.Error,
+        "Low" => MudColor.Info,
+        _ => MudColor.Warning
+    };
+
+    private static string GetLeadTaskPriorityText(string? priority) => priority switch
+    {
+        "High" => "عاجلة",
+        "Low" => "منخفضة",
+        _ => "متوسطة"
+    };
 
     // ═══════════════════════════════════════════
     //  تعديل الملاحظات Inline

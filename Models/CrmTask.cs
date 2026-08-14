@@ -11,6 +11,8 @@ public partial class CrmTask
 
     public int? PartyId { get; set; }
 
+    public int? LeadId { get; set; }
+
     public int AssignedTo { get; set; }
 
     public int? TaskTypeId { get; set; }
@@ -30,6 +32,12 @@ public partial class CrmTask
     public string? CompletedBy { get; set; }
 
     public string? CompletionNotes { get; set; }
+
+    public DateTime? StartedAt { get; set; }
+
+    public string? StartedBy { get; set; }
+
+    public string? StartNotes { get; set; }
 
     public bool ReminderEnabled { get; set; }
 
