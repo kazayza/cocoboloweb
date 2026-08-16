@@ -3,7 +3,8 @@ using Microsoft.AspNetCore.Components.Forms;
 
 public interface IProductService
 {
-    Task<List<ProductListDto>> GetProductsAsync(string? search);
+    Task<List<ProductListDto>> GetProductsAsync(string? search, int? branchId = null, int? warehouseId = null);
+    Task<List<ProductStockLocationDto>> GetProductStockLocationsAsync(int productId);
     
     Task FactorySetCostAsync(
         int productId,

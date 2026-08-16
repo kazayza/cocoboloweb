@@ -28,6 +28,9 @@ public interface IInvoiceService
     Task<(bool Success, string Message)> CancelInvoiceAsync(
         int transactionId, string reason, string currentUserName);
 
+    Task<(bool Success, string Message)> ReceivePurchaseInvoiceAsync(
+        int transactionId, string currentUserName, string? notes = null);
+
     Task<(bool Success, string Message)> PermanentlyDeleteInvoiceAsync(
         int transactionId, string currentUserName);
 
@@ -40,8 +43,11 @@ public interface IInvoiceService
 
     // ⭐ منتجات عميل معين فقط
     Task<List<ProductLookupDto>> SearchProductsForPartyAsync(int partyId, string? search, int max = 50);
+    Task<List<ProductLookupDto>> SearchAvailableSaleProductsAsync(int partyId, int warehouseId, string? search, int max = 200);
+    Task<List<ProductLookupDto>> SearchShowroomProductsAsync(string? search, int max = 200);
 
     Task<List<Models.Warehouse>> GetWarehousesAsync();
+    Task<List<Models.Warehouse>> GetWarehousesForUserAsync(string userName);
     Task<List<Models.CashBox>> GetCashBoxesAsync();
 
     // ⭐ Helper - جلب EmployeeId من اسم المستخدم

@@ -1,0 +1,327 @@
+@page "/inventory/transactions"
+@page "/inventory/movements"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
+
+@attribute [Authorize]
+
+@inject IStockService StockService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+<PageTitle>حركة المخزون</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="stock-loading-wrap">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل حركة المخزون...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+        غير مسموح لك بعرض هذه الشاشة.
+    </MudAlert>
+}
+else
+{
+    <div class="stock-page" dir="rtl">
+        <div class="stock-hero history-hero">
+            <div class="stock-hero-bg"></div>
+            <div class="stock-hero-content">
+                <div>
+                    <h1>حركة المخزون</h1>
+                    <p>سجل كامل لدخول وخروج وتحويلات المخزون حسب المنتج والمخزن والفرع.</p>
+                </div>
+                <MudButton Variant="Variant.Outlined" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">
+                    رجوع
+                </MudButton>
+            </div>
+        </div>
+
+        <MudPaper Class="stock-form-card mt-2" Elevation="0">
+            <div class="section-header compact">
+                <MudIcon Icon="@Icons.Material.Filled.FilterAlt" />
+                <div>
+                    <h3>الفلاتر</h3>
+                    <p>اختر الفرع أو المخزن أو المنتج للحصول على صورة دقيقة لحركة الرصيد.</p>
+                </div>
+            </div>
+
+            <MudGrid Spacing="2">
+                <MudItem xs="12" md="3">
+                    <MudSelect T="int?" Label="الفرع" Variant="Variant.Outlined" Dense="true" Value="_filter.BranchId" ValueChanged="OnBranchChanged" Clearable="true">
+                        <MudSelectItem T="int?" Value="@((int?)null)">كل الفروع</MudSelectItem>
+                        @foreach (var branch in _branches)
+                        {
+                            <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">@branch.BranchNameAr</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12" md="3">
+                    <MudSelect T="int?" Label="المخزن" Variant="Variant.Outlined" Dense="true" Value="_filter.WarehouseId" ValueChanged="OnWarehouseChanged" Clearable="true">
+                        <MudSelectItem T="int?" Value="@((int?)null)">كل المخازن</MudSelectItem>
+                        @foreach (var warehouse in _warehouses)
+                        {
+                            <MudSelectItem T="int?" Value="@((int?)warehouse.WarehouseId)">@warehouse.WarehouseName</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12" md="3">
+                    <MudAutocomplete T="StockProductLookupDto"
+                                     Label="المنتج"
+                                     Variant="Variant.Outlined"
+                                     Dense="true"
+                                     Value="_selectedProduct"
+                                     ValueChanged="OnProductChanged"
+                                     SearchFunc="SearchProductsAsync"
+                                     ToStringFunc="@(p => p == null ? string.Empty : $"{p.ProductName} {(p.HasCustomer ? $"- {p.CustomerName}" : "- منتج معرض")}")"
+                                     Clearable="true"
+                                     ResetValueOnEmptyText="true" />
+                </MudItem>
+
+                <MudItem xs="12" md="3">
+                    <MudSelect T="string" Label="نوع الحركة" Variant="Variant.Outlined" Dense="true" Value="_filter.ReferenceType" ValueChanged="OnReferenceTypeChanged" Clearable="true">
+                        <MudSelectItem T="string" Value='@("OpeningBalance")'>رصيد افتتاحي</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("ShowroomSupply")'>إدخال للمخزن / صالة العرض</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("FactoryReceive")'>استلام من المصنع</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("Adjustment")'>تسوية</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("WarehouseTransferOut")'>تحويل صادر</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("WarehouseTransferIn")'>تحويل وارد</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("SaleInvoice")'>بيع</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("PurchaseInvoice")'>شراء</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("PurchaseInvoiceReceipt")'>استلام فاتورة شراء</MudSelectItem>
+                        <MudSelectItem T="string" Value='@("PurchaseInvoiceCancel")'>إلغاء فاتورة شراء</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12" md="3">
+                    <MudDatePicker T="DateTime?" Label="من تاريخ" Variant="Variant.Outlined" Date="_filter.DateFrom" DateChanged="@(d => _filter.DateFrom = d)" />
+                </MudItem>
+                <MudItem xs="12" md="3">
+                    <MudDatePicker T="DateTime?" Label="إلى تاريخ" Variant="Variant.Outlined" Date="_filter.DateTo" DateChanged="@(d => _filter.DateTo = d)" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField T="string" Label="بحث" Variant="Variant.Outlined" Dense="true" @bind-Value="_filter.SearchText" />
+                </MudItem>
+            </MudGrid>
+
+            <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2" Class="mt-3">
+                <MudButton Variant="Variant.Text" OnClick="ResetFilters">مسح الفلاتر</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LoadDataAsync">تطبيق</MudButton>
+            </MudStack>
+        </MudPaper>
+
+        <MudPaper Class="stock-form-card mt-2" Elevation="0">
+            <div class="section-header compact">
+                <MudIcon Icon="@Icons.Material.Filled.History" />
+                <div>
+                    <h3>الحركات</h3>
+                    <p>إجمالي الحركات المعروضة: @_items.Count</p>
+                </div>
+            </div>
+
+            @if (!_items.Any())
+            {
+                <MudAlert Severity="Severity.Info" Dense="true">لا توجد حركات مطابقة للفلاتر الحالية.</MudAlert>
+            }
+            else
+            {
+                <MudTable Items="_items" Dense="true" Hover="true" Striped="true" Breakpoint="Breakpoint.Md" Elevation="0">
+                    <HeaderContent>
+                        <MudTh>التاريخ</MudTh>
+                        <MudTh>المنتج</MudTh>
+                        <MudTh>الفرع</MudTh>
+                        <MudTh>المخزن</MudTh>
+                        <MudTh>الاتجاه</MudTh>
+                        <MudTh>الكمية</MudTh>
+                        <MudTh>السبب</MudTh>
+                        <MudTh>ملاحظات</MudTh>
+                        <MudTh>بواسطة</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@(context.TransactionDate?.ToString("yyyy/MM/dd HH:mm") ?? "—")</MudTd>
+                        <MudTd>
+                            <div>
+                                <strong>@context.ProductName</strong>
+                                <small class="stock-inline-id">#@context.ProductId</small>
+                            </div>
+                        </MudTd>
+                        <MudTd>@(context.BranchNameAr ?? "—")</MudTd>
+                        <MudTd>@context.WarehouseName</MudTd>
+                        <MudTd>
+                            <MudChip T="string" Color="@(context.TransactionType == "In" ? Color.Success : Color.Error)" Variant="Variant.Outlined">
+                                @(context.TransactionType == "In" ? "دخول" : "خروج")
+                            </MudChip>
+                        </MudTd>
+                        <MudTd>@context.Quantity</MudTd>
+                        <MudTd>@GetReferenceTypeText(context.ReferenceType)</MudTd>
+                        <MudTd>@(context.Notes ?? "—")</MudTd>
+                        <MudTd>@(context.CreatedBy ?? "—")</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudPaper>
+    </div>
+}
+
+<style>
+    .stock-loading-wrap {
+        min-height: 50vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+    .stock-page {
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+    .stock-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 22px;
+        background: linear-gradient(135deg,#0f172a 0%,#1e293b 100%);
+        color: white;
+        box-shadow: 0 16px 45px rgba(15,23,42,.18);
+    }
+    .history-hero .stock-hero-bg {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at 18% 20%, rgba(236,72,153,.22), transparent 35%), radial-gradient(circle at 82% 78%, rgba(56,189,248,.16), transparent 30%);
+    }
+    .stock-hero-content {
+        position: relative;
+        z-index: 1;
+        padding: 1.4rem 1.6rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+    .stock-hero h1 { margin: 0; font-size: 1.55rem; font-weight: 800; }
+    .stock-hero p { margin: .3rem 0 0; color: rgba(255,255,255,.82); }
+    .stock-form-card {
+        border-radius: 18px;
+        background: white;
+        border: 1px solid rgba(226,232,240,.9);
+        box-shadow: 0 14px 28px rgba(15,23,42,.05);
+        padding: 1rem;
+    }
+    .section-header {
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+    .section-header.compact { margin-bottom: .8rem; }
+    .section-header h3 { margin: 0; font-size: 1.05rem; font-weight: 800; color: #0f172a; }
+    .section-header p { margin: .15rem 0 0; color: #64748b; font-size: .82rem; }
+    .stock-inline-id { display:block; color:#64748b; font-size:.74rem; }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _canView;
+    private StockTransactionFilterDto _filter = new();
+    private StockProductLookupDto? _selectedProduct;
+    private List<BranchListDto> _branches = new();
+    private List<WarehouseListDto> _warehouses = new();
+    private List<StockTransactionListDto> _items = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _canView = user.IsInRole("Admin")
+            || user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole(SystemRoles.GeneralManager)
+            || user.IsInRole(SystemRoles.AccountManager)
+            || user.IsInRole(SystemRoles.ProductionManager)
+            || user.IsInRole("factory")
+            || user.HasClaim("Permission", "frm_StockTransactions:View");
+
+        if (!_canView)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        _branches = await StockService.GetBranchesAsync();
+        _warehouses = await StockService.GetWarehousesAsync();
+        await LoadDataAsync();
+        _isLoading = false;
+    }
+
+    private async Task OnBranchChanged(int? value)
+    {
+        _filter.BranchId = value;
+        _filter.WarehouseId = null;
+        _warehouses = await StockService.GetWarehousesAsync(value);
+    }
+
+    private Task OnWarehouseChanged(int? value)
+    {
+        _filter.WarehouseId = value;
+        return Task.CompletedTask;
+    }
+
+    private Task OnReferenceTypeChanged(string? value)
+    {
+        _filter.ReferenceType = value;
+        return Task.CompletedTask;
+    }
+
+    private async Task<IEnumerable<StockProductLookupDto>> SearchProductsAsync(string? value, CancellationToken token)
+    {
+        return await StockService.SearchProductsAsync(value, 30);
+    }
+
+    private Task OnProductChanged(StockProductLookupDto? product)
+    {
+        _selectedProduct = product;
+        _filter.ProductId = product?.ProductId;
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadDataAsync()
+    {
+        _items = await StockService.GetStockTransactionsAsync(_filter);
+    }
+
+    private async Task ResetFilters()
+    {
+        _filter = new StockTransactionFilterDto();
+        _selectedProduct = null;
+        _warehouses = await StockService.GetWarehousesAsync();
+        await LoadDataAsync();
+    }
+
+    private string GetReferenceTypeText(string? value) => value switch
+    {
+        "OpeningBalance" => "رصيد افتتاحي",
+        "ShowroomSupply" => "إدخال للمخزن / صالة العرض",
+        "FactoryReceive" => "استلام من المصنع",
+        "Adjustment" => "تسوية",
+        "WarehouseTransferOut" => "تحويل صادر",
+        "WarehouseTransferIn" => "تحويل وارد",
+        "SaleInvoice" => "بيع",
+        "PurchaseInvoice" => "شراء",
+        "PurchaseInvoiceReceipt" => "استلام فاتورة شراء",
+        "PurchaseInvoiceCancel" => "إلغاء فاتورة شراء",
+        _ => value ?? "—"
+    };
+
+    private void GoBack() => Navigation.NavigateTo("/products");
+}

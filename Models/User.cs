@@ -26,6 +26,8 @@ public partial class User
 
     public int? EmployeeId { get; set; }
 
+    public int? DefaultBranchId { get; set; }
+
     public string? Fcmtoken { get; set; }
 
     public string? Role { get; set; }

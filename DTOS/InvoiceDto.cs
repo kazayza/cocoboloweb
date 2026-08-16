@@ -108,6 +108,7 @@ public class InvoiceItemDto
     public decimal TotalAmount => Math.Round(Quantity * UnitPrice, 2);
     public string? Notes { get; set; }
     public int? AvailableStock { get; set; }
+    public bool IsShowroomProduct { get; set; }
 
     public int? SelectedAlternativeId { get; set; }
     public string? SelectedAlternativeName { get; set; }
@@ -250,6 +251,7 @@ public class ProductLookupDto
     public decimal? PurchasePrice { get; set; }
     public decimal? PurchasePriceElite { get; set; }
     public int AvailableStock { get; set; }
+    public bool IsShowroomProduct { get; set; }
     public string? PricingType { get; set; }
     public int? Period { get; set; }
 }
@@ -396,7 +398,6 @@ public static class SystemRoles
     public const string AccountManager = "AccountManager";
     public const string HrManager = "HrManager";
     public const string Account = "Account";
-
     public const string SocialManager = "SocialManager";
     public const string ProductionManager = "ProductionManager";
 }

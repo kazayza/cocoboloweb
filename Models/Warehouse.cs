@@ -19,6 +19,10 @@ public partial class Warehouse
 
     public DateTime? CreatedAt { get; set; }
 
+    public int? BranchId { get; set; }
+
+    public virtual Branch? Branch { get; set; }
+
     public virtual ICollection<StockLevel> StockLevels { get; set; } = new List<StockLevel>();
 
     public virtual ICollection<StockTransaction> StockTransactions { get; set; } = new List<StockTransaction>();

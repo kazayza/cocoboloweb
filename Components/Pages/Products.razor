@@ -6,6 +6,8 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
 @inject IProductService ProductService
+@inject IBranchService BranchService
+@inject IWarehouseService WarehouseService
 @inject IAuditService AuditService
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthProvider
@@ -25,6 +27,7 @@
                 <div class="header-text">
                     <h1>إدارة المنتجات</h1>
                     <p class="subtitle">عرض وإدارة كافة المنتجات المسجلة في النظام</p>
+                    <p class="subtitle" style="margin-top:.35rem;opacity:.9;">@GetInventoryScopeDescription()</p>
                 </div>
             </div>
             <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
@@ -50,6 +53,14 @@
                         تصدير Excel
                     </MudButton>
                 }
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Success"
+                           StartIcon="@Icons.Material.Filled.Inventory2"
+                           Class="add-btn"
+                           Style="background: rgba(255,255,255,0.15); color: white; border-color: rgba(255,255,255,0.4);"
+                           OnClick="OpenStockEntry">
+                    إضافة رصيد للمخزن
+                </MudButton>
                 <MudButton Variant="Variant.Filled"
                            Color="Color.Primary"
                            StartIcon="@Icons.Material.Filled.Add"
@@ -109,6 +120,44 @@
                     <MudSelectItem T="string" Value="@("all")">كل المنتجات</MudSelectItem>
                     <MudSelectItem T="string" Value="@("showroom")">منتجات المعرض (@_showroomCount)</MudSelectItem>
                     <MudSelectItem T="string" Value="@("linked")">مرتبطة بعميل (@_linkedToCustomerCount)</MudSelectItem>
+                </MudSelect>
+            </div>
+
+            <div class="filter-section filter-section-compact filter-status-compact">
+                <MudSelect T="int?"
+                           Value="@_selectedBranchId"
+                           ValueChanged="OnBranchFilterChanged"
+                           Placeholder="كل الفروع"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Clearable="true"
+                           Class="status-filter"
+                           AdornmentIcon="@Icons.Material.Filled.Storefront"
+                           Adornment="Adornment.Start">
+                    <MudSelectItem T="int?" Value="@((int?)null)">كل الفروع</MudSelectItem>
+                    @foreach (var b in _branches)
+                    {
+                        <MudSelectItem T="int?" Value="@((int?)b.BranchId)">@b.BranchNameAr</MudSelectItem>
+                    }
+                </MudSelect>
+            </div>
+
+            <div class="filter-section filter-section-compact filter-status-compact">
+                <MudSelect T="int?"
+                           Value="@_selectedWarehouseId"
+                           ValueChanged="OnWarehouseFilterChanged"
+                           Placeholder="كل المخازن"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Clearable="true"
+                           Class="status-filter"
+                           AdornmentIcon="@Icons.Material.Filled.Inventory2"
+                           Adornment="Adornment.Start">
+                    <MudSelectItem T="int?" Value="@((int?)null)">كل المخازن</MudSelectItem>
+                    @foreach (var w in FilteredWarehouseLookups)
+                    {
+                        <MudSelectItem T="int?" Value="@((int?)w.WarehouseId)">@(string.IsNullOrWhiteSpace(w.BranchNameAr) ? w.WarehouseName : $"{w.WarehouseName} — {w.BranchNameAr}")</MudSelectItem>
+                    }
                 </MudSelect>
             </div>
 
@@ -172,7 +221,7 @@
                 <p>@(string.IsNullOrWhiteSpace(_searchText) && !_statusFilter.HasValue && _activeStatFilter == "all"
                     ? "لم يتم إضافة أي منتجات بعد"
                     : "لم يتم العثور على نتائج مطابقة")</p>
-                @if (string.IsNullOrWhiteSpace(_searchText) && !_statusFilter.HasValue && _activeStatFilter == "all")
+                @if (string.IsNullOrWhiteSpace(_searchText) && !_statusFilter.HasValue && _activeStatFilter == "all" && _ownershipFilter == "all" && !_selectedBranchId.HasValue && !_selectedWarehouseId.HasValue)
                 {
                     <MudButton Variant="Variant.Filled"
                                Color="Color.Primary"
@@ -218,6 +267,12 @@
                     <div class="header-cell">
                         <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
                         <span>الحالة</span>
+                    </div>
+                </MudTh>
+                <MudTh Class="table-header">
+                    <div class="header-cell">
+                        <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Small" />
+                        <span>@GetStockHeaderText()</span>
                     </div>
                 </MudTh>
                 @if (_showSalePrice)
@@ -266,7 +321,7 @@
 
             <RowTemplate>
                 <MudTd DataLabel="الصورة">
-                    <div class="product-thumb-wrapper" @onclick="@(() => OpenViewDialog(context))">
+                    <div class="product-thumb-wrapper" @onclick="@(() => OpenViewDialogAsync(context))">
                         <img src="/api/product-images/@context.ProductId"
                              alt="@context.ProductName"
                              class="product-thumb"
@@ -307,6 +362,10 @@
                              Variant="Variant.Outlined">
                         @GetStatusText(context.PricingStatusId)
                     </MudChip>
+                </MudTd>
+
+                <MudTd DataLabel="الرصيد">
+                    <span class="sale-price">@context.StockQuantity</span>
                 </MudTd>
 
                 @if (_showSalePrice)
@@ -417,7 +476,7 @@
                             <MudIconButton Icon="@Icons.Material.Filled.Visibility"
                                            Color="Color.Info"
                                            Size="Size.Small"
-                                           OnClick="() => OpenViewDialog(context)" />
+                                           OnClick="() => OpenViewDialogAsync(context)" />
                         </MudTooltip>
 
                         <MudTooltip Text="تعديل">
@@ -477,7 +536,7 @@
             @foreach (var product in _pagedProducts)
             {
                 <div class="product-card">
-                    <div class="product-card-image" @onclick="@(() => OpenViewDialog(product))">
+                    <div class="product-card-image" @onclick="@(() => OpenViewDialogAsync(product))">
                         <img src="/api/product-images/@product.ProductId"
                              alt="@product.ProductName"
                              onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" />
@@ -517,6 +576,11 @@
             <span>@product.CustomerName</span>
         </div>
     }
+
+    <div class="card-customer">
+        <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Small" />
+        <span>@GetStockHeaderText(): @product.StockQuantity</span>
+    </div>
 
     @if (_showSalePrice)
     {
@@ -778,6 +842,37 @@
                 </div>
             }
 
+            <div class="vd-stock-scope">
+                <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Small" />
+                <span>@GetStockHeaderText(): @_selectedProduct.StockQuantity</span>
+            </div>
+
+            @if (_selectedProductStockLocations.Any())
+            {
+                <div class="vd-stock-breakdown">
+                    <div class="vd-stock-breakdown-title">توزيع الرصيد على الفروع والمخازن</div>
+                    <div class="vd-stock-breakdown-list">
+                        @foreach (var loc in _selectedProductStockLocations)
+                        {
+                            <div class="vd-stock-item">
+                                <div>
+                                    <strong>@loc.WarehouseName</strong>
+                                    <small>@(string.IsNullOrWhiteSpace(loc.BranchNameAr) ? "بدون فرع" : loc.BranchNameAr)</small>
+                                </div>
+                                <span class="vd-stock-qty">@loc.Quantity</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="vd-stock-breakdown vd-stock-breakdown-empty">
+                    <div class="vd-stock-breakdown-title">توزيع الرصيد</div>
+                    <span>لا يوجد رصيد فعلي موزع على المخازن لهذا المنتج.</span>
+                </div>
+            }
+
             <!-- الوصف -->
             @if (!string.IsNullOrWhiteSpace(_selectedProduct.ProductDescription))
             {
@@ -806,6 +901,12 @@
                         فتح PDF
                     </MudButton>
                 }
+                <MudButton Variant="Variant.Text"
+                           Color="Color.Default"
+                           FullWidth="true"
+                           OnClick="@(() => _viewDialogOpen = false)">
+                    إغلاق
+                </MudButton>
             </div>
 
         </MudPaper>
@@ -1158,7 +1259,19 @@
     .empty-state p, .loading-state p { color: #718096; margin: 0; }
 
     /* Dialogs */
-    .custom-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1001; }
+    .custom-dialog {
+        position: fixed;
+        top: 3vh;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1001;
+        width: min(560px, 95vw);
+        max-height: 94vh;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        overflow: hidden;
+    }
     .dialog-gradient-header { background: linear-gradient(135deg, #667eea, #764ba2); padding: 1.25rem; display: flex; justify-content: space-between; align-items: center; }
     /* ⭐ صورة المنتج في View Dialog */
 .dialog-product-image {
@@ -1641,9 +1754,10 @@
 /* ===== VIEW DIALOG REDESIGN ===== */
 .vd-paper {
     border-radius: 20px !important;
-    overflow: hidden;
-    width: 520px;
-    max-width: 95vw;
+    overflow: hidden auto;
+    width: 100%;
+    max-width: 100%;
+    max-height: 94vh;
     display: flex;
     flex-direction: column;
 }
@@ -1652,6 +1766,9 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 3;
 }
 .vd-header-cclass {
     background: linear-gradient(135deg, #6d28d9 0%, #8b5cf6 50%, #a855f7 100%);
@@ -1723,6 +1840,65 @@
     color: #667eea;
     font-weight: 600;
 }
+.vd-stock-scope {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0 1.25rem 0.75rem;
+    color: #0f172a;
+    font-size: 0.9rem;
+    font-weight: 700;
+}
+.vd-stock-breakdown {
+    margin: 0 1.25rem 0.9rem;
+    padding: 0.85rem 1rem;
+    background: #f8fafc;
+    border: 1px solid rgba(148,163,184,0.18);
+    border-radius: 14px;
+}
+.vd-stock-breakdown-empty {
+    color: #64748b;
+    font-size: 0.88rem;
+}
+.vd-stock-breakdown-title {
+    font-size: 0.82rem;
+    font-weight: 800;
+    color: #334155;
+    margin-bottom: 0.65rem;
+}
+.vd-stock-breakdown-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+.vd-stock-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    background: white;
+    border-radius: 12px;
+    padding: 0.65rem 0.8rem;
+    border: 1px solid rgba(226,232,240,0.9);
+}
+.vd-stock-item strong {
+    display: block;
+    color: #0f172a;
+    font-size: 0.9rem;
+}
+.vd-stock-item small {
+    color: #64748b;
+    font-size: 0.74rem;
+}
+.vd-stock-qty {
+    min-width: 42px;
+    text-align: center;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(16,185,129,0.12);
+    color: #059669;
+    font-weight: 800;
+}
 .vd-prices {
     display: flex;
     gap: 0.75rem;
@@ -1791,6 +1967,10 @@
     gap: 0.75rem;
     padding: 0.75rem 1.25rem 1.25rem;
     border-top: 1px solid var(--mud-palette-divider);
+    position: sticky;
+    bottom: 0;
+    background: white;
+    z-index: 2;
 }
 
     @@media (max-width: 960px) {
@@ -1814,6 +1994,10 @@
 
     private string? _searchText;
     private int? _statusFilter = null;
+    private int? _selectedBranchId = null;
+    private int? _selectedWarehouseId = null;
+    private int? _preferredBranchId = null;
+    private string? _currentUserName;
     private string _ownershipFilter = "all"; // all / showroom / linked
     private string _activeStatFilter = "all"; // ✅ "all", "priced", "unpriced"
     private int _totalCount;
@@ -1827,6 +2011,8 @@
     private bool _jobOrderDialogOpen = false;
     private JobOrderCustomerOptionVm? _jobOrderSelectedCustomer;
     private List<JobOrderCustomerOptionVm> _jobOrderCustomers = new();
+    private List<BranchListDto> _branches = new();
+    private List<WarehouseListDto> _warehouseLookups = new();
 
     // ==================== PAGINATION ====================
     private int _currentPage = 1;
@@ -1845,6 +2031,7 @@
     // ==================== DIALOGS ====================
     private bool _viewDialogOpen = false;
     private ProductListDto? _selectedProduct = null;
+    private List<ProductStockLocationDto> _selectedProductStockLocations = new();
     private bool _deleteDialogOpen = false;
     private ProductListDto? _productToDelete = null;
     private string? _deleteError = null;
@@ -1865,12 +2052,18 @@ private bool _isLoadingHistory = false;
         }
     }
 
+    private IEnumerable<WarehouseListDto> FilteredWarehouseLookups =>
+        _selectedBranchId.HasValue
+            ? _warehouseLookups.Where(w => w.BranchId == _selectedBranchId.Value)
+            : _warehouseLookups;
+
     // ==================== LIFECYCLE ====================
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthProvider.GetAuthenticationStateAsync();
         var user = auth.User;
         _currentRole = user.FindFirst(ClaimTypes.Role)?.Value;
+        _currentUserName = user.Identity?.Name;
 
         _showSalePrice = _currentRole != "factory";
         _canDelete = _currentRole is "Admin" or "AccountManager";
@@ -1883,13 +2076,50 @@ private bool _isLoadingHistory = false;
             || user.IsInRole(SystemRoles.HrManager)
             || user.IsInRole("factory");
 
+        await ResolvePreferredBranchAsync();
+        await LoadBranchAwareLookupsAsync();
+
         // ✅ تحميل الفلتر المحفوظ من sessionStorage
         await RestoreFilterState();
+
+        if (!_selectedBranchId.HasValue && _preferredBranchId.HasValue)
+            _selectedBranchId = _preferredBranchId;
+
+        if (_selectedWarehouseId.HasValue && !FilteredWarehouseLookups.Any(w => w.WarehouseId == _selectedWarehouseId.Value))
+            _selectedWarehouseId = null;
 
         await LoadData();
     }
 
     // ==================== DATA ====================
+    private async Task ResolvePreferredBranchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_currentUserName))
+            return;
+
+        _preferredBranchId = await Db.Users.AsNoTracking()
+            .Where(u => u.Username == _currentUserName)
+            .Select(u => u.DefaultBranchId)
+            .FirstOrDefaultAsync();
+
+        if (!_preferredBranchId.HasValue)
+        {
+            _preferredBranchId = await Db.Users.AsNoTracking()
+                .Where(u => u.Username == _currentUserName && u.EmployeeId.HasValue)
+                .Join(Db.Employees.AsNoTracking(),
+                    u => u.EmployeeId,
+                    e => (int?)e.EmployeeId,
+                    (u, e) => e.BranchId)
+                .FirstOrDefaultAsync();
+        }
+    }
+
+    private async Task LoadBranchAwareLookupsAsync()
+    {
+        _branches = await BranchService.GetBranchesAsync();
+        _warehouseLookups = await WarehouseService.GetWarehousesAsync();
+    }
+
     private async Task LoadData()
     {
         _isLoading = true;
@@ -1897,7 +2127,7 @@ private bool _isLoadingHistory = false;
 
         try
         {
-            _allProducts = await ProductService.GetProductsAsync(null);
+            _allProducts = await ProductService.GetProductsAsync(null, _selectedBranchId, _selectedWarehouseId);
             _totalCount = _allProducts.Count;
 
             // ✅ إحصائيات — مسعّر = عنده C Class أو Premium أو Elite
@@ -2112,6 +2342,63 @@ private string FormatPrice(object? price)
         ApplyFilter();
     }
 
+    private async Task OnBranchFilterChanged(int? value)
+    {
+        _selectedBranchId = value;
+        if (_selectedWarehouseId.HasValue && !FilteredWarehouseLookups.Any(w => w.WarehouseId == _selectedWarehouseId.Value))
+            _selectedWarehouseId = null;
+
+        _currentPage = 1;
+        await LoadData();
+        await SaveFilterState();
+    }
+
+    private async Task OnWarehouseFilterChanged(int? value)
+    {
+        _selectedWarehouseId = value;
+        _currentPage = 1;
+        await LoadData();
+        await SaveFilterState();
+    }
+
+    private string GetStockHeaderText()
+    {
+        if (_selectedWarehouseId.HasValue)
+        {
+            var warehouse = _warehouseLookups.FirstOrDefault(w => w.WarehouseId == _selectedWarehouseId.Value);
+            return warehouse == null ? "رصيد المخزن" : $"رصيد {warehouse.WarehouseName}";
+        }
+
+        if (_selectedBranchId.HasValue)
+        {
+            var branch = _branches.FirstOrDefault(b => b.BranchId == _selectedBranchId.Value);
+            return branch == null ? "رصيد الفرع" : $"رصيد فرع {branch.BranchNameAr}";
+        }
+
+        return "إجمالي الرصيد";
+    }
+
+    private string GetInventoryScopeDescription()
+    {
+        if (_selectedWarehouseId.HasValue)
+        {
+            var warehouse = _warehouseLookups.FirstOrDefault(w => w.WarehouseId == _selectedWarehouseId.Value);
+            if (warehouse != null)
+                return string.IsNullOrWhiteSpace(warehouse.BranchNameAr)
+                    ? $"أنت تعرض الآن المنتجات الموجودة فعليًا في مخزن {warehouse.WarehouseName}."
+                    : $"أنت تعرض الآن المنتجات الموجودة فعليًا في مخزن {warehouse.WarehouseName} التابع لفرع {warehouse.BranchNameAr}.";
+        }
+
+        if (_selectedBranchId.HasValue)
+        {
+            var branch = _branches.FirstOrDefault(b => b.BranchId == _selectedBranchId.Value);
+            if (branch != null)
+                return $"أنت تعرض الآن المنتجات التي لها رصيد فعلي داخل مخازن فرع {branch.BranchNameAr}.";
+        }
+
+        return "أنت تعرض الآن إجمالي رصيد المنتجات عبر كل المخازن النشطة.";
+    }
+
     // ==================== HELPERS ====================
     private string GetStatusText(int? statusId) => statusId switch
     {
@@ -2162,14 +2449,17 @@ private void SetViewMode(string mode)
         ApplyFilter();
     }
 
-    private void ClearAllFilters()
+    private async Task ClearAllFilters()
     {
         _searchText = null;
         _statusFilter = null;
+        _selectedBranchId = _preferredBranchId;
+        _selectedWarehouseId = null;
         _ownershipFilter = "all";
         _activeStatFilter = "all";
         _currentPage = 1;
-        ApplyFilter();
+        await LoadData();
+        await SaveFilterState();
     }
 
     private async Task LoadJobOrderCustomersAsync()
@@ -2236,6 +2526,8 @@ private void SetViewMode(string mode)
             {
                 SearchText = _searchText,
                 StatusFilter = _statusFilter,
+                BranchFilter = _selectedBranchId,
+                WarehouseFilter = _selectedWarehouseId,
                 OwnershipFilter = _ownershipFilter,
                 ActiveStatFilter = _activeStatFilter,
                 ViewMode = _viewMode,
@@ -2265,6 +2557,12 @@ private void SetViewMode(string mode)
                 if (root.TryGetProperty("StatusFilter", out var status) && status.ValueKind != System.Text.Json.JsonValueKind.Null)
                     _statusFilter = status.GetInt32();
 
+                if (root.TryGetProperty("BranchFilter", out var branchFilter) && branchFilter.ValueKind != System.Text.Json.JsonValueKind.Null)
+                    _selectedBranchId = branchFilter.GetInt32();
+
+                if (root.TryGetProperty("WarehouseFilter", out var warehouseFilter) && warehouseFilter.ValueKind != System.Text.Json.JsonValueKind.Null)
+                    _selectedWarehouseId = warehouseFilter.GetInt32();
+
                 if (root.TryGetProperty("OwnershipFilter", out var ownershipFilter))
                     _ownershipFilter = ownershipFilter.GetString() ?? "all";
 
@@ -2284,12 +2582,14 @@ private void SetViewMode(string mode)
     // ==================== NAVIGATION ====================
     
     private void AddProduct() => Navigation.NavigateTo("/products/form");
+    private void OpenStockEntry() => Navigation.NavigateTo("/inventory/stock-entry");
     private void Edit(int id) => Navigation.NavigateTo($"/products/form/{id}");
 
     // ==================== DIALOGS ====================
-    private void OpenViewDialog(ProductListDto product)
+    private async Task OpenViewDialogAsync(ProductListDto product)
     {
         _selectedProduct = product;
+        _selectedProductStockLocations = await ProductService.GetProductStockLocationsAsync(product.ProductId);
         _viewDialogOpen = true;
     }
 

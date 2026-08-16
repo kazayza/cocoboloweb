@@ -14,10 +14,20 @@ public class ProductListDto
     public decimal? SuggestedSalePriceElite { get; set; }
     public string? PdfPath { get; set; }
     public bool HasOldPdf { get; set; } = false;
+    public int StockQuantity { get; set; }
 
     // ⭐ تواريخ وأوقات التسجيل والتسعير
     public DateTime? CreatedAt { get; set; }
     public DateTime? FactoryPricedAt { get; set; }
     public string? ResponseTimeText { get; set; }
     public string? ResponseTimeClass { get; set; }
+}
+
+public class ProductStockLocationDto
+{
+    public int WarehouseId { get; set; }
+    public string WarehouseName { get; set; } = "";
+    public int? BranchId { get; set; }
+    public string? BranchNameAr { get; set; }
+    public int Quantity { get; set; }
 }

@@ -6,7 +6,7 @@ namespace COCOBOLOERPNEW.Services;
 
 // صفوف خام خفيفة للاستعلامات
 public record LeadRow(int LeadId, DateTime? LeadDate, string? LeadStatus, bool IsConverted, int? ConvertedPartyId, int? ConvertedOpportunityId, string? FormId, string? Platform, string? AdSetName, string? AdName, int? AssignedEmployeeId);
-public record OppRow(int OpportunityId, int PartyId, int StageId, DateTime CreatedAt, int? TransactionId, int? SourceId);
+public record OppRow(int OpportunityId, int PartyId, int StageId, DateTime CreatedAt, int? TransactionId, int? SourceId, int? EmployeeId);
 public record SaleRow(int TransactionId, DateTime TransactionDate, decimal NetTotalAmount, int PartyId);
 public record ExpenseRow(DateTime ExpenseDate, decimal Amount, string? Notes, string ExpenseName);
 public record ExpenseGroupRow(int ExpenseGroupId, string? ExpenseGroupName, int? ParentGroupId);
@@ -84,12 +84,12 @@ public class MarketingDashboardService : IMarketingDashboardService
         // ── الفرص (مراحل البيع) ──
         var opps = await db.SalesOpportunities.AsNoTracking()
             .Where(o => o.CreatedAt >= dateFrom && o.CreatedAt < dateTo.AddDays(1) && o.IsActive)
-            .Select(o => new OppRow(o.OpportunityId, o.PartyId, o.StageId, o.CreatedAt, o.TransactionId, o.SourceId))
+            .Select(o => new OppRow(o.OpportunityId, o.PartyId, o.StageId, o.CreatedAt, o.TransactionId, o.SourceId, o.EmployeeId))
             .ToListAsync();
 
         var prevOpps = await db.SalesOpportunities.AsNoTracking()
             .Where(o => o.CreatedAt >= prevFrom && o.CreatedAt < prevTo.AddDays(1) && o.IsActive)
-            .Select(o => new OppRow(o.OpportunityId, o.PartyId, o.StageId, o.CreatedAt, o.TransactionId, o.SourceId))
+            .Select(o => new OppRow(o.OpportunityId, o.PartyId, o.StageId, o.CreatedAt, o.TransactionId, o.SourceId, o.EmployeeId))
             .ToListAsync();
 
         // ── الفواتير (بيع) ──
@@ -123,10 +123,17 @@ public class MarketingDashboardService : IMarketingDashboardService
             .CountAsync(u => u.IsActive == true && u.Role == "Sales");
         var salesEmployeeCount = Math.Max(salesEmployees, 1);
 
-        // ── الفلترة على القناة ──
+        // ── الفلترة على القناة (مطبقة فعلياً على كل الحسابات) ──
         var channelFilter = (int? sourceId) => channel == "all" || ChannelOfSource(sourceId) == channel;
+        var leadChannelFilter = (LeadRow l) => channel == "all" || ChannelOfSource(LeadSourceId(l)) == channel;
 
-        // ── الحسابات ──
+        // 🎯 اللييدز والفرص المفلترة
+        var filteredLeads = leads.Where(leadChannelFilter).ToList();
+        var filteredPrevLeads = prevLeads.Where(leadChannelFilter).ToList();
+        var filteredOpps = opps.Where(o => channelFilter(o.SourceId)).ToList();
+        var filteredPrevOpps = prevOpps.Where(o => channelFilter(o.SourceId)).ToList();
+
+        // ── الحسابات (على المفلتر) ──
         var spend = expenses.Sum(e => e.Amount);
         var prevSpend = prevExpenses.Sum(e => e.Amount);
 
@@ -135,34 +142,35 @@ public class MarketingDashboardService : IMarketingDashboardService
         var prevSpendF = channel == "all" ? prevSpend : prevExpenses.Where(e => ChannelOfExpense(e.Notes + " " + e.ExpenseName) == channel).Sum(e => e.Amount);
 
         // 1) إجمالي اللييدز
-        var leadsCount = leads.Count;
-        var prevLeadsCount = prevLeads.Count;
+        var leadsCount = filteredLeads.Count;
+        var prevLeadsCount = filteredPrevLeads.Count;
 
         // 2) تم التواصل
-        var contacted = leads.Count(l => l.LeadStatus == "تم التواصل");
-        var prevContacted = prevLeads.Count(l => l.LeadStatus == "تم التواصل");
+        var rejected = filteredLeads.Count(l => l.LeadStatus == "مرفوض");
+        var prevRejected = filteredPrevLeads.Count(l => l.LeadStatus == "مرفوض");
+        var contacted = filteredLeads.Count(l => l.LeadStatus == "تم التواصل");
+        var prevContacted = filteredPrevLeads.Count(l => l.LeadStatus == "تم التواصل");
 
         // 3) المؤهل = اللييدز المحولين المربوطين بفرص مرحلة 1
-        var stage1OppIds = opps.Where(o => o.StageId == 1).Select(o => o.OpportunityId).ToHashSet();
-        var prevStage1OppIds = prevOpps.Where(o => o.StageId == 1).Select(o => o.OpportunityId).ToHashSet();
+        var stage1OppIds = filteredOpps.Where(o => o.StageId == 1).Select(o => o.OpportunityId).ToHashSet();
+        var prevStage1OppIds = filteredPrevOpps.Where(o => o.StageId == 1).Select(o => o.OpportunityId).ToHashSet();
 
-        var qualified = leads.Count(l => l.IsConverted && l.ConvertedOpportunityId != null && stage1OppIds.Contains(l.ConvertedOpportunityId.Value));
-        var prevQualified = prevLeads.Count(l => l.IsConverted && l.ConvertedOpportunityId != null && prevStage1OppIds.Contains(l.ConvertedOpportunityId.Value));
+        // المحول = اللييدز المحولة (من جدول اللييدز — الأساس) — 28
+        var qualified = filteredLeads.Count(l => l.IsConverted && l.ConvertedOpportunityId != null);
+        var prevQualified = filteredPrevLeads.Count(l => l.IsConverted && l.ConvertedOpportunityId != null && prevStage1OppIds.Contains(l.ConvertedOpportunityId.Value));
 
         // 4) قيد التقدم = فرص المرحلة 2 + 7
-        var inProgress = opps.Count(o => o.StageId == 2 || o.StageId == 7);
-        var prevInProgress = prevOpps.Count(o => o.StageId == 2 || o.StageId == 7);
+        // فرص بيع = عالي الاهتمام (7) + معلق/مؤجل (9)
+        var inProgress = filteredOpps.Count(o => o.StageId == 7 || o.StageId == 9);
+        var prevInProgress = filteredPrevOpps.Count(o => o.StageId == 2 || o.StageId == 7);
 
         // 5) تم البيع = فرص المرحلة 3 المرتبطة بفواتير
-        var saleOppIds = opps.Where(o => o.StageId == 3 && o.TransactionId != null).Select(o => o.OpportunityId).ToHashSet();
-        var prevSaleOppIds = prevOpps.Where(o => o.StageId == 3 && o.TransactionId != null).Select(o => o.OpportunityId).ToHashSet();
-
-        var deals = opps.Count(o => o.StageId == 3 && o.TransactionId != null);
-        var prevDeals = prevOpps.Count(o => o.StageId == 3 && o.TransactionId != null);
+        var deals = filteredOpps.Count(o => o.StageId == 3 && o.TransactionId != null);
+        var prevDeals = filteredPrevOpps.Count(o => o.StageId == 3 && o.TransactionId != null);
 
         // الإيرادات = الفواتير المرتبطة بفرص تم البيع
-        var linkedInvoiceIds = opps.Where(o => o.StageId == 3 && o.TransactionId != null).Select(o => o.TransactionId!.Value).ToHashSet();
-        var prevLinkedInvoiceIds = prevOpps.Where(o => o.StageId == 3 && o.TransactionId != null).Select(o => o.TransactionId!.Value).ToHashSet();
+        var linkedInvoiceIds = filteredOpps.Where(o => o.StageId == 3 && o.TransactionId != null).Select(o => o.TransactionId!.Value).ToHashSet();
+        var prevLinkedInvoiceIds = filteredPrevOpps.Where(o => o.StageId == 3 && o.TransactionId != null).Select(o => o.TransactionId!.Value).ToHashSet();
 
         var revenue = sales.Where(s => linkedInvoiceIds.Contains(s.TransactionId)).Sum(s => s.NetTotalAmount);
         var prevRevenue = prevSales.Where(s => prevLinkedInvoiceIds.Contains(s.TransactionId)).Sum(s => s.NetTotalAmount);
@@ -183,6 +191,10 @@ public class MarketingDashboardService : IMarketingDashboardService
         var contactRate = leadsCount > 0 ? (double)contacted / leadsCount * 100 : 0;
         var prevConvRate = prevLeadsCount > 0 ? (double)prevQualified / prevLeadsCount * 100 : 0;
 
+        // ── 🎯 إنجاز تارجيت الموظفين ──
+        // إيراد كل موظف = الفواتير المرتبطة بفرص تم البيع اللي هو مسؤول عنها (EmployeeID في الفرصة)
+        var employeeTargets = await BuildEmployeeTargetsAsync(db, dateFrom, dateTo, filteredOpps, sales, channelFilter);
+
         // ── DTO ──
         var result = new MarketingDashboardDto
         {
@@ -194,6 +206,10 @@ public class MarketingDashboardService : IMarketingDashboardService
             MonthlySalesTarget = MonthlyTarget,
             SalesEmployeeCount = salesEmployees,
             PerEmployeeMonthlyTarget = Math.Round(MonthlyTarget / salesEmployeeCount),
+            CompanyActualRevenue = revenue,
+            CompanyTargetPercent = MonthlyTarget > 0 ? (double)(revenue / MonthlyTarget * 100m) : 0,
+            CompanyGaugeStyle = BuildGaugeStyle(MonthlyTarget > 0 ? (double)(revenue / MonthlyTarget * 100m) : 0),
+            EmployeeTargets = employeeTargets,
         };
 
         result.Kpis = BuildKpis(spendF, prevSpendF, leadsCount, prevLeadsCount, cpl, prevCpl,
@@ -204,15 +220,15 @@ public class MarketingDashboardService : IMarketingDashboardService
         result.OverallDelta = result.Kpis.Where(k => k.Delta.HasValue).Select(k => k.Delta!.Value).DefaultIfEmpty(0).Average();
 
         // ── القمع (5 مراحل) ──
-        result.Funnel = BuildFunnel(leadsCount, contacted, qualified, inProgress, deals);
+        result.Funnel = BuildFunnel(leadsCount, rejected, qualified, inProgress, deals);
 
         // ── الحملات (من AdSetName + AdName) ──
-        var campaigns = BuildCampaigns(leads);
+        var campaigns = BuildCampaigns(filteredLeads);
         result.TopCampaigns = campaigns.OrderByDescending(c => c.Qualified).ThenByDescending(c => c.Leads).Take(5).ToList();
         result.WorstCampaigns = campaigns.Where(c => c.Leads > 0).OrderBy(c => c.Qualified).ThenBy(c => c.Leads).Take(5).ToList();
 
         // ── المصادر ──
-        result.Channels = BuildChannels(sources, leads, opps, expenses, channel);
+        result.Channels = BuildChannels(sources, filteredLeads, filteredOpps, expenses, channel);
 
         // ── المستهدف ──
         result.Targets = BuildTargets(leadsCount, contacted, qualified, deals, revenue);
@@ -223,7 +239,7 @@ public class MarketingDashboardService : IMarketingDashboardService
             Leads = leadsCount,
             Contacted = contacted,
             Qualified = qualified,
-            Opportunities = opps.Count,
+            Opportunities = filteredOpps.Count,
             Customers = customers,
             SalesInvoices = sales.Count(s => linkedInvoiceIds.Contains(s.TransactionId)),
             SalesValue = revenue,
@@ -264,12 +280,13 @@ public class MarketingDashboardService : IMarketingDashboardService
         const decimal cplThreshold = 1000m;
         return new List<MarketingKpiDto>
         {
-            new() { Key = "leads", Label = "إجمالي اللييدز", Value = leads.ToString("N0"), Delta = DeltaPct(leads, prevLeads), Color = "#8b5cf6", Icon = "person_search" },
+            new() { Key = "leads", Label = "إجمالي المحتملين", Value = leads.ToString("N0"), Delta = DeltaPct(leads, prevLeads), Color = "#8b5cf6", Icon = "person_search" },
             new() { Key = "contacted", Label = "تم التواصل", Value = contacted.ToString("N0"), Delta = DeltaPct(contacted, prevContacted), Color = "#3b82f6", Icon = "phone_in_talk" },
-            new() { Key = "qualified", Label = "عملاء مؤهلين", Value = qualified.ToString("N0"), Delta = DeltaPct(qualified, prevQualified), Color = "#10b981", Icon = "verified" },
-            new() { Key = "progress", Label = "فرص قيد التقدم", Value = inProgress.ToString("N0"), Delta = DeltaPct(inProgress, prevInProgress), Color = "#f59e0b", Icon = "trending_up" },
+            new() { Key = "qualified", Label = "مؤهل", Value = qualified.ToString("N0"), Delta = DeltaPct(qualified, prevQualified), Color = "#7447c6", Icon = "verified" },
+            new() { Key = "conv", Label = "معدل التحويل ", Value = convRate.ToString("0.0") + "%", Delta = DeltaPct(convRate, prevConvRate), Color = "#0ea5e9", Icon = "conv" },
+            new() { Key = "progress", Label = "فرص البيع", Value = inProgress.ToString("N0"), Delta = DeltaPct(inProgress, prevInProgress), Color = "#f59e0b", Icon = "trending_up" },
             new() { Key = "deals", Label = "صفقات مغلقة", Value = deals.ToString("N0"), Delta = DeltaPct(deals, prevDeals), Color = "#ef4444", Icon = "handshake" },
-            new() { Key = "customers", Label = "عملاء فواتير", Value = customers.ToString("N0"), Sub = "مرتبطين بفرص تم بيع", Delta = DeltaPct(customers, prevCustomers), Color = "#14b8a6", Icon = "groups" },
+            new() { Key = "customers", Label = "العملاء", Value = customers.ToString("N0"), Sub = "مرتبطين بفرص تم بيع", Delta = DeltaPct(customers, prevCustomers), Color = "#14b8a6", Icon = "groups" },
             new() { Key = "revenue", Label = "الإيرادات", Value = FmtMoney(revenue), IsMoney = true, Delta = DeltaPct(revenue, prevRevenue), Color = "#2563eb", Icon = "savings" },
             new() { Key = "spend", Label = "الإنفاق الإعلاني", Value = FmtMoney(spend), IsMoney = true, Delta = DeltaPct(spend, prevSpend), Color = "#f472b6", Icon = "campaign" },
             new() { Key = "cpl", Label = "تكلفة اللييد CPL", Value = FmtMoney(cpl), IsMoney = true, Delta = DeltaPct(cpl, prevCpl), GoodWhenUp = false, Color = "#f59e0b", Icon = "payments",
@@ -287,14 +304,14 @@ public class MarketingDashboardService : IMarketingDashboardService
     // 🪜 القمع (5 مراحل)
     // ═══════════════════════════════════════════
     private static List<MarketingFunnelStageDto> BuildFunnel(
-        int leads, int contacted, int qualified, int inProgress, int deals)
+        int leads, int rejected, int qualified, int inProgress, int deals)
     {
         var stages = new List<(string Name, string Sub, int Count)>
         {
             ("إجمالي اللييدز", "كل المحتملين", leads),
-            ("تم التواصل", "أول اتصال", contacted),
-            ("عميل مؤهل", "المرحلة 1 — محول", qualified),
-            ("قيد التقدم", "المرحلتين 2+7 — مهتم/عالي", inProgress),
+            ("مرفوض", "من جدول اللييدز", rejected),
+            ("محول", "ليدز محولة في الفترة", qualified),
+            ("فرص بيع", "عالى الاهتمام + معلق", inProgress),
             ("تم البيع", "المرحلة 3 + فاتورة", deals),
         };
 
@@ -636,26 +653,26 @@ public class MarketingDashboardService : IMarketingDashboardService
         var t = (text ?? "").ToLowerInvariant();
         if (t.Contains("فيسبوك") || t.Contains("فيس بوك") || t.Contains("facebook") || t.Contains("fb")) return "fb";
         if (t.Contains("انستجرام") || t.Contains("انستا") || t.Contains("instagram") || t.Contains("ig")) return "ig";
-        if (t.Contains("تيك توك") || t.Contains("tiktok")) return "tiktok";
-        if (t.Contains("جوجل") || t.Contains("google")) return "google";
+        if (t.Contains("واتساب") || t.Contains("whatsapp") || t.Contains("wa")) return "whatsapp";
+        if (t.Contains("ترافيك") || t.Contains("traffic")) return "traffic";
         return "other";
     }
 
     public static string ChannelOfSource(int? sourceId) => sourceId switch
     {
-        2 => "fb",
-        5 => "ig",
-        7 => "google",
-        8 => "tiktok",
-        _ => "other",
+        2 => "fb",        // فيسبوك
+        5 => "ig",        // انستجرام
+        1 => "whatsapp",  // واتساب
+        4 => "traffic",   // Traffic
+        _ => "other",     // مكالمة، توصية، جوجل، تيك توك، عميل قديم...
     };
 
     public static string ChannelName(string key) => key switch
     {
         "fb" => "فيسبوك",
         "ig" => "انستجرام",
-        "google" => "جوجل",
-        "tiktok" => "تيك توك",
+        "whatsapp" => "واتساب",
+        "traffic" => "Traffic",
         "other" => "أخرى",
         _ => "الكل",
     };
@@ -664,4 +681,88 @@ public class MarketingDashboardService : IMarketingDashboardService
         v >= 1_000_000 ? (v / 1_000_000m).ToString("0.0") + "M" :
         v >= 1_000 ? (v / 1_000m).ToString("0.0") + "K" :
         v.ToString("N0");
+
+    // ═══════════════════════════════════════════
+    // 🎯 إنجاز تارجيت الموظفين (Gauge لكل موظف)
+    // ═══════════════════════════════════════════
+    private async Task<List<EmployeeTargetDto>> BuildEmployeeTargetsAsync(
+        db24804Context db,
+        DateTime dateFrom, DateTime dateTo,
+        List<OppRow> filteredOpps,
+        List<SaleRow> sales,
+        Func<int?, bool> channelFilter)
+    {
+        var result = new List<EmployeeTargetDto>();
+
+        // 1) الموظفين أصحاب دور Sales (من Users) + أسمائهم من Employees
+        var salesUsers = await db.Users.AsNoTracking()
+            .Where(u => u.IsActive == true && u.Role == "Sales")
+            .Select(u => new { u.UserId, u.EmployeeId })
+            .ToListAsync();
+
+        if (salesUsers.Count == 0) return result;
+
+        // أسماء الموظفين
+        var empIds = salesUsers.Select(su => su.EmployeeId).Where(e => e != null).Cast<int>().ToList();
+        var empNames = new Dictionary<int, string>();
+        if (empIds.Any())
+        {
+            empNames = await db.Employees.AsNoTracking()
+                .Where(e => empIds.Contains(e.EmployeeId))
+                .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName);
+        }
+
+        var perEmployeeTarget = Math.Round(MonthlyTarget / salesUsers.Count);
+
+        // 2) لكل موظف: فرص تم البيع اللي EmployeeID بتاعه (من جدول الفرص)
+        //    الفرص المرتبطة بفواتير → الإيراد بتاعه
+        foreach (var su in salesUsers)
+        {
+            var empId = su.EmployeeId ?? 0;
+            var empName = empId != 0 && empNames.ContainsKey(empId)
+                ? empNames[empId]
+                : $"موظف ({su.UserId})";
+
+            // فرص تم البيع للموظف ده في الفترة
+            var empDealOpps = filteredOpps
+                .Where(o => o.StageId == 3 && o.TransactionId != null && o.EmployeeId == empId)
+                .ToList();
+
+            // الفواتير المرتبطة بيهم
+            var empInvoiceIds = empDealOpps.Select(o => o.TransactionId!.Value).ToHashSet();
+            var empRevenue = sales.Where(s => empInvoiceIds.Contains(s.TransactionId)).Sum(s => s.NetTotalAmount);
+
+            var percent = perEmployeeTarget > 0 ? (double)(empRevenue / perEmployeeTarget * 100m) : 0;
+
+            result.Add(new EmployeeTargetDto
+            {
+                EmployeeId = empId != 0 ? empId : su.UserId,
+                EmployeeName = empName,
+                TargetAmount = perEmployeeTarget,
+                ActualAmount = empRevenue,
+                Percent = Math.Round(percent, 1),
+                GaugeStyle = BuildGaugeStyle(percent),
+                StatusClass = percent >= 100 ? "good" : percent >= 50 ? "warn" : "bad",
+                StatusText = percent >= 100 ? "ممتاز" : percent >= 50 ? "قريب من الهدف" : "متأخر",
+            });
+        }
+
+        return result.OrderByDescending(e => e.Percent).ToList();
+    }
+
+    // ═══════════════════════════════════════════
+    // 🎨 ستايل الـ Gauge (conic-gradient)
+    // ═══════════════════════════════════════════
+    public static string BuildGaugeStyle(double percent)
+    {
+        var normalized = Math.Max(0, Math.Min(100, percent));
+        var deg = normalized * 3.6;
+
+        string color = normalized >= 100 ? "#15965e"
+            : normalized >= 75 ? "#35a86d"
+            : normalized >= 50 ? "#efa21b"
+            : "#d93445";
+
+        return $"background:conic-gradient({color} 0deg {deg.ToString("0.0")}deg, #e8edf3 {deg.ToString("0.0")}deg 360deg);";
+    }
 }

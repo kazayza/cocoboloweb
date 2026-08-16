@@ -1,6 +1,6 @@
 @page "/factory/purchases"
 @using Microsoft.AspNetCore.Authorization
-@attribute [Authorize(Roles = "factory")]
+@attribute [Authorize]
 
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
@@ -37,6 +37,12 @@ else
                         <p>متابعة فواتير المشتريات الخاصة بالمصنع</p>
                     </div>
                 </div>
+                @if (_canManageReceipts)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="GoToNewPurchase">
+                        فاتورة شراء جديدة
+                    </MudButton>
+                }
             </div>
 
             <!-- Stats -->
@@ -164,10 +170,11 @@ else
                 <HeaderContent>
                     <MudTh>رقم الفاتورة</MudTh>
                     <MudTh>التاريخ</MudTh>
-                    <MudTh>العميل (من فاتورة البيع)</MudTh>
+                    <MudTh>المورد / العميل المرتبط</MudTh>
                     <MudTh>الإجمالي</MudTh>
-                    <MudTh>الحالة</MudTh>
-                    <MudTh>عرض</MudTh>
+                    <MudTh>الحالة المالية</MudTh>
+                    <MudTh>حالة الاستلام</MudTh>
+                    <MudTh>إجراءات</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd>
@@ -187,7 +194,7 @@ else
                     </MudTd>
                     <MudTd>
                         <div class="customer-cell">
-                            <span class="customer-name">@(context.EmpName ?? "-")</span>
+                            <span class="customer-name">@(string.IsNullOrWhiteSpace(context.EmpName) ? context.PartyName : context.EmpName)</span>
                         </div>
                     </MudTd>
                     <MudTd><strong class="amount-total">@FormatMoney(context.GrandTotal)</strong></MudTd>
@@ -213,11 +220,23 @@ else
                         </div>
                     </MudTd>
                     <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="@(context.IsDelivered == true ? Color.Success : Color.Warning)">
+                            @(context.IsDelivered == true ? "تم الاستلام" : "بانتظار الاستلام")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>
                         <div class="table-actions" @onclick:stopPropagation="true">
                             <MudIconButton Icon="@Icons.Material.Filled.Visibility"
                                            Size="Size.Small" Color="Color.Info"
                                            OnClick="() => GoToDetails(context.TransactionId)"
                                            Title="عرض" />
+                            @if (_canManageReceipts && context.IsDelivered != true && context.InvoiceStatus != InvoiceStatuses.Cancelled)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Inventory2"
+                                               Size="Size.Small" Color="Color.Success"
+                                               OnClick="() => ReceivePurchase(context.TransactionId)"
+                                               Title="تأكيد الاستلام" />
+                            }
                         </div>
                     </MudTd>
                 </RowTemplate>
@@ -465,6 +484,8 @@ else
     private bool _isLoading = true;
     private bool _isTableLoading;
     private bool _canView;
+    private bool _canManageReceipts;
+    private string? _currentUserName;
 
     private InvoiceFilterDto _filter = new() { TransactionType = TransactionTypes.Purchase };
     private PagedResult<InvoiceListDto> _pagedResult = new();
@@ -482,7 +503,9 @@ else
             // ✅ التحقق من صلاحية فواتير المشتريات
             var auth = await AuthProvider.GetAuthenticationStateAsync();
             var user = auth.User;
-            _canView = user.HasClaim("Permission", "frm_SupplierInvoices:View") || user.IsInRole("Admin");
+            _currentUserName = user.Identity?.Name ?? "System";
+            _canView = user.HasClaim("Permission", "frm_SupplierInvoices:View") || user.IsInRole("Admin") || user.IsInRole("factory");
+            _canManageReceipts = _canView;
 
             if (!_canView)
             {
@@ -579,6 +602,18 @@ else
     }
 
     private void GoToDetails(int id) => Navigation.NavigateTo($"/sales/invoices/{id}");
+    private void GoToNewPurchase() => Navigation.NavigateTo("/factory/purchases/new");
+
+    private async Task ReceivePurchase(int id)
+    {
+        var (ok, msg) = await InvoiceService.ReceivePurchaseInvoiceAsync(id, _currentUserName ?? "System");
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+        {
+            await LoadData();
+            await LoadStats();
+        }
+    }
 
     // ===== Helpers =====
     private string FormatMoney(decimal value) => $"{value:N2} ج";

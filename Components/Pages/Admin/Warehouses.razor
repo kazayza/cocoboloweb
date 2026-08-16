@@ -1,0 +1,469 @@
+@page "/admin/warehouses"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
+
+@attribute [Authorize]
+
+@inject IWarehouseService WarehouseService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+
+<PageTitle>إدارة المخازن</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="loading-wrap">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل المخازن...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+        غير مسموح لك بعرض هذه الشاشة.
+    </MudAlert>
+}
+else
+{
+    <div class="branches-page" dir="rtl">
+        <div class="branches-header">
+            <div class="header-bg"></div>
+            <div class="header-content">
+                <div class="title-wrap">
+                    <div class="title-icon">
+                        <MudIcon Icon="@Icons.Material.Filled.Inventory2" />
+                    </div>
+                    <div>
+                        <h1>إدارة المخازن</h1>
+                        <p>إضافة وتعديل وتفعيل وتعطيل المخازن وربطها بالفروع</p>
+                    </div>
+                </div>
+
+                @if (_canManage)
+                {
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.AddBusiness"
+                               OnClick="OpenAddDialog"
+                               Class="add-btn">
+                        إضافة مخزن
+                    </MudButton>
+                }
+            </div>
+        </div>
+
+        <div class="stats-row">
+            <div class="stat-card">
+                <span class="stat-label">إجمالي المخازن</span>
+                <strong>@_warehouses.Count</strong>
+            </div>
+            <div class="stat-card stat-active">
+                <span class="stat-label">المخازن النشطة</span>
+                <strong>@_warehouses.Count(x => x.IsActive)</strong>
+            </div>
+            <div class="stat-card stat-inactive">
+                <span class="stat-label">الفروع المرتبطة</span>
+                <strong>@_warehouses.Where(x => x.BranchId.HasValue).Select(x => x.BranchId).Distinct().Count()</strong>
+            </div>
+        </div>
+
+        <MudPaper Class="table-shell" Elevation="0">
+            <MudTable Items="_warehouses" Dense="true" Hover="true" Striped="true" Breakpoint="Breakpoint.Md" Elevation="0">
+                <HeaderContent>
+                    <MudTh>اسم المخزن</MudTh>
+                    <MudTh>الفرع</MudTh>
+                    <MudTh>الموقع</MudTh>
+                    <MudTh>ملاحظات</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh>إجراءات</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <div class="branch-name-cell">
+                            <strong>@context.WarehouseName</strong>
+                        </div>
+                    </MudTd>
+                    <MudTd>@(context.BranchNameAr ?? "—")</MudTd>
+                    <MudTd>@(context.Location ?? "—")</MudTd>
+                    <MudTd>@(context.Notes ?? "—")</MudTd>
+                    <MudTd>
+                        <MudChip T="string"
+                                 Size="Size.Small"
+                                 Color="@(context.IsActive ? Color.Success : Color.Error)"
+                                 Variant="Variant.Filled">
+                            @(context.IsActive ? "نشط" : "معطل")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>
+                        <div class="row-actions">
+                            @if (_canManage)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                               Color="Color.Primary"
+                                               Size="Size.Small"
+                                               OnClick="@(() => OpenEditDialog(context.WarehouseId))"
+                                               Title="تعديل" />
+
+                                <MudSwitch T="bool"
+                                           Value="@context.IsActive"
+                                           ValueChanged="@((bool v) => ToggleStatusAsync(context.WarehouseId, v))"
+                                           Color="Color.Success"
+                                           Size="Size.Small"
+                                           Class="status-switch" />
+                            }
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="empty-box">
+                        <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Large" />
+                        <span>لا توجد مخازن بعد</span>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    </div>
+}
+
+<MudDialog @bind-Visible="_showDialog" Options="_dialogOptions">
+    <TitleContent>
+        <div class="dialog-title-wrap">
+            <MudIcon Icon="@(_editing.WarehouseId == 0 ? Icons.Material.Filled.AddBusiness : Icons.Material.Filled.Edit)" />
+            <MudText Typo="Typo.h6">@(_editing.WarehouseId == 0 ? "إضافة مخزن" : "تعديل مخزن")</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        <MudGrid Spacing="2" Class="mt-1">
+            <MudItem xs="12" md="6">
+                <MudTextField T="string"
+                              @bind-Value="_editing.WarehouseName"
+                              Label="اسم المخزن *"
+                              Variant="Variant.Outlined"
+                              Immediate="true" />
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudSelect T="int?"
+                           @bind-Value="_editing.BranchId"
+                           Label="الفرع *"
+                           Variant="Variant.Outlined"
+                           Clearable="false">
+                    @foreach (var branch in _branches)
+                    {
+                        <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">@branch.BranchNameAr</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField T="string"
+                              @bind-Value="_editing.Location"
+                              Label="الموقع"
+                              Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudTextField T="string"
+                              @bind-Value="_editing.Notes"
+                              Label="ملاحظات"
+                              Variant="Variant.Outlined"
+                              Lines="2" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudSwitch T="bool"
+                           @bind-Value="_editing.IsActive"
+                           Color="Color.Success"
+                           Label="المخزن نشط" />
+            </MudItem>
+        </MudGrid>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="CloseDialog">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   OnClick="SaveAsync"
+                   Disabled="@_isSaving">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="me-2" />
+            }
+            حفظ
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .loading-wrap {
+        min-height: 50vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .branches-page {
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .branches-header {
+        position: relative;
+        overflow: hidden;
+        border-radius: 22px;
+        background: linear-gradient(135deg,#0f172a 0%,#1e293b 100%);
+        color: white;
+        box-shadow: 0 16px 45px rgba(15,23,42,.18);
+    }
+
+    .header-bg {
+        position: absolute;
+        inset: 0;
+        background:
+            radial-gradient(circle at 15% 20%, rgba(56,189,248,.22), transparent 35%),
+            radial-gradient(circle at 85% 80%, rgba(34,197,94,.16), transparent 30%);
+    }
+
+    .header-content {
+        position: relative;
+        z-index: 1;
+        padding: 1.4rem 1.6rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .title-wrap {
+        display: flex;
+        align-items: center;
+        gap: .9rem;
+    }
+
+    .title-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255,255,255,.12);
+        font-size: 1.6rem;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,.14);
+    }
+
+    .title-wrap h1 {
+        margin: 0;
+        font-size: 1.55rem;
+        font-weight: 800;
+    }
+
+    .title-wrap p {
+        margin: .2rem 0 0;
+        color: rgba(255,255,255,.8);
+        font-size: .92rem;
+    }
+
+    .add-btn {
+        border-radius: 14px;
+        padding-inline: 1.2rem;
+        box-shadow: 0 10px 20px rgba(37,99,235,.18);
+    }
+
+    .stats-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit,minmax(220px,1fr));
+        gap: 1rem;
+    }
+
+    .stat-card {
+        border-radius: 18px;
+        background: white;
+        padding: 1rem 1.1rem;
+        box-shadow: 0 10px 25px rgba(15,23,42,.06);
+        border: 1px solid rgba(226,232,240,.9);
+        display: flex;
+        flex-direction: column;
+        gap: .4rem;
+    }
+
+    .stat-card strong {
+        font-size: 1.6rem;
+        color: #0f172a;
+    }
+
+    .stat-label {
+        color: #64748b;
+        font-size: .9rem;
+        font-weight: 600;
+    }
+
+    .stat-active { border-top: 4px solid #22c55e; }
+    .stat-inactive { border-top: 4px solid #3b82f6; }
+
+    .table-shell {
+        border-radius: 18px;
+        background: white;
+        border: 1px solid rgba(226,232,240,.9);
+        box-shadow: 0 14px 28px rgba(15,23,42,.05);
+        padding: .75rem;
+    }
+
+    .branch-name-cell {
+        display: flex;
+        flex-direction: column;
+        gap: .2rem;
+    }
+
+    .branch-name-cell strong {
+        color: #0f172a;
+        font-weight: 700;
+    }
+
+    .row-actions {
+        display: flex;
+        align-items: center;
+        gap: .35rem;
+    }
+
+    .status-switch {
+        margin-inline-start: .25rem;
+    }
+
+    .empty-box {
+        min-height: 160px;
+        display: flex;
+        flex-direction: column;
+        gap: .6rem;
+        align-items: center;
+        justify-content: center;
+        color: #64748b;
+    }
+
+    .dialog-title-wrap {
+        display: flex;
+        align-items: center;
+        gap: .6rem;
+        font-weight: 700;
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _isSaving;
+    private bool _showDialog;
+    private bool _canView;
+    private bool _canManage;
+
+    private List<WarehouseListDto> _warehouses = new();
+    private List<Branch> _branches = new();
+    private WarehouseFormDto _editing = new();
+
+    private readonly DialogOptions _dialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Medium,
+        FullWidth = true,
+        CloseButton = true,
+        CloseOnEscapeKey = true
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        _canView = user.IsInRole("Admin");
+        _canManage = user.IsInRole("Admin");
+
+        if (!_canView)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        await LoadAsync();
+        _isLoading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        _warehouses = await WarehouseService.GetWarehousesAsync();
+        _branches = await WarehouseService.GetBranchesAsync();
+    }
+
+    private void OpenAddDialog()
+    {
+        _editing = new WarehouseFormDto { IsActive = true };
+        _showDialog = true;
+    }
+
+    private async Task OpenEditDialog(int warehouseId)
+    {
+        var dto = await WarehouseService.GetWarehouseForEditAsync(warehouseId);
+        if (dto == null)
+        {
+            Snackbar.Add("المخزن غير موجود.", Severity.Error);
+            return;
+        }
+
+        _editing = dto;
+        _showDialog = true;
+    }
+
+    private void CloseDialog()
+    {
+        _showDialog = false;
+        _editing = new WarehouseFormDto();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_editing.WarehouseName))
+        {
+            Snackbar.Add("اسم المخزن مطلوب.", Severity.Warning);
+            return;
+        }
+
+        if (!_editing.BranchId.HasValue || _editing.BranchId.Value <= 0)
+        {
+            Snackbar.Add("اختيار الفرع مطلوب.", Severity.Warning);
+            return;
+        }
+
+        _isSaving = true;
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var userName = auth.User.Identity?.Name ?? "System";
+
+            var (ok, msg, _) = await WarehouseService.SaveWarehouseAsync(_editing, userName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok)
+            {
+                _showDialog = false;
+                await LoadAsync();
+            }
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task ToggleStatusAsync(int warehouseId, bool isActive)
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var userName = auth.User.Identity?.Name ?? "System";
+
+        var (ok, msg) = await WarehouseService.ToggleWarehouseStatusAsync(warehouseId, isActive, userName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+            await LoadAsync();
+    }
+}

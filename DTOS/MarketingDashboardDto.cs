@@ -31,6 +31,14 @@ public class MarketingDashboardDto
     public int SalesEmployeeCount { get; set; }
     public decimal PerEmployeeMonthlyTarget { get; set; }
 
+    // 🎯 إنجاز تارجيت الفريق
+    public decimal CompanyActualRevenue { get; set; }   // الإيراد الفعلي (فواتير مرتبطة بفرص تم بيع)
+    public double CompanyTargetPercent { get; set; }    // نسبة إنجاز الشركة من 3 مليون
+    public string CompanyGaugeStyle { get; set; } = ""; // conic-gradient للـ Gauge
+
+    // 🎯 إنجاز كل موظف (Gauge لكل موظف)
+    public List<EmployeeTargetDto> EmployeeTargets { get; set; } = new();
+
     // 📊 التسويق مقابل المبيعات
     public MarketingVsSalesDto VsSales { get; set; } = new();
 
@@ -159,4 +167,19 @@ public class MarketingTrendDto
     public string Label { get; set; } = "";
     public double Value { get; set; }
     public string ChartLabel => "\u2067" + Label + "\u2069";
+}
+
+// ─────────────────────────────────────────────
+// 🎯 إنجاز تارجيت الموظفين (Gauge Chart)
+// ─────────────────────────────────────────────
+public class EmployeeTargetDto
+{
+    public int EmployeeId { get; set; }
+    public string EmployeeName { get; set; } = "";
+    public decimal TargetAmount { get; set; }       // تارجيت الموظف (3M ÷ عدد الموظفين)
+    public decimal ActualAmount { get; set; }       // إيراد الموظف الفعلي (فواتير مرتبطة بفرص تم بيع)
+    public double Percent { get; set; }             // نسبة الإنجاز
+    public string GaugeStyle { get; set; } = "";    // conic-gradient style للـ Gauge
+    public string StatusClass { get; set; } = "";   // good / warn / bad
+    public string StatusText { get; set; } = "";    // "ممتاز" / "قريب" / "متأخر"
 }

@@ -49,6 +49,8 @@ public partial class Employee
 
     public DateTime? CreatedAt { get; set; }
 
+    public int? BranchId { get; set; }
+
     public virtual ICollection<ComplaintFollowUp> ComplaintFollowUps { get; set; } = new List<ComplaintFollowUp>();
 
     public virtual ICollection<Complaint> Complaints { get; set; } = new List<Complaint>();

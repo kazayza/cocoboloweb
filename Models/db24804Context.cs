@@ -117,6 +117,10 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
 
     public virtual DbSet<ShortPermission> ShortPermissions { get; set; }
 
+    public virtual DbSet<StockCountHeader> StockCountHeaders { get; set; }
+
+    public virtual DbSet<StockCountLine> StockCountLines { get; set; }
+
     public virtual DbSet<StockLevel> StockLevels { get; set; }
 
     public virtual DbSet<StockTransaction> StockTransactions { get; set; }
@@ -698,6 +702,7 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
                 .HasDefaultValueSql("(getdate())")
                 .HasColumnType("datetime");
             entity.Property(e => e.CreatedBy).HasMaxLength(50);
+            entity.Property(e => e.BranchId).HasColumnName("BranchID");
             entity.Property(e => e.CurrentSalaryBase).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.Department).HasMaxLength(100);
             entity.Property(e => e.EmailAddress).HasMaxLength(50);
@@ -1766,6 +1771,60 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .HasDefaultValue("Pending");
         });
 
+        modelBuilder.Entity<StockCountHeader>(entity =>
+        {
+            entity.HasKey(e => e.StockCountId);
+            entity.ToTable("StockCountHeaders");
+
+            entity.Property(e => e.StockCountId).HasColumnName("StockCountID");
+            entity.Property(e => e.BranchId).HasColumnName("BranchID");
+            entity.Property(e => e.WarehouseId).HasColumnName("WarehouseID");
+            entity.Property(e => e.CountDate).HasColumnType("datetime");
+            entity.Property(e => e.Status).HasMaxLength(20).HasDefaultValue("Draft");
+            entity.Property(e => e.Notes).HasMaxLength(500);
+            entity.Property(e => e.CreatedBy).HasMaxLength(100);
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnType("datetime");
+            entity.Property(e => e.FinalizedAt).HasColumnType("datetime");
+            entity.Property(e => e.FinalizedBy).HasMaxLength(100);
+
+            entity.HasOne(d => d.Branch)
+                .WithMany()
+                .HasForeignKey(d => d.BranchId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_StockCountHeaders_Branches");
+
+            entity.HasOne(d => d.Warehouse)
+                .WithMany()
+                .HasForeignKey(d => d.WarehouseId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_StockCountHeaders_Warehouses");
+        });
+
+        modelBuilder.Entity<StockCountLine>(entity =>
+        {
+            entity.HasKey(e => e.StockCountLineId);
+            entity.ToTable("StockCountLines");
+
+            entity.Property(e => e.StockCountLineId).HasColumnName("StockCountLineID");
+            entity.Property(e => e.StockCountId).HasColumnName("StockCountID");
+            entity.Property(e => e.ProductId).HasColumnName("ProductID");
+            entity.Property(e => e.Notes).HasMaxLength(500);
+
+            entity.HasOne(d => d.StockCount)
+                .WithMany(p => p.Lines)
+                .HasForeignKey(d => d.StockCountId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_StockCountLines_Headers");
+
+            entity.HasOne(d => d.Product)
+                .WithMany()
+                .HasForeignKey(d => d.ProductId)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_StockCountLines_Products");
+        });
+
         modelBuilder.Entity<StockLevel>(entity =>
         {
             entity.HasKey(e => e.StockLevelId).HasName("PK__StockLev__573D8053DCB218F4");
@@ -1950,6 +2009,7 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .HasDefaultValueSql("(getdate())")
                 .HasColumnType("datetime");
             entity.Property(e => e.CreatedBy).HasMaxLength(50);
+            entity.Property(e => e.DefaultBranchId).HasColumnName("DefaultBranchID");
             entity.Property(e => e.Email).HasMaxLength(100);
             entity.Property(e => e.EmployeeId).HasColumnName("employeeID");
             entity.Property(e => e.Fcmtoken)
@@ -2193,6 +2253,7 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.HasKey(e => e.WarehouseId).HasName("PK__Warehous__2608AFD96528B9B3");
 
             entity.Property(e => e.WarehouseId).HasColumnName("WarehouseID");
+            entity.Property(e => e.BranchId).HasColumnName("BranchID");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("(getdate())")
                 .HasColumnType("datetime");
@@ -2201,6 +2262,11 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.Location).HasMaxLength(200);
             entity.Property(e => e.Notes).HasMaxLength(150);
             entity.Property(e => e.WarehouseName).HasMaxLength(100);
+
+            entity.HasOne(d => d.Branch)
+                .WithMany()
+                .HasForeignKey(d => d.BranchId)
+                .HasConstraintName("FK_Warehouses_Branches");
         });
         modelBuilder.Entity<ComplaintAttachment>(entity =>
 {

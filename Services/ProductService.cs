@@ -19,7 +19,7 @@ public class ProductService : IProductService
         _env = env;
     }
 
-        public async Task<List<ProductListDto>> GetProductsAsync(string? search)
+        public async Task<List<ProductListDto>> GetProductsAsync(string? search, int? branchId = null, int? warehouseId = null)
     {
         var query = from p in _context.Products.AsNoTracking()
                     join c in _context.Parties.AsNoTracking()
@@ -62,6 +62,21 @@ public class ProductService : IProductService
             .Where(p => p.Pdffile != null && productIds.Contains(p.ProductId))
             .Select(p => p.ProductId)
             .ToListAsync();
+
+        var stockQuery = _context.StockLevels
+            .AsNoTracking()
+            .Include(s => s.Warehouse)
+            .Where(s => productIds.Contains(s.ProductId));
+
+        if (warehouseId.HasValue)
+            stockQuery = stockQuery.Where(s => s.WarehouseId == warehouseId.Value);
+        else if (branchId.HasValue)
+            stockQuery = stockQuery.Where(s => s.Warehouse.BranchId == branchId.Value);
+
+        var stockMap = await stockQuery
+            .GroupBy(s => s.ProductId)
+            .Select(g => new { ProductId = g.Key, Qty = g.Sum(x => x.Quantity) })
+            .ToDictionaryAsync(x => x.ProductId, x => x.Qty);
 
         var factoryPricedDates = await _context.PriceHistories
             .AsNoTracking()
@@ -125,17 +140,39 @@ public class ProductService : IProductService
                 SuggestedSalePriceElite = p.SuggestedSalePriceElite,
                 PdfPath = p.PdfPath,
                 HasOldPdf = idsWithOldPdf.Contains(p.ProductId),
+                StockQuantity = stockMap.TryGetValue(p.ProductId, out var qty) ? qty : 0,
                 CreatedAt = p.CreatedAt,
                 FactoryPricedAt = pricedAt,
                 ResponseTimeText = delayText,
                 ResponseTimeClass = delayClass
             };
-        }).ToList();
+        });
 
-        return products;
+        if (branchId.HasValue || warehouseId.HasValue)
+            products = products.Where(p => p.StockQuantity > 0);
+
+        return products.ToList();
     }
 
-    
+    public async Task<List<ProductStockLocationDto>> GetProductStockLocationsAsync(int productId)
+    {
+        return await _context.StockLevels
+            .AsNoTracking()
+            .Include(s => s.Warehouse)
+                .ThenInclude(w => w.Branch)
+            .Where(s => s.ProductId == productId && s.Quantity > 0)
+            .OrderBy(s => s.Warehouse.Branch != null ? s.Warehouse.Branch.BranchNameAr : "")
+            .ThenBy(s => s.Warehouse.WarehouseName)
+            .Select(s => new ProductStockLocationDto
+            {
+                WarehouseId = s.WarehouseId,
+                WarehouseName = s.Warehouse.WarehouseName,
+                BranchId = s.Warehouse.BranchId,
+                BranchNameAr = s.Warehouse.Branch != null ? s.Warehouse.Branch.BranchNameAr : null,
+                Quantity = s.Quantity
+            })
+            .ToListAsync();
+    }
 
     public async Task FactorySetCostAsync(
         int ProductId,

@@ -1,0 +1,458 @@
+@page "/inventory/count"
+@page "/inventory/stock-count"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
+
+@attribute [Authorize]
+
+@inject IStockService StockService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+<PageTitle>الجرد المخزني</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="stock-loading-wrap">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل شاشة الجرد...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+        غير مسموح لك بعرض هذه الشاشة.
+    </MudAlert>
+}
+else
+{
+    <div class="stock-page" dir="rtl">
+        <div class="stock-hero count-hero">
+            <div class="stock-hero-bg"></div>
+            <div class="stock-hero-content">
+                <div>
+                    <h1>الجرد المخزني</h1>
+                    <p>قارن الكمية بالنظام مع الكمية الفعلية واعتمد الجرد ليقوم النظام بعمل التسويات تلقائيًا.</p>
+                </div>
+                <MudButton Variant="Variant.Outlined" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">رجوع</MudButton>
+            </div>
+        </div>
+
+        <MudGrid Spacing="3" Class="mt-1">
+            <MudItem xs="12" lg="8">
+                <MudPaper Class="stock-form-card" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.FactCheck" />
+                        <div>
+                            <h3>إعداد الجرد</h3>
+                            <p>اختر الفرع والمخزن ثم حمّل أصناف المخزن الحالية. الجرد هنا يخص منتجات المعرض فقط.</p>
+                        </div>
+                    </div>
+
+                    <MudGrid Spacing="2">
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="int?" Label="الفرع *" Variant="Variant.Outlined" Dense="true" Value="_selectedBranchId" ValueChanged="OnBranchChanged">
+                                @foreach (var branch in _branches)
+                                {
+                                    <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">@branch.BranchNameAr</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="int?" Label="المخزن *" Variant="Variant.Outlined" Dense="true" Value="_selectedWarehouseId" ValueChanged="OnWarehouseChanged" Disabled="@(!_warehouses.Any())">
+                                @foreach (var warehouse in _warehouses)
+                                {
+                                    <MudSelectItem T="int?" Value="@((int?)warehouse.WarehouseId)">@warehouse.WarehouseName</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12">
+                            <MudTextField T="string" Label="ملاحظات الجرد" Variant="Variant.Outlined" Dense="true" Lines="2" @bind-Value="_workspace.Notes" />
+                        </MudItem>
+                    </MudGrid>
+
+                    <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2" Class="mt-3">
+                        <MudButton Variant="Variant.Outlined" Color="Color.Info" OnClick="LoadWorkspaceAsync" Disabled="@(!_selectedWarehouseId.HasValue)">تحميل أصناف المخزن</MudButton>
+                    </MudStack>
+                </MudPaper>
+
+                @if (_workspace.Lines.Any())
+                {
+                    <MudPaper Class="stock-form-card mt-3" Elevation="0">
+                        <div class="section-header compact">
+                            <MudIcon Icon="@Icons.Material.Filled.Inventory2" />
+                            <div>
+                                <h3>أصناف الجرد</h3>
+                                <p>@_workspace.WarehouseName — @_workspace.BranchNameAr</p>
+                            </div>
+                        </div>
+
+                        <MudTable Items="_workspace.Lines" Dense="true" Hover="true" Striped="true" Breakpoint="Breakpoint.Sm" Elevation="0">
+                            <HeaderContent>
+                                <MudTh>المنتج</MudTh>
+                                <MudTh>كمية النظام</MudTh>
+                                <MudTh>الكمية الفعلية</MudTh>
+                                <MudTh>الفرق</MudTh>
+                                <MudTh>ملاحظات</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>
+                                    <div>
+                                        <strong>@context.ProductName</strong>
+                                        <div class="stock-product-link-row">
+                                            <a href="@($"/products/form/{context.ProductId}")" class="stock-inline-link">#@context.ProductId</a>
+                                            <a href="@($"/products/form/{context.ProductId}")" target="_blank" rel="noopener noreferrer" class="stock-open-new-link" title="فتح في صفحة جديدة">
+                                                <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" />
+                                            </a>
+                                        </div>
+                                    </div>
+                                </MudTd>
+                                <MudTd>@context.SystemQty</MudTd>
+                                <MudTd>
+                                    <MudNumericField T="int" Variant="Variant.Outlined" Dense="true" Min="0"
+                                                     Value="@context.ActualQty"
+                                                     ValueChanged="@(v => OnActualQtyChanged(context, v))" />
+                                </MudTd>
+                                <MudTd>
+                                    <MudChip T="string" Color="@GetDifferenceColor(context.DifferenceQty)" Variant="Variant.Outlined">@context.DifferenceQty</MudChip>
+                                </MudTd>
+                                <MudTd>
+                                    <MudTextField T="string" Variant="Variant.Outlined" Dense="true"
+                                                  Value="@context.Notes"
+                                                  ValueChanged="@(v => context.Notes = v)" />
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+
+                        <MudDivider Class="my-4" />
+
+                        <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2">
+                            <MudButton Variant="Variant.Outlined" OnClick="ResetWorkspace">إلغاء / مسح</MudButton>
+                            <MudButton Variant="Variant.Filled" Color="Color.Info" Disabled="_isSavingDraft" OnClick="SaveDraftAsync">@(_isSavingDraft ? "جاري الحفظ..." : "حفظ مسودة")</MudButton>
+                            <MudButton Variant="Variant.Filled" Color="Color.Success" Disabled="_isFinalizing" OnClick="FinalizeAsync">@(_isFinalizing ? "جاري الاعتماد..." : "اعتماد الجرد")</MudButton>
+                        </MudStack>
+                    </MudPaper>
+                }
+            </MudItem>
+
+            <MudItem xs="12" lg="4">
+                <MudStack Spacing="2">
+                    <MudPaper Class="stock-side-card" Elevation="0">
+                        <div class="section-header compact">
+                            <MudIcon Icon="@Icons.Material.Filled.Analytics" />
+                            <div>
+                                <h3>ملخص سريع</h3>
+                                <p>نتيجة الجرد الحالي</p>
+                            </div>
+                        </div>
+                        <div class="stock-stat-grid">
+                            <div class="stock-stat-box">
+                                <span class="stock-stat-label">عدد الأصناف</span>
+                                <strong class="stock-stat-value">@_workspace.Lines.Count</strong>
+                            </div>
+                            <div class="stock-stat-box warning">
+                                <span class="stock-stat-label">أصناف بها فرق</span>
+                                <strong class="stock-stat-value">@_workspace.Lines.Count(x => x.DifferenceQty != 0)</strong>
+                            </div>
+                        </div>
+                    </MudPaper>
+
+                    <MudPaper Class="stock-side-card" Elevation="0">
+                        <div class="section-header compact">
+                            <MudIcon Icon="@Icons.Material.Filled.History" />
+                            <div>
+                                <h3>آخر الجردات</h3>
+                                <p>افتح مسودة قديمة أو راجع جرد معتمد</p>
+                            </div>
+                        </div>
+                        @if (!_recentCounts.Any())
+                        {
+                            <MudAlert Severity="Severity.Info" Dense="true">لا توجد مستندات جرد حتى الآن.</MudAlert>
+                        }
+                        else
+                        {
+                            <MudStack Spacing="1">
+                                @foreach (var count in _recentCounts.Take(8))
+                                {
+                                    <MudPaper Class="count-item" Elevation="0">
+                                        <div>
+                                            <strong>@count.WarehouseName</strong>
+                                            <small>@count.BranchNameAr — @count.CountDate.ToString("yyyy/MM/dd HH:mm")</small>
+                                        </div>
+                                        <div class="count-item-right">
+                                            <MudChip T="string" Color="@(count.Status == "Finalized" ? Color.Success : Color.Warning)" Variant="Variant.Outlined">@count.Status</MudChip>
+                                            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="@(() => LoadExistingCountAsync(count.StockCountId))">فتح</MudButton>
+                                        </div>
+                                    </MudPaper>
+                                }
+                            </MudStack>
+                        }
+                    </MudPaper>
+                </MudStack>
+            </MudItem>
+        </MudGrid>
+    </div>
+}
+
+<style>
+    .stock-loading-wrap {
+        min-height: 50vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+    .stock-page {
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+    .stock-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 22px;
+        background: linear-gradient(135deg,#0f172a 0%,#1e293b 100%);
+        color: white;
+        box-shadow: 0 16px 45px rgba(15,23,42,.18);
+    }
+    .count-hero .stock-hero-bg {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at 18% 20%, rgba(245,158,11,.22), transparent 35%), radial-gradient(circle at 82% 78%, rgba(16,185,129,.16), transparent 30%);
+    }
+    .stock-hero-content {
+        position: relative;
+        z-index: 1;
+        padding: 1.4rem 1.6rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+    .stock-hero h1 { margin: 0; font-size: 1.55rem; font-weight: 800; }
+    .stock-hero p { margin: .3rem 0 0; color: rgba(255,255,255,.82); }
+    .stock-form-card, .stock-side-card {
+        border-radius: 18px;
+        background: white;
+        border: 1px solid rgba(226,232,240,.9);
+        box-shadow: 0 14px 28px rgba(15,23,42,.05);
+        padding: 1rem;
+    }
+    .section-header {
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+    .section-header.compact { margin-bottom: .8rem; }
+    .section-header h3 { margin: 0; font-size: 1.05rem; font-weight: 800; color: #0f172a; }
+    .section-header p { margin: .15rem 0 0; color: #64748b; font-size: .82rem; }
+    .stock-stat-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+    .stock-stat-box {
+        border-radius: 16px;
+        background: linear-gradient(135deg, #eff6ff, #f8fafc);
+        padding: 1rem;
+        border: 1px solid rgba(59,130,246,.12);
+    }
+    .stock-stat-box.warning { border-color: rgba(245,158,11,.18); }
+    .stock-stat-label { display:block; color:#64748b; font-size:.85rem; margin-bottom:.35rem; }
+    .stock-stat-value { font-size:2rem; font-weight:900; color:#0f172a; }
+    .stock-inline-id { display:block; color:#64748b; font-size:.74rem; }
+    .stock-product-link-row {
+        display: inline-flex;
+        align-items: center;
+        gap: .35rem;
+        margin-top: .2rem;
+    }
+    .stock-inline-link {
+        color: #2563eb;
+        font-size: .74rem;
+        font-weight: 700;
+        text-decoration: none;
+    }
+    .stock-inline-link:hover {
+        text-decoration: underline;
+    }
+    .stock-open-new-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: #64748b;
+        text-decoration: none;
+    }
+    .stock-open-new-link:hover {
+        color: #0f172a;
+    }
+    .count-item {
+        display:flex; justify-content:space-between; align-items:center; gap:.75rem;
+        padding:.75rem .85rem; border-radius:14px; border:1px solid rgba(226,232,240,.9); background:#f8fafc;
+    }
+    .count-item small { display:block; color:#64748b; font-size:.74rem; }
+    .count-item-right { display:flex; align-items:center; gap:.5rem; }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _canView;
+    private bool _isSavingDraft;
+    private bool _isFinalizing;
+    private string _currentUserName = "system";
+    private int? _selectedBranchId;
+    private int? _selectedWarehouseId;
+    private List<BranchListDto> _branches = new();
+    private List<WarehouseListDto> _warehouses = new();
+    private StockCountWorkspaceDto _workspace = new();
+    private List<StockCountHeaderListDto> _recentCounts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _currentUserName = user.Identity?.Name ?? "system";
+        _canView = user.IsInRole("Admin")
+            || user.IsInRole(SystemRoles.Admin)
+            || user.HasClaim("Permission", "frm_StockCount:View");
+
+        if (!_canView)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        _branches = await StockService.GetBranchesAsync();
+        await LoadRecentCountsAsync();
+        _isLoading = false;
+    }
+
+    private async Task OnBranchChanged(int? value)
+    {
+        _selectedBranchId = value;
+        _selectedWarehouseId = null;
+        _warehouses = await StockService.GetWarehousesAsync(value);
+        ResetWorkspace();
+    }
+
+    private Task OnWarehouseChanged(int? value)
+    {
+        _selectedWarehouseId = value;
+        ResetWorkspace();
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadWorkspaceAsync()
+    {
+        if (!_selectedWarehouseId.HasValue)
+        {
+            Snackbar.Add("اختيار المخزن مطلوب", Severity.Warning);
+            return;
+        }
+
+        var workspace = await StockService.GetStockCountWorkspaceAsync(_selectedWarehouseId.Value);
+        if (workspace == null)
+        {
+            Snackbar.Add("تعذر تحميل بيانات الجرد للمخزن المحدد", Severity.Error);
+            return;
+        }
+
+        _workspace = workspace;
+        _selectedBranchId = workspace.BranchId;
+        _selectedWarehouseId = workspace.WarehouseId;
+    }
+
+    private async Task LoadExistingCountAsync(int stockCountId)
+    {
+        var workspace = await StockService.GetStockCountWorkspaceAsync(0, stockCountId);
+        if (workspace == null)
+        {
+            Snackbar.Add("مستند الجرد غير موجود", Severity.Error);
+            return;
+        }
+
+        _workspace = workspace;
+        _selectedBranchId = workspace.BranchId;
+        _selectedWarehouseId = workspace.WarehouseId;
+        _warehouses = await StockService.GetWarehousesAsync(_selectedBranchId);
+    }
+
+    private async Task LoadRecentCountsAsync()
+    {
+        _recentCounts = await StockService.GetStockCountsAsync(new StockCountFilterDto());
+    }
+
+    private void OnActualQtyChanged(StockCountLineDto line, int value)
+    {
+        line.ActualQty = value;
+        line.DifferenceQty = line.ActualQty - line.SystemQty;
+    }
+
+    private async Task SaveDraftAsync()
+    {
+        if (_workspace.WarehouseId <= 0 || _workspace.BranchId <= 0 || !_workspace.Lines.Any())
+        {
+            Snackbar.Add("حمّل أصناف المخزن أولًا", Severity.Warning);
+            return;
+        }
+
+        _isSavingDraft = true;
+        try
+        {
+            var (ok, msg, stockCountId) = await StockService.SaveStockCountDraftAsync(_workspace, _currentUserName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok)
+            {
+                _workspace.StockCountId = stockCountId;
+                await LoadRecentCountsAsync();
+            }
+        }
+        finally
+        {
+            _isSavingDraft = false;
+        }
+    }
+
+    private async Task FinalizeAsync()
+    {
+        if (!_workspace.StockCountId.HasValue || _workspace.StockCountId.Value <= 0)
+        {
+            Snackbar.Add("احفظ المسودة أولًا قبل الاعتماد", Severity.Warning);
+            return;
+        }
+
+        _isFinalizing = true;
+        try
+        {
+            var (ok, msg) = await StockService.FinalizeStockCountAsync(_workspace.StockCountId.Value, _currentUserName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok)
+            {
+                await LoadExistingCountAsync(_workspace.StockCountId.Value);
+                await LoadRecentCountsAsync();
+            }
+        }
+        finally
+        {
+            _isFinalizing = false;
+        }
+    }
+
+    private Color GetDifferenceColor(int diff) => diff switch
+{
+    > 0 => Color.Success,
+    < 0 => Color.Error,
+    _ => Color.Default
+};
+
+    private void ResetWorkspace()
+    {
+        _workspace = new StockCountWorkspaceDto();
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/inventory/transactions");
+}

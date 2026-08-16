@@ -248,7 +248,8 @@ public class InvoiceService : IInvoiceService
                                   p.PurchasePriceCClass,
                                   p.PurchasePrice,
                                   p.PurchasePriceElite,
-                                  p.Period
+                                  p.Period,
+                                  ProductCustomer = p.Customer
                               }).ToListAsync();
 
         var itemAlternativeIds = rawItems.Where(x => x.SelectedAlternativeId.HasValue).Select(x => x.SelectedAlternativeId!.Value).Distinct().ToList();
@@ -288,7 +289,8 @@ public class InvoiceService : IInvoiceService
                 AlternativePurchasePriceCClass = alt?.PurchasePriceCClass,
                 AlternativePurchasePricePremium = alt?.PurchasePricePremium,
                 AlternativePurchasePriceElite = alt?.PurchasePriceElite,
-                AlternativePeriod = alt?.Period
+                AlternativePeriod = alt?.Period,
+                IsShowroomProduct = !d.ProductCustomer.HasValue
             };
         }).ToList();
 
@@ -498,6 +500,9 @@ public class InvoiceService : IInvoiceService
         var validation = ValidateInvoice(dto);
         if (!validation.IsValid) return (false, validation.Message, null, null);
 
+        if (dto.TransactionType == TransactionTypes.Purchase)
+            return await CreateShowroomPurchaseInvoiceAsync(dto, currentUserName);
+
         using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
@@ -519,6 +524,58 @@ public class InvoiceService : IInvoiceService
                     t.TransactionType == TransactionTypes.Sale);
                 if (exists) return (false, $"رقم الفاتورة '{dto.ReferenceNumber}' مستخدم.", null, null);
             }
+
+            var productIds = dto.Items.Select(i => i.ProductId).Distinct().ToList();
+            var productMap = await _db.Products
+                .AsNoTracking()
+                .Where(p => productIds.Contains(p.ProductId))
+                .Select(p => new { p.ProductId, p.ProductName, p.Customer })
+                .ToDictionaryAsync(p => p.ProductId);
+
+            if (productMap.Count != productIds.Count)
+                return (false, "يوجد صنف غير موجود أو تم حذفه من قاعدة البيانات.", null, null);
+
+            var showroomItemGroups = dto.Items
+                .Where(item => !productMap[item.ProductId].Customer.HasValue)
+                .GroupBy(item => item.ProductId)
+                .Select(g => new
+                {
+                    ProductId = g.Key,
+                    ProductName = productMap[g.Key].ProductName ?? $"#{g.Key}",
+                    RequiredQuantity = (int)Math.Round(g.Sum(x => x.Quantity))
+                })
+                .Where(x => x.RequiredQuantity > 0)
+                .ToList();
+
+            if (showroomItemGroups.Any())
+            {
+                var showroomProductIds = showroomItemGroups.Select(x => x.ProductId).ToList();
+                var stockMap = await _db.StockLevels
+                    .AsNoTracking()
+                    .Where(s => s.WarehouseId == dto.WarehouseId.Value && showroomProductIds.Contains(s.ProductId))
+                    .ToDictionaryAsync(s => s.ProductId, s => s.Quantity);
+
+                var shortages = showroomItemGroups
+                    .Select(x => new
+                    {
+                        x.ProductName,
+                        x.RequiredQuantity,
+                        AvailableQuantity = stockMap.TryGetValue(x.ProductId, out var qty) ? qty : 0
+                    })
+                    .Where(x => x.AvailableQuantity < x.RequiredQuantity)
+                    .ToList();
+
+                if (shortages.Any())
+                {
+                    var shortageMessage = string.Join(" | ", shortages.Select(x =>
+                        $"رصيد المنتج '{x.ProductName}' في المخزن المختار غير كافٍ. المتاح {x.AvailableQuantity} والمطلوب {x.RequiredQuantity}."));
+                    return (false, shortageMessage, null, null);
+                }
+            }
+
+            var customerLinkedItems = dto.Items
+                .Where(item => productMap[item.ProductId].Customer.HasValue)
+                .ToList();
 
             // فاتورة المبيعات
             var saleTransaction = new Transaction
@@ -550,61 +607,65 @@ public class InvoiceService : IInvoiceService
             _db.Transactions.Add(saleTransaction);
             await _db.SaveChangesAsync();
 
-            // فاتورة الشراء المرآة
-            var mirrorRefNumber = await GenerateNextInvoiceNumberAsync(TransactionTypes.Purchase);
-            var mirrorPurchase = new Transaction
+            Transaction? mirrorPurchase = null;
+            string? mirrorRefNumber = null;
+
+            if (customerLinkedItems.Any())
             {
-                TransactionDate = dto.TransactionDate,
-                PartyId = SystemConstants.DefaultSupplierId,
-                TransactionType = TransactionTypes.Purchase,
-                WarehouseId = dto.WarehouseId.Value,
-                ReferenceNumber = mirrorRefNumber,
-                ReferenceType = "MirrorOf:" + saleTransaction.TransactionId,
-                EmpId = dto.PartyId, // ⭐ كود العميل
-                Notes = $"فاتورة شراء تلقائية مقابل البيع رقم {dto.ReferenceNumber}",
-                CreatedBy = currentUserName,
-                CreatedAt = DateTime.Now,
-                InvoiceStatus = InvoiceStatuses.Open,
-                IsDelivered = true,
-                PaymentMethod = PaymentMethods.Credit,
-                PaidAmount = 0,
-                DiscountPercentage = 0,
-                DiscountAmount = 0,
-                TotalChargesAmount = 0
-            };
-
-            decimal mirrorTotal = 0;
-            _db.Transactions.Add(mirrorPurchase);
-            await _db.SaveChangesAsync();
-
-            // أصناف المرآة (يزود المخزون)
-            foreach (var item in dto.Items)
-            {
-                var effectiveTier = NormalizePricingTier(item.PricingTier);
-                var purchasePrice = GetPurchasePriceByTier(item, effectiveTier);
-
-                var purchaseDetail = new TransactionDetail
+                mirrorRefNumber = await GenerateNextInvoiceNumberAsync(TransactionTypes.Purchase);
+                mirrorPurchase = new Transaction
                 {
-                    TransactionId = mirrorPurchase.TransactionId,
-                    ProductId = item.ProductId,
-                    Quantity = item.Quantity,
-                    UnitPrice = purchasePrice,
-                    TotalAmount = Math.Round(item.Quantity * purchasePrice, 2),
-                    SelectedAlternativeId = item.SelectedAlternativeId,
-                    PricingTier = effectiveTier,
-                    Notes = $"[{effectiveTier}] - مقابل بيع {dto.ReferenceNumber}"
+                    TransactionDate = dto.TransactionDate,
+                    PartyId = SystemConstants.DefaultSupplierId,
+                    TransactionType = TransactionTypes.Purchase,
+                    WarehouseId = dto.WarehouseId.Value,
+                    ReferenceNumber = mirrorRefNumber,
+                    ReferenceType = "MirrorOf:" + saleTransaction.TransactionId,
+                    EmpId = dto.PartyId,
+                    Notes = $"فاتورة شراء تلقائية مقابل البيع رقم {dto.ReferenceNumber}",
+                    CreatedBy = currentUserName,
+                    CreatedAt = DateTime.Now,
+                    InvoiceStatus = InvoiceStatuses.Open,
+                    IsDelivered = true,
+                    PaymentMethod = PaymentMethods.Credit,
+                    PaidAmount = 0,
+                    DiscountPercentage = 0,
+                    DiscountAmount = 0,
+                    TotalChargesAmount = 0
                 };
-                _db.TransactionDetails.Add(purchaseDetail);
-                mirrorTotal += purchaseDetail.TotalAmount ?? 0;
 
-                await UpdateStockAsync(item.ProductId, mirrorPurchase.WarehouseId,
-                    +(int)Math.Round(item.Quantity), mirrorPurchase.TransactionId,
-                    purchasePrice, currentUserName, "PurchaseInvoice");
+                decimal mirrorTotal = 0;
+                _db.Transactions.Add(mirrorPurchase);
+                await _db.SaveChangesAsync();
+
+                foreach (var item in customerLinkedItems)
+                {
+                    var effectiveTier = NormalizePricingTier(item.PricingTier);
+                    var purchasePrice = GetPurchasePriceByTier(item, effectiveTier);
+
+                    var purchaseDetail = new TransactionDetail
+                    {
+                        TransactionId = mirrorPurchase.TransactionId,
+                        ProductId = item.ProductId,
+                        Quantity = item.Quantity,
+                        UnitPrice = purchasePrice,
+                        TotalAmount = Math.Round(item.Quantity * purchasePrice, 2),
+                        SelectedAlternativeId = item.SelectedAlternativeId,
+                        PricingTier = effectiveTier,
+                        Notes = $"[{effectiveTier}] - مقابل بيع {dto.ReferenceNumber}"
+                    };
+                    _db.TransactionDetails.Add(purchaseDetail);
+                    mirrorTotal += purchaseDetail.TotalAmount ?? 0;
+
+                    await UpdateStockAsync(item.ProductId, mirrorPurchase.WarehouseId,
+                        +(int)Math.Round(item.Quantity), mirrorPurchase.TransactionId,
+                        purchasePrice, currentUserName, "PurchaseInvoice");
+                }
+
+                mirrorPurchase.TotalAmount = mirrorTotal;
+                mirrorPurchase.NetTotalAmount = mirrorTotal;
+                mirrorPurchase.GrandTotal = mirrorTotal;
             }
-
-            mirrorPurchase.TotalAmount = mirrorTotal;
-            mirrorPurchase.NetTotalAmount = mirrorTotal;
-            mirrorPurchase.GrandTotal = mirrorTotal;
 
             // أصناف فاتورة البيع (يخصم المخزون)
             foreach (var item in dto.Items)
@@ -625,19 +686,20 @@ public class InvoiceService : IInvoiceService
                         : $"[{effectiveTier}] {item.Notes}"
                 };
                 _db.TransactionDetails.Add(detail);
-                
-
 
                 await UpdateStockAsync(item.ProductId, saleTransaction.WarehouseId,
                     -(int)Math.Round(item.Quantity), saleTransaction.TransactionId,
                     item.UnitPrice, currentUserName, "SaleInvoice");
             }
 
-            // ⭐ تحديث IsSelected للمنتجات المباعة
-            foreach (var item in dto.Items)
+            if (customerLinkedItems.Any())
             {
-                var product = await _db.Products.FirstOrDefaultAsync(p => p.ProductId == item.ProductId);
-                if (product != null)
+                var customerProductIds = customerLinkedItems.Select(i => i.ProductId).Distinct().ToList();
+                var soldCustomerProducts = await _db.Products
+                    .Where(p => customerProductIds.Contains(p.ProductId))
+                    .ToListAsync();
+
+                foreach (var product in soldCustomerProducts)
                 {
                     product.IsSelected = true;
                 }
@@ -744,17 +806,178 @@ public class InvoiceService : IInvoiceService
             // ⭐ Audit للفواتير
             await _audit.LogAsync("Transactions", "Insert",
                 saleTransaction.TransactionId.ToString(), null, saleTransaction, currentUserName);
-            await _audit.LogAsync("Transactions", "Insert",
-                mirrorPurchase.TransactionId.ToString(), null, mirrorPurchase, currentUserName);
+
+            if (mirrorPurchase != null)
+            {
+                await _audit.LogAsync("Transactions", "Insert",
+                    mirrorPurchase.TransactionId.ToString(), null, mirrorPurchase, currentUserName);
+            }
 
             // ⭐ إشعارات الإدارة + الإنتاج
             await SendInvoiceNotificationsAsync(saleTransaction, currentUserName, "تم إنشاء فاتورة جديدة");
-            await SendProductionStartNotificationAsync(saleTransaction, currentUserName);
+            if (customerLinkedItems.Any())
+                await SendProductionStartNotificationAsync(saleTransaction, currentUserName);
+
+            var successMessage = mirrorPurchase == null
+                ? $"تم إنشاء الفاتورة {saleTransaction.ReferenceNumber} وخصم منتجات المعرض من المخزون بدون إنشاء فاتورة شراء مرآة."
+                : showroomItemGroups.Any()
+                    ? $"تم إنشاء الفاتورة {saleTransaction.ReferenceNumber}، وتم إنشاء فاتورة الشراء المرآة {mirrorRefNumber} للأصناف المخصصة للعميل فقط، مع خصم منتجات المعرض من المخزون مباشرة."
+                    : $"تم إنشاء الفاتورة {saleTransaction.ReferenceNumber} مع فاتورة الشراء المرآة {mirrorRefNumber}.";
 
             return (true,
-                $"تم إنشاء الفاتورة {saleTransaction.ReferenceNumber} مع فاتورة الشراء المرآة {mirrorRefNumber}.",
+                successMessage,
                 saleTransaction.TransactionId,
-                mirrorPurchase.TransactionId);
+                mirrorPurchase?.TransactionId);
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return (false, $"حدث خطأ: {ex.Message}", null, null);
+        }
+    }
+
+    private async Task<(bool Success, string Message, int? TransactionId, int? MirrorTransactionId)> CreateShowroomPurchaseInvoiceAsync(InvoiceFormDto dto, string currentUserName)
+    {
+        using var tx = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            dto.PartyId = SystemConstants.DefaultSupplierId;
+            dto.PartyName = "المصنع";
+
+            CalculateTotals(dto);
+
+            if (string.IsNullOrWhiteSpace(dto.ReferenceNumber))
+                dto.ReferenceNumber = await GenerateNextInvoiceNumberAsync(TransactionTypes.Purchase);
+            else
+            {
+                var exists = await _db.Transactions.AnyAsync(t =>
+                    t.ReferenceNumber == dto.ReferenceNumber &&
+                    t.TransactionType == TransactionTypes.Purchase);
+                if (exists) return (false, $"رقم فاتورة الشراء '{dto.ReferenceNumber}' مستخدم.", null, null);
+            }
+
+            var purchaseTransaction = new Transaction
+            {
+                TransactionDate = dto.TransactionDate,
+                PartyId = dto.PartyId!.Value,
+                TransactionType = TransactionTypes.Purchase,
+                WarehouseId = dto.WarehouseId!.Value,
+                ReferenceNumber = dto.ReferenceNumber,
+                ReferenceType = "PurchaseInvoice",
+                OpportunityId = dto.OpportunityId,
+                EmpId = dto.EmpId,
+                DueDate = dto.DueDate,
+                TotalAmount = dto.TotalAmount,
+                DiscountPercentage = dto.DiscountPercentage,
+                DiscountAmount = dto.DiscountAmount,
+                NetTotalAmount = dto.NetTotalAmount,
+                TotalChargesAmount = dto.TotalChargesAmount,
+                GrandTotal = dto.GrandTotal,
+                PaidAmount = 0,
+                PaymentMethod = dto.PaymentMethod,
+                Notes = dto.Notes,
+                InvoiceStatus = InvoiceStatuses.Open,
+                IsDelivered = false,
+                CreatedBy = currentUserName,
+                CreatedAt = DateTime.Now
+            };
+
+            _db.Transactions.Add(purchaseTransaction);
+            await _db.SaveChangesAsync();
+
+            var purchaseProductIds = dto.Items.Select(i => i.ProductId).Distinct().ToList();
+            var customerLinkedProducts = await _db.Products
+                .Where(p => purchaseProductIds.Contains(p.ProductId) && p.Customer.HasValue)
+                .Select(p => p.ProductName)
+                .ToListAsync();
+
+            if (customerLinkedProducts.Any())
+                return (false, "هذه الشاشة مخصصة لشراء منتجات المعرض فقط، ولا تسمح بشراء منتجات مرتبطة بعميل.", null, null);
+
+            foreach (var item in dto.Items)
+            {
+                var detail = new TransactionDetail
+                {
+                    TransactionId = purchaseTransaction.TransactionId,
+                    ProductId = item.ProductId,
+                    Quantity = item.Quantity,
+                    UnitPrice = item.UnitPrice,
+                    TotalAmount = item.TotalAmount,
+                    SelectedAlternativeId = item.SelectedAlternativeId,
+                    PricingTier = NormalizePricingTier(item.PricingTier),
+                    Notes = item.Notes
+                };
+                _db.TransactionDetails.Add(detail);
+            }
+
+            foreach (var ch in dto.Charges)
+            {
+                _db.AdditionalCharges.Add(new AdditionalCharge
+                {
+                    TransactionId = purchaseTransaction.TransactionId,
+                    PartyId = purchaseTransaction.PartyId,
+                    ChargeDescription = ch.ChargeDescription,
+                    ChargeAmount = ch.ChargeAmount,
+                    Notes = ch.Notes,
+                    CreatedBy = currentUserName,
+                    CreatedAt = DateTime.Now
+                });
+            }
+
+            decimal newPaymentTotal = 0;
+            if (dto.PaidAmount > 0)
+            {
+                if (dto.CashBoxId == null)
+                    return (false, "يرجى اختيار الخزينة عند تسجيل دفعة شراء.", null, null);
+
+                var payment = new Payment
+                {
+                    TransactionId = purchaseTransaction.TransactionId,
+                    PaymentDate = DateTime.Now,
+                    Amount = dto.PaidAmount,
+                    PaymentMethod = dto.PaymentMethod ?? PaymentMethods.Cash,
+                    Notes = "دفعة عند إنشاء فاتورة الشراء",
+                    CreatedBy = currentUserName,
+                    CreatedAt = DateTime.Now
+                };
+                _db.Payments.Add(payment);
+                await _db.SaveChangesAsync();
+
+                _db.CashboxTransactions.Add(new CashboxTransaction
+                {
+                    CashBoxId = dto.CashBoxId.Value,
+                    PaymentId = payment.PaymentId,
+                    ReferenceId = purchaseTransaction.TransactionId,
+                    ReferenceType = "PurchaseInvoice",
+                    TransactionType = "صرف",
+                    Amount = dto.PaidAmount,
+                    TransactionDate = DateTime.Now,
+                    Notes = $"سداد فاتورة شراء {purchaseTransaction.ReferenceNumber}",
+                    CreatedBy = currentUserName,
+                    CreatedAt = DateTime.Now
+                });
+
+                newPaymentTotal = dto.PaidAmount;
+
+                await _audit.LogAsync("Payments", "Insert",
+                    payment.PaymentId.ToString(), null, payment, currentUserName);
+            }
+
+            purchaseTransaction.PaidAmount = newPaymentTotal;
+            purchaseTransaction.InvoiceStatus = ComputeStatus(purchaseTransaction.GrandTotal, purchaseTransaction.PaidAmount);
+
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            await _audit.LogAsync("Transactions", "Insert",
+                purchaseTransaction.TransactionId.ToString(), null, purchaseTransaction, currentUserName);
+
+            await SendInvoiceNotificationsAsync(purchaseTransaction, currentUserName, "تم إنشاء فاتورة شراء للمعرض");
+
+            return (true,
+                $"تم إنشاء فاتورة الشراء {purchaseTransaction.ReferenceNumber} وسيتم إدخال المخزون عند الاستلام الفعلي.",
+                purchaseTransaction.TransactionId,
+                null);
         }
         catch (Exception ex)
         {
@@ -899,6 +1122,69 @@ public class InvoiceService : IInvoiceService
     // ============================================================
     //  إلغاء فاتورة
     // ============================================================
+    public async Task<(bool Success, string Message)> ReceivePurchaseInvoiceAsync(
+        int transactionId, string currentUserName, string? notes = null)
+    {
+        var transaction = await _db.Transactions
+            .FirstOrDefaultAsync(t => t.TransactionId == transactionId);
+
+        if (transaction == null) return (false, "فاتورة الشراء غير موجودة.");
+        if (transaction.TransactionType != TransactionTypes.Purchase)
+            return (false, "هذا الإجراء متاح لفواتير الشراء فقط.");
+        if (!string.IsNullOrWhiteSpace(transaction.ReferenceType) && transaction.ReferenceType.StartsWith("MirrorOf:"))
+            return (false, "فاتورة الشراء المرآة لا تستقبل يدويًا.");
+        if (transaction.InvoiceStatus == InvoiceStatuses.Cancelled)
+            return (false, "لا يمكن استلام فاتورة شراء ملغية.");
+        if (transaction.IsDelivered == true)
+            return (false, "تم استلام هذه الفاتورة بالفعل.");
+
+        using var tx = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            var details = await _db.TransactionDetails
+                .Where(d => d.TransactionId == transactionId)
+                .ToListAsync();
+
+            foreach (var d in details)
+            {
+                await UpdateStockAsync(d.ProductId, transaction.WarehouseId,
+                    +(int)Math.Round(d.Quantity), transaction.TransactionId,
+                    d.UnitPrice, currentUserName, "PurchaseInvoiceReceipt");
+            }
+
+            transaction.IsDelivered = true;
+            transaction.DeliveredAt = DateTime.Now;
+            transaction.DeliveredNotes = string.IsNullOrWhiteSpace(notes)
+                ? "تم الاستلام وإدخال المخزون"
+                : notes.Trim();
+
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            await _audit.LogAsync<object>(
+                "Transactions",
+                "ReceivePurchaseInvoice",
+                transaction.TransactionId.ToString(),
+                null,
+                new
+                {
+                    transaction.TransactionId,
+                    transaction.ReferenceNumber,
+                    transaction.WarehouseId,
+                    transaction.DeliveredAt,
+                    transaction.DeliveredNotes
+                },
+                currentUserName);
+
+            return (true, "تم استلام فاتورة الشراء وإدخال الأصناف إلى المخزن بنجاح.");
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return (false, $"حدث خطأ: {ex.Message}");
+        }
+    }
+
     public async Task<(bool Success, string Message)> CancelInvoiceAsync(
         int transactionId, string reason, string currentUserName)
     {
@@ -911,27 +1197,30 @@ public class InvoiceService : IInvoiceService
         using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
-            var saleDetails = await _db.TransactionDetails
+            var mirrorWasCancelled = false;
+            var invoiceDetails = await _db.TransactionDetails
                 .Where(d => d.TransactionId == transactionId).ToListAsync();
-            foreach (var d in saleDetails)
-            {
-                await UpdateStockAsync(d.ProductId, transaction.WarehouseId,
-                    +(int)Math.Round(d.Quantity), transactionId,
-                    d.UnitPrice, currentUserName, "SaleInvoiceCancel");
-            }
-                        // ⭐ إرجاع IsSelected = false للمنتجات الملغاة
-            var cancelledProductIds = saleDetails.Select(d => d.ProductId).ToList();
-            var cancelledProducts = await _db.Products
-                .Where(p => cancelledProductIds.Contains(p.ProductId))
-                .ToListAsync();
-            foreach (var p in cancelledProducts)
-            {
-                p.IsSelected = false;
-            }
 
-            // إلغاء المرآة
             if (transaction.TransactionType == TransactionTypes.Sale)
             {
+                foreach (var d in invoiceDetails)
+                {
+                    await UpdateStockAsync(d.ProductId, transaction.WarehouseId,
+                        +(int)Math.Round(d.Quantity), transactionId,
+                        d.UnitPrice, currentUserName, "SaleInvoiceCancel");
+                }
+
+                // ⭐ إرجاع IsSelected = false للمنتجات الخاصة بالعملاء فقط
+                var cancelledProductIds = invoiceDetails.Select(d => d.ProductId).ToList();
+                var cancelledProducts = await _db.Products
+                    .Where(p => cancelledProductIds.Contains(p.ProductId) && p.Customer.HasValue)
+                    .ToListAsync();
+                foreach (var p in cancelledProducts)
+                {
+                    p.IsSelected = false;
+                }
+
+                // إلغاء المرآة
                 var mirrorTag = "MirrorOf:" + transactionId;
                 var mirror = await _db.Transactions
                     .FirstOrDefaultAsync(t => t.ReferenceType == mirrorTag);
@@ -953,7 +1242,21 @@ public class InvoiceService : IInvoiceService
 
                     await _audit.LogAsync("Transactions", "Cancel",
                         mirror.TransactionId.ToString(), null,
-                        new { Reason = "Mirror cancellation" }, currentUserName);
+                        new { mirror.InvoiceStatus, mirror.EditReason, mirror.EditBy, mirror.EditAt }, currentUserName);
+
+                    mirrorWasCancelled = true;
+                }
+            }
+            else if (transaction.TransactionType == TransactionTypes.Purchase)
+            {
+                if (transaction.IsDelivered == true && (transaction.ReferenceType == "PurchaseInvoice" || string.IsNullOrWhiteSpace(transaction.ReferenceType)))
+                {
+                    foreach (var d in invoiceDetails)
+                    {
+                        await UpdateStockAsync(d.ProductId, transaction.WarehouseId,
+                            -(int)Math.Round(d.Quantity), transactionId,
+                            d.UnitPrice, currentUserName, "PurchaseInvoiceCancel");
+                    }
                 }
             }
 
@@ -989,7 +1292,13 @@ public class InvoiceService : IInvoiceService
             await SendInvoiceNotificationsAsync(transaction, currentUserName,
                 $"تم إلغاء فاتورة - السبب: {reason}");
 
-            return (true, "تم إلغاء الفاتورة وفاتورة الشراء المرآة وإعادة المخزون.");
+            var cancelMessage = transaction.TransactionType == TransactionTypes.Sale
+                ? (mirrorWasCancelled
+                    ? "تم إلغاء الفاتورة وفاتورة الشراء المرآة وإعادة المخزون."
+                    : "تم إلغاء الفاتورة وإعادة المخزون بدون وجود فاتورة شراء مرآة مرتبطة.")
+                : "تم إلغاء فاتورة الشراء ومعالجة المخزون حسب حالة الاستلام.";
+
+            return (true, cancelMessage);
         }
         catch (Exception ex)
         {
@@ -1229,6 +1538,7 @@ public class InvoiceService : IInvoiceService
                 AvailableStock = _db.StockLevels
                     .Where(s => s.ProductId == p.ProductId)
                     .Sum(s => (int?)s.Quantity) ?? 0,
+                IsShowroomProduct = false,
                 Period = p.Period,
                 PricingType = p.PricingType
             })
@@ -1246,13 +1556,136 @@ public class InvoiceService : IInvoiceService
         return products.Take(max).ToList();
     }
 
+    public async Task<List<ProductLookupDto>> SearchAvailableSaleProductsAsync(int partyId, int warehouseId, string? search, int max = 200)
+    {
+        var customerProducts = await SearchProductsForPartyAsync(partyId, search, int.MaxValue);
+
+        var showroomProducts = await _db.Products.AsNoTracking()
+            .Where(p => !p.Customer.HasValue)
+            .OrderBy(p => p.ProductName)
+            .Select(p => new ProductLookupDto
+            {
+                ProductId = p.ProductId,
+                ProductName = p.ProductName,
+                ProductDescription = p.ProductDescription,
+                ImagePath = null,
+                SuggestedSalePriceCClass = p.SuggestedSalePriceCClass,
+                SuggestedSalePrice = p.SuggestedSalePrice,
+                SuggestedSalePriceElite = p.SuggestedSalePriceElite,
+                PurchasePriceCClass = p.PurchasePriceCClass,
+                PurchasePrice = p.PurchasePrice,
+                PurchasePriceElite = p.PurchasePriceElite,
+                AvailableStock = _db.StockLevels
+                    .Where(s => s.ProductId == p.ProductId && s.WarehouseId == warehouseId)
+                    .Sum(s => (int?)s.Quantity) ?? 0,
+                IsShowroomProduct = true,
+                Period = p.Period,
+                PricingType = p.PricingType
+            })
+            .ToListAsync();
+
+        showroomProducts = showroomProducts
+            .Where(p => p.AvailableStock > 0)
+            .ToList();
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            showroomProducts = showroomProducts
+                .Where(p => (p.ProductName ?? "").ContainsArabic(s) ||
+                            (p.ProductDescription ?? "").ContainsArabic(s))
+                .ToList();
+        }
+
+        return customerProducts
+            .Concat(showroomProducts)
+            .OrderBy(p => p.IsShowroomProduct)
+            .ThenBy(p => p.ProductName)
+            .Take(max)
+            .ToList();
+    }
+
+    public async Task<List<ProductLookupDto>> SearchShowroomProductsAsync(string? search, int max = 200)
+    {
+        var query = _db.Products.AsNoTracking()
+            .Where(p => !p.Customer.HasValue);
+
+        var products = await query
+            .OrderBy(p => p.ProductName)
+            .Select(p => new ProductLookupDto
+            {
+                ProductId = p.ProductId,
+                ProductName = p.ProductName,
+                ProductDescription = p.ProductDescription,
+                ImagePath = null,
+                SuggestedSalePriceCClass = p.SuggestedSalePriceCClass,
+                SuggestedSalePrice = p.SuggestedSalePrice,
+                SuggestedSalePriceElite = p.SuggestedSalePriceElite,
+                PurchasePriceCClass = p.PurchasePriceCClass,
+                PurchasePrice = p.PurchasePrice,
+                PurchasePriceElite = p.PurchasePriceElite,
+                AvailableStock = _db.StockLevels
+                    .Where(s => s.ProductId == p.ProductId)
+                    .Sum(s => (int?)s.Quantity) ?? 0,
+                IsShowroomProduct = true,
+                Period = p.Period,
+                PricingType = p.PricingType
+            })
+            .ToListAsync();
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            products = products
+                .Where(p => (p.ProductName ?? "").ContainsArabic(search) ||
+                            (p.ProductDescription ?? "").ContainsArabic(search))
+                .ToList();
+        }
+
+        return products.Take(max).ToList();
+    }
+
     public async Task<List<Warehouse>> GetWarehousesAsync()
     {
         return await _db.Warehouses
             .AsNoTracking()
+            .Include(w => w.Branch)
             .Where(w => w.IsActive == true)
-            .OrderBy(w => w.WarehouseName)
+            .OrderBy(w => w.Branch != null ? w.Branch.BranchNameAr : "")
+            .ThenBy(w => w.WarehouseName)
             .ToListAsync();
+    }
+
+    public async Task<List<Warehouse>> GetWarehousesForUserAsync(string userName)
+    {
+        var preferredBranchId = await _db.Users
+            .AsNoTracking()
+            .Where(u => u.Username == userName)
+            .Select(u => u.DefaultBranchId)
+            .FirstOrDefaultAsync();
+
+        if (!preferredBranchId.HasValue)
+        {
+            preferredBranchId = await _db.Users
+                .AsNoTracking()
+                .Where(u => u.Username == userName && u.EmployeeId.HasValue)
+                .Join(_db.Employees.AsNoTracking(),
+                    u => u.EmployeeId,
+                    e => (int?)e.EmployeeId,
+                    (u, e) => e.BranchId)
+                .FirstOrDefaultAsync();
+        }
+
+        var warehouses = await _db.Warehouses
+            .AsNoTracking()
+            .Include(w => w.Branch)
+            .Where(w => w.IsActive == true)
+            .ToListAsync();
+
+        return warehouses
+            .OrderByDescending(w => preferredBranchId.HasValue && w.BranchId == preferredBranchId.Value)
+            .ThenBy(w => w.Branch != null ? w.Branch.BranchNameAr : "")
+            .ThenBy(w => w.WarehouseName)
+            .ToList();
     }
 
     public async Task<List<CashBox>> GetCashBoxesAsync()

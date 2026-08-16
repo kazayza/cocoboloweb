@@ -141,10 +141,11 @@ builder.Services.AddSingleton<ShareTokenService>();
 builder.Services.AddScoped<IQuotationExportService, QuotationExportService>();
 builder.Services.AddScoped<ISalesDeliveryStatusService, SalesDeliveryStatusService>();
 builder.Services.AddScoped<IComplaintService, ComplaintService>();
-builder.Services.AddScoped<IMarketingDashboardService, MarketingDashboardService>();
 builder.Services.AddScoped<IPasswordService, PasswordService>();
 builder.Services.AddScoped<ICompanyInfoService, CompanyInfoService>();
 builder.Services.AddScoped<IBranchService, BranchService>();
+builder.Services.AddScoped<IWarehouseService, WarehouseService>();
+builder.Services.AddScoped<IStockService, StockService>();
 builder.Services.AddScoped<GlobalSearchService>();
 builder.Services.AddScoped<ICrmDashboardService, CrmDashboardService>();
 builder.Services.AddScoped<IOpportunityService, OpportunityService>();
@@ -156,6 +157,7 @@ builder.Services.AddScoped<IB2BAuthService, B2BAuthService>();
 builder.Services.AddScoped<IB2BPortalUserService, B2BPortalUserService>();
 builder.Services.AddScoped<IB2BRequestService, B2BRequestService>();
 builder.Services.AddScoped<IB2BPortalService, B2BPortalService>();
+builder.Services.AddScoped<IMarketingDashboardService, MarketingDashboardService>();
 
 
 

@@ -1,0 +1,437 @@
+@page "/inventory/transfer"
+@page "/inventory/warehouse-transfer"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
+
+@attribute [Authorize]
+
+@inject IStockService StockService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+<PageTitle>تحويل مخزني</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="stock-loading-wrap">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري تحميل شاشة التحويل المخزني...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+        غير مسموح لك بعرض هذه الشاشة.
+    </MudAlert>
+}
+else
+{
+    <div class="stock-page" dir="rtl">
+        <div class="stock-hero transfer-hero">
+            <div class="stock-hero-bg"></div>
+            <div class="stock-hero-content">
+                <div>
+                    <h1>تحويل مخزني</h1>
+                    <p>انقل المنتج بين صالات العرض والمخازن مع حفظ أثر حركة الخروج والدخول بشكل واضح.</p>
+                </div>
+                <MudButton Variant="Variant.Outlined" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">
+                    رجوع
+                </MudButton>
+            </div>
+        </div>
+
+        <MudGrid Spacing="3" Class="mt-1">
+            <MudItem xs="12" lg="8">
+                <MudPaper Class="stock-form-card" Elevation="0">
+                    <div class="section-header">
+                        <MudIcon Icon="@Icons.Material.Filled.SwapHoriz" />
+                        <div>
+                            <h3>بيانات التحويل</h3>
+                            <p>حدد المصدر ثم الوجهة ثم المنتج والكمية التي تريد نقلها.</p>
+                        </div>
+                    </div>
+
+                    <MudGrid Spacing="2">
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="int?" Label="فرع المصدر *" Variant="Variant.Outlined" Dense="true"
+                                       Value="_form.FromBranchId" ValueChanged="OnFromBranchChanged">
+                                @foreach (var branch in _branches)
+                                {
+                                    <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">@branch.BranchNameAr</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="int?" Label="مخزن المصدر *" Variant="Variant.Outlined" Dense="true"
+                                       Value="_form.FromWarehouseId" ValueChanged="OnFromWarehouseChanged" Disabled="@(!_fromWarehouses.Any())">
+                                @foreach (var warehouse in _fromWarehouses)
+                                {
+                                    <MudSelectItem T="int?" Value="@((int?)warehouse.WarehouseId)">@warehouse.WarehouseName</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="int?" Label="فرع الوجهة *" Variant="Variant.Outlined" Dense="true"
+                                       Value="_form.ToBranchId" ValueChanged="OnToBranchChanged">
+                                @foreach (var branch in _branches)
+                                {
+                                    <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">@branch.BranchNameAr</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="int?" Label="مخزن الوجهة *" Variant="Variant.Outlined" Dense="true"
+                                       Value="_form.ToWarehouseId" ValueChanged="OnToWarehouseChanged" Disabled="@(!_toWarehouses.Any())">
+                                @foreach (var warehouse in _toWarehouses)
+                                {
+                                    <MudSelectItem T="int?" Value="@((int?)warehouse.WarehouseId)">@warehouse.WarehouseName</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+
+                        <MudItem xs="12">
+                            <MudAutocomplete T="StockProductLookupDto"
+                                             Label="المنتج (منتجات المعرض فقط) *"
+                                             Variant="Variant.Outlined"
+                                             Dense="true"
+                                             Value="_selectedProduct"
+                                             ValueChanged="OnProductChanged"
+                                             SearchFunc="SearchProductsAsync"
+                                             ToStringFunc="@(p => p == null ? string.Empty : $"{p.ProductName} {(p.HasCustomer ? $"- {p.CustomerName}" : "- منتج معرض")}")"
+                                             Clearable="true"
+                                             ResetValueOnEmptyText="true"
+                                             Disabled="@(!_form.FromWarehouseId.HasValue)">
+                                <ItemTemplate Context="product">
+                                    <div class="stock-product-item">
+                                        <div>
+                                            <strong>@product.ProductName</strong>
+                                            <div class="stock-product-sub">@(product.HasCustomer ? $"مرتبط بالعميل: {product.CustomerName}" : "منتج معرض / بدون عميل")</div>
+                                        </div>
+                                        <span class="stock-product-badge">#@product.ProductId</span>
+                                    </div>
+                                </ItemTemplate>
+                            </MudAutocomplete>
+                        </MudItem>
+
+                        <MudItem xs="12" md="4">
+                            <MudNumericField T="int" Label="الكمية المحولة *" Variant="Variant.Outlined" Dense="true" Min="1" @bind-Value="_form.Quantity" />
+                        </MudItem>
+                        <MudItem xs="12" md="8">
+                            <MudTextField T="string" Label="ملاحظات التحويل" Variant="Variant.Outlined" Dense="true" Lines="2" @bind-Value="_form.Notes" />
+                        </MudItem>
+                    </MudGrid>
+
+                    <MudDivider Class="my-4" />
+
+                    <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2">
+                        <MudButton Variant="Variant.Text" OnClick="ResetForm">مسح النموذج</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_isSaving" StartIcon="@Icons.Material.Filled.SwapHoriz" OnClick="SaveAsync">
+                            @(_isSaving ? "جاري التحويل..." : "تنفيذ التحويل")
+                        </MudButton>
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+
+            <MudItem xs="12" lg="4">
+                <MudStack Spacing="2">
+                    <MudPaper Class="stock-side-card" Elevation="0">
+                        <div class="section-header compact">
+                            <MudIcon Icon="@Icons.Material.Filled.Info" />
+                            <div>
+                                <h3>الرصيد قبل التحويل</h3>
+                                <p>مصدر / وجهة</p>
+                            </div>
+                        </div>
+
+                        <div class="stock-stat-grid">
+                            <div class="stock-stat-box danger">
+                                <span class="stock-stat-label">المصدر</span>
+                                <strong class="stock-stat-value">@_sourceStock</strong>
+                            </div>
+                            <div class="stock-stat-box success">
+                                <span class="stock-stat-label">الوجهة</span>
+                                <strong class="stock-stat-value">@_destinationStock</strong>
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(_lastTransferReference))
+                        {
+                            <MudAlert Severity="Severity.Success" Dense="true" Class="mt-3">
+                                رقم آخر تحويل: <strong>@_lastTransferReference</strong>
+                            </MudAlert>
+                        }
+                    </MudPaper>
+
+                    <MudPaper Class="stock-side-card" Elevation="0">
+                        <div class="section-header compact">
+                            <MudIcon Icon="@Icons.Material.Filled.TipsAndUpdates" />
+                            <div>
+                                <h3>متى أستخدم التحويل؟</h3>
+                                <p>مثال زايد ↔ البارون</p>
+                            </div>
+                        </div>
+
+                        <ul class="stock-tips">
+                            <li>هذه الشاشة مخصصة لمنتجات المعرض فقط، وليست لمنتجات العملاء المخصصة.</li>
+                            <li>لو القطعة خرجت من صالة عرض زايد إلى صالة عرض البارون.</li>
+                            <li>لو نقلت منتج من مخزن الفرع إلى صالة العرض داخل نفس الفرع.</li>
+                            <li>التحويل لا ينشئ منتجًا جديدًا، بل ينقل الرصيد القائم بين مخزنين.</li>
+                        </ul>
+                    </MudPaper>
+                </MudStack>
+            </MudItem>
+        </MudGrid>
+    </div>
+}
+
+<style>
+    .stock-loading-wrap {
+        min-height: 50vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+    .stock-page {
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+    .stock-hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 22px;
+        background: linear-gradient(135deg,#0f172a 0%,#1e293b 100%);
+        color: white;
+        box-shadow: 0 16px 45px rgba(15,23,42,.18);
+    }
+    .transfer-hero .stock-hero-bg {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at 18% 20%, rgba(59,130,246,.22), transparent 35%), radial-gradient(circle at 82% 78%, rgba(16,185,129,.16), transparent 30%);
+    }
+    .stock-hero-content {
+        position: relative;
+        z-index: 1;
+        padding: 1.4rem 1.6rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+    .stock-hero h1 { margin: 0; font-size: 1.55rem; font-weight: 800; }
+    .stock-hero p { margin: .3rem 0 0; color: rgba(255,255,255,.82); }
+    .stock-form-card, .stock-side-card {
+        border-radius: 18px;
+        background: white;
+        border: 1px solid rgba(226,232,240,.9);
+        box-shadow: 0 14px 28px rgba(15,23,42,.05);
+        padding: 1rem;
+    }
+    .section-header {
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+        margin-bottom: 1rem;
+    }
+    .section-header.compact { margin-bottom: .8rem; }
+    .section-header h3 { margin: 0; font-size: 1.05rem; font-weight: 800; color: #0f172a; }
+    .section-header p { margin: .15rem 0 0; color: #64748b; font-size: .82rem; }
+    .stock-product-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: .75rem;
+        width: 100%;
+    }
+    .stock-product-sub { color: #64748b; font-size: .78rem; }
+    .stock-product-badge {
+        background: rgba(59,130,246,.12);
+        color: #2563eb;
+        padding: .2rem .55rem;
+        border-radius: 999px;
+        font-weight: 800;
+        font-size: .75rem;
+    }
+    .stock-stat-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+    .stock-stat-box {
+        border-radius: 16px;
+        background: linear-gradient(135deg, #eff6ff, #f8fafc);
+        padding: 1rem;
+        border: 1px solid rgba(59,130,246,.12);
+    }
+    .stock-stat-box.danger { border-color: rgba(239,68,68,.18); }
+    .stock-stat-box.success { border-color: rgba(16,185,129,.18); }
+    .stock-stat-label { display:block; color:#64748b; font-size:.85rem; margin-bottom:.35rem; }
+    .stock-stat-value { font-size:2rem; font-weight:900; color:#0f172a; }
+    .stock-tips { margin:0; padding-right:1rem; color:#475569; line-height:1.8; font-size:.92rem; }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _isSaving;
+    private bool _canView;
+    private string _currentUserName = "system";
+
+    private StockTransferFormDto _form = new() { Quantity = 1 };
+    private StockProductLookupDto? _selectedProduct;
+    private List<BranchListDto> _branches = new();
+    private List<WarehouseListDto> _fromWarehouses = new();
+    private List<WarehouseListDto> _toWarehouses = new();
+    private int _sourceStock;
+    private int _destinationStock;
+    private string? _lastTransferReference;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _currentUserName = user.Identity?.Name ?? "system";
+        _canView = user.IsInRole("Admin")
+            || user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole(SystemRoles.GeneralManager)
+            || user.IsInRole(SystemRoles.AccountManager)
+            || user.IsInRole(SystemRoles.ProductionManager)
+            || user.IsInRole("factory");
+
+        if (!_canView)
+        {
+            _isLoading = false;
+            return;
+        }
+
+        _branches = await StockService.GetBranchesAsync();
+        _isLoading = false;
+    }
+
+    private async Task OnFromBranchChanged(int? value)
+    {
+        _form.FromBranchId = value;
+        _form.FromWarehouseId = null;
+        _selectedProduct = null;
+        _form.ProductId = null;
+        _sourceStock = 0;
+        _destinationStock = 0;
+        _fromWarehouses = await StockService.GetWarehousesAsync(value);
+    }
+
+    private async Task OnFromWarehouseChanged(int? value)
+    {
+        _form.FromWarehouseId = value;
+        _selectedProduct = null;
+        _form.ProductId = null;
+        _sourceStock = 0;
+        await RefreshStocksAsync();
+    }
+
+    private async Task OnToBranchChanged(int? value)
+    {
+        _form.ToBranchId = value;
+        _form.ToWarehouseId = null;
+        _destinationStock = 0;
+        _toWarehouses = await StockService.GetWarehousesAsync(value);
+    }
+
+    private async Task OnToWarehouseChanged(int? value)
+    {
+        _form.ToWarehouseId = value;
+        await RefreshStocksAsync();
+    }
+
+    private async Task<IEnumerable<StockProductLookupDto>> SearchProductsAsync(string? value, CancellationToken token)
+    {
+        if (!_form.FromWarehouseId.HasValue)
+            return Enumerable.Empty<StockProductLookupDto>();
+
+        return await StockService.SearchProductsByWarehouseAsync(_form.FromWarehouseId.Value, value, 30);
+    }
+
+    private async Task OnProductChanged(StockProductLookupDto? product)
+    {
+        _selectedProduct = product;
+        _form.ProductId = product?.ProductId;
+        await RefreshStocksAsync();
+    }
+
+    private async Task RefreshStocksAsync()
+    {
+        if (_form.ProductId.HasValue && _form.FromWarehouseId.HasValue)
+            _sourceStock = await StockService.GetCurrentStockAsync(_form.ProductId.Value, _form.FromWarehouseId.Value);
+        else
+            _sourceStock = 0;
+
+        if (_form.ProductId.HasValue && _form.ToWarehouseId.HasValue)
+            _destinationStock = await StockService.GetCurrentStockAsync(_form.ProductId.Value, _form.ToWarehouseId.Value);
+        else
+            _destinationStock = 0;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!_form.FromBranchId.HasValue || !_form.FromWarehouseId.HasValue || !_form.ToBranchId.HasValue || !_form.ToWarehouseId.HasValue)
+        {
+            Snackbar.Add("حدد المصدر والوجهة بالكامل", Severity.Warning);
+            return;
+        }
+
+        if (!_form.ProductId.HasValue || _selectedProduct == null)
+        {
+            Snackbar.Add("اختيار المنتج مطلوب", Severity.Warning);
+            return;
+        }
+
+        if (_form.Quantity <= 0)
+        {
+            Snackbar.Add("الكمية يجب أن تكون أكبر من صفر", Severity.Warning);
+            return;
+        }
+
+        _isSaving = true;
+        try
+        {
+            var result = await StockService.TransferStockAsync(_form, _currentUserName);
+            Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+            if (result.Success)
+            {
+                _lastTransferReference = result.TransferReference;
+                _sourceStock = result.SourceNewQuantity ?? _sourceStock;
+                _destinationStock = result.DestinationNewQuantity ?? _destinationStock;
+                ResetForm();
+            }
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private void ResetForm()
+    {
+        var fromBranch = _form.FromBranchId;
+        var fromWarehouse = _form.FromWarehouseId;
+        var toBranch = _form.ToBranchId;
+        var toWarehouse = _form.ToWarehouseId;
+
+        _form = new StockTransferFormDto
+        {
+            FromBranchId = fromBranch,
+            FromWarehouseId = fromWarehouse,
+            ToBranchId = toBranch,
+            ToWarehouseId = toWarehouse,
+            Quantity = 1
+        };
+        _selectedProduct = null;
+        _sourceStock = 0;
+        _destinationStock = 0;
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/products");
+}
