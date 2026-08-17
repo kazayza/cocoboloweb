@@ -1,0 +1,459 @@
+@page "/purchase-receipt-status"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Components.Shared
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+@implements IDisposable
+
+@inject IPurchaseReceiptStatusService PurchaseReceiptService
+@inject IInvoiceService InvoiceService
+@inject ISnackbar Snackbar
+@inject ILogger<PurchaseReceiptStatus> Logger
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+
+<PageTitle>متابعة استلامات الشراء</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+
+    <MudPaper Elevation="0"
+              Class="pa-4 mb-4 rounded-lg"
+              Style="background:linear-gradient(135deg,#0f766e,#155e75); color:white;">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudIcon Icon="@Icons.Material.Filled.Inventory2" Style="color:#ffd700; font-size:2rem;" />
+                <div>
+                    <MudText Typo="Typo.h5">متابعة استلامات الشراء</MudText>
+                    <MudText Typo="Typo.caption" Style="opacity:.85;">
+                        مورد الشراء: المصنع | عدد الفواتير: @_summary.TotalCount
+                    </MudText>
+                </div>
+            </MudStack>
+            <MudStack Row="true" Spacing="1">
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Inherit"
+                           StartIcon="@Icons.Material.Filled.ArrowBack"
+                           OnClick="GoBack">
+                    رجوع لشاشة التسليمات
+                </MudButton>
+                <MudTooltip Text="تحديث">
+                    <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                   Color="Color.Inherit"
+                                   Disabled="_loading"
+                                   OnClick="RefreshAsync" />
+                </MudTooltip>
+            </MudStack>
+        </MudStack>
+    </MudPaper>
+
+    <MudGrid Spacing="2" Class="mb-4">
+        @foreach (var card in BuildCards())
+        {
+            <MudItem xs="6" md="3">
+                <MudPaper Elevation="@(card.IsActive ? 6 : 1)"
+                          Class="@($"pa-4 rounded-lg cursor-pointer status-card {(card.IsActive ? "status-card--active" : "")}")"
+                          Style="@($"background:{card.Color}; color:white; transition:all .2s;")"
+                          @onclick="(() => SetStatusAsync(card.Status))">
+                    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                        <div>
+                            <MudText Typo="Typo.body2" Style="opacity:.9;">@card.Label</MudText>
+                            <MudText Typo="Typo.h4">@card.Count</MudText>
+                        </div>
+                        <MudIcon Icon="@card.Icon" Style="font-size:2.5rem; opacity:.4;" />
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+        }
+    </MudGrid>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudGrid Spacing="2">
+            <MudItem xs="12" sm="6" md="3">
+                <MudDatePicker @bind-Date="_from"
+                               Label="من"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Clearable="true"
+                               MaxDate="_to ?? DateTime.Today" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudDatePicker @bind-Date="_to"
+                               Label="إلى"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Clearable="true"
+                               MinDate="_from" />
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudSelect T="string"
+                           @bind-Value="_dateFilterType"
+                           Label="نوع التاريخ"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense">
+                    <MudSelectItem T="string" Value="@PurchaseReceiptDateFilterTypes.DueDate">تاريخ الاستلام المتوقع</MudSelectItem>
+                    <MudSelectItem T="string" Value="@PurchaseReceiptDateFilterTypes.InvoiceDate">تاريخ الفاتورة</MudSelectItem>
+                    <MudSelectItem T="string" Value="@PurchaseReceiptDateFilterTypes.ReceivedDate">تاريخ الاستلام الفعلي</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <MudTextField T="string"
+                              @bind-Value="_search"
+                              @bind-Value:after="OnSearchChangedAsync"
+                              Label="رقم الفاتورة / المورد / المخزن"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              DebounceInterval="400"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Immediate="true"
+                              Clearable="true" />
+            </MudItem>
+            <MudItem xs="12">
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Search"
+                               OnClick="RefreshAsync"
+                               Disabled="_loading">بحث</MudButton>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Default"
+                               StartIcon="@Icons.Material.Filled.Clear"
+                               OnClick="ClearAsync"
+                               Disabled="_loading">مسح</MudButton>
+                </MudStack>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    <MudPaper Elevation="1">
+        <MudTable T="PurchaseReceiptListDto"
+                  Items="_items"
+                  Dense="true"
+                  Hover="true"
+                  Striped="true"
+                  Loading="_loading"
+                  LoadingProgressColor="Color.Primary"
+                  Breakpoint="Breakpoint.Sm"
+                  Elevation="0">
+            <NoRecordsContent>
+                <AppEmpty Icon="@Icons.Material.Filled.Inventory2"
+                          Message="لا توجد فواتير شراء مطابقة"
+                          Description="جرّب تغيير الفلاتر أو الفترة الزمنية" />
+            </NoRecordsContent>
+            <HeaderContent>
+                <MudTh>رقم الفاتورة</MudTh>
+                <MudTh>تاريخ الفاتورة</MudTh>
+                <MudTh>المورد</MudTh>
+                <MudTh>المخزن</MudTh>
+                <MudTh>الاستلام المتوقع</MudTh>
+                <MudTh>الاستلام الفعلي</MudTh>
+                <MudTh Style="text-align:end;">الإجمالي</MudTh>
+                <MudTh Style="text-align:end;">المتبقي</MudTh>
+                <MudTh>الحالة</MudTh>
+                <MudTh Style="text-align:center;">إجراءات</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="رقم الفاتورة">@(!string.IsNullOrWhiteSpace(context.ReferenceNumber) ? context.ReferenceNumber : $"#{context.TransactionId}")</MudTd>
+                <MudTd DataLabel="تاريخ الفاتورة">@context.TransactionDate.ToString("yyyy/MM/dd")</MudTd>
+                <MudTd DataLabel="المورد">@context.SupplierName</MudTd>
+                <MudTd DataLabel="المخزن">@context.WarehouseName</MudTd>
+                <MudTd DataLabel="الاستلام المتوقع">
+                    @if (context.DueDate.HasValue)
+                    {
+                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                            <span>@context.DueDate.Value.ToString("yyyy/MM/dd")</span>
+                            @if (context.DaysRemaining.HasValue && !context.IsDelivered)
+                            {
+                                var d = context.DaysRemaining.Value;
+                                <MudChip T="string" Size="Size.Small"
+                                         Color="@(d < 0 ? Color.Error : d <= 2 ? Color.Warning : Color.Default)">
+                                    @(d < 0 ? $"متأخر {Math.Abs(d)} يوم" : $"باقي {d} يوم")
+                                </MudChip>
+                            }
+                        </MudStack>
+                    }
+                    else
+                    {
+                        <span>—</span>
+                    }
+                </MudTd>
+                <MudTd DataLabel="الاستلام الفعلي">@(context.DeliveredAt?.ToString("yyyy/MM/dd HH:mm") ?? "—")</MudTd>
+                <MudTd DataLabel="الإجمالي" Style="text-align:end;">@context.GrandTotal.ToString("N2")</MudTd>
+                <MudTd DataLabel="المتبقي" Style="text-align:end;">
+                    <span style="@(context.RemainingAmount > 0 ? "color:#d32f2f; font-weight:600;" : "color:#388e3c;")">
+                        @context.RemainingAmount.ToString("N2")
+                    </span>
+                </MudTd>
+                <MudTd DataLabel="الحالة">
+                    <MudChip T="string"
+                             Size="Size.Small"
+                             Variant="Variant.Filled"
+                             Icon="@GetStatusIcon(context.ReceiptStatus)"
+                             Color="@GetStatusColor(context.ReceiptStatus)">
+                        @context.ReceiptStatus
+                    </MudChip>
+                </MudTd>
+                <MudTd DataLabel="إجراءات" Style="text-align:center;">
+                    <MudStack Row="true" Spacing="0" Justify="Justify.Center">
+                        <MudTooltip Text="فتح الفاتورة">
+                            <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                           Size="Size.Small"
+                                           Color="Color.Primary"
+                                           OnClick="@(() => OpenInvoice(context.TransactionId))" />
+                        </MudTooltip>
+                        @if (_canConfirmReceipt && !context.IsDelivered)
+                        {
+                            <MudTooltip Text="تأكيد الاستلام">
+                                <MudIconButton Icon="@Icons.Material.Filled.Inventory"
+                                               Size="Size.Small"
+                                               Color="Color.Success"
+                                               OnClick="@(() => ConfirmReceiptAsync(context))" />
+                            </MudTooltip>
+                        }
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="@(new int[] { 10, 25, 50, 100 })"
+                               RowsPerPageString="عدد الصفوف"
+                               InfoFormat="{first_item}-{last_item} من {all_items}" />
+            </PagerContent>
+        </MudTable>
+    </MudPaper>
+
+</MudContainer>
+
+<style>
+    .status-card { user-select:none; }
+    .status-card:hover { transform: translateY(-2px); }
+    .status-card--active { outline: 3px solid rgba(255,255,255,.9); outline-offset: -3px; }
+    .cursor-pointer { cursor: pointer; }
+</style>
+
+@code {
+    private const string FilterStorageKey = "purchase_receipt_status_filters";
+
+    private List<PurchaseReceiptListDto> _items = new();
+    private PurchaseReceiptSummaryDto _summary = new();
+    private bool _loading = true;
+    private DateTime? _from;
+    private DateTime? _to;
+    private string _dateFilterType = PurchaseReceiptDateFilterTypes.DueDate;
+    private string? _search;
+    private string? _status;
+    private bool _canView;
+    private bool _canConfirmReceipt;
+    private string _currentUserName = "system";
+    private CancellationTokenSource? _cts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPermissionsAsync();
+        if (!_canView)
+            return;
+
+        await RestoreFilterStateAsync();
+        await RefreshAsync();
+    }
+
+    private async Task LoadPermissionsAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        _currentUserName = user.Identity?.Name ?? "system";
+        _canView = user.Identity?.IsAuthenticated == true &&
+                   (user.IsInRole("Admin")
+                    || user.IsInRole(SystemRoles.Admin)
+                    || user.IsInRole("AccountManager")
+                    || user.IsInRole(SystemRoles.AccountManager)
+                    || user.IsInRole("factory")
+                    || user.HasClaim("Permission", "frm_SupplierInvoices:View"));
+
+        _canConfirmReceipt = _canView;
+
+        if (!_canView)
+        {
+            Nav.NavigateTo("/sales-delivery-status");
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+
+    private async Task RefreshAsync()
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+
+        _loading = true;
+        StateHasChanged();
+
+        try
+        {
+            var itemsTask = PurchaseReceiptService.GetFilteredAsync(_from, _to, _dateFilterType, _search, _status);
+            var summaryTask = PurchaseReceiptService.GetSummaryAsync(_from, _to, _dateFilterType, _search, _status);
+
+            await Task.WhenAll(itemsTask, summaryTask);
+            if (token.IsCancellationRequested) return;
+
+            _items = await itemsTask;
+            _summary = await summaryTask;
+            await SaveFilterStateAsync();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load purchase receipt follow-up");
+            Snackbar.Add("تعذّر تحميل بيانات استلامات الشراء: " + ex.Message, Severity.Error);
+            _items = new();
+            _summary = new();
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task OnSearchChangedAsync() => RefreshAsync();
+
+    private async Task ClearAsync()
+    {
+        _from = null;
+        _to = null;
+        _search = null;
+        _status = null;
+        _dateFilterType = PurchaseReceiptDateFilterTypes.DueDate;
+        await RefreshAsync();
+    }
+
+    private async Task SetStatusAsync(string? status)
+    {
+        _status = (_status == status) ? null : status;
+        await RefreshAsync();
+    }
+
+    private void GoBack() => Nav.NavigateTo("/sales-delivery-status");
+
+    private void OpenInvoice(int transactionId) => Nav.NavigateTo($"/sales/invoices/{transactionId}");
+
+    private async Task ConfirmReceiptAsync(PurchaseReceiptListDto item)
+    {
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Title, "تأكيد الاستلام" },
+            { x => x.Message, $"هل تريد تأكيد استلام فاتورة الشراء {(item.ReferenceNumber ?? $"#{item.TransactionId}")} للمخزن {item.WarehouseName}؟" },
+            { x => x.YesText, "نعم، تم الاستلام" },
+            { x => x.CancelText, "إلغاء" }
+        };
+
+        var msgDialog = await DialogService.ShowAsync<MudMessageBox>(
+            "تأكيد الاستلام", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+
+        var msgResult = await msgDialog.Result;
+        if (msgResult is null || msgResult.Canceled) return;
+
+        try
+        {
+            var (success, message) = await InvoiceService.ReceivePurchaseInvoiceAsync(item.TransactionId, _currentUserName,
+                "تم الاستلام من شاشة متابعة استلامات الشراء");
+
+            Snackbar.Add(message, success ? Severity.Success : Severity.Error);
+            if (success)
+                await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Confirm purchase receipt failed for {Id}", item.TransactionId);
+            Snackbar.Add("حدث خطأ أثناء تأكيد الاستلام: " + ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task SaveFilterStateAsync()
+    {
+        try
+        {
+            var state = System.Text.Json.JsonSerializer.Serialize(new PurchaseReceiptFilterState
+            {
+                From = _from,
+                To = _to,
+                DateFilterType = _dateFilterType,
+                Search = _search,
+                Status = _status
+            });
+            await JS.InvokeVoidAsync("localStorage.setItem", FilterStorageKey, state);
+        }
+        catch { }
+    }
+
+    private async Task RestoreFilterStateAsync()
+    {
+        try
+        {
+            var json = await JS.InvokeAsync<string>("localStorage.getItem", FilterStorageKey);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            var saved = System.Text.Json.JsonSerializer.Deserialize<PurchaseReceiptFilterState>(json);
+            if (saved == null)
+                return;
+
+            _from = saved.From;
+            _to = saved.To;
+            _dateFilterType = string.IsNullOrWhiteSpace(saved.DateFilterType)
+                ? PurchaseReceiptDateFilterTypes.DueDate
+                : saved.DateFilterType;
+            _search = saved.Search;
+            _status = saved.Status;
+        }
+        catch { }
+    }
+
+    private record CardModel(string Label, string? Status, int Count, string Color, string Icon, bool IsActive);
+
+    private IEnumerable<CardModel> BuildCards() => new[]
+    {
+        new CardModel("الكل", null, _summary.TotalCount, "#0f766e", Icons.Material.Filled.ListAlt, _status is null),
+        new CardModel(PurchaseReceiptStatusNames.Pending, PurchaseReceiptStatusNames.Pending, _summary.PendingCount, "#f59e0b", Icons.Material.Filled.PendingActions, _status == PurchaseReceiptStatusNames.Pending),
+        new CardModel(PurchaseReceiptStatusNames.Received, PurchaseReceiptStatusNames.Received, _summary.ReceivedCount, "#16a34a", Icons.Material.Filled.Inventory, _status == PurchaseReceiptStatusNames.Received),
+        new CardModel(PurchaseReceiptStatusNames.Overdue, PurchaseReceiptStatusNames.Overdue, _summary.OverdueCount, "#dc2626", Icons.Material.Filled.Warning, _status == PurchaseReceiptStatusNames.Overdue),
+    };
+
+    private static Color GetStatusColor(string? status) => status switch
+    {
+        var s when s == PurchaseReceiptStatusNames.Pending => Color.Warning,
+        var s when s == PurchaseReceiptStatusNames.Overdue => Color.Error,
+        var s when s == PurchaseReceiptStatusNames.Received => Color.Success,
+        _ => Color.Default
+    };
+
+    private static string GetStatusIcon(string? status) => status switch
+    {
+        var s when s == PurchaseReceiptStatusNames.Pending => Icons.Material.Filled.PendingActions,
+        var s when s == PurchaseReceiptStatusNames.Overdue => Icons.Material.Filled.Warning,
+        var s when s == PurchaseReceiptStatusNames.Received => Icons.Material.Filled.Inventory,
+        _ => Icons.Material.Filled.HelpOutline
+    };
+
+    private sealed class PurchaseReceiptFilterState
+    {
+        public DateTime? From { get; set; }
+        public DateTime? To { get; set; }
+        public string? DateFilterType { get; set; }
+        public string? Search { get; set; }
+        public string? Status { get; set; }
+    }
+}

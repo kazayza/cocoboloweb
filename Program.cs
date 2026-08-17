@@ -148,6 +148,7 @@ builder.Services.AddScoped<IWarehouseService, WarehouseService>();
 builder.Services.AddScoped<IStockService, StockService>();
 builder.Services.AddScoped<GlobalSearchService>();
 builder.Services.AddScoped<ICrmDashboardService, CrmDashboardService>();
+builder.Services.AddScoped<IMarketingDashboardService, MarketingDashboardService>();
 builder.Services.AddScoped<IOpportunityService, OpportunityService>();
 builder.Services.AddScoped<IInteractionService, InteractionService>();
 builder.Services.AddScoped<ITaskService, TaskService>();
@@ -157,7 +158,7 @@ builder.Services.AddScoped<IB2BAuthService, B2BAuthService>();
 builder.Services.AddScoped<IB2BPortalUserService, B2BPortalUserService>();
 builder.Services.AddScoped<IB2BRequestService, B2BRequestService>();
 builder.Services.AddScoped<IB2BPortalService, B2BPortalService>();
-builder.Services.AddScoped<IMarketingDashboardService, MarketingDashboardService>();
+builder.Services.AddScoped<IPurchaseReceiptStatusService, PurchaseReceiptStatusService>();
 
 
 
@@ -495,7 +496,7 @@ app.MapGet("/api/product-images/{productId:int}", async (
         .FirstOrDefaultAsync();
 
     if (image == null)
-        return Results.NotFound();
+        return await GetDefaultProductImageResultAsync(env);
 
     // 2) لو فيه ImagePath والملف موجود فعلاً
     if (!string.IsNullOrEmpty(image.ImagePath))
@@ -519,7 +520,7 @@ app.MapGet("/api/product-images/{productId:int}", async (
     }
 
     // 4) مفيش صورة صالحة
-    return Results.NotFound();
+    return await GetDefaultProductImageResultAsync(env);
 }).RequireAuthorization();
 
 // ⭐ Public endpoint للصور - للعميل من عرض السعر العام
@@ -537,7 +538,7 @@ app.MapGet("/api/public/product-images/{productId:int}", async (
         .FirstOrDefaultAsync();
 
     if (image == null)
-        return Results.NotFound();
+        return await GetDefaultProductImageResultAsync(env);
 
     if (!string.IsNullOrEmpty(image.ImagePath))
     {
@@ -558,7 +559,7 @@ app.MapGet("/api/public/product-images/{productId:int}", async (
         return Results.File(image.ImageProduct, mimeType);
     }
 
-    return Results.NotFound();
+    return await GetDefaultProductImageResultAsync(env);
 });
 // ============================================================
 // 🖼️ Product Image By ID (للحصول على صورة معينة)
@@ -599,7 +600,7 @@ app.MapGet("/api/product-image-by-id/{productImagesId:int}", async (
     }
 
     // 3) مفيش صورة صالحة
-    return Results.NotFound();
+    return await GetDefaultProductImageResultAsync(env);
 });
 
 
@@ -859,6 +860,17 @@ app.Run();
 // ============================================================
 // Helpers
 // ============================================================
+static async Task<IResult> GetDefaultProductImageResultAsync(IWebHostEnvironment env)
+{
+    var fullPath = Path.Combine(env.WebRootPath, "images", "no-product.svg");
+
+    if (!File.Exists(fullPath))
+        return Results.NotFound();
+
+    var fileBytes = await File.ReadAllBytesAsync(fullPath);
+    return Results.File(fileBytes, "image/svg+xml", enableRangeProcessing: true);
+}
+
 static bool IsApiRequest(HttpRequest request)
 {
     if (request.Path.StartsWithSegments("/auth")) return true;
