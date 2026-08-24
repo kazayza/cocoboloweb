@@ -28,6 +28,8 @@ public class LeadsDashboardDataDto
     public List<CampaignPerformanceDto> TopCampaigns { get; set; } = new();
     public List<ProjectTypeSummaryDto> ProjectSummary { get; set; } = new();
     public List<RecentConvertedDto> RecentConverted { get; set; } = new();
+    public List<ClosedDealDetailDto> ClosedDealsDetails { get; set; } = new();
+    public LeadJourneyTreeNodeDto? LeadJourneyTree { get; set; }
 
     // Filter options (for dropdowns)
     public List<string> AvailableCities { get; set; } = new();
@@ -127,6 +129,28 @@ public class CampaignPerformanceDto
     public int TotalLeads { get; set; }
     public int ConvertedLeads { get; set; }
     public decimal ConversionRate { get; set; }
+}
+
+public class ClosedDealDetailDto
+{
+    public int OpportunityId { get; set; }
+    public string ClientName { get; set; } = "";
+    public string InvoiceReference { get; set; } = "بدون فاتورة";
+    public decimal ActualValue { get; set; }
+    public string SourceName { get; set; } = "غير محدد";
+}
+
+public class LeadJourneyTreeNodeDto
+{
+    public string Id { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string CountLabel { get; set; } = "0";
+    public string? SubLabel { get; set; }
+    public string BgColor { get; set; } = "#ffffff";
+    public string BorderColor { get; set; } = "#cbd5e1";
+    public string BorderHoverColor { get; set; } = "#94a3b8";
+    public string AccentColor { get; set; } = "#475569";
+    public List<LeadJourneyTreeNodeDto> Children { get; set; } = new();
 }
 
 public class ProjectTypeSummaryDto

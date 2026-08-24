@@ -1051,6 +1051,8 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             l.ProjectType,
             l.ProjectStage,
             l.CampaignName,
+            l.AdName,
+            l.AdSetName,
             l.FullName,
             l.AssignedEmployeeId,
             l.IsDuplicate,
@@ -1122,7 +1124,12 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             var leadScopedQuery = _db.LeadsCRMs.AsNoTracking().Where(l => l.ConvertedOpportunityId.HasValue);
 
             if (!string.IsNullOrWhiteSpace(filter.Platform))
-                leadScopedQuery = leadScopedQuery.Where(l => l.Platform == filter.Platform);
+            {
+                var platformAliases = GetPlatformAliases(filter.Platform);
+                leadScopedQuery = platformAliases.Count == 0
+                    ? leadScopedQuery.Where(l => l.Platform == filter.Platform)
+                    : leadScopedQuery.Where(l => l.Platform != null && platformAliases.Contains(l.Platform));
+            }
             if (!string.IsNullOrWhiteSpace(filter.City))
                 leadScopedQuery = leadScopedQuery.Where(l => l.City == filter.City);
             if (!string.IsNullOrWhiteSpace(filter.ProjectType))
@@ -1148,6 +1155,31 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             .Select(o => o.OpportunityId)
             .Distinct()
             .ToList();
+
+        var allOppPartyIds = allOppDetails
+            .Select(o => o.PartyId)
+            .Distinct()
+            .ToList();
+
+        var allOppSourceIds = allOppDetails
+            .Where(o => o.SourceId.HasValue)
+            .Select(o => o.SourceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var opportunityPartyNames = allOppPartyIds.Count > 0
+            ? await _db.Parties.AsNoTracking()
+                .Where(p => allOppPartyIds.Contains(p.PartyId))
+                .ToDictionaryAsync(p => p.PartyId, p => p.PartyName ?? $"عميل #{p.PartyId}")
+            : new Dictionary<int, string>();
+
+        var opportunitySourceNames = allOppSourceIds.Count > 0
+            ? await _db.ContactSources.AsNoTracking()
+                .Where(s => allOppSourceIds.Contains(s.SourceId))
+                .ToDictionaryAsync(
+                    s => s.SourceId,
+                    s => string.IsNullOrWhiteSpace(s.SourceNameAr) ? (s.SourceName ?? "غير محدد") : s.SourceNameAr!)
+            : new Dictionary<int, string>();
 
         var leadOriginOppIdsInScope = leads
             .Where(l => l.LeadStatus == "محول"
@@ -1216,9 +1248,46 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             .Where(o => o.StageId == closedDealStageId || invoicedOppIds.Contains(o.OpportunityId) || o.TransactionId.HasValue)
             .ToList();
 
-        var closedDealCount = wonDeals.Select(o => o.OpportunityId).Distinct().Count();
-        var closedDealValue = wonDeals.Sum(o => actualValueByOpp.TryGetValue(o.OpportunityId, out var oppActual) ? oppActual : (o.ActualValue ?? o.ExpectedValue ?? 0m));
-        var closedDealExpectedValue = wonDeals.Sum(o => o.ExpectedValue ?? 0m);
+        var marketingWonDeals = wonDeals
+            .Where(o => !IsExcludedMarketingSourceName(o.SourceId.HasValue
+                ? opportunitySourceNames.GetValueOrDefault(o.SourceId.Value)
+                : null))
+            .ToList();
+
+        var marketingWonDealIds = marketingWonDeals
+            .Select(o => o.OpportunityId)
+            .Distinct()
+            .ToHashSet();
+
+        var invoiceRefsByOpp = saleTransactions
+            .Where(t => t.OpportunityId.HasValue)
+            .GroupBy(t => t.OpportunityId!.Value)
+            .ToDictionary(
+                g => g.Key,
+                g => string.Join("، ", g.Select(x => x.ReferenceNumber).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct()));
+
+        result.ClosedDealsDetails = marketingWonDeals
+            .Select(o => new ClosedDealDetailDto
+            {
+                OpportunityId = o.OpportunityId,
+                ClientName = opportunityPartyNames.GetValueOrDefault(o.PartyId, $"عميل #{o.PartyId}"),
+                InvoiceReference = invoiceRefsByOpp.TryGetValue(o.OpportunityId, out var invoiceRef) && !string.IsNullOrWhiteSpace(invoiceRef)
+                    ? invoiceRef
+                    : "بدون فاتورة",
+                ActualValue = actualValueByOpp.TryGetValue(o.OpportunityId, out var oppActual)
+                    ? oppActual
+                    : (o.ActualValue ?? o.ExpectedValue ?? 0m),
+                SourceName = o.SourceId.HasValue
+                    ? opportunitySourceNames.GetValueOrDefault(o.SourceId.Value, "غير محدد")
+                    : "غير محدد"
+            })
+            .OrderByDescending(x => x.ActualValue)
+            .ThenBy(x => x.ClientName)
+            .ToList();
+
+        var closedDealCount = marketingWonDeals.Select(o => o.OpportunityId).Distinct().Count();
+        var closedDealValue = marketingWonDeals.Sum(o => actualValueByOpp.TryGetValue(o.OpportunityId, out var oppActual) ? oppActual : (o.ActualValue ?? o.ExpectedValue ?? 0m));
+        var closedDealExpectedValue = marketingWonDeals.Sum(o => o.ExpectedValue ?? 0m);
         var valueVariance = closedDealExpectedValue - closedDealValue;
 
         var closeStageIds = lostIdSet.Concat(new[] { closedDealStageId }).ToHashSet();
@@ -1347,20 +1416,17 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
                     Color = "#6b7280"
                 }));
 
-        var platformLabels = new Dictionary<string, string>
-        {
-            { "fb", "Facebook" },
-            { "ig", "Instagram" }
-        };
-
         result.PlatformData = leads
-            .Where(l => l.Platform != null)
-            .GroupBy(l => l.Platform)
+            .Select(l => NormalizeLeadPlatformLabel(l.Platform))
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .GroupBy(p => p!)
             .Select(g => new ChartItemDto
             {
-                Label = platformLabels.GetValueOrDefault(g.Key!, g.Key!),
+                Label = g.Key,
                 Value = g.Count()
-            }).ToList();
+            })
+            .OrderByDescending(x => x.Value)
+            .ToList();
 
         var dailyGroups = leads
             .Where(l => l.CreatedAt.Date >= trendFrom.Date && l.CreatedAt.Date <= trendTo.Date)
@@ -1399,6 +1465,7 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             .ToList();
 
         var empSales = saleTransactions
+            .Where(t => t.OpportunityId.HasValue && marketingWonDealIds.Contains(t.OpportunityId.Value))
             .Select(t => new
             {
                 EmpId = t.EmpId ?? (t.OpportunityId.HasValue ? oppEmployeeById.GetValueOrDefault(t.OpportunityId.Value) : null),
@@ -1415,7 +1482,7 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
 
         if (empSales.Count == 0)
         {
-            empSales = wonDeals
+            empSales = marketingWonDeals
                 .Where(o => o.EmployeeId.HasValue)
                 .GroupBy(o => o.EmployeeId!.Value)
                 .ToDictionary(g => g.Key, g => new
@@ -1472,6 +1539,141 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
                 .Where(s => opportunityStageIds.Contains(s.StageId))
                 .ToDictionaryAsync(s => s.StageId)
             : new Dictionary<int, SalesStage>();
+
+        var newLeadCount = leads.Count(l => l.LeadStatus == "جديد");
+        var assignedLeadCount = leads.Count(l => l.LeadStatus == "تم الإسناد");
+        var untouchedLeadCount = newLeadCount + assignedLeadCount;
+        var contactedOnlyCount = leads.Count(l =>
+            (l.LeadStatus == "تم التواصل" || l.LeadStatus == "مؤهل")
+            && !(l.IsConverted || l.LeadStatus == "محول")
+            && l.LeadStatus != "مرفوض");
+        var contactedStageCount = leads.Count(l =>
+            l.LeadStatus == "تم التواصل"
+            && !(l.IsConverted || l.LeadStatus == "محول")
+            && l.LeadStatus != "مرفوض");
+        var qualifiedStageCount = leads.Count(l =>
+            l.LeadStatus == "مؤهل"
+            && !(l.IsConverted || l.LeadStatus == "محول")
+            && l.LeadStatus != "مرفوض");
+        var convertedLeadCountForTree = leads.Count(l =>
+            (l.IsConverted || l.LeadStatus == "محول")
+            && l.ConvertedOpportunityId.HasValue
+            && allOppIds.Contains(l.ConvertedOpportunityId.Value));
+        var rejectedLeadCountForTree = leads.Count(l => l.LeadStatus == "مرفوض");
+
+        var convertedOppsForTree = allOppDetails
+            .Where(o => leadOriginOppIdsInScope.Contains(o.OpportunityId))
+            .ToList();
+
+        var convertedStageNodes = convertedOppsForTree
+            .GroupBy(o => o.StageId)
+            .OrderBy(g => opportunityStagesById.TryGetValue(g.Key, out var stage) ? stage.StageOrder : int.MaxValue)
+            .ThenBy(g => g.Key)
+            .Select(g =>
+            {
+                opportunityStagesById.TryGetValue(g.Key, out var stage);
+                var stageTitle = stage?.StageNameAr ?? stage?.StageName ?? $"مرحلة {g.Key}";
+                var stageAccent = stage?.StageColor ?? "#6366f1";
+                var stageBg = IsExitStageId(g.Key)
+                    ? "#fef2f2"
+                    : g.Key == closedDealStageId ? "#ecfdf5" : "#eef2ff";
+                var stageBorder = IsExitStageId(g.Key)
+                    ? "#fca5a5"
+                    : g.Key == closedDealStageId ? "#86efac" : "#c7d2fe";
+                var stageHover = IsExitStageId(g.Key)
+                    ? "#ef4444"
+                    : g.Key == closedDealStageId ? "#10b981" : "#6366f1";
+                var stageValue = g.Sum(o => actualValueByOpp.TryGetValue(o.OpportunityId, out var oppActual) ? oppActual : (o.ActualValue ?? o.ExpectedValue ?? 0m));
+
+                var stageCount = g.Select(x => x.OpportunityId).Distinct().Count();
+                return CreateLeadJourneyNode(
+                    id: $"opp-stage-{g.Key}",
+                    title: stageTitle,
+                    count: stageCount,
+                    bgColor: stageBg,
+                    borderColor: stageBorder,
+                    borderHoverColor: stageHover,
+                    accentColor: stageAccent,
+                    subLabel: BuildLeadJourneyStageSub(stageCount, leadOriginOppIdsInScope.Count, stageValue));
+            })
+            .ToList();
+
+        var leadJourneyChildren = new List<LeadJourneyTreeNodeDto>
+        {
+            CreateLeadJourneyNode(
+                id: "lead-untouched",
+                title: "لم يتم التواصل",
+                count: untouchedLeadCount,
+                bgColor: "#eff6ff",
+                borderColor: "#93c5fd",
+                borderHoverColor: "#3b82f6",
+                accentColor: "#3b82f6",
+                subLabel: BuildLeadJourneyLeadSub(untouchedLeadCount, totalLeads),
+                children: new List<LeadJourneyTreeNodeDto>
+                {
+                    CreateLeadJourneyNode("lead-new", "جديد", newLeadCount, "#eff6ff", "#bfdbfe", "#60a5fa", "#2563eb", BuildLeadJourneyLeadSub(newLeadCount, totalLeads)),
+                    CreateLeadJourneyNode("lead-assigned", "تم الإسناد", assignedLeadCount, "#e0f2fe", "#7dd3fc", "#0ea5e9", "#0284c7", BuildLeadJourneyLeadSub(assignedLeadCount, totalLeads))
+                }),
+            CreateLeadJourneyNode(
+                id: "lead-contacted",
+                title: "تم التواصل",
+                count: contactedOnlyCount,
+                bgColor: "#fff7ed",
+                borderColor: "#fdba74",
+                borderHoverColor: "#f97316",
+                accentColor: "#f97316",
+                subLabel: BuildLeadJourneyLeadSub(contactedOnlyCount, totalLeads),
+                children: new List<LeadJourneyTreeNodeDto>
+                {
+                    CreateLeadJourneyNode("lead-contacted-only", "تم التواصل فقط", contactedStageCount, "#fff7ed", "#fdba74", "#fb923c", "#ea580c", BuildLeadJourneyLeadSub(contactedStageCount, totalLeads)),
+                    CreateLeadJourneyNode("lead-qualified", "مؤهل", qualifiedStageCount, "#faf5ff", "#d8b4fe", "#a855f7", "#9333ea", BuildLeadJourneyLeadSub(qualifiedStageCount, totalLeads))
+                }),
+            CreateLeadJourneyNode(
+                id: "lead-rejected",
+                title: "مرفوض",
+                count: rejectedLeadCountForTree,
+                bgColor: "#fef2f2",
+                borderColor: "#fca5a5",
+                borderHoverColor: "#ef4444",
+                accentColor: "#dc2626",
+                subLabel: BuildLeadJourneyLeadSub(rejectedLeadCountForTree, totalLeads)),
+            CreateLeadJourneyNode(
+                id: "lead-converted",
+                title: "محول إلى فرصة",
+                count: convertedLeadCountForTree,
+                bgColor: "#f5f3ff",
+                borderColor: "#c4b5fd",
+                borderHoverColor: "#8b5cf6",
+                accentColor: "#7c3aed",
+                subLabel: BuildLeadJourneyLeadSub(convertedLeadCountForTree, totalLeads),
+                children: convertedStageNodes)
+        };
+
+        var classifiedLeadCount = untouchedLeadCount + contactedOnlyCount + rejectedLeadCountForTree + convertedLeadCountForTree;
+        var remainingLeadCount = Math.Max(0, totalLeads - classifiedLeadCount);
+        if (remainingLeadCount > 0)
+        {
+            leadJourneyChildren.Add(CreateLeadJourneyNode(
+                id: "lead-other",
+                title: "حالات أخرى",
+                count: remainingLeadCount,
+                bgColor: "#f8fafc",
+                borderColor: "#cbd5e1",
+                borderHoverColor: "#64748b",
+                accentColor: "#475569",
+                subLabel: BuildLeadJourneyLeadSub(remainingLeadCount, totalLeads)));
+        }
+
+        result.LeadJourneyTree = CreateLeadJourneyNode(
+            id: "lead-root",
+            title: "إجمالي العملاء المحتملين",
+            count: totalLeads,
+            bgColor: "#f8fafc",
+            borderColor: "#94a3b8",
+            borderHoverColor: "#475569",
+            accentColor: "#475569",
+            subLabel: "الأساس من LeadsCRM",
+            children: leadJourneyChildren);
 
         var openStageOutcomeById = new Dictionary<int, string>();
         var openStagesInScope = opportunityStagesById.Values
@@ -1540,7 +1742,7 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
 
         var arMonths = new[] { "", "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر" };
 
-        var salesPeriods = wonDeals
+        var salesPeriods = marketingWonDeals
             .GroupBy(o => new { o.CreatedAt.Year, o.CreatedAt.Month })
             .OrderBy(g => g.Key.Year).ThenBy(g => g.Key.Month)
             .Select(g => new SalesByPeriodDto
@@ -1578,7 +1780,7 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             var end = new DateTime(trendTo.Year, trendTo.Month, 1);
             while (m <= end)
             {
-                var monthWonDeals = wonDeals.Where(o => o.CreatedAt.Year == m.Year && o.CreatedAt.Month == m.Month).ToList();
+                var monthWonDeals = marketingWonDeals.Where(o => o.CreatedAt.Year == m.Year && o.CreatedAt.Month == m.Month).ToList();
                 var actualValue = monthWonDeals.Sum(o => actualValueByOpp.TryGetValue(o.OpportunityId, out var oppActual) ? oppActual : (o.ActualValue ?? 0m));
                 var expectedValue = monthWonDeals.Sum(o => o.ExpectedValue ?? 0m);
 
@@ -1784,18 +1986,26 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
         };
 
         result.TopCampaigns = leads
-            .Where(l => l.CampaignName != null)
-            .GroupBy(l => new { l.CampaignName, l.Platform })
+            .Select(l => new
+            {
+                CampaignLabel = BuildCampaignDisplayName(l.AdSetName, l.AdName, l.CampaignName),
+                Platform = NormalizeLeadPlatformLabel(l.Platform) ?? string.Empty,
+                l.LeadStatus
+            })
+            .Where(x => !string.IsNullOrWhiteSpace(x.CampaignLabel))
+            .GroupBy(x => new { x.CampaignLabel, x.Platform })
             .Select(g => new CampaignPerformanceDto
             {
-                CampaignName = g.Key.CampaignName!,
-                Platform = g.Key.Platform ?? "",
+                CampaignName = g.Key.CampaignLabel!,
+                Platform = g.Key.Platform,
                 TotalLeads = g.Count(),
                 ConvertedLeads = g.Count(l => l.LeadStatus == "محول"),
                 ConversionRate = g.Count() > 0
                     ? Math.Round((decimal)g.Count(l => l.LeadStatus == "محول") / g.Count() * 100, 1) : 0
             })
-            .OrderByDescending(x => x.TotalLeads)
+            .OrderByDescending(x => x.ConvertedLeads)
+            .ThenByDescending(x => x.ConversionRate)
+            .ThenByDescending(x => x.TotalLeads)
             .Take(10)
             .ToList();
 
@@ -2263,7 +2473,12 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
         if (filter.DateTo.HasValue)
             q = q.Where(l => l.CreatedAt <= filter.DateTo.Value.AddDays(1));
         if (!string.IsNullOrWhiteSpace(filter.Platform))
-            q = q.Where(l => l.Platform == filter.Platform);
+        {
+            var platformAliases = GetPlatformAliases(filter.Platform);
+            q = platformAliases.Count == 0
+                ? q.Where(l => l.Platform == filter.Platform)
+                : q.Where(l => l.Platform != null && platformAliases.Contains(l.Platform));
+        }
         if (filter.EmployeeId.HasValue)
             q = q.Where(l => l.AssignedEmployeeId == filter.EmployeeId);
         if (!string.IsNullOrWhiteSpace(filter.City))
@@ -2335,6 +2550,59 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
         return "مهتم";
     }
 
+    private static bool IsExitStageId(int stageId) => stageId == 4 || stageId == 5;
+
+    private static LeadJourneyTreeNodeDto CreateLeadJourneyNode(
+        string id,
+        string title,
+        int count,
+        string bgColor,
+        string borderColor,
+        string borderHoverColor,
+        string accentColor,
+        string? subLabel = null,
+        List<LeadJourneyTreeNodeDto>? children = null)
+    {
+        return new LeadJourneyTreeNodeDto
+        {
+            Id = id,
+            Title = title,
+            CountLabel = count.ToString("N0"),
+            SubLabel = subLabel,
+            BgColor = bgColor,
+            BorderColor = borderColor,
+            BorderHoverColor = borderHoverColor,
+            AccentColor = accentColor,
+            Children = children ?? new List<LeadJourneyTreeNodeDto>()
+        };
+    }
+
+    private static string BuildLeadJourneyLeadSub(int count, int total)
+    {
+        if (total <= 0) return "0% من الإجمالي";
+        var pct = Math.Round((decimal)count / total * 100m, 1);
+        return $"{pct:F1}% من الإجمالي";
+    }
+
+    private static string BuildLeadJourneyStageSub(int count, int totalConverted, decimal totalValue)
+    {
+        var pctText = totalConverted > 0
+            ? $"{Math.Round((decimal)count / totalConverted * 100m, 1):F1}% من المحولين"
+            : "0% من المحولين";
+
+        if (totalValue <= 0)
+            return pctText;
+
+        return $"{pctText} • {FormatCompactMoney(totalValue)}";
+    }
+
+    private static string FormatCompactMoney(decimal value)
+    {
+        if (value >= 1_000_000m) return $"{(value / 1_000_000m):0.#}M ج.م";
+        if (value >= 1_000m) return $"{(value / 1_000m):0.#}K ج.م";
+        return $"{value:N0} ج.م";
+    }
+
     private static string MapBudgetCategory(string? budget)
     {
         if (string.IsNullOrWhiteSpace(budget) ||
@@ -2364,6 +2632,96 @@ public async Task<LeadsDashboardDataDto> GetDashboardDataAsync(LeadsDashboardFil
             return "من 500 ألف لـ 1 مليون جنيه";
 
         return raw;
+    }
+
+    private static string BuildCampaignDisplayName(string? adSetName, string? adName, string? campaignName)
+    {
+        var adSet = string.IsNullOrWhiteSpace(adSetName) ? null : adSetName.Trim();
+        var ad = string.IsNullOrWhiteSpace(adName) ? null : adName.Trim();
+        var campaign = string.IsNullOrWhiteSpace(campaignName) ? null : campaignName.Trim();
+
+        if (!string.IsNullOrWhiteSpace(adSet) && !string.IsNullOrWhiteSpace(ad))
+            return $"{adSet} / {ad}";
+        if (!string.IsNullOrWhiteSpace(ad))
+            return ad;
+        if (!string.IsNullOrWhiteSpace(adSet))
+            return adSet;
+        return campaign ?? string.Empty;
+    }
+
+    private static List<string> GetPlatformAliases(string? platformFilter)
+    {
+        if (string.IsNullOrWhiteSpace(platformFilter))
+            return new List<string>();
+
+        var normalized = NormalizeLooseArabic(platformFilter);
+        return normalized switch
+        {
+            "fb" or "facebook" or "فيسبوك" => new List<string> { "fb", "facebook", "Facebook", "فيسبوك" },
+            "ig" or "instagram" or "انستجرام" or "انستغرام" => new List<string> { "ig", "instagram", "Instagram", "انستجرام", "إنستجرام", "انستغرام", "إنستغرام" },
+            _ => new List<string> { platformFilter }
+        };
+    }
+
+    private static string? NormalizeLeadPlatformLabel(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        var normalized = NormalizeLooseArabic(raw);
+
+        if (normalized is "fb" or "facebook" or "فيسبوك")
+            return "Facebook";
+        if (normalized is "ig" or "instagram" or "انستجرام" or "انستغرام")
+            return "Instagram";
+        if (normalized.Contains("tiktok") || normalized.Contains("تيك توك") || normalized.Contains("تيكتوك"))
+            return "TikTok";
+        if (normalized.Contains("google") || normalized.Contains("جوجل"))
+            return "Google";
+        if (normalized.Contains("website") || normalized.Contains("site") || normalized.Contains("ويب") || normalized.Contains("موقع"))
+            return "Website";
+        if (normalized.Contains("whatsapp") || normalized.Contains("واتساب"))
+            return "WhatsApp";
+
+        if (IsExcludedMarketingSourceName(raw))
+            return null;
+
+        return raw.Trim();
+    }
+
+    private static bool IsExcludedMarketingSourceName(string? sourceName)
+    {
+        if (string.IsNullOrWhiteSpace(sourceName))
+            return false;
+
+        var normalized = NormalizeLooseArabic(sourceName);
+
+        return normalized.Contains("عميل قديم")
+            || normalized.Contains("العميل القديم")
+            || normalized.Contains("توصية عميل")
+            || normalized.Contains("توصيه عميل")
+            || normalized.Contains("توصية")
+            || normalized.Contains("توصيه")
+            || normalized.Contains("طرف المهندس حسن")
+            || normalized.Contains("المهندس حسن")
+            || normalized.Contains("مهندس حسن");
+    }
+
+    private static string NormalizeLooseArabic(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return string.Empty;
+
+        var s = input.Trim().ToLowerInvariant()
+            .Replace("أ", "ا")
+            .Replace("إ", "ا")
+            .Replace("آ", "ا")
+            .Replace("ى", "ي")
+            .Replace("ة", "ه")
+            .Replace("ـ", string.Empty)
+            .Replace("  ", " ");
+
+        return s;
     }
 
     private sealed class DirectSourceRow

@@ -566,9 +566,16 @@ else
                             @for (int idx = 0; idx < interactionList.Count; idx++)
                             {
                                 var i = interactionList[idx];
-                                // هل التفاعل السابق كان عامل متابعة قادمة والتفاعل ده هو اللي خلصها؟
-                                var prevFollowUp = idx > 0 ? interactionList[idx - 1].NextFollowUpDate : (DateTime?)null;
-                                var isFollowUpCompleted = prevFollowUp.HasValue && i.InteractionDate.Date >= prevFollowUp.Value.Date;
+                                DateTime? completedFollowUpAt = null;
+                                if (i.NextFollowUpDate.HasValue)
+                                {
+                                    completedFollowUpAt = interactionList
+                                        .Take(idx)
+                                        .Where(x => x.InteractionDate.Date >= i.NextFollowUpDate.Value.Date)
+                                        .OrderBy(x => x.InteractionDate)
+                                        .Select(x => (DateTime?)x.InteractionDate)
+                                        .FirstOrDefault();
+                                }
 
                                 var stageColor = i.StageAfterId.HasValue
                                     ? _stages.FirstOrDefault(s => s.StageId == i.StageAfterId)?.StageColor ?? "#94a3b8"
@@ -637,20 +644,11 @@ else
                                             {
                                                 <span class="tl-note">📌 @i.Notes</span>
                                             }
-                                            @if (isFollowUpCompleted)
-                                            {
-                                                <span class="tl-followup-done">✅ تمت متابعة @FormatDateAr(prevFollowUp.Value)</span>
-                                            }
                                             @if (i.NextFollowUpDate.HasValue)
                                             {
-                                                var fuDate = i.NextFollowUpDate.Value.Date;
-                                                var fuDone = _completedTaskByDate.TryGetValue(fuDate, out var fuTask);
-                                                if (fuDone)
+                                                if (completedFollowUpAt.HasValue)
                                                 {
-                                                    <span class="tl-followup fu-completed">
-                                                        <span class="fu-strike">📅 متابعة: @FormatDateAr(i.NextFollowUpDate.Value)</span>
-                                                        <span class="fu-done-label">✅ تمت المتابعة بتاريخ @FormatDateAr(fuTask.CompletedDate!.Value)</span>
-                                                    </span>
+                                                    <span class="tl-followup fu-completed">📅 متابعة: @FormatDateAr(i.NextFollowUpDate.Value) ✅ تمت المتابعة بتاريخ @FormatDateAr(completedFollowUpAt.Value)</span>
                                                 }
                                                 else
                                                 {
@@ -1732,9 +1730,7 @@ else
     .tl-note, .tl-followup, .tl-followup-done { font-size: 0.75rem; color: var(--mud-palette-text-secondary); }
     .fu-overdue { color: #ef4444 !important; font-weight: 700; }
     .tl-followup-done { color: #10b981 !important; font-weight: 600; }
-    .fu-completed { display: inline-flex; flex-direction: column; gap: 0.1rem; }
-    .fu-strike { text-decoration: line-through; opacity: 0.45; }
-    .fu-done-label { color: #10b981 !important; font-weight: 600; }
+    .fu-completed { color: #10b981 !important; font-weight: 600; }
 
     /* ════════════════════════════════════ */
     /*        INFO GRID (SIDEBAR)          */
@@ -1899,8 +1895,6 @@ else
     private List<ContactStatus> _statuses = new();
     /// <summary> mapped 1:1 with _interactions by index — StatusNameAr for each interaction </summary>
     private List<string?> _interactionStatusNames = new();
-    /// <summary> DueDate.Date → completed task (للمقارنة مع NextFollowUpDate) </summary>
-    private Dictionary<DateTime, TaskListDto> _completedTaskByDate = new();
     private List<LostReason> _lostReasons = new();
     private List<TaskType> _taskTypes = new();
     private List<Employee> _employees = new();
@@ -2049,7 +2043,6 @@ else
             _interactions = await InteractionService.GetByOpportunityAsync(Id);
             await LoadInteractionStatusNamesAsync();
             _tasks = await TaskService.GetByOpportunityAsync(Id);
-            BuildCompletedTaskLookup();
             await LoadSourceLeadAsync();
             await LoadRelatedDocumentsAsync();
 
@@ -2105,7 +2098,6 @@ else
         _interactions = await InteractionService.GetByOpportunityAsync(Id);
         await LoadInteractionStatusNamesAsync();
         _tasks = await TaskService.GetByOpportunityAsync(Id);
-        BuildCompletedTaskLookup();
         await LoadSourceLeadAsync();
         await LoadRelatedDocumentsAsync();
     }
@@ -2119,19 +2111,6 @@ else
             && r.RequestedStageId == requestedStageId
             && r.CurrentStageId == _stageBeforeId
             && string.Equals(r.RequestedBy, _currentUserName, StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>
-    /// بناء Lookup من المهام المكتملة: DueDate → Task
-    /// عشان نقدر نقارن مع NextFollowUpDate في التايملاين
-    /// </summary>
-    private void BuildCompletedTaskLookup()
-    {
-        _completedTaskByDate = _tasks
-            .Where(t => t.Status == "Completed" && t.CompletedDate.HasValue)
-            .GroupBy(t => t.DueDate.Date)
-            .Select(g => g.First())
-            .ToDictionary(t => t.DueDate.Date, t => t);
     }
 
     /// <summary>
@@ -2377,48 +2356,6 @@ else
 
             var (ok, msg) = await InteractionService.AddQuickAsync(_newInteraction, _currentUserName!);
             if (!ok) { Snackbar.Add(msg, Severity.Error); return; }
-
-            if (!(executingApprovedClosure && ShowLostFields && !_canDirectCloseOpportunity))
-            {
-                var formDto = await OppService.GetOpportunityForEditAsync(Id);
-                if (formDto != null)
-                {
-                    formDto.StageId = _newInteraction.StageAfterId.Value;
-                    formDto.NextFollowUpDate = ShowLostFields ? null : _newInteraction.NextFollowUpDate;
-                    formDto.LostReasonId = _newInteraction.LostReasonId;
-                    formDto.LostNotes = _newInteraction.LostNotes;
-                    formDto.Notes = _newInteraction.Summary;
-                    formDto.Guidance = _guidanceText;
-                    await OppService.SaveOpportunityAsync(formDto, _currentUserName!);
-                }
-            }
-
-            var stageId = _newInteraction.StageAfterId.Value;
-
-            if (IsExitStageId(stageId))
-            {
-                var label = stageId == 4 ? "خسارة" : "غير مهتم";
-                await TaskService.CloseAllTasksForOpportunityAsync(Id, "Completed", $"تم الإلغاء تلقائياً - العميل {label}", _currentUserName!);
-            }
-            else if (stageId == 3)
-            {
-                await TaskService.CloseAllTasksForOpportunityAsync(Id, "Completed", "تم الإغلاق تلقائياً - تم البيع بنجاح", _currentUserName!);
-            }
-            else if (_newInteraction.NextFollowUpDate.HasValue)
-            {
-                await TaskService.CloseAllTasksForOpportunityAsync(Id, "Completed", "تم المتابعة وجدولة موعد جديد", _currentUserName!);
-                var autoTask = new QuickTaskDto
-                {
-                    OpportunityId = Id,
-                    PartyId = _opp.PartyId,
-                    AssignedTo = _newInteraction.EmployeeId ?? _opp.EmployeeId ?? 0,
-                    TaskTypeId = _selectedTaskTypeId,
-                    TaskDescription = _guidanceText ?? "متابعة",
-                    DueDate = _newInteraction.NextFollowUpDate.Value,
-                    Priority = _selectedTaskPriority
-                };
-                await TaskService.AddQuickAsync(autoTask, _currentUserName!);
-            }
 
             await ReloadData();
             _stageBeforeId = _opp.StageId;
