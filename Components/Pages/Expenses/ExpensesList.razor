@@ -6,9 +6,12 @@
 
 @inject IExpenseService ExpenseService
 @inject ICashBoxService CashBoxService
+@inject IBranchService BranchService
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 @inject AuthenticationStateProvider AuthProvider
+
+@implements IDisposable
 
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
 <!-- ⭐ LOADING                                                                  -->
@@ -231,6 +234,17 @@ else
                             }
                         </div>
 
+                        <!-- الفرع -->
+                        <MudSelect T="int?" @bind-Value="_filter.BranchId" @bind-Value:after="OnBranchFilterChanged"
+                                   Label="الفرع" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                   Clearable="true" AnchorOrigin="Origin.BottomCenter"
+                                   Class="filter-select">
+                            @foreach (var branch in _branches)
+                            {
+                                <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">@branch.BranchNameAr</MudSelectItem>
+                            }
+                        </MudSelect>
+
                         <!-- المجموعة -->
                         <MudSelect T="int?" @bind-Value="_filter.ExpenseGroupId" @bind-Value:after="OnFilterChange"
                                    Label="المجموعة" Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -247,7 +261,7 @@ else
                                    Label="الخزينة" Variant="Variant.Outlined" Margin="Margin.Dense"
                                    Clearable="true" AnchorOrigin="Origin.BottomCenter"
                                    Class="filter-select">
-                            @foreach (var cb in _boxes)
+                            @foreach (var cb in GetFilterCashBoxes())
                             {
                                 <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName</MudSelectItem>
                             }
@@ -255,7 +269,7 @@ else
 
                         <!-- من تاريخ -->
                         <MudDatePicker Date="_dateFrom"
-                                       DateChanged="@(d => { _dateFrom = d; _filter.DateFrom = d; _ = OnFilterChange(); })"
+                                       DateChanged="@(async d => { _dateFrom = d; _filter.DateFrom = d; await OnFilterChange(); })"
                                        Label="من تاريخ" Variant="Variant.Outlined" Margin="Margin.Dense"
                                        Clearable="true" Class="filter-select"
                                        Adornment="Adornment.Start"
@@ -263,7 +277,7 @@ else
 
                         <!-- إلى تاريخ -->
                         <MudDatePicker Date="_dateTo"
-                                       DateChanged="@(d => { _dateTo = d; _filter.DateTo = d; _ = OnFilterChange(); })"
+                                       DateChanged="@(async d => { _dateTo = d; _filter.DateTo = d; await OnFilterChange(); })"
                                        Label="إلى تاريخ" Variant="Variant.Outlined" Margin="Margin.Dense"
                                        Clearable="true" Class="filter-select" />
                     </div>
@@ -272,11 +286,16 @@ else
                     <div class="filter-advanced">
                         <div class="advance-toggle">
                             <MudSwitch T="bool" Value="@(_filter.OnlyParents == true)"
-                                       ValueChanged="@(async (bool v) => { _filter.OnlyParents = v ? (bool?)true : null; await OnFilterChange(); })"
+                                       ValueChanged="@(async (bool v) =>
+                                       {
+                                           _filter.OnlyParents = v ? (bool?)true : null;
+                                           _filter.ExcludeAdvanceHeaders = !v;
+                                           await OnFilterChange();
+                                       })"
                                        Color="Color.Primary" />
                             <span class="advance-label">
                                 <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="Size.Small" />
-                                إخفاء أشهر المصروف المقدم
+                                عرض أصل المصروف المقدم بدل الأقساط
                             </span>
                         </div>
                     </div>
@@ -308,6 +327,7 @@ else
             <MudTable Items="@_pagedResult.Items" Hover="true" Striped="true" Class="expenses-table">
                 <HeaderContent>
                     <MudTh>التاريخ</MudTh>
+                    <MudTh>الفرع</MudTh>
                     <MudTh>المصروف</MudTh>
                     <MudTh>المجموعة</MudTh>
                     <MudTh>المستلم</MudTh>
@@ -336,6 +356,14 @@ else
                                 مصروف مقدم
                             </span>
                         }
+                    </MudTd>
+
+                    <!-- الفرع -->
+                    <MudTd DataLabel="الفرع">
+                        <span class="cashbox-badge">
+                            <MudIcon Icon="@Icons.Material.Filled.Storefront" Size="Size.Small" />
+                            @(context.BranchName ?? "غير محدد")
+                        </span>
                     </MudTd>
 
                     <!-- المصروف -->
@@ -553,9 +581,9 @@ else
             @if (_selectedExpense != null)
             {
                 <p class="delete-message">
-                    @if (_selectedExpense.IsAdvance && _selectedExpense.AdvanceMonths > 1)
+                    @if ((_selectedExpense.IsAdvance && _selectedExpense.AdvanceMonths > 1) || _selectedExpense.AdvanceParentExpenseId.HasValue)
                     {
-                        <span>سيتم حذف '<strong>@_selectedExpense.ExpenseName</strong>' وكل الـ <strong>@_selectedExpense.AdvanceMonths</strong> شهور المرتبطة</span>
+                        <span>سيتم حذف المصروف المقدم بالكامل بما فيه كل الشهور / الأقساط المرتبطة</span>
                     }
                     else
                     {
@@ -712,7 +740,7 @@ else
     .filter-expand-icon { transition:transform 0.3s; }
     .filter-expand-icon.expanded { transform:rotate(180deg); }
     .filter-content { padding:0 1.5rem 1.25rem; border-top:1px solid var(--mud-palette-divider); }
-    .filter-grid { display:grid; grid-template-columns:2fr repeat(4,1fr); gap:0.875rem; padding-top:1rem; }
+    .filter-grid { display:grid; grid-template-columns:2fr repeat(5,1fr); gap:0.875rem; padding-top:1rem; }
     .search-box-wrapper { display:flex; align-items:center; background:var(--mud-palette-background); border:1px solid var(--mud-palette-divider); border-radius:12px; padding:0 0.75rem; height:42px; transition:all 0.3s; }
     .search-box-wrapper:focus-within { border-color:var(--expense-color); box-shadow:0 0 0 3px rgba(245,158,11,0.1); }
     .search-icon { color:var(--mud-palette-text-secondary); margin-left:0.5rem; }
@@ -896,6 +924,7 @@ else
     private bool _isLoading = true;
     private bool _isTableLoading = false;
     private bool _filterExpanded = true;
+    private bool _disposed = false;
     private string _searchDisplay = "";
 
     // Delete Dialog
@@ -903,15 +932,17 @@ else
     private bool _isDeleting = false;
     private ExpenseListDto? _selectedExpense;
 
-    private ExpenseFilterDto _filter = new() { OnlyParents = true };
+    private ExpenseFilterDto _filter = new() { ExcludeAdvanceHeaders = true };
     private PagedResult<ExpenseListDto> _pagedResult = new();
     private ExpenseStatsDto _stats = new();
+    private List<BranchListDto> _branches = new();
     private List<CashBoxListDto> _boxes = new();
     private List<ExpenseGroupDto> _groups = new();
     private DateTime? _dateFrom, _dateTo;
 
     private bool _canAdd, _canEdit, _canDelete;
 
+    private readonly System.Threading.SemaphoreSlim _loadGate = new(1, 1);
     private System.Timers.Timer? _searchTimer;
 
     // ════════════════════════════════════════════════════════════════════════════
@@ -930,6 +961,7 @@ else
 
         _boxes = await CashBoxService.GetCashBoxesAsync();
         _groups = await ExpenseService.GetExpenseGroupsAsync();
+        _branches = (await BranchService.GetBranchesAsync()).Where(b => b.IsActive).ToList();
         await LoadData();
         _isLoading = false;
     }
@@ -939,12 +971,27 @@ else
     // ════════════════════════════════════════════════════════════════════════════
     private async Task LoadData()
     {
-        _isTableLoading = true;
-        StateHasChanged();
-        _pagedResult = await ExpenseService.GetExpensesAsync(_filter);
-        _stats = await ExpenseService.GetStatsAsync();
-        _isTableLoading = false;
-        StateHasChanged();
+        await _loadGate.WaitAsync();
+        try
+        {
+            if (_disposed)
+                return;
+
+            _isTableLoading = true;
+            await InvokeAsync(StateHasChanged);
+
+            var filter = CloneFilter(_filter);
+            _pagedResult = await ExpenseService.GetExpensesAsync(filter);
+            _stats = await ExpenseService.GetStatsAsync(branchId: filter.BranchId);
+        }
+        finally
+        {
+            _isTableLoading = false;
+            _loadGate.Release();
+
+            if (!_disposed)
+                await InvokeAsync(StateHasChanged);
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════════
@@ -956,17 +1003,18 @@ else
         _searchDisplay = value;
         _filter.SearchText = value.NormalizeArabic();
 
-        _searchTimer?.Stop();
-        _searchTimer?.Dispose();
+        CancelPendingSearchTimer();
         _searchTimer = new System.Timers.Timer(400);
         _searchTimer.Elapsed += async (_, _) =>
         {
-            _searchTimer?.Stop();
+            CancelPendingSearchTimer();
             await InvokeAsync(async () =>
             {
+                if (_disposed)
+                    return;
+
                 _filter.PageNumber = 1;
                 await LoadData();
-                StateHasChanged();
             });
         };
         _searchTimer.AutoReset = false;
@@ -975,6 +1023,7 @@ else
 
     private async Task ClearSearch()
     {
+        CancelPendingSearchTimer();
         _searchDisplay = "";
         _filter.SearchText = "";
         _filter.PageNumber = 1;
@@ -986,10 +1035,23 @@ else
     // ════════════════════════════════════════════════════════════════════════════
     private bool HasActiveFilters() =>
         !string.IsNullOrWhiteSpace(_searchDisplay) ||
+        _filter.BranchId.HasValue ||
         _filter.ExpenseGroupId.HasValue ||
         _filter.CashBoxId.HasValue ||
         _dateFrom.HasValue ||
         _dateTo.HasValue;
+
+    private async Task OnBranchFilterChanged()
+    {
+        if (_filter.BranchId.HasValue && _filter.CashBoxId.HasValue)
+        {
+            var box = _boxes.FirstOrDefault(b => b.CashBoxId == _filter.CashBoxId.Value);
+            if (box?.BranchId != _filter.BranchId.Value)
+                _filter.CashBoxId = null;
+        }
+
+        await OnFilterChange();
+    }
 
     private async Task OnFilterChange()
     {
@@ -1005,11 +1067,45 @@ else
 
     private async Task ResetFilters()
     {
+        CancelPendingSearchTimer();
         _searchDisplay = "";
-        _filter = new() { OnlyParents = true };
+        _filter = new() { ExcludeAdvanceHeaders = true };
         _dateFrom = null;
         _dateTo = null;
         await LoadData();
+    }
+
+    private void CancelPendingSearchTimer()
+    {
+        _searchTimer?.Stop();
+        _searchTimer?.Dispose();
+        _searchTimer = null;
+    }
+
+    private static ExpenseFilterDto CloneFilter(ExpenseFilterDto filter) => new()
+    {
+        SearchText = filter.SearchText,
+        BranchId = filter.BranchId,
+        ParentGroupId = filter.ParentGroupId,
+        ExpenseGroupId = filter.ExpenseGroupId,
+        CashBoxId = filter.CashBoxId,
+        DateFrom = filter.DateFrom,
+        DateTo = filter.DateTo,
+        AmountFrom = filter.AmountFrom,
+        AmountTo = filter.AmountTo,
+        IsAdvance = filter.IsAdvance,
+        OnlyParents = filter.OnlyParents,
+        ExcludeAdvanceHeaders = filter.ExcludeAdvanceHeaders,
+        PageNumber = filter.PageNumber,
+        PageSize = filter.PageSize,
+        SortBy = filter.SortBy,
+        SortDescending = filter.SortDescending
+    };
+
+    public void Dispose()
+    {
+        _disposed = true;
+        CancelPendingSearchTimer();
     }
 
     // ════════════════════════════════════════════════════════════════════════════
@@ -1040,5 +1136,14 @@ else
     // ════════════════════════════════════════════════════════════════════════════
     // HELPERS
     // ════════════════════════════════════════════════════════════════════════════
+    private List<CashBoxListDto> GetFilterCashBoxes()
+    {
+        return _boxes
+            .Where(b => !_filter.BranchId.HasValue || b.BranchId == _filter.BranchId.Value)
+            .OrderBy(b => b.BranchName)
+            .ThenBy(b => b.CashBoxName)
+            .ToList();
+    }
+
     private string FormatMoney(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
 }

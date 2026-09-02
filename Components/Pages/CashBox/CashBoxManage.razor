@@ -4,6 +4,7 @@
 @using COCOBOLOERPNEW.Services
 
 @inject ICashBoxService CashBoxService
+@inject IBranchService BranchService
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 @inject AuthenticationStateProvider AuthProvider
@@ -155,6 +156,15 @@ else
                             }
                         </div>
 
+                        <MudSelect T="int?" @bind-Value="_branchFilter" @bind-Value:after="ApplyFilter"
+                                   Label="الفرع" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                   Clearable="true" AnchorOrigin="Origin.BottomCenter" Class="filter-select">
+                            @foreach (var branch in _branches)
+                            {
+                                <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">@branch.BranchNameAr</MudSelectItem>
+                            }
+                        </MudSelect>
+
                         <MudSelect T="string" @bind-Value="_kindFilter" @bind-Value:after="ApplyFilter"
                                    Label="النوع" Variant="Variant.Outlined" Margin="Margin.Dense"
                                    Clearable="true" AnchorOrigin="Origin.BottomCenter" Class="filter-select">
@@ -191,9 +201,14 @@ else
 
                         <!-- Badges -->
                         <div class="card-top-badges">
-                            <span class="kind-badge" style="background:@(box.Color)12; color:@box.Color; border:1px solid @(box.Color)30;">
-                                @box.KindAr
-                            </span>
+                            <div style="display:flex; gap:.5rem; flex-wrap:wrap;">
+                                <span class="kind-badge" style="background:@(box.Color)12; color:@box.Color; border:1px solid @(box.Color)30;">
+                                    @box.KindAr
+                                </span>
+                                <span class="kind-badge" style="background:rgba(59,130,246,.08); color:#2563eb; border:1px solid rgba(59,130,246,.2);">
+                                    @(box.BranchName ?? "غير محدد")
+                                </span>
+                            </div>
                             <div class="card-top-right">
                                 @if (box.IsDefault)
                                 {
@@ -414,7 +429,7 @@ else
     .filter-header{display:flex;align-items:center;justify-content:space-between;padding:1rem 1.5rem;cursor:pointer;transition:background 0.2s}.filter-header:hover{background:var(--mud-palette-background-gray)}
     .filter-header-right{display:flex;align-items:center;gap:0.75rem}.filter-icon-box{width:36px;height:36px;background:var(--mud-palette-background-gray);border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--mud-palette-text-secondary);transition:all 0.3s}.filter-header:hover .filter-icon-box{background:var(--gold);color:white}.filter-title{font-size:0.9rem;font-weight:700}.filter-active-badge{position:relative;background:var(--gold);color:white;font-size:0.68rem;font-weight:700;padding:0.25rem 0.6rem;border-radius:12px;overflow:hidden}.badge-pulse{position:absolute;inset:0;background:white;border-radius:12px;opacity:0;animation:ping 1.5s ease-in-out infinite}
     .filter-header-left{display:flex;align-items:center;gap:0.5rem}.btn-reset-filter{font-size:0.75rem !important}.filter-expand-icon{transition:transform 0.3s}.filter-expand-icon.expanded{transform:rotate(180deg)}
-    .filter-content{padding:0 1.5rem 1.25rem;border-top:1px solid var(--mud-palette-divider)}.filter-grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:0.875rem;padding-top:1rem}
+    .filter-content{padding:0 1.5rem 1.25rem;border-top:1px solid var(--mud-palette-divider)}.filter-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:0.875rem;padding-top:1rem}
     .search-box-wrapper{display:flex;align-items:center;background:var(--mud-palette-background);border:1px solid var(--mud-palette-divider);border-radius:12px;padding:0 0.75rem;height:42px;transition:all 0.3s}.search-box-wrapper:focus-within{border-color:var(--gold);box-shadow:0 0 0 3px rgba(212,168,83,0.1)}.search-icon{color:var(--mud-palette-text-secondary);margin-left:0.5rem}.search-input{flex:1;background:transparent;border:none;outline:none;color:var(--mud-palette-text-primary);font-size:0.875rem;padding:0 0.5rem;font-family:inherit}.search-input::placeholder{color:var(--mud-palette-text-secondary)}.search-clear{width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;background:var(--mud-palette-background-gray);border:none;cursor:pointer;color:var(--mud-palette-text-secondary);transition:all 0.2s}.search-clear:hover{background:#fef2f2;color:#ef4444}
     ::deep .filter-select .mud-input-outlined-border{border-radius:12px !important}
 
@@ -472,8 +487,10 @@ else
     private bool _filterExpanded = true;
     private List<CashBoxListDto> _all = new();
     private List<CashBoxListDto> _filtered = new();
+    private List<BranchListDto> _branches = new();
 
     private string _searchText = "";
+    private int? _branchFilter;
     private string? _kindFilter;
     private bool? _activeFilter;
 
@@ -495,6 +512,7 @@ else
         _canEdit = user.HasClaim("Permission", "frmCashBox:Edit") || user.IsInRole("Admin");
         _canDelete = user.HasClaim("Permission", "frmCashBox:Delete") || user.IsInRole("Admin");
 
+        _branches = (await BranchService.GetBranchesAsync()).Where(b => b.IsActive).ToList();
         await LoadData();
         _isLoading = false;
     }
@@ -521,6 +539,7 @@ else
     {
         _filtered = _all.Where(b =>
             (string.IsNullOrEmpty(_searchText) || b.CashBoxName.Contains(_searchText, StringComparison.OrdinalIgnoreCase)) &&
+            (!_branchFilter.HasValue || b.BranchId == _branchFilter.Value) &&
             (string.IsNullOrEmpty(_kindFilter) || b.CashBoxKind == _kindFilter) &&
             (!_activeFilter.HasValue || b.IsActive == _activeFilter.Value)
         ).ToList();
@@ -529,12 +548,14 @@ else
 
     private bool HasActiveFilters() =>
         !string.IsNullOrWhiteSpace(_searchText) ||
+        _branchFilter.HasValue ||
         !string.IsNullOrEmpty(_kindFilter) ||
         _activeFilter.HasValue;
 
     private void ResetFilters()
     {
         _searchText = "";
+        _branchFilter = null;
         _kindFilter = null;
         _activeFilter = null;
         ApplyFilter();

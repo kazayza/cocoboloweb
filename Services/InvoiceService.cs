@@ -9,12 +9,14 @@ public class InvoiceService : IInvoiceService
     private readonly db24804Context _db;
     private readonly IAuditService _audit;
     private readonly NotificationService _notify;
+    private readonly IHttpContextAccessor _http;
 
-    public InvoiceService(db24804Context db, IAuditService audit, NotificationService notify)
+    public InvoiceService(db24804Context db, IAuditService audit, NotificationService notify, IHttpContextAccessor http)
     {
         _db = db;
         _audit = audit;
         _notify = notify;
+        _http = http;
     }
 
     // ============================================================
@@ -22,10 +24,23 @@ public class InvoiceService : IInvoiceService
     // ============================================================
     public async Task<PagedResult<InvoiceListDto>> GetInvoicesAsync(InvoiceFilterDto filter)
     {
+        // ⭐ سكوب تاريخ الاطلاع — من Users.CrmAccessFromDate عبر الـ Claim (Admin معفي تلقائياً)
+        var accessFrom = _http.GetCrmAccessFrom();
+
+        // ⭐ حماية فواتير مديري الحسابات: لا تظهر إلا لـ Admin/AccountManager/Account
+        var protectedCreators = SalesInvoiceAccess.CanViewAccountManagerInvoices(_http.HttpContext?.User)
+            ? new List<string>()
+            : await SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(_db);
+
         var query = _db.Transactions
             .AsNoTracking()
             .Where(t => t.TransactionType == filter.TransactionType)
             .AsQueryable();
+
+        if (accessFrom.HasValue)
+            query = query.Where(t => t.TransactionDate >= accessFrom.Value);
+
+        query = query.ExcludeProtectedSales(protectedCreators);
 
                  if (!string.IsNullOrWhiteSpace(filter.SearchText))
         {
@@ -209,6 +224,11 @@ public class InvoiceService : IInvoiceService
             .FirstOrDefaultAsync(x => x.TransactionId == transactionId);
 
         if (t == null) return null;
+
+        // ⭐ حماية الفتح المباشر: فواتير مديري الحسابات لا تفتح إلا لـ Admin/AccountManager/Account
+        // (تغطي التفاصيل والطباعة والتعديل — كلها تمر من هنا)
+        if (await SalesInvoiceAccess.IsProtectedSaleAsync(_db, t, _http.HttpContext?.User))
+            return null;
 
                 var partyName = await _db.Parties
             .Where(p => p.PartyId == t.PartyId)
@@ -436,12 +456,20 @@ public class InvoiceService : IInvoiceService
     // ============================================================
         public async Task<InvoiceStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null, string transactionType = "Sale")
     {
+        // ⭐ نفس قيود القائمة: سكوب التاريخ + حماية فواتير مديري الحسابات
+        var accessFrom = _http.GetCrmAccessFrom();
+        var protectedCreators = SalesInvoiceAccess.CanViewAccountManagerInvoices(_http.HttpContext?.User)
+            ? new List<string>()
+            : await SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(_db);
+
         var query = _db.Transactions
             .AsNoTracking()
             .Where(t => t.TransactionType == transactionType && t.InvoiceStatus != "Cancelled");
 
+        if (accessFrom.HasValue) query = query.Where(t => t.TransactionDate >= accessFrom.Value);
         if (from.HasValue) query = query.Where(t => t.TransactionDate >= from.Value.Date);
         if (to.HasValue) query = query.Where(t => t.TransactionDate <= to.Value.Date.AddDays(1).AddTicks(-1));
+        query = query.ExcludeProtectedSales(protectedCreators);
 
         var today = DateTime.Today;
         var stats = new InvoiceStatsDto
@@ -973,6 +1001,7 @@ public class InvoiceService : IInvoiceService
                 purchaseTransaction.TransactionId.ToString(), null, purchaseTransaction, currentUserName);
 
             await SendInvoiceNotificationsAsync(purchaseTransaction, currentUserName, "تم إنشاء فاتورة شراء للمعرض");
+            await SendPurchaseSupplyNotificationAsync(purchaseTransaction, currentUserName);
 
             return (true,
                 $"تم إنشاء فاتورة الشراء {purchaseTransaction.ReferenceNumber} وسيتم إدخال المخزون عند الاستلام الفعلي.",
@@ -1070,8 +1099,8 @@ public class InvoiceService : IInvoiceService
         await _audit.LogAsync("Transactions", "EditRequest",
             transactionId.ToString(), null, new { Reason = reason, RequestedBy = currentUserName }, currentUserName);
 
-        await SendInvoiceNotificationsAsync(transaction, currentUserName,
-            $"طلب تعديل فاتورة - السبب: {reason}");
+        // ⭐ إشعار طلب التعديل يوجَّه لمدير الإنتاج (مالك تدفق التسليم) — يعدّل التاريخ من أوامر التشغيل
+        await SendInvoiceEditRequestToProductionAsync(transaction, currentUserName, reason);
 
         return (true, "تم إرسال طلب التعديل وتسجيله في النظام بنجاح.");
     }
@@ -1088,9 +1117,6 @@ public class InvoiceService : IInvoiceService
         transaction.EditReviewedAt = now;
         transaction.EditReviewNotes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
 
-        string actionMessage = approve 
-            ? $"تمت الموافقة على طلب تعديل الفاتورة رقم {transaction.ReferenceNumber}" 
-            : $"تم رفض طلب تعديل الفاتورة رقم {transaction.ReferenceNumber} - السبب: {notes}";
 
         if (approve)
         {
@@ -1111,10 +1137,8 @@ public class InvoiceService : IInvoiceService
 
         await _db.SaveChangesAsync();
 
+        // ⭐ إشعار القرار لصاحب الطلب شخصياً فقط (بدون أدمن/مدير حسابات)
         await SendInvoiceEditDecisionNotificationToRequesterAsync(transaction, approve, currentUserName, notes);
-
-        // ⭐ إشعار للأدمن ومدير الحسابات
-        await SendInvoiceNotificationsAsync(transaction, currentUserName, actionMessage);
 
         return (true, approve ? "تمت الموافقة على فتح الفاتورة للتعديل." : "تم رفض طلب التعديل.");
     }
@@ -1278,6 +1302,38 @@ public class InvoiceService : IInvoiceService
                 _db.Payments.Remove(advPay);
             }
 
+            // ⭐ فك ارتباط عروض الأسعار المرتبطة بفاتورة بيع ملغاة:
+            // العرض يعود لحالة «مقبول» — العميل قبله فعلاً وما أُلغي هو التنفيذ فقط —
+            // فيصبح جاهزاً لإعادة التحويل من جديد دون أي عمل يدوي.
+            var quotationUnlinkNote = string.Empty;
+            if (transaction.TransactionType == TransactionTypes.Sale)
+            {
+                var linkedQuotations = await _db.Quotations
+                    .Where(q => q.InvoiceId == transactionId)
+                    .ToListAsync();
+
+                foreach (var q in linkedQuotations)
+                {
+                    q.InvoiceId = null;
+                    q.Status = QuotationStatuses.Accepted;
+
+                    await _audit.LogAsync("Quotations", "CancelUnlink",
+                        q.QuotationId.ToString(), null,
+                        new
+                        {
+                            q.QuotationId,
+                            q.ReferenceNumber,
+                            UnlinkedInvoiceId = transactionId,
+                            NewStatus = q.Status,
+                            Reason = $"فك ارتباط تلقائي بسبب إلغاء الفاتورة {transaction.ReferenceNumber ?? transactionId.ToString()}",
+                            By = currentUserName,
+                            At = DateTime.Now
+                        }, currentUserName);
+
+                    quotationUnlinkNote += $"، وفُك ارتباط عرض السعر {q.ReferenceNumber ?? q.QuotationId.ToString()} وأُعيد لحالة «مقبول»";
+                }
+            }
+
             transaction.InvoiceStatus = InvoiceStatuses.Cancelled;
             transaction.EditReason = reason;
             transaction.EditBy = currentUserName;
@@ -1297,6 +1353,9 @@ public class InvoiceService : IInvoiceService
                     ? "تم إلغاء الفاتورة وفاتورة الشراء المرآة وإعادة المخزون."
                     : "تم إلغاء الفاتورة وإعادة المخزون بدون وجود فاتورة شراء مرآة مرتبطة.")
                 : "تم إلغاء فاتورة الشراء ومعالجة المخزون حسب حالة الاستلام.";
+
+            if (!string.IsNullOrEmpty(quotationUnlinkNote))
+                cancelMessage += quotationUnlinkNote + ".";
 
             return (true, cancelMessage);
         }
@@ -1735,6 +1794,7 @@ public class InvoiceService : IInvoiceService
             {
                 ChargeId = c.ChargeId,
                 PartyId = c.PartyId ?? 0,
+                ChargeType = c.ChargeType,
                 ChargeDescription = c.ChargeDescription,
                 ChargeAmount = c.ChargeAmount ?? 0,
                 Notes = c.Notes,
@@ -1765,9 +1825,10 @@ public class InvoiceService : IInvoiceService
         var party = await _db.Parties.AsNoTracking().FirstOrDefaultAsync(p => p.PartyId == partyId);
         if (party == null) return (false, "العميل غير موجود.", null);
 
+        // ⭐ الدفعات الجديدة تُسجل بالنوع الصريح Advance (ما عدا رسوم المعاينة)
         var chargeType = description == AdvanceChargeTypes.Inspection
             ? ChargeTypes.Inspection
-            : ChargeTypes.Other;
+            : ChargeTypes.Advance;
 
         var charge = new AdditionalCharge
         {
@@ -1857,6 +1918,30 @@ public class InvoiceService : IInvoiceService
         }
     }
 
+    // ⭐ إشعار طلب تعديل الفاتورة يوجَّه لمدير الإنتاج (مالك تدفق التسليم) — يعدّل التاريخ من شاشة أوامر التشغيل
+    private async Task SendInvoiceEditRequestToProductionAsync(Transaction transaction, string requester, string reason)
+    {
+        try
+        {
+            var partyName = await _db.Parties
+                .Where(p => p.PartyId == transaction.PartyId)
+                .Select(p => p.PartyName)
+                .FirstOrDefaultAsync() ?? "غير محدد";
+
+            var title = "🧾 طلب تعديل فاتورة";
+            var message = $"طلب تعديل الفاتورة {transaction.ReferenceNumber} للعميل {partyName} بواسطة {requester}." +
+                          $"\nالسبب: {reason}" +
+                          "\nبرجاء تعديل تاريخ التسليم من شاشة أوامر التشغيل (زر 📅 تعديل التاريخ).";
+
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.ProductionManager, requester,
+                "production/job-orders", "Transactions", transaction.TransactionId);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[InvoiceService.EditRequestNotify] {ex.Message}");
+        }
+    }
+
     private async Task SendProductionStartNotificationAsync(Transaction transaction, string actor)
     {
         try
@@ -1882,10 +1967,55 @@ public class InvoiceService : IInvoiceService
                 createdBy: actor,
                 formName: $"sales/invoices/{transaction.TransactionId}/job-order",
                 relatedTable: "Transactions");
+
+            await _notify.NotifyRoleAsync(
+                title: title,
+                message: message,
+                role: "factory",
+                createdBy: actor,
+                formName: $"sales/invoices/{transaction.TransactionId}/job-order",
+                relatedTable: "Transactions");
+
+            await _notify.NotifyRoleAsync(
+                title: title,
+                message: message,
+                role: SystemRoles.FactoryManager,
+                createdBy: actor,
+                formName: $"sales/invoices/{transaction.TransactionId}/job-order",
+                relatedTable: "Transactions");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[InvoiceService.ProductionNotify] {ex.Message}");
+        }
+    }
+
+    // ⭐ إشعار "أمر توريد جديد" عند إنشاء فاتورة شراء مباشرة للمعرض — يُوجَّه لأدوار المصنع/الإنتاج الثلاثة
+    private async Task SendPurchaseSupplyNotificationAsync(Transaction transaction, string actor)
+    {
+        try
+        {
+            var itemsCount = await _db.TransactionDetails
+                .CountAsync(d => d.TransactionId == transaction.TransactionId);
+
+            var title = "🏭 أمر توريد جديد";
+            var message = $"تم إنشاء فاتورة شراء {transaction.ReferenceNumber} من المورد (المصنع) بواسطة {actor}."
+                          + $"\nعدد الأصناف: {itemsCount}"
+                          + (transaction.DueDate.HasValue
+                              ? $"\nتاريخ الاستلام المتوقع: {transaction.DueDate.Value:yyyy/MM/dd}"
+                              : "")
+                          + "\nبرجاء متابعة تجهيز المنتجات والشحن والاستلام من شاشة استلامات الشراء.";
+
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.ProductionManager, actor,
+                "purchase-receipt-status", "Transactions", transaction.TransactionId);
+            await _notify.NotifyRoleAsync(title, message, "factory", actor,
+                "purchase-receipt-status", "Transactions", transaction.TransactionId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.FactoryManager, actor,
+                "purchase-receipt-status", "Transactions", transaction.TransactionId);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[InvoiceService.PurchaseSupplyNotify] {ex.Message}");
         }
     }
 

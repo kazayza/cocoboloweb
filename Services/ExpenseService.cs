@@ -16,12 +16,39 @@ public class ExpenseService : IExpenseService
         _audit = audit;
     }
 
+    private IQueryable<Expense> BuildRecognizedExpensesQuery(int? branchId = null)
+    {
+        var query = _db.Expenses.AsNoTracking()
+            .Where(e => (e.IsAdvance != true) || e.AdvanceParentExpenseId.HasValue);
+
+        if (branchId.HasValue)
+            query = query.Where(e => e.BranchId == branchId.Value);
+
+        return query;
+    }
+
+    private IQueryable<Expense> BuildAdvanceHeadersQuery(int? branchId = null)
+    {
+        var query = _db.Expenses.AsNoTracking()
+            .Where(e => e.IsAdvance == true
+                && e.AdvanceParentExpenseId == null
+                && e.AdvanceMonthIndex == 0);
+
+        if (branchId.HasValue)
+            query = query.Where(e => e.BranchId == branchId.Value);
+
+        return query;
+    }
+
     // ============================================================
     //  ⭐ Expenses List - محسّن للسرعة (5x أسرع)
     // ============================================================
         public async Task<PagedResult<ExpenseListDto>> GetExpensesAsync(ExpenseFilterDto filter)
     {
         var query = _db.Expenses.AsNoTracking().AsQueryable();
+
+        if (filter.BranchId.HasValue)
+            query = query.Where(e => e.BranchId == filter.BranchId.Value);
 
         // ⭐ فلتر المجموعة الرئيسية مستقل ويشمل كل المستويات التابعة لها
         if (filter.ParentGroupId.HasValue)
@@ -74,6 +101,10 @@ public class ExpenseService : IExpenseService
 
         if (filter.OnlyParents == true)
             query = query.Where(e => e.AdvanceParentExpenseId == null);
+        else if (filter.ExcludeAdvanceHeaders)
+            query = query.Where(e => !(e.IsAdvance == true
+                && e.AdvanceParentExpenseId == null
+                && e.AdvanceMonthIndex == 0));
 
         var totalCount = await query.CountAsync();
 
@@ -93,6 +124,7 @@ public class ExpenseService : IExpenseService
             .Select(e => new
             {
                 e.ExpenseId,
+                e.BranchId,
                 e.ExpenseName,
                 e.ExpenseDate,
                 e.Amount,
@@ -131,9 +163,18 @@ public class ExpenseService : IExpenseService
             .Where(c => cashBoxIds.Contains(c.CashBoxId))
             .ToDictionaryAsync(c => c.CashBoxId, c => c.CashBoxName);
 
+        var branchIds = rawData.Where(e => e.BranchId.HasValue).Select(e => e.BranchId!.Value).Distinct().ToList();
+        var branches = branchIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await _db.Branches.AsNoTracking()
+                .Where(b => branchIds.Contains(b.BranchId))
+                .ToDictionaryAsync(b => b.BranchId, b => b.BranchNameAr);
+
         var items = rawData.Select(e => new ExpenseListDto
         {
             ExpenseId = e.ExpenseId,
+            BranchId = e.BranchId,
+            BranchName = e.BranchId.HasValue ? branches.GetValueOrDefault(e.BranchId.Value) : null,
             ExpenseName = e.ExpenseName,
             ExpenseDate = e.ExpenseDate,
             Amount = e.Amount,
@@ -169,6 +210,7 @@ public class ExpenseService : IExpenseService
         return new ExpenseFormDto
         {
             ExpenseId = e.ExpenseId,
+            BranchId = e.BranchId,
             ExpenseName = e.ExpenseName,
             ExpenseDate = e.ExpenseDate,
             ExpenseGroupId = e.ExpenseGroupId,
@@ -189,6 +231,7 @@ public class ExpenseService : IExpenseService
             .Select(e => new ExpenseListDto
             {
                 ExpenseId = e.ExpenseId,
+                BranchId = e.BranchId,
                 ExpenseName = e.ExpenseName,
                 ExpenseDate = e.ExpenseDate,
                 Amount = e.Amount,
@@ -209,26 +252,33 @@ public class ExpenseService : IExpenseService
         {
             var groupIds = children.Select(c => c.ExpenseGroupId).Distinct().ToList();
             var cashBoxIds = children.Select(c => c.CashBoxId).Distinct().ToList();
+            var branchIds = children.Where(c => c.BranchId.HasValue).Select(c => c.BranchId!.Value).Distinct().ToList();
             var groups = await _db.ExpenseGroups.AsNoTracking()
                 .Where(g => groupIds.Contains(g.ExpenseGroupId))
                 .ToDictionaryAsync(g => g.ExpenseGroupId, g => g.ExpenseGroupName);
             var boxes = await _db.CashBoxes.AsNoTracking()
                 .Where(c => cashBoxIds.Contains(c.CashBoxId))
                 .ToDictionaryAsync(c => c.CashBoxId, c => c.CashBoxName);
+            var branches = branchIds.Count == 0
+                ? new Dictionary<int, string>()
+                : await _db.Branches.AsNoTracking()
+                    .Where(b => branchIds.Contains(b.BranchId))
+                    .ToDictionaryAsync(b => b.BranchId, b => b.BranchNameAr);
 
             foreach (var c in children)
             {
                 c.ExpenseGroupName = groups.GetValueOrDefault(c.ExpenseGroupId);
                 c.CashBoxName = boxes.GetValueOrDefault(c.CashBoxId);
+                c.BranchName = c.BranchId.HasValue ? branches.GetValueOrDefault(c.BranchId.Value) : null;
             }
         }
 
         return children;
     }
 
-    public async Task<ExpenseStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null)
+    public async Task<ExpenseStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null, int? branchId = null)
     {
-        var query = _db.Expenses.AsNoTracking().AsQueryable();
+        var query = BuildRecognizedExpensesQuery(branchId);
         if (from.HasValue) query = query.Where(e => e.ExpenseDate >= from.Value.Date);
         if (to.HasValue) query = query.Where(e => e.ExpenseDate <= to.Value.Date.AddDays(1).AddTicks(-1));
 
@@ -273,7 +323,7 @@ public class ExpenseService : IExpenseService
 
         return stats;
     }
-     public async Task<ExpenseDashboardDto> GetDashboardDataAsync()
+     public async Task<ExpenseDashboardDto> GetDashboardDataAsync(int? branchId = null)
 {
     var dashboard = new ExpenseDashboardDto();
     var today = DateTime.Today;
@@ -285,16 +335,18 @@ public class ExpenseService : IExpenseService
     var prevMonthEnd = currentMonthStart.AddDays(-1);
     var yearStart = new DateTime(today.Year, 1, 1);
 
-    // Base expenses (no advance children)
-    var baseExpenses = _db.Expenses.AsNoTracking()
-        .Where(e => e.AdvanceParentExpenseId == null);
+    // المصروفات المعترف بها فعلياً = العادية + أقساط المصروف المقدم
+    var recognizedExpenses = BuildRecognizedExpensesQuery(branchId);
+
+    // رؤوس المصروفات المقدمة للمتابعة فقط
+    var advanceHeaders = BuildAdvanceHeadersQuery(branchId);
 
     // ── 1. Current & Previous Month ──
-    dashboard.CurrentMonthAmount = await baseExpenses
+    dashboard.CurrentMonthAmount = await recognizedExpenses
         .Where(e => e.ExpenseDate >= currentMonthStart && e.ExpenseDate <= currentMonthEnd)
         .SumAsync(e => (decimal?)e.Amount) ?? 0;
 
-    dashboard.PreviousMonthAmount = await baseExpenses
+    dashboard.PreviousMonthAmount = await recognizedExpenses
         .Where(e => e.ExpenseDate >= prevMonthStart && e.ExpenseDate <= prevMonthEnd)
         .SumAsync(e => (decimal?)e.Amount) ?? 0;
 
@@ -311,13 +363,17 @@ public class ExpenseService : IExpenseService
         ? Math.Round(dashboard.CurrentMonthAmount / daysInMonthPassed, 2) : 0;
 
     // ── 3. Active Advances ──
-    var advancesQuery = baseExpenses.Where(e => e.IsAdvance == true && e.AdvanceMonths > 1);
-    dashboard.ActiveAdvanceExpensesCount = await advancesQuery.CountAsync();
-    dashboard.ActiveAdvanceExpensesAmount = await advancesQuery
-        .SumAsync(e => (decimal?)e.Amount) ?? 0;
+    var advanceHeadersQuery = advanceHeaders.Where(e => e.AdvanceMonths > 1);
+    var advanceHeaderIds = await advanceHeadersQuery.Select(e => e.ExpenseId).ToListAsync();
+    dashboard.ActiveAdvanceExpensesCount = advanceHeaderIds.Count;
+    dashboard.ActiveAdvanceExpensesAmount = advanceHeaderIds.Count == 0
+        ? 0m
+        : (await _db.Expenses.AsNoTracking()
+            .Where(e => e.AdvanceParentExpenseId.HasValue && advanceHeaderIds.Contains(e.AdvanceParentExpenseId.Value))
+            .SumAsync(e => (decimal?)e.Amount)) ?? 0m;
 
     // ── 4. Group Distribution (Current Year - Top 10) ──
-    var groupData = await baseExpenses
+    var groupData = await recognizedExpenses
         .Where(e => e.ExpenseDate >= yearStart)
         .GroupBy(e => e.ExpenseGroupId)
         .Select(g => new { GroupId = g.Key, Total = g.Sum(x => x.Amount), Count = g.Count() })
@@ -339,7 +395,7 @@ public class ExpenseService : IExpenseService
     }).OrderByDescending(x => x.Total).Take(10).ToList();
 
     // ── 5. Top 5 Expenses (Current Month) ──
-    var topExpensesQuery = await baseExpenses
+    var topExpensesQuery = await recognizedExpenses
         .Where(e => e.ExpenseDate >= currentMonthStart && e.ExpenseDate <= currentMonthEnd)
         .OrderByDescending(e => e.Amount)
         .Take(5)
@@ -360,7 +416,7 @@ public class ExpenseService : IExpenseService
 
     // ── 6. Monthly Trends (Last 12 Months) ──
     var twelveMonthsAgo = currentMonthStart.AddMonths(-11);
-    var trendData = await baseExpenses
+    var trendData = await recognizedExpenses
         .Where(e => e.ExpenseDate >= twelveMonthsAgo && e.ExpenseDate <= currentMonthEnd)
         .GroupBy(e => new { e.ExpenseDate.Year, e.ExpenseDate.Month })
         .Select(g => new { g.Key.Year, g.Key.Month, Total = g.Sum(x => x.Amount) })
@@ -379,7 +435,7 @@ public class ExpenseService : IExpenseService
     }
 
     // ── 7. ⭐ Daily Trend (Current Month) ──
-    var dailyData = await baseExpenses
+    var dailyData = await recognizedExpenses
         .Where(e => e.ExpenseDate >= currentMonthStart && e.ExpenseDate <= currentMonthEnd)
         .GroupBy(e => e.ExpenseDate.Day)
         .Select(g => new { Day = g.Key, Total = g.Sum(x => x.Amount) })
@@ -397,13 +453,13 @@ public class ExpenseService : IExpenseService
 
     // ── 8. ⭐ Variance Analysis (Current Month vs Average of Last 3 Months) ──
     var threeMonthsAgo = currentMonthStart.AddMonths(-3);
-    var currentMonthByGroup = await baseExpenses
+    var currentMonthByGroup = await recognizedExpenses
         .Where(e => e.ExpenseDate >= currentMonthStart && e.ExpenseDate <= currentMonthEnd)
         .GroupBy(e => e.ExpenseGroupId)
         .Select(g => new { GroupId = g.Key, Total = g.Sum(x => x.Amount) })
         .ToListAsync();
 
-    var prevThreeMonthsByGroup = await baseExpenses
+    var prevThreeMonthsByGroup = await recognizedExpenses
         .Where(e => e.ExpenseDate >= threeMonthsAgo && e.ExpenseDate < currentMonthStart)
         .GroupBy(e => e.ExpenseGroupId)
         .Select(g => new { GroupId = g.Key, Total = g.Sum(x => x.Amount) })
@@ -463,9 +519,29 @@ public class ExpenseService : IExpenseService
     {
         if (string.IsNullOrWhiteSpace(dto.ExpenseName))
             return (false, "اسم المصروف مطلوب", null);
+        if (!dto.BranchId.HasValue) return (false, "الفرع مطلوب", null);
         if (dto.Amount <= 0) return (false, "المبلغ يجب أن يكون أكبر من صفر", null);
         if (dto.CashBoxId == null) return (false, "الخزينة مطلوبة", null);
         if (dto.ExpenseGroupId == null) return (false, "مجموعة المصروف مطلوبة", null);
+
+        var selectedCashBox = await _db.CashBoxes.AsNoTracking()
+            .Where(c => c.CashBoxId == dto.CashBoxId.Value)
+            .Select(c => new { c.CashBoxId, c.BranchId, c.IsActive })
+            .FirstOrDefaultAsync();
+
+        if (selectedCashBox == null)
+            return (false, "الخزينة المحددة غير موجودة", null);
+        if (!selectedCashBox.IsActive)
+            return (false, "الخزينة المحددة غير نشطة", null);
+        if (!selectedCashBox.BranchId.HasValue)
+            return (false, "الخزينة المحددة غير مربوطة بفرع", null);
+        if (selectedCashBox.BranchId.Value != dto.BranchId.Value)
+            return (false, "لا يمكن اختيار خزينة من فرع مختلف عن فرع المصروف", null);
+
+        var branchExists = await _db.Branches.AsNoTracking()
+            .AnyAsync(b => b.BranchId == dto.BranchId.Value && b.IsActive);
+        if (!branchExists)
+            return (false, "الفرع المحدد غير موجود أو غير نشط", null);
 
         var isNew = dto.ExpenseId == 0;
 
@@ -542,6 +618,7 @@ public class ExpenseService : IExpenseService
                 oldEntity = new
                 {
                     entity.ExpenseId,
+                    entity.BranchId,
                     entity.ExpenseName,
                     entity.ExpenseDate,
                     entity.Amount,
@@ -558,6 +635,7 @@ public class ExpenseService : IExpenseService
                 _db.CashboxTransactions.RemoveRange(oldTrans);
             }
 
+            entity.BranchId = dto.BranchId.Value;
             entity.ExpenseName = dto.ExpenseName;
             entity.ExpenseDate = dto.ExpenseDate;
             entity.ExpenseGroupId = dto.ExpenseGroupId.Value;
@@ -570,7 +648,7 @@ public class ExpenseService : IExpenseService
             {
                 entity.IsAdvance = true;
                 entity.AdvanceMonths = dto.AdvanceMonths;
-                entity.Amount = dto.Amount;
+                entity.Amount = 0m;
                 entity.AdvanceMonthIndex = 0;
 
                 await _db.SaveChangesAsync();
@@ -590,6 +668,7 @@ public class ExpenseService : IExpenseService
                     var childExpense = new Expense
                     {
                         ExpenseGroupId = entity.ExpenseGroupId,
+                        BranchId = entity.BranchId,
                         ExpenseName = $"{entity.ExpenseName} - شهر {i}/{dto.AdvanceMonths.Value}",
                         ExpenseDate = monthDate,
                         Amount = amount,
@@ -724,8 +803,7 @@ public class ExpenseService : IExpenseService
             .OrderBy(g => g.ExpenseGroupName).ToListAsync();
 
         // ✅ تحسين: حساب الإجماليات لكل المجموعات بـ query واحد
-        var groupTotals = await _db.Expenses.AsNoTracking()
-            .Where(e => e.AdvanceParentExpenseId == null)
+        var groupTotals = await BuildRecognizedExpensesQuery()
             .GroupBy(e => e.ExpenseGroupId)
             .Select(g => new { GroupId = g.Key, Total = g.Sum(x => x.Amount), Count = g.Count() })
             .ToDictionaryAsync(x => x.GroupId, x => new { x.Total, x.Count });
@@ -928,12 +1006,13 @@ public class ExpenseService : IExpenseService
         headerRow.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
 
         ws.Cell(1, 1).Value = "التاريخ";
-        ws.Cell(1, 2).Value = "اسم المصروف / البيان";
-        ws.Cell(1, 3).Value = "المجموعة / النوع";
-        ws.Cell(1, 4).Value = "الخزينة";
-        ws.Cell(1, 5).Value = "المستلم";
-        ws.Cell(1, 6).Value = "المبلغ";
-        ws.Cell(1, 7).Value = "ملاحظات";
+        ws.Cell(1, 2).Value = "الفرع";
+        ws.Cell(1, 3).Value = "اسم المصروف / البيان";
+        ws.Cell(1, 4).Value = "المجموعة / النوع";
+        ws.Cell(1, 5).Value = "الخزينة";
+        ws.Cell(1, 6).Value = "المستلم";
+        ws.Cell(1, 7).Value = "المبلغ";
+        ws.Cell(1, 8).Value = "ملاحظات";
 
         int row = 2;
         decimal totalAmount = 0;
@@ -941,18 +1020,19 @@ public class ExpenseService : IExpenseService
         foreach (var exp in data.Items)
         {
             ws.Cell(row, 1).Value = exp.ExpenseDate.ToString("yyyy/MM/dd");
+            ws.Cell(row, 2).Value = exp.BranchName ?? "غير محدد";
             
             string advanceTag = exp.IsAdvance ? $" (مقدم {exp.AdvanceMonths} أشهر)" : "";
-            ws.Cell(row, 2).Value = exp.ExpenseName + advanceTag;
+            ws.Cell(row, 3).Value = exp.ExpenseName + advanceTag;
             
-            ws.Cell(row, 3).Value = exp.FullGroupPath ?? exp.ExpenseGroupName;
-            ws.Cell(row, 4).Value = exp.CashBoxName;
-            ws.Cell(row, 5).Value = exp.Recipient;
+            ws.Cell(row, 4).Value = exp.FullGroupPath ?? exp.ExpenseGroupName;
+            ws.Cell(row, 5).Value = exp.CashBoxName;
+            ws.Cell(row, 6).Value = exp.Recipient;
             
-            ws.Cell(row, 6).Value = exp.Amount;
-            ws.Cell(row, 6).Style.NumberFormat.Format = "#,##0.00";
+            ws.Cell(row, 7).Value = exp.Amount;
+            ws.Cell(row, 7).Style.NumberFormat.Format = "#,##0.00";
             
-            ws.Cell(row, 7).Value = exp.Notes;
+            ws.Cell(row, 8).Value = exp.Notes;
 
             totalAmount += exp.Amount;
             row++;
@@ -963,10 +1043,10 @@ public class ExpenseService : IExpenseService
         totalRow.Style.Font.Bold = true;
         totalRow.Style.Fill.BackgroundColor = XLColor.LightGray;
         
-        ws.Cell(row, 5).Value = "الإجمالي الكلي:";
-        ws.Cell(row, 6).Value = totalAmount;
-        ws.Cell(row, 6).Style.NumberFormat.Format = "#,##0.00";
-        ws.Cell(row, 6).Style.Font.FontColor = XLColor.DarkRed;
+        ws.Cell(row, 6).Value = "الإجمالي الكلي:";
+        ws.Cell(row, 7).Value = totalAmount;
+        ws.Cell(row, 7).Style.NumberFormat.Format = "#,##0.00";
+        ws.Cell(row, 7).Style.Font.FontColor = XLColor.DarkRed;
 
         // تظبيط عرض الأعمدة تلقائياً
         ws.Columns().AdjustToContents();

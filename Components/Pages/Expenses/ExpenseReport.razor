@@ -6,6 +6,7 @@
 
 @inject IExpenseService ExpenseService
 @inject ICashBoxService CashBoxService
+@inject IBranchService BranchService
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 
@@ -144,6 +145,21 @@
                                Class="toolbar-control" />
             </div>
 
+            <div class="toolbar-field toolbar-field--branch">
+                <MudSelect T="int?" @bind-Value="_filter.BranchId"
+                           Label="الفرع"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Dense="true"
+                           Clearable="true"
+                           Class="toolbar-control">
+                    @foreach (var branch in _branches)
+                    {
+                        <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">@branch.BranchNameAr</MudSelectItem>
+                    }
+                </MudSelect>
+            </div>
+
             <div class="toolbar-field toolbar-field--group">
                 <MudSelect T="int?" Value="@_filter.ParentGroupId"
                            ValueChanged="OnParentGroupChanged"
@@ -183,7 +199,7 @@
                            Dense="true"
                            Clearable="true"
                            Class="toolbar-control">
-                    @foreach (var box in _boxes)
+                    @foreach (var box in GetFilterCashBoxes())
                     {
                         <MudSelectItem T="int?" Value="@((int?)box.CashBoxId)">@box.CashBoxName</MudSelectItem>
                     }
@@ -254,6 +270,7 @@
                     <thead>
                         <tr>
                             <th>التاريخ</th>
+                            <th>الفرع</th>
                             <th>المصروف</th>
                             <th>المجموعة</th>
                             <th>الخزينة</th>
@@ -271,6 +288,7 @@
                                         <span class="date-rest">@exp.ExpenseDate.ToString("MM/yyyy")</span>
                                     </div>
                                 </td>
+                                <td><span class="badge badge-group">@(exp.BranchName ?? "غير محدد")</span></td>
                                 <td>
                                     <div class="name-cell">
                                         <strong>@exp.ExpenseName</strong>
@@ -292,7 +310,7 @@
                     </tbody>
                     <tfoot>
                         <tr>
-                            <td colspan="5" class="text-left foot-label">
+                            <td colspan="6" class="text-left foot-label">
                                 <MudIcon Icon="@Icons.Material.Filled.Functions" Size="Size.Small" />
                                 إجمالي المصروفات
                             </td>
@@ -612,6 +630,7 @@
 
     .toolbar-field--search { width: 340px; }
     .toolbar-field--date { width: 140px; }
+    .toolbar-field--branch { width: 180px; }
     .toolbar-field--group { width: 190px; }
     .toolbar-field--type { width: 250px; }
     .toolbar-field--cashbox { width: 180px; }
@@ -773,6 +792,7 @@
         }
 
         .toolbar-field--date,
+        .toolbar-field--branch,
         .toolbar-field--group,
         .toolbar-field--cashbox {
             width: calc(50% - .4rem);
@@ -799,6 +819,7 @@
         .active-filter-strip,
         .toolbar-field--search,
         .toolbar-field--date,
+        .toolbar-field--branch,
         .toolbar-field--group,
         .toolbar-field--type,
         .toolbar-field--cashbox,
@@ -823,7 +844,7 @@
 
 @code {
     private bool _isLoading = true;
-    private ExpenseFilterDto _filter = new();
+    private ExpenseFilterDto _filter = new() { ExcludeAdvanceHeaders = true };
     private DateTime? _dateFrom;
     private DateTime? _dateTo;
 
@@ -836,6 +857,7 @@
     private List<ExpenseGroupDto> _mainGroups = new();
     private List<ExpenseGroupDto> _typeGroups = new();
 
+    private List<BranchListDto> _branches = new();
     private List<CashBoxListDto> _boxes = new();
 
     protected override async Task OnInitializedAsync()
@@ -851,6 +873,7 @@
             .ThenBy(g => g.ExpenseGroupName)
             .ToList();
 
+        _branches = (await BranchService.GetBranchesAsync()).Where(b => b.IsActive).ToList();
         _boxes = await CashBoxService.GetCashBoxesAsync();
 
         var today = DateTime.Today;
@@ -872,6 +895,13 @@
         _isLoading = true;
         StateHasChanged();
 
+        if (_filter.BranchId.HasValue && _filter.CashBoxId.HasValue)
+        {
+            var selectedBox = _boxes.FirstOrDefault(b => b.CashBoxId == _filter.CashBoxId.Value);
+            if (selectedBox?.BranchId != _filter.BranchId.Value)
+                _filter.CashBoxId = null;
+        }
+
         _filter.PageSize = 5000;
         var result = await ExpenseService.GetExpensesAsync(_filter);
 
@@ -886,7 +916,7 @@
 
     private async Task ClearFilters()
     {
-        _filter = new ExpenseFilterDto { PageSize = 5000 };
+        _filter = new ExpenseFilterDto { PageSize = 5000, ExcludeAdvanceHeaders = true };
         _dateFrom = null;
         _dateTo = null;
         await LoadData();
@@ -898,6 +928,15 @@
             return group.ExpenseGroupName;
 
         return $"{group.ParentGroupName} / {group.ExpenseGroupName}";
+    }
+
+    private List<CashBoxListDto> GetFilterCashBoxes()
+    {
+        return _boxes
+            .Where(b => !_filter.BranchId.HasValue || b.BranchId == _filter.BranchId.Value)
+            .OrderBy(b => b.BranchName)
+            .ThenBy(b => b.CashBoxName)
+            .ToList();
     }
 
     private IEnumerable<string> ActiveFilterLabels
@@ -912,6 +951,13 @@
                 var fromText = _filter.DateFrom?.ToString("yyyy/MM/dd") ?? "البداية";
                 var toText = _filter.DateTo?.ToString("yyyy/MM/dd") ?? "النهاية";
                 yield return $"الفترة: {fromText} → {toText}";
+            }
+
+            if (_filter.BranchId.HasValue)
+            {
+                var branch = _branches.FirstOrDefault(b => b.BranchId == _filter.BranchId.Value);
+                if (branch != null)
+                    yield return $"الفرع: {branch.BranchNameAr}";
             }
 
             if (_filter.ParentGroupId.HasValue)
@@ -973,6 +1019,7 @@
         if (!string.IsNullOrWhiteSpace(_filter.SearchText)) count++;
         if (_filter.DateFrom.HasValue) count++;
         if (_filter.DateTo.HasValue) count++;
+        if (_filter.BranchId.HasValue) count++;
         if (_filter.ParentGroupId.HasValue) count++;
         if (_filter.ExpenseGroupId.HasValue) count++;
         if (_filter.CashBoxId.HasValue) count++;
@@ -985,6 +1032,7 @@
         if (!string.IsNullOrWhiteSpace(_filter.SearchText)) query.Add($"SearchText={Uri.EscapeDataString(_filter.SearchText.Trim())}");
         if (_filter.DateFrom.HasValue) query.Add($"DateFrom={_filter.DateFrom.Value:yyyy-MM-dd}");
         if (_filter.DateTo.HasValue) query.Add($"DateTo={_filter.DateTo.Value:yyyy-MM-dd}");
+        if (_filter.BranchId.HasValue) query.Add($"BranchId={_filter.BranchId.Value}");
         if (_filter.ParentGroupId.HasValue) query.Add($"ParentGroupId={_filter.ParentGroupId.Value}");
         if (_filter.ExpenseGroupId.HasValue) query.Add($"GroupId={_filter.ExpenseGroupId.Value}");
         if (_filter.CashBoxId.HasValue) query.Add($"BoxId={_filter.CashBoxId.Value}");

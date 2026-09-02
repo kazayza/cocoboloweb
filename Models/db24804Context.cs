@@ -295,6 +295,7 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
             entity.HasKey(e => e.CashBoxId).HasName("PK__CashBoxe__3E790512EDDA3B98");
 
             entity.Property(e => e.CashBoxId).HasColumnName("CashBoxID");
+            entity.Property(e => e.BranchId).HasColumnName("BranchID");
             entity.Property(e => e.CashBoxName).HasMaxLength(100);
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("(getdate())")
@@ -311,6 +312,11 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
     entity.Property(e => e.CashBoxKind).HasMaxLength(50);
     entity.Property(e => e.Icon).HasMaxLength(50);
     entity.Property(e => e.Color).HasMaxLength(20);
+
+            entity.HasOne(d => d.Branch)
+                .WithMany()
+                .HasForeignKey(d => d.BranchId)
+                .HasConstraintName("FK_CashBoxes_Branches");
         });
 
         modelBuilder.Entity<CashboxTransaction>(entity =>
@@ -823,6 +829,7 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
 
             entity.Property(e => e.ExpenseId).HasColumnName("ExpenseID");
             entity.Property(e => e.Amount).HasColumnType("decimal(18, 2)");
+            entity.Property(e => e.BranchId).HasColumnName("BranchID");
             entity.Property(e => e.CashBoxId).HasColumnName("CashBoxID");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("(getdate())")
@@ -836,6 +843,11 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
             entity.Property(e => e.IsAdvance).HasDefaultValue(false);
             entity.Property(e => e.Notes).HasMaxLength(255);
             entity.Property(e => e.Torecipient).HasMaxLength(100);
+
+            entity.HasOne(d => d.Branch)
+                .WithMany()
+                .HasForeignKey(d => d.BranchId)
+                .HasConstraintName("FK_Expenses_Branches");
 
             entity.HasOne(d => d.ExpenseGroup).WithMany(p => p.Expenses)
                 .HasForeignKey(d => d.ExpenseGroupId)

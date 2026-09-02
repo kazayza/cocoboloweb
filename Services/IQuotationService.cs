@@ -39,4 +39,12 @@ public interface IQuotationService
 
     Task<(bool Success, string Message)> SendDiscountRequestAsync(
         QuotationDiscountRequestDto dto, string currentUserName);
+
+    // ⭐ تعديل تكلفة أصناف العرض بواسطة دور المصنع (يكتب أسعار شراء المنتجات + PriceHistory)
+    Task<(bool Success, string Message, List<string> ChangedProducts)> SaveQuotationItemCostsAsync(
+        int quotationId, List<QuotationItemCostUpdateDto> updates, string currentUserName);
+
+    // ⭐ طلب تسعير: إشعار لدور المصنع بالذهاب لعرض السعر وتحديث تكاليفه
+    Task<(bool Success, string Message)> SendPricingRequestAsync(
+        int quotationId, string? note, string currentUserName);
 }

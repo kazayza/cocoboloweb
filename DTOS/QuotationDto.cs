@@ -22,11 +22,15 @@ public class QuotationListDto
     public decimal GrandTotal { get; set; }
     public int ItemsCount { get; set; }
     public decimal? TotalCost { get; set; }
-    public decimal? GrossProfit => TotalCost.HasValue ? GrandTotal - TotalCost.Value : null;
+
+    // ⭐ قناع الأسعار: ProductionManager / factory يرون التكلفة فقط (يُضبط من الخدمة)
+    public bool PricesMasked { get; set; }
+
+    public decimal? GrossProfit => PricesMasked || !TotalCost.HasValue ? null : GrandTotal - TotalCost.Value;
     public decimal? ProfitMarginPercentage =>
-    TotalCost.HasValue && TotalCost.Value > 0
-        ? Math.Round(((GrandTotal - TotalCost.Value) / TotalCost.Value) * 100m, 2)
-        : null;
+    PricesMasked || !TotalCost.HasValue || TotalCost.Value <= 0
+        ? null
+        : Math.Round(((GrandTotal - TotalCost.Value) / TotalCost.Value) * 100m, 2);
     public string Status { get; set; } = QuotationStatuses.Draft;
     public int? InvoiceId { get; set; }
     public string? InvoiceReference { get; set; }
@@ -87,6 +91,9 @@ public class QuotationFormDto
     public DateTime CreatedAt { get; set; }
 
     public List<QuotationItemDto> Items { get; set; } = new();
+
+    // ⭐ قناع الأسعار: ProductionManager / factory يرون التكلفة فقط (يُضبط من الخدمة)
+    public bool PricesMasked { get; set; }
 
     // Helper Properties
     public bool IsConverted => InvoiceId.HasValue;
@@ -240,4 +247,13 @@ public static class QuotationStatuses
         { Converted, "تحوّل لفاتورة" },
         { Expired, "منتهي الصلاحية" }
     };
+}
+
+// ============================
+// ⭐ تعديل تكلفة صنف من داخل عرض السعر (صلاحية دور المصنع)
+// ============================
+public class QuotationItemCostUpdateDto
+{
+    public int QuotationDetailId { get; set; }
+    public decimal UnitCost { get; set; }
 }

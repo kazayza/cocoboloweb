@@ -7,6 +7,7 @@
 
 @inject IExpenseService ExpenseService
 @inject ICashBoxService CashBoxService
+@inject IBranchService BranchService
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 @inject AuthenticationStateProvider AuthProvider
@@ -75,6 +76,16 @@ else
                                        DateChanged="@(d => _form.ExpenseDate = d ?? DateTime.Today)"
                                        Label="تاريخ المصروف *" Variant="Variant.Outlined" />
 
+                        <MudSelect T="int?" Value="@_form.BranchId" ValueChanged="OnBranchChanged"
+                                   Label="الفرع *" Variant="Variant.Outlined">
+                            @foreach (var branch in _branches)
+                            {
+                                <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">
+                                    @branch.BranchNameAr
+                                </MudSelectItem>
+                            }
+                        </MudSelect>
+
                         <MudSelect T="int?" Value="@_form.ExpenseGroupId" ValueChanged="OnGroupSelected"
                                    Label="المجموعة *" Variant="Variant.Outlined">
                             @foreach (var g in _groups)
@@ -96,8 +107,9 @@ else
 
                     <div class="grid-2 mt-3">
                         <MudSelect T="int?" @bind-Value="_form.CashBoxId"
-                                   Label="الخزينة *" Variant="Variant.Outlined">
-                            @foreach (var box in _boxes)
+                                   Label="الخزينة *" Variant="Variant.Outlined"
+                                   Disabled="@(!_form.BranchId.HasValue)">
+                            @foreach (var box in GetAvailableCashBoxes())
                             {
                                 <MudSelectItem T="int?" Value="@((int?)box.CashBoxId)">
                                     @box.CashBoxName (@box.CurrentBalance.ToString("N2", CultureInfo.InvariantCulture) ج)
@@ -109,6 +121,13 @@ else
                                       Label="المستلم"
                                       Variant="Variant.Outlined" />
                     </div>
+
+                    @if (_form.BranchId.HasValue && !GetAvailableCashBoxes().Any())
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                            لا توجد خزائن نشطة على هذا الفرع حالياً.
+                        </MudAlert>
+                    }
 
                     <MudTextField @bind-Value="_form.Notes"
                                   Label="ملاحظات"
@@ -185,6 +204,15 @@ else
                         <span>التاريخ:</span>
                         <strong>@_form.ExpenseDate.ToString("yyyy/MM/dd")</strong>
                     </div>
+
+                    @{ var selectedBranch = _branches.FirstOrDefault(b => b.BranchId == _form.BranchId); }
+                    @if (selectedBranch != null)
+                    {
+                        <div class="sum-row">
+                            <span>الفرع:</span>
+                            <strong>@selectedBranch.BranchNameAr</strong>
+                        </div>
+                    }
 
                     @{ var selectedGroup = _groups.FirstOrDefault(g => g.ExpenseGroupId == _form.ExpenseGroupId); }
                     @if (selectedGroup != null)
@@ -449,6 +477,7 @@ else
     };
 
     private List<ExpenseGroupDto> _groups = new();
+    private List<BranchListDto> _branches = new();
     private List<CashBoxListDto> _boxes = new();
     
     // Previous expenses cache for auto-suggesting
@@ -456,6 +485,7 @@ else
 
     private bool CanSave =>
         !string.IsNullOrWhiteSpace(_form.ExpenseName) &&
+        _form.BranchId.HasValue &&
         _form.Amount > 0 &&
         _form.ExpenseGroupId.HasValue &&
         _form.CashBoxId.HasValue &&
@@ -470,6 +500,7 @@ else
         if (!canManage) { Navigation.NavigateTo("/expenses"); return; }
 
         _groups = await ExpenseService.GetExpenseGroupsAsync();
+        _branches = (await BranchService.GetBranchesAsync()).Where(b => b.IsActive).ToList();
         _boxes = await CashBoxService.GetCashBoxesAsync(activeOnly: true);
 
         if (IsEdit)
@@ -482,16 +513,26 @@ else
                 return;
             }
             _form = loaded;
+            EnsureCashBoxMatchesBranch();
         }
         else
         {
-            // Default cashbox
-            var defaultBox = _boxes.FirstOrDefault(b => b.IsDefault) ?? _boxes.FirstOrDefault();
-            if (defaultBox != null) _form.CashBoxId = defaultBox.CashBoxId;
+            // Default branch/cashbox
+            var defaultBox = _boxes.FirstOrDefault(b => b.IsDefault && b.IsActive && b.BranchId.HasValue)
+                             ?? _boxes.FirstOrDefault(b => b.IsActive && b.BranchId.HasValue);
+            if (defaultBox != null)
+            {
+                _form.BranchId = defaultBox.BranchId;
+                _form.CashBoxId = defaultBox.CashBoxId;
+            }
         }
 
         // Load recent expenses to build the auto-suggest list
-        var pagedExpenses = await ExpenseService.GetExpensesAsync(new ExpenseFilterDto { PageSize = 1000 });
+        var pagedExpenses = await ExpenseService.GetExpensesAsync(new ExpenseFilterDto
+        {
+            PageSize = 1000,
+            OnlyParents = true
+        });
         _previousExpenses = pagedExpenses.Items.ToList();
 
         _isLoading = false;
@@ -503,6 +544,7 @@ else
         await Task.Yield();
         
         IEnumerable<string> expenseNames = _previousExpenses
+            .Where(e => !_form.BranchId.HasValue || e.BranchId == _form.BranchId.Value)
             .Where(e => !_form.ExpenseGroupId.HasValue || e.ExpenseGroupId == _form.ExpenseGroupId.Value)
             .Select(e => e.ExpenseName)
             .Where(n => !string.IsNullOrWhiteSpace(n))
@@ -525,11 +567,16 @@ else
         // Auto-select group based on exact typed match if it exists
         if (!string.IsNullOrEmpty(newValue))
         {
-            var exactMatch = _previousExpenses.FirstOrDefault(e => e.ExpenseName.Equals(newValue, StringComparison.OrdinalIgnoreCase));
+            var exactMatch = _previousExpenses.FirstOrDefault(e =>
+                (!_form.BranchId.HasValue || e.BranchId == _form.BranchId.Value)
+                && e.ExpenseName.Equals(newValue, StringComparison.OrdinalIgnoreCase));
             if (exactMatch != null)
             {
-                // Always try to select the group if we find a match
                 _form.ExpenseGroupId = exactMatch.ExpenseGroupId;
+                if (!_form.BranchId.HasValue && exactMatch.BranchId.HasValue)
+                    _form.BranchId = exactMatch.BranchId;
+
+                EnsureCashBoxMatchesBranch();
             }
         }
     }
@@ -541,12 +588,48 @@ else
         // Clear the expense name if it's not compatible with the newly selected group
         if (newGroupId.HasValue && !string.IsNullOrEmpty(_form.ExpenseName))
         {
-            var isCompatible = _previousExpenses.Any(e => e.ExpenseGroupId == newGroupId.Value && e.ExpenseName.Equals(_form.ExpenseName, StringComparison.OrdinalIgnoreCase));
+            var isCompatible = _previousExpenses.Any(e =>
+                (!_form.BranchId.HasValue || e.BranchId == _form.BranchId.Value)
+                && e.ExpenseGroupId == newGroupId.Value
+                && e.ExpenseName.Equals(_form.ExpenseName, StringComparison.OrdinalIgnoreCase));
             if (!isCompatible)
             {
                 // Un-comment to clear name if they change groups
                 // _form.ExpenseName = string.Empty;
             }
+        }
+    }
+
+    private void OnBranchChanged(int? newBranchId)
+    {
+        _form.BranchId = newBranchId;
+        EnsureCashBoxMatchesBranch();
+    }
+
+    private List<CashBoxListDto> GetAvailableCashBoxes()
+    {
+        if (!_form.BranchId.HasValue)
+            return new List<CashBoxListDto>();
+
+        return _boxes
+            .Where(b => b.IsActive && b.BranchId == _form.BranchId.Value)
+            .OrderByDescending(b => b.IsDefault)
+            .ThenBy(b => b.CashBoxName)
+            .ToList();
+    }
+
+    private void EnsureCashBoxMatchesBranch()
+    {
+        var availableBoxes = GetAvailableCashBoxes();
+
+        if (_form.CashBoxId.HasValue && !availableBoxes.Any(b => b.CashBoxId == _form.CashBoxId.Value))
+            _form.CashBoxId = null;
+
+        if (!_form.CashBoxId.HasValue)
+        {
+            var preferredBox = availableBoxes.FirstOrDefault(b => b.IsDefault) ?? availableBoxes.FirstOrDefault();
+            if (preferredBox != null)
+                _form.CashBoxId = preferredBox.CashBoxId;
         }
     }
 

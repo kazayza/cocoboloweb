@@ -96,7 +96,23 @@ else
                     <MudButton Variant="Variant.Outlined" Color="Color.Inherit" OnClick="GoBack"
                                StartIcon="@Icons.Material.Filled.Close">إلغاء</MudButton>
 
-                    @if (IsEdit)
+                    @* ⭐ وضع المصنع: حفظ تعديلات التكلفة فقط (بدون لمس أسعار البيع أو الخصومات) *@
+                    @if (_isFactoryEditor && _form.PricesMasked && IsEdit && _form.QuotationId > 0)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                                   OnClick="SaveFactoryCosts"
+                                   Disabled="@_isSavingCosts"
+                                   StartIcon="@Icons.Material.Filled.PriceChange"
+                                   Class="save-btn">
+                            @if (_isSavingCosts)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                            }
+                            حفظ التكلفة
+                        </MudButton>
+                    }
+
+                    @if (IsEdit && !_form.PricesMasked)
                     {
                         <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="OpenPrintPage"
                                    StartIcon="@Icons.Material.Filled.Print">طباعة</MudButton>
@@ -125,10 +141,11 @@ else
                                        StartIcon="@Icons.Material.Filled.Flag">تغيير الحالة</MudButton>
                         }
                         @* ⭐ زرارين رد العميل (يظهروا لو العرض مش متحول ومش متأكد منه) *@
-@if (IsEdit && _form.QuotationId > 0 && !_form.IsConverted 
-     && _form.Status != QuotationStatuses.Accepted 
+@if (IsEdit && _form.QuotationId > 0 && !_form.IsConverted
+     && _form.Status != QuotationStatuses.Accepted
      && _form.Status != QuotationStatuses.Rejected
-     && _form.Status != QuotationStatuses.Converted)
+     && _form.Status != QuotationStatuses.Converted
+     && !_form.PricesMasked)
 {
     <MudTooltip Text="تسجيل موافقة العميل (بعد التواصل معه)">
         <MudButton Variant="Variant.Filled" Color="Color.Success"
@@ -153,7 +170,7 @@ else
     </MudTooltip>
 }
 
-                        @if (!_form.IsConverted)
+                        @if (!_form.IsConverted && !_form.PricesMasked)
                         {
                             <MudButton Variant="Variant.Filled" Color="Color.Success"
                                        OnClick="OpenConvertDialog"
@@ -163,7 +180,7 @@ else
                         }
                     }
 
-                    @if (!_isReadOnly && !_form.IsConverted)
+                    @if (!_isReadOnly && !_form.IsConverted && !_form.PricesMasked)
                     {
                         <MudButton Variant="Variant.Filled" Color="Color.Primary"
                                    OnClick="SaveQuotation"
@@ -202,7 +219,7 @@ else
                         <MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" Size="Size.Small" />
                         <div>
                             <span>الإجمالي</span>
-                            <strong>@FormatMoney(_form.GrandTotal) ج</strong>
+                            <strong>@(_form.PricesMasked ? "—" : $"{FormatMoney(_form.GrandTotal)} ج")</strong>
                         </div>
                     </div>
                     <div class="summary-pill">
@@ -844,7 +861,7 @@ else
 
     @if (_canViewCost)
     {
-        <div class="col-cost">التكلفة</div>
+        <div class="col-cost">@(_form.PricesMasked ? "سعر المنتج" : "التكلفة")</div>
     }
 
     <div class="col-total">الإجمالي</div>
@@ -931,46 +948,77 @@ else
                      Step="1m"
                      HideSpinButtons="true"
                      Class="table-input qty-input"
-                     Disabled="@_isReadOnly" />
+                     Disabled="@(_isReadOnly || _isRestrictedViewer)" />
 </div>
                     <div class="col-price price-cell @(_isReadOnly ? "readonly" : "")">
-    <MudNumericField Value="item.UnitPrice"
-                     ValueChanged="@((decimal v) => OnUnitPriceChanged(item, v))"
-                     T="decimal"
-                     Variant="Variant.Outlined"
-                     Margin="Margin.Dense"
-                     Min="@(_canOverrideBasePrice ? 0m : GetBaseSalePrice(item))"
-                     HideSpinButtons="true"
-                     Class="table-input price-input"
-                     Disabled="@_isReadOnly" />
-
-    @if (!_isReadOnly)
+    @if (_form.PricesMasked)
     {
-        <MudButton Variant="Variant.Outlined"
-                   Color="Color.Success"
-                   Size="Size.Small"
-                   OnClick="@(() => IncreaseItemPrice(index, _priceIncreasePercentage))"
-                   Class="increase-item-btn">
-            +@($"{_priceIncreasePercentage:N0}%")
-        </MudButton>
+        @* ⭐ قناع الأسعار: مشاهدو التكلفة المقيّدون لا يرون أسعار البيع *@
+        <span class="text-muted">—</span>
     }
+    else
+    {
+        <MudNumericField Value="item.UnitPrice"
+                         ValueChanged="@((decimal v) => OnUnitPriceChanged(item, v))"
+                         T="decimal"
+                         Variant="Variant.Outlined"
+                         Margin="Margin.Dense"
+                         Min="@(_canOverrideBasePrice ? 0m : GetBaseSalePrice(item))"
+                         HideSpinButtons="true"
+                         Class="table-input price-input"
+                         Disabled="@_isReadOnly" />
 
-    <MudTooltip Text="@($"السعر الأساسي: {FormatMoney(GetBaseSalePrice(item))} ج - لا يمكن البيع بأقل منه")"
-                Placement="Placement.Top">
-        <span class="base-price-info">
-            <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
-        </span>
-    </MudTooltip>
+        @if (!_isReadOnly)
+        {
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Success"
+                       Size="Size.Small"
+                       OnClick="@(() => IncreaseItemPrice(index, _priceIncreasePercentage))"
+                       Class="increase-item-btn">
+                +@($"{_priceIncreasePercentage:N0}%")
+            </MudButton>
+        }
+
+        <MudTooltip Text="@($"السعر الأساسي: {FormatMoney(GetBaseSalePrice(item))} ج - لا يمكن البيع بأقل منه")"
+                    Placement="Placement.Top">
+            <span class="base-price-info">
+                <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
+            </span>
+        </MudTooltip>
+    }
 </div>
 @if (_canViewCost)
 {
     <div class="col-cost cost-cell">
-        <strong>@FormatMoney(GetLineCost(item)) ج</strong>
-        <span>وحدة: @FormatMoney(GetUnitCost(item)) ج</span>
+        @if (_form.PricesMasked && _isFactoryEditor)
+        {
+            @* ⭐ دور المصنع فقط: تعديل سعر المنتج مباشرة من عرض السعر (مدير الإنتاج يقرأ فقط) *@
+            <MudNumericField Value="@GetEditableItemCost(item)"
+                             ValueChanged="@(v => SetEditableItemCost(item, v))"
+                             T="decimal"
+                             Variant="Variant.Outlined"
+                             Margin="Margin.Dense"
+                             Min="0m"
+                             Format="N0"
+                             HideSpinButtons="true"
+                             Class="table-input cost-input" />
+        }
+        else
+        {
+            <strong>@FormatMoney(GetLineCost(item)) ج</strong>
+            <span>وحدة: @FormatMoney(GetUnitCost(item)) ج</span>
+        }
     </div>
 }
                                     <div class="col-total total-cell">
-    <strong>@FormatMoney(item.TotalAmount) ج</strong>
+    @if (_form.PricesMasked)
+    {
+        <span class="text-muted">—</span>
+    }
+    else
+    {
+        <strong>@FormatMoney(item.TotalAmount) ج</strong>
+    }
 </div>
                                     <div class="col-action">
                                         @if (!_isReadOnly)
@@ -1010,11 +1058,11 @@ else
                     <div class="summary-top-grid">
                         <div class="summary-stat-card">
                             <span class="summary-stat-label">إجمالي الأصناف</span>
-                            <strong>@FormatMoney(_form.TotalAmount) ج</strong>
+                            <strong>@(_form.PricesMasked ? "—" : $"{FormatMoney(_form.TotalAmount)} ج")</strong>
                         </div>
                         <div class="summary-stat-card summary-stat-grand">
                             <span class="summary-stat-label">الإجمالي النهائي</span>
-                            <strong>@FormatMoney(_form.GrandTotal) ج</strong>
+                            <strong>@(_form.PricesMasked ? "—" : $"{FormatMoney(_form.GrandTotal)} ج")</strong>
                         </div>
                     </div>
 
@@ -1040,30 +1088,35 @@ else
 
                     <div class="summary-row">
                         <span>إجمالي الأصناف:</span>
-                        <strong>@FormatMoney(_form.TotalAmount) ج</strong>
+                        <strong>@(_form.PricesMasked ? "—" : $"{FormatMoney(_form.TotalAmount)} ج")</strong>
                     </div>
                     @if (_canViewCost)
 {
     <div class="summary-row cost-summary-row">
-        <span>إجمالي التكلفة:</span>
+        <span>@(_form.PricesMasked ? "إجمالي سعر المنتجات:" : "إجمالي التكلفة:")</span>
         <strong>@FormatMoney(GetTotalCost()) ج</strong>
     </div>
 
-    <div class="summary-row profit-summary-row">
-        <span>الربح المتوقع:</span>
-        <strong>@FormatMoney(GetGrossProfit()) ج</strong>
-    </div>
-
-    @if (GetProfitMarginPercentage().HasValue)
+    @if (!_form.PricesMasked)
     {
-        <div class="summary-row margin-summary-row">
-            <span>نسبة الربح:</span>
-            <strong>@($"{GetProfitMarginPercentage()!.Value:N2}%")</strong>
+        <div class="summary-row profit-summary-row">
+            <span>الربح المتوقع:</span>
+            <strong>@FormatMoney(GetGrossProfit()) ج</strong>
         </div>
+
+        @if (GetProfitMarginPercentage().HasValue)
+        {
+            <div class="summary-row margin-summary-row">
+                <span>نسبة الربح:</span>
+                <strong>@($"{GetProfitMarginPercentage()!.Value:N2}%")</strong>
+            </div>
+        }
     }
 }
 
                     
+                    @if (!_form.PricesMasked)
+                    {
                     <!-- ✅ خصم مرن: نسبة أو قيمة -->
 <div class="discount-section">
     <div class="discount-header">
@@ -1170,6 +1223,7 @@ else
         </div>
     }
 </div>
+                    }
                     
 
                     @if ((_form.DiscountAmount ?? 0) > 0)
@@ -1190,7 +1244,7 @@ else
 
                     <div class="summary-row total-row">
                         <span>الإجمالي النهائي:</span>
-                        <strong>@FormatMoney(_form.GrandTotal) ج</strong>
+                        <strong>@(_form.PricesMasked ? "—" : $"{FormatMoney(_form.GrandTotal)} ج")</strong>
                     </div>
 
                     <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3" Icon="@Icons.Material.Filled.Info">
@@ -2861,8 +2915,9 @@ else
     private string? _currentUserName;
     private bool _canEdit;
     private bool _canAdd;
-    // صلاحية رؤية التكلفة: Admin + AccountManager فقط
+    // صلاحية رؤية التكلفة: Admin + AccountManager فقط (+ دور المصنع في وضع القناع)
     private bool _canViewCost;
+    private bool _isRestrictedViewer;
     private bool _canOverrideBasePrice;
     private bool _isAdmin;
     private bool _isAccountManager;
@@ -2875,6 +2930,13 @@ else
 
 // نسبة زيادة السعر الافتراضية
     private decimal _priceIncreasePercentage = 10m;
+
+    // ⭐ وضع المصنع: مسودة تعديلات التكلفة لكل صنف + حالة الحفظ
+    private readonly Dictionary<QuotationItemDto, decimal> _itemCostDrafts = new();
+    private bool _isSavingCosts;
+
+    // ⭐ التعديل الفعلي للتكلفة من صلاحية دور المصنع فقط (مدير الإنتاج يقرأ فقط)
+    private bool _isFactoryEditor;
 
 
     protected override async Task OnInitializedAsync()
@@ -2893,7 +2955,12 @@ else
 
             _canEdit = user.HasClaim("Permission", "frmNewQuotation:Edit") || _isAdmin;
             _canAdd= user.HasClaim("Permission", "frmNewQuotation:Add") || _isAdmin;
-            _canViewCost = _isAdmin || _isAccountManager;
+
+            // ⭐ مشاهدو التكلفة المقيّدون (مدير الإنتاج / المصنع): تكلفة فقط، تُقنَّع الأسعار من الخدمة
+            _isRestrictedViewer = user.IsInRole(SystemRoles.ProductionManager) || user.IsInRole("factory");
+            // ⭐ التعديل الفعلي للتكلفة من صلاحية دور المصنع فقط (مدير الإنتاج يقرأ فقط)
+            _isFactoryEditor = user.IsInRole("factory") && !user.IsInRole(SystemRoles.Admin);
+            _canViewCost = _isAdmin || _isAccountManager || _isRestrictedViewer;
             _canOverrideBasePrice = _isAdmin;
 
             _warehouses = await InvoiceService.GetWarehousesForUserAsync(_currentUserName!) ?? new();
@@ -2926,6 +2993,7 @@ else
             _loadedRouteKey = routeKey;
             _selectedParty = null;
             _availableProducts = new();
+            _itemCostDrafts.Clear();
             _rejectionReason = null;
             _rejectedAt = null;
             _rejectedBy = null;
@@ -2946,6 +3014,10 @@ else
                 _form = loaded;
                 _originalDiscountAmount = _form.DiscountAmount ?? 0m;
                 SyncPricingTypeFromItems();
+                // ⭐ قناع الأسعار لمشاهدي التكلفة المقيّدين (يُضبط من الخدمة):
+                // تُصفَّر قيم البيع المعروضة ولا تُعتبر خصمًا محفوظًا.
+                if (_form.PricesMasked)
+                    _originalDiscountAmount = 0m;
                 _isReadOnly = _form.IsConverted || !_canEdit;
 
                 if (_form.QuotationId > 0)
@@ -2975,6 +3047,14 @@ else
             }
             else
             {
+                if (_isRestrictedViewer)
+                {
+                    // ⭐ حساب المصنع يعدّل التكاليف على العروض القائمة فقط
+                    Snackbar.Add("إنشاء عرض سعر جديد ليس من صلاحياتك.", Severity.Warning);
+                    Navigation.NavigateTo("/quotations");
+                    return;
+                }
+
                 _isReadOnly = false;
                 _discountByPercentage = true;
                 _form = new QuotationFormDto
@@ -3160,7 +3240,21 @@ else
     {
         try
         {
-            _partyOpportunities = await OpportunityService.GetOpportunitiesByPartyAsync(partyId) ?? new();
+            var allPartyOpportunities = await OpportunityService.GetOpportunitiesByPartyAsync(partyId) ?? new();
+
+            // ⭐ إخفاء فرص البيع المُبيعة (تم ربطها بفاتورة) من اختيار العرض — قديمة ولا يصح ربط عرض جديد بها
+            _partyOpportunities = allPartyOpportunities
+                .Where(o => o.TransactionId == null && !IsWonOpportunityStage(o.StageNameAr))
+                .ToList();
+
+            // ⭐ لو العرض الحالي مربوط أصلًا بفرصة مبيعة (عرض قديم) نُبقيها في القائمة حتى لا تختفي قيمته
+            if (_form.OpportunityId.HasValue
+                && _partyOpportunities.All(o => o.OpportunityId != _form.OpportunityId.Value))
+            {
+                var currentLinked = allPartyOpportunities.FirstOrDefault(o => o.OpportunityId == _form.OpportunityId.Value);
+                if (currentLinked != null)
+                    _partyOpportunities.Add(currentLinked);
+            }
 
             if (_form.OpportunityId.HasValue)
             {
@@ -3174,6 +3268,16 @@ else
             _partyOpportunities = new();
             Snackbar.Add($"تعذّر تحميل فرص البيع: {ex.Message}", Severity.Error);
         }
+    }
+
+    /// <summary>⭐ هل المرحلة تعني أن الفرصة بيعت؟ (نفس كلمات WonKeywords في OpportunityService)</summary>
+    private static bool IsWonOpportunityStage(string? stageName)
+    {
+        if (string.IsNullOrWhiteSpace(stageName)) return false;
+        var s = stageName.Trim();
+        return s.Contains("تم البيع")
+            || s.Contains("بيع")
+            || s.Contains("Closed Deal", StringComparison.OrdinalIgnoreCase);
     }
 
     private OpportunityLookupDto? GetSelectedOpportunity()
@@ -3626,6 +3730,103 @@ private decimal? GetProfitMarginPercentage()
     if (totalCost <= 0) return null;
 
     return Math.Round((GetGrossProfit() / totalCost) * 100m, 2);
+}
+
+/// <summary>⭐ قيمة التكلفة القابلة للتحرير (مسودة دور المصنع) لصنف معين.</summary>
+private decimal GetEditableItemCost(QuotationItemDto item)
+{
+    return _itemCostDrafts.TryGetValue(item, out var draft) ? draft : GetUnitCost(item);
+}
+
+/// <summary>⭐ تخزين تعديل التكلفة في المسودة (بدون كتابة فورية).</summary>
+private void SetEditableItemCost(QuotationItemDto item, decimal value)
+{
+    _itemCostDrafts[item] = Math.Round(Math.Max(value, 0m), 2);
+}
+
+/// <summary>⭐ تطبيق التكلفة الجديدة على حقول سعر الشراء داخل الـ DTO حسب الباقة والبديل.</summary>
+private void ApplyCostToItem(QuotationItemDto item, decimal cost)
+{
+    var tier = NormalizeTier(item.PricingTier);
+
+    if (item.SelectedAlternativeId.HasValue)
+    {
+        switch (tier)
+        {
+            case var t when t == PricingTiers.CClass: item.AlternativePurchasePriceCClass = cost; break;
+            case var t when t == PricingTiers.Elite: item.AlternativePurchasePriceElite = cost; break;
+            default: item.AlternativePurchasePricePremium = cost; break;
+        }
+    }
+    else
+    {
+        switch (tier)
+        {
+            case var t when t == PricingTiers.CClass: item.PurchasePriceCClass = cost; break;
+            case var t when t == PricingTiers.Elite: item.PurchasePriceElite = cost; break;
+            default: item.PurchasePricePremium = cost; break;
+        }
+    }
+}
+
+/// <summary>
+/// ⭐ حفظ تعديلات تكلفة الأصناف بواسطة دور المصنع (وضع قناع الأسعار).
+/// تكتب الخدمة أسعار الشراء على مستوى المنتج/البديل مع سجل PriceHistory.
+/// </summary>
+private async Task SaveFactoryCosts()
+{
+    if (!_form.PricesMasked || _form.QuotationId <= 0 || !_form.Items.Any())
+        return;
+
+    var updates = _form.Items
+        .Where(i => _itemCostDrafts.TryGetValue(i, out var draft) && draft != GetUnitCost(i))
+        .Select(i => new QuotationItemCostUpdateDto
+        {
+            QuotationDetailId = i.QuotationDetailId,
+            UnitCost = _itemCostDrafts[i]
+        })
+        .ToList();
+
+    if (!updates.Any())
+    {
+        Snackbar.Add("لا توجد تغييرات تكلفة جديدة للحفظ.", Severity.Info);
+        return;
+    }
+
+    try
+    {
+        _isSavingCosts = true;
+
+        var (ok, msg, changed) = await QuotationService.SaveQuotationItemCostsAsync(
+            _form.QuotationId, updates, _currentUserName!);
+
+        if (ok)
+        {
+            Snackbar.Add(msg, Severity.Success);
+
+            foreach (var update in updates)
+            {
+                var item = _form.Items.FirstOrDefault(x => x.QuotationDetailId == update.QuotationDetailId);
+                if (item != null)
+                    ApplyCostToItem(item, update.UnitCost);
+            }
+
+            _itemCostDrafts.Clear();
+        }
+        else
+        {
+            Snackbar.Add(msg, Severity.Error);
+        }
+    }
+    catch (Exception ex)
+    {
+        Snackbar.Add($"تعذر حفظ التكاليف: {ex.Message}", Severity.Error);
+    }
+    finally
+    {
+        _isSavingCosts = false;
+        StateHasChanged();
+    }
 }
 /// <summary>
 /// عند تغيير سعر البيع يدويًا، يمنع أن يقل عن سعر البيع الأساسي من جدول المنتجات.

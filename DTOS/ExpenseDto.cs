@@ -3,6 +3,8 @@ namespace COCOBOLOERPNEW.DTOs;
 public class ExpenseListDto
 {
     public int ExpenseId { get; set; }
+    public int? BranchId { get; set; }
+    public string? BranchName { get; set; }
     public string ExpenseName { get; set; } = "";
     public DateTime ExpenseDate { get; set; }
     public decimal Amount { get; set; }
@@ -31,6 +33,7 @@ public class ExpenseListDto
 public class ExpenseFormDto
 {
     public int ExpenseId { get; set; }
+    public int? BranchId { get; set; }
     public string ExpenseName { get; set; } = "";
     public DateTime ExpenseDate { get; set; } = DateTime.Today;
     public int? ExpenseGroupId { get; set; }
@@ -45,6 +48,7 @@ public class ExpenseFormDto
 public class ExpenseFilterDto
 {
     public string? SearchText { get; set; }
+    public int? BranchId { get; set; }
     public int? ParentGroupId { get; set; }
     public int? ExpenseGroupId { get; set; }
     public int? CashBoxId { get; set; }
@@ -54,6 +58,7 @@ public class ExpenseFilterDto
     public decimal? AmountTo { get; set; }
     public bool? IsAdvance { get; set; }
     public bool? OnlyParents { get; set; }
+    public bool ExcludeAdvanceHeaders { get; set; }
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 25;
     public string SortBy { get; set; } = "ExpenseDate";

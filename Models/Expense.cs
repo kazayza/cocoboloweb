@@ -10,6 +10,8 @@ public partial class Expense
 
     public int ExpenseGroupId { get; set; }
 
+    public int? BranchId { get; set; }
+
     public string ExpenseName { get; set; } = null!;
 
     public DateTime ExpenseDate { get; set; }
@@ -34,5 +36,6 @@ public partial class Expense
     public int? AdvanceParentExpenseId { get; set; }    // ID الأصل لو ده شهر فرعي
     public int? AdvanceMonthIndex { get; set; }          // 0 للأصل، 1, 2, 3 للأشهر
 
+    public virtual Branch? Branch { get; set; }
     public virtual ExpenseGroup ExpenseGroup { get; set; } = null!;
 }

@@ -16,4 +16,5 @@ public interface IStockService
     Task<List<StockCountHeaderListDto>> GetStockCountsAsync(StockCountFilterDto filter);
     Task<(bool Success, string Message, int? StockCountId)> SaveStockCountDraftAsync(StockCountWorkspaceDto dto, string currentUserName);
     Task<(bool Success, string Message)> FinalizeStockCountAsync(int stockCountId, string currentUserName);
+    Task<(List<StockValueRowDto> Rows, StockValueSummaryDto Summary)> GetStockValueAsync(int? branchId, int? warehouseId, string? priceTier);
 }

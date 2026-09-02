@@ -9,16 +9,25 @@ public class FinancialDashboardService : IFinancialDashboardService
     private readonly IDbContextFactory<db24804Context> _factory;
     private readonly IFinancialReportsService _income;
     private readonly ICashFlowService _cashFlow;
+    private readonly IHttpContextAccessor _http;
 
     public FinancialDashboardService(
         IDbContextFactory<db24804Context> factory,
         IFinancialReportsService income,
-        ICashFlowService cashFlow)
+        ICashFlowService cashFlow,
+        IHttpContextAccessor http)
     {
         _factory = factory;
         _income = income;
         _cashFlow = cashFlow;
+        _http = http;
     }
+
+    // ⭐ منشئو الفواتير المحمية (فواتير مديري الحسابات) — قائمة فارغة لو المستخدم مخوّل
+    private Task<List<string>> GetProtectedCreatorsAsync(db24804Context db)
+        => SalesInvoiceAccess.CanViewAccountManagerInvoices(_http.HttpContext?.User)
+            ? Task.FromResult(new List<string>())
+            : SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(db);
 
     // ============================================================
     //  ⭐ الـ Method الرئيسية
@@ -243,17 +252,21 @@ public class FinancialDashboardService : IFinancialDashboardService
         r.RevenuePerInvoice = income.AverageInvoiceValue;
 
         // نسبة التحصيل
+        var protectedCreators = await GetProtectedCreatorsAsync(_db);
+
         var totalInvoiced = await _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Sale
                 && t.InvoiceStatus != "Cancelled"
                 && t.TransactionDate >= dto.FromDate
                 && t.TransactionDate <= dto.ToDate)
+            .ExcludeProtectedSales(protectedCreators)
             .SumAsync(t => (decimal?)t.GrandTotal) ?? 0;
         var totalCollected = await _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Sale
                 && t.InvoiceStatus != "Cancelled"
                 && t.TransactionDate >= dto.FromDate
                 && t.TransactionDate <= dto.ToDate)
+            .ExcludeProtectedSales(protectedCreators)
             .SumAsync(t => (decimal?)t.PaidAmount) ?? 0;
         r.CollectionRate = totalInvoiced == 0 ? 0
             : Math.Round((totalCollected / totalInvoiced) * 100, 1);
@@ -270,6 +283,7 @@ public class FinancialDashboardService : IFinancialDashboardService
             .Where(t => t.TransactionType == TransactionTypes.Sale
                 && t.InvoiceStatus != "Cancelled"
                 && t.GrandTotal > t.PaidAmount)
+            .ExcludeProtectedSales(await GetProtectedCreatorsAsync(_db))
             .SumAsync(t => (decimal?)(t.GrandTotal - t.PaidAmount)) ?? 0;
     }
 
@@ -507,12 +521,14 @@ public class FinancialDashboardService : IFinancialDashboardService
         while (current <= endDate)
         {
             var monthEnd = current.AddMonths(1).AddDays(-1).Date.AddDays(1).AddTicks(-1);
+            var protectedCreators = await GetProtectedCreatorsAsync(_db);
 
             // إيرادات
             var revenue = await _db.Transactions.AsNoTracking()
                 .Where(t => t.TransactionType == TransactionTypes.Sale
                     && t.InvoiceStatus != "Cancelled"
                     && t.TransactionDate >= current && t.TransactionDate <= monthEnd)
+                .ExcludeProtectedSales(protectedCreators)
                 .SumAsync(t => (decimal?)(t.NetTotalAmount ?? t.GrandTotal)) ?? 0;
 
             // COGS
@@ -523,6 +539,7 @@ public class FinancialDashboardService : IFinancialDashboardService
                 where t.TransactionType == TransactionTypes.Sale
                     && t.InvoiceStatus != "Cancelled"
                     && t.TransactionDate >= current && t.TransactionDate <= monthEnd
+                    && (t.TransactionType != TransactionTypes.Sale || !protectedCreators.Contains(t.CreatedBy))
                 select d.Quantity * (p.PurchasePrice ?? 0)
             ).SumAsync(x => (decimal?)x) ?? 0;
 
@@ -573,6 +590,7 @@ public class FinancialDashboardService : IFinancialDashboardService
     private async Task GetTopProductsAsync(FinancialDashboardDto dto)
     {
         using var _db = _factory.CreateDbContext();
+        var protectedCreators = await GetProtectedCreatorsAsync(_db);
         var data = await (
             from t in _db.Transactions.AsNoTracking()
             join d in _db.TransactionDetails.AsNoTracking() on t.TransactionId equals d.TransactionId
@@ -581,6 +599,7 @@ public class FinancialDashboardService : IFinancialDashboardService
                 && t.InvoiceStatus != "Cancelled"
                 && t.TransactionDate >= dto.FromDate
                 && t.TransactionDate <= dto.ToDate
+                && (t.TransactionType != TransactionTypes.Sale || !protectedCreators.Contains(t.CreatedBy))
             group new { d, p, t } by new { p.ProductId, p.ProductName } into g
             select new
             {
@@ -925,7 +944,7 @@ public class FinancialDashboardService : IFinancialDashboardService
         {
             recs.Add(new StrategicRecommendationDto
             {
-                Title = "وقت الاستثمار في النمو 🚀",
+                Title = "وقت الاستثمار في النمو",
                 Description = "أداء مالي ممتاز - الوقت مناسب للاستثمار في توسيع النشاط.",
                 Impact = "High",
                 Difficulty = "Hard",

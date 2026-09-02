@@ -67,10 +67,36 @@ public class QuotationService : IQuotationService
         if (user.IsInRole("Admin")) return true;
         return user.HasClaim("Permission", $"frmQuotationsList:{permission}");
     }
+    private const string FactoryRoleName = "factory";
+
+    /// <summary>
+    /// ⭐ مشاهدو التكلفة المقيدون (ProductionManager / factory):
+    /// يرون التكلفة فقط ولا يجوز مطلقًا رؤية أو تعديل أسعار البيع أو الخصومات.
+    /// </summary>
+    private bool IsRestrictedCostViewer()
+    {
+        var user = CurrentUser;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+
+        return user.IsInRole(SystemRoles.ProductionManager)
+            || user.IsInRole(FactoryRoleName);
+    }
+
+    /// <summary>⭐ من يحق له حفظ تعديلات التكلفة من شاشة عروض الأسعار (دور المصنع فقط)</summary>
+    private bool CanEditQuotationCost()
+    {
+        var user = CurrentUser;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+
+        return user.IsInRole(FactoryRoleName) && !user.IsInRole(SystemRoles.Admin);
+    }
+
     private bool CanViewQuotationCost()
 {
     var user = CurrentUser;
     if (user?.Identity?.IsAuthenticated != true) return false;
+
+    if (IsRestrictedCostViewer()) return true;
 
     return user.IsInRole(SystemRoles.Admin)
         || user.IsInRole(SystemRoles.AccountManager);
@@ -81,7 +107,7 @@ public class QuotationService : IQuotationService
     // ============================================================
     public async Task<PagedResult<QuotationListDto>> GetQuotationsAsync(QuotationFilterDto filter)
     {
-        if (!HasPermission("View"))
+        if (!HasPermission("View") && !IsRestrictedCostViewer())
             return new PagedResult<QuotationListDto> { Items = new(), TotalCount = 0 };
 
         // ✅ Step 1: استعلام أساسي على Quotations فقط، بـ nullable casts
@@ -94,6 +120,24 @@ public class QuotationService : IQuotationService
                 db,
                 db.Quotations.AsNoTracking().AsQueryable(),
                 filter);
+
+            // ⭐ سكوب تاريخ الاطلاع — من Users.CrmAccessFromDate عبر الـ Claim (Admin معفي تلقائياً)
+            var accessFrom = _httpContext.GetCrmAccessFrom();
+            if (accessFrom.HasValue)
+                baseQuery = baseQuery.Where(q => q.QuotationDate >= accessFrom.Value);
+
+            // ⭐ حماية عروض مديري الحسابات: لا تظهر إلا لـ Admin/AccountManager/Account
+            // ⭐ مشاهدو التكلفة المقيّدون (ProductionManager/factory) موظفون داخليون → يرون كل العروض لكن بتكلفة فقط
+            var protectedCreators = SalesInvoiceAccess.CanViewAccountManagerInvoices(_httpContext.HttpContext?.User)
+                || IsRestrictedCostViewer()
+                ? new List<string>()
+                : await SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(db);
+            baseQuery = baseQuery.ExcludeProtectedQuotations(protectedCreators);
+
+            // ⭐ مشاهدو التكلفة المقيّدون (مدير الإنتاج / المصنع): يرون العروض الجارية فقط
+            // — العروض المحوّلة لفواتير انتهى دورها ولا علاقة لهم بها
+            if (IsRestrictedCostViewer())
+                baseQuery = baseQuery.Where(q => q.InvoiceId == null);
 
             step = "Step 2: Count total";
             var totalCount = await baseQuery.CountAsync();
@@ -334,13 +378,27 @@ if (canViewCost && quoteIds.Any())
                 };
             }).ToList();
 
-            return new PagedResult<QuotationListDto>
+            var result = new PagedResult<QuotationListDto>
             {
                 Items = items,
                 TotalCount = totalCount,
                 PageNumber = filter.PageNumber,
                 PageSize = filter.PageSize
             };
+
+            // ⭐ قناع أسعار البيع لمشاهدي التكلفة المقيّدين (التكلفة تبقى ظاهرة)
+            if (IsRestrictedCostViewer())
+            {
+                foreach (var row in result.Items)
+                {
+                    row.PricesMasked = true;
+                    row.TotalAmount = 0;
+                    row.DiscountAmount = null;
+                    row.GrandTotal = 0;
+                }
+            }
+
+            return result;
         }
         catch (Exception ex)
         {
@@ -439,7 +497,7 @@ if (canViewCost && quoteIds.Any())
     // ============================================================
     public async Task<QuotationFormDto?> GetQuotationForEditAsync(int quotationId)
     {
-        if (!HasPermission("View")) return null;
+        if (!HasPermission("View") && !IsRestrictedCostViewer()) return null;
 
         // Step 1: Quotation الأساسي
         var rawData = await _db.Quotations.AsNoTracking()
@@ -590,7 +648,7 @@ if (canViewCost && quoteIds.Any())
 
         var netTotal = total - (rawData.DiscountAmount ?? 0);
 
-        return new QuotationFormDto
+        var dto = new QuotationFormDto
         {
             QuotationId = qid,
             ReferenceNumber = $"QT-{qdate.Year}-{qid:D5}",
@@ -617,6 +675,19 @@ if (canViewCost && quoteIds.Any())
             CreatedAt = rawData.CAt ?? DateTime.Today,
             Items = items
         };
+
+        // ⭐ قناع أسعار البيع لمشاهد التكلفة المقيّد (يبقى يرى التكاليف في الأصناف فقط)
+        if (IsRestrictedCostViewer())
+        {
+            dto.PricesMasked = true;
+            dto.TotalAmount = 0;
+            dto.DiscountAmount = null;
+            dto.DiscountPercentage = null;
+            dto.NetTotalAmount = 0;
+            dto.GrandTotal = 0;
+        }
+
+        return dto;
     }
 
     // ============================================================
@@ -624,6 +695,9 @@ if (canViewCost && quoteIds.Any())
     // ============================================================
     public async Task<QuotationPrintDto?> GetQuotationForPrintAsync(int quotationId)
     {
+        // ⭐ مشاهدو التكلفة المقيّدون لا تُعرض لهم صفحة الطباعة (تحتوي أسعار البيع)
+        if (IsRestrictedCostViewer()) return null;
+
         var form = await GetQuotationForEditAsync(quotationId);
         if (form == null) return null;
 
@@ -677,7 +751,7 @@ if (canViewCost && quoteIds.Any())
 
     public async Task<QuotationStatsDto> GetStatsAsync(QuotationFilterDto filter)
     {
-        if (!HasPermission("View")) return new QuotationStatsDto();
+        if (!HasPermission("View") && !IsRestrictedCostViewer()) return new QuotationStatsDto();
 
         try
         {
@@ -687,6 +761,15 @@ if (canViewCost && quoteIds.Any())
                 db,
                 db.Quotations.AsNoTracking().AsQueryable(),
                 filter);
+
+            // ⭐ نفس قيود القائمة: سكوب التاريخ + حماية عروض مديري الحسابات
+            var accessFrom = _httpContext.GetCrmAccessFrom();
+            if (accessFrom.HasValue)
+                query = query.Where(q => q.QuotationDate >= accessFrom.Value);
+            var protectedCreators = SalesInvoiceAccess.CanViewAccountManagerInvoices(_httpContext.HttpContext?.User)
+                ? new List<string>()
+                : await SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(db);
+            query = query.ExcludeProtectedQuotations(protectedCreators);
 
             var today = DateTime.Today;
 
@@ -708,7 +791,7 @@ if (canViewCost && quoteIds.Any())
             var totalValue = raw.Sum(x => x.Grand ?? x.Total ?? 0m);
             var convertedValue = raw.Where(x => x.InvId != null).Sum(x => x.Grand ?? x.Total ?? 0m);
 
-            return new QuotationStatsDto
+            var stats = new QuotationStatsDto
             {
                 TotalCount = total,
                 DistinctCustomersCount = distinctCustomers,
@@ -727,6 +810,15 @@ if (canViewCost && quoteIds.Any())
                                                   || x.Stat == QuotationStatuses.Sent)),
                 ConversionRate = total == 0 ? 0 : Math.Round(((decimal)converted / total) * 100, 1)
             };
+
+            // ⭐ قناع الأرقام المالية عن مشاهدي التكلفة المقيّدين
+            if (IsRestrictedCostViewer())
+            {
+                stats.TotalValue = 0;
+                stats.ConvertedValue = 0;
+            }
+
+            return stats;
         }
         catch (Exception ex)
         {
@@ -751,7 +843,7 @@ if (canViewCost && quoteIds.Any())
     public async Task<(bool Success, string Message, int? QuotationId)> CreateQuotationAsync(
     QuotationFormDto dto, string currentUserName)
 {
-    if (!HasPermission("Add"))
+    if (!HasPermission("Add") || IsRestrictedCostViewer())
         return (false, "ليس لديك صلاحية إنشاء عروض الأسعار.", null);
 
     var validation = ValidateQuotation(dto);
@@ -762,6 +854,9 @@ if (canViewCost && quoteIds.Any())
 
     var discountValidation = ValidateDiscountPermission(dto);
     if (!discountValidation.IsValid) return (false, discountValidation.Message, null);
+
+    if (IsRestrictedCostViewer())
+        return (false, "ليس لديك صلاحية إنشاء أو تعديل عروض الأسعار.", null);
 
     await using var tx = await _db.Database.BeginTransactionAsync();
     try
@@ -850,7 +945,7 @@ if (canViewCost && quoteIds.Any())
     public async Task<(bool Success, string Message)> UpdateQuotationAsync(
         QuotationFormDto dto, string currentUserName)
     {
-        if (!HasPermission("Edit"))
+        if (!HasPermission("Edit") || IsRestrictedCostViewer())
             return (false, "ليس لديك صلاحية تعديل عروض الأسعار.");
 
         var quotation = await _db.Quotations
@@ -991,7 +1086,8 @@ if (canViewCost && quoteIds.Any())
     int quotationId, string newStatus, string currentUserName, bool isPublic = false)
 {
     // ✅ تخطي permission check لو الاستدعاء من الصفحة العامة
-    if (!isPublic && !HasPermission("Edit"))
+    // ⭐ مشاهدو التكلفة المقيّدون لا يغيّرون الحالة أبدًا
+    if (!isPublic && (!HasPermission("Edit") || IsRestrictedCostViewer()))
         return (false, "ليس لديك صلاحية تغيير حالة عرض السعر.");
 
         var quotation = await _db.Quotations
@@ -1058,7 +1154,7 @@ if (canViewCost && quoteIds.Any())
     public async Task<(bool Success, string Message)> DeleteQuotationAsync(
         int quotationId, string currentUserName)
     {
-        if (!HasPermission("Delete"))
+        if (!HasPermission("Delete") || IsRestrictedCostViewer())
             return (false, "ليس لديك صلاحية حذف عروض الأسعار.");
 
         var quotation = await _db.Quotations.FirstOrDefaultAsync(q => q.QuotationId == quotationId);
@@ -1105,7 +1201,7 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
     int quotationId, List<int>? selectedAdvanceChargeIds,
     string currentUserName, DateTime? invoiceDate = null)
 {
-    if (!HasPermission("Edit"))
+    if (!HasPermission("Edit") || IsRestrictedCostViewer())
         return (false, "ليس لديك صلاحية تحويل عرض السعر لفاتورة.", null);
 
     try
@@ -1954,4 +2050,237 @@ private async Task<string?> ResolveQuotationActorDisplayNameAsync(string userNam
 
     return userInfo?.Username ?? userName;
 }
+
+    // ============================================================
+    //  ⭐ حفظ تعديلات التكلفة بواسطة دور المصنع (وضع قناع الأسعار)
+    //  يكتب أسعار الشراء على مستوى المنتج/البديل المصنعي + سجل PriceHistory
+    // ============================================================
+    public async Task<(bool Success, string Message, List<string> ChangedProducts)> SaveQuotationItemCostsAsync(
+        int quotationId, List<QuotationItemCostUpdateDto> updates, string currentUserName)
+    {
+        if (!CanEditQuotationCost())
+            return (false, "تعديل التكاليف من صلاحية دور المصنع فقط.", new List<string>());
+        if (updates == null || updates.Count == 0)
+            return (false, "لا توجد تعديلات تكلفة للحفظ.", new List<string>());
+
+        try
+        {
+            var details = await _db.QuotationDetails
+                .Where(d => d.QuotationId == quotationId).ToListAsync();
+            if (details.Count == 0)
+                return (false, "عرض السعر غير موجود أو لا يحتوي أصناف.", new List<string>());
+
+            var detailIds = details.Select(d => d.QuotationDetailId).ToHashSet();
+            foreach (var u in updates)
+            {
+                if (!detailIds.Contains(u.QuotationDetailId))
+                    return (false, "أحد الأصناف المرسلة لا ينتمي لهذا عرض السعر.", new List<string>());
+                if (u.UnitCost <= 0)
+                    return (false, "التكلفة يجب أن تكون أكبر من صفر.", new List<string>());
+            }
+
+            // سياق مستقل حتى لا تبقى تعديلات معلقة على السياق الم scope
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            await using var tx = await db.Database.BeginTransactionAsync();
+            try
+            {
+                var changed = new List<string>();
+
+                foreach (var group in updates.GroupBy(u => u.QuotationDetailId))
+                {
+                    var detail = details.First(d => d.QuotationDetailId == group.Key);
+                    var newCost = Math.Round(group.First().UnitCost, 2);
+
+                    if (detail.SelectedAlternativeId.HasValue)
+                    {
+                        var alternative = await db.ProductFactoryAlternatives
+                            .FirstOrDefaultAsync(a => a.AlternativeId == detail.SelectedAlternativeId.Value);
+                        if (alternative == null)
+                            return (false, "البديل المصنعي لأحد الأصناف غير موجود.", new List<string>());
+
+                        var oldCost = GetAlternativeCostByTier(alternative, detail.PricingTier);
+                        if (oldCost.HasValue && Math.Round(oldCost.Value, 2) == newCost)
+                            continue;
+
+                        SetAlternativeCostByTier(alternative, detail.PricingTier, newCost);
+                        db.PriceHistories.Add(new PriceHistory
+                        {
+                            ProductId = alternative.ProductId,
+                            PriceType = GetPriceTypeByTier(detail.PricingTier),
+                            OldPrice = oldCost,
+                            NewPrice = newCost,
+                            ChangedBy = currentUserName,
+                            ChangedAt = DateTime.Now,
+                            ChangeReason = $"تكلفة بديل مصنعي من عرض السعر QT-{quotationId:D5}"
+                        });
+
+                        changed.Add($"{alternative.AlternativeName} = {newCost:N2} ج");
+                    }
+                    else
+                    {
+                        var product = await db.Products
+                            .FirstOrDefaultAsync(p => p.ProductId == detail.ProductId);
+                        if (product == null)
+                            return (false, "أحد المنتجات غير موجود.", new List<string>());
+
+                        var oldCost = GetProductCostByTier(product, detail.PricingTier);
+                        if (oldCost.HasValue && Math.Round(oldCost.Value, 2) == newCost)
+                            continue;
+
+                        SetProductCostByTier(product, detail.PricingTier, newCost);
+                        db.PriceHistories.Add(new PriceHistory
+                        {
+                            ProductId = product.ProductId,
+                            PriceType = GetPriceTypeByTier(detail.PricingTier),
+                            OldPrice = oldCost,
+                            NewPrice = newCost,
+                            ChangedBy = currentUserName,
+                            ChangedAt = DateTime.Now,
+                            ChangeReason = $"تكلفة من عرض السعر QT-{quotationId:D5}"
+                        });
+
+                        changed.Add($"{product.ProductName} = {newCost:N2} ج");
+                    }
+                }
+
+                if (changed.Count == 0)
+                {
+                    await tx.RollbackAsync();
+                    return (true, "التكاليف المرسلة مطابقة للحالية، لا يوجد تغيير.", new List<string>());
+                }
+
+                await db.SaveChangesAsync();
+                await tx.CommitAsync();
+
+                return (true, $"تم تحديث تكلفة {changed.Count} صنف: {string.Join("، ", changed)}", changed);
+            }
+            catch (Exception ex)
+            {
+                await tx.RollbackAsync();
+                _logger.LogError(ex, "SaveQuotationItemCostsAsync failed for quotation {Id}", quotationId);
+                return (false, "حدث خطأ أثناء حفظ التكاليف، لم يتم حفظ أي تغيير.", new List<string>());
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "SaveQuotationItemCostsAsync outer failure for quotation {Id}", quotationId);
+            return (false, "حدث خطأ غير متوقع أثناء حفظ التكاليف.", new List<string>());
+        }
+    }
+
+    // ============================================================
+    //  ⭐ طلب تسعير: إشعار لدور المصنع بتحديث تكاليف عرض السعر
+    // ============================================================
+    public async Task<(bool Success, string Message)> SendPricingRequestAsync(
+        int quotationId, string? note, string currentUserName)
+    {
+        if (IsRestrictedCostViewer())
+            return (false, "طلب التسعير من صلاحية فريق المبيعات.");
+
+        try
+        {
+            var quotation = await _db.Quotations.AsNoTracking()
+                .FirstOrDefaultAsync(q => q.QuotationId == quotationId);
+
+            if (quotation == null)
+                return (false, "عرض السعر غير موجود.");
+
+            if (quotation.InvoiceId != null)
+                return (false, "لا يمكن طلب تسعير لعرض سعر تم تحويله لفاتورة.");
+
+            var reference = $"QT-{quotation.QuotationDate.Year}-{quotation.QuotationId:D5}";
+            var message = string.IsNullOrWhiteSpace(note)
+                ? $"طلب تحديث تكاليف عرض السعر {reference} - برجاء فتح العرض وتحديث تكلفة الأصناف."
+                : $"طلب تحديث تكاليف عرض السعر {reference}: {note}";
+
+            var sent = 0;
+            foreach (var role in new[] { SystemRoles.ProductionManager, "factory" })
+            {
+                try
+                {
+                    await _notify.NotifyRoleAsync(
+                        "طلب تسعير",
+                        message,
+                        role,
+                        currentUserName,
+                        formName: "frmQuotationsList",
+                        relatedTable: "Quotations",
+                        relatedId: quotation.QuotationId);
+                    sent++;
+                }
+                catch (Exception notifyEx)
+                {
+                    _logger.LogWarning(notifyEx, "Failed to send pricing request notification to role {Role}", role);
+                }
+            }
+
+            if (sent == 0)
+                return (false, "تعذر إرسال إشعار طلب التسعير.");
+
+            return (true, $"تم إرسال طلب التسعير لقسم المصنع بشأن عرض السعر {reference}.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "SendPricingRequestAsync failed for quotation {Id}", quotationId);
+            return (false, "تعذر إرسال طلب التسعير، حاول مرة أخرى.");
+        }
+    }
+
+    private static string NormalizeTierKey(string? tier)
+    {
+        var value = (tier ?? "").Trim();
+        if (value.Equals(PricingTiers.CClass, StringComparison.OrdinalIgnoreCase)) return PricingTiers.CClass;
+        if (value.Equals(PricingTiers.Elite, StringComparison.OrdinalIgnoreCase)) return PricingTiers.Elite;
+        return PricingTiers.Premium;
+    }
+
+    private static decimal? GetProductCostByTier(Product product, string? tier)
+    {
+        return NormalizeTierKey(tier) switch
+        {
+            PricingTiers.CClass => product.PurchasePriceCClass,
+            PricingTiers.Elite => product.PurchasePriceElite ?? product.PurchasePrice,
+            _ => product.PurchasePrice
+        };
+    }
+
+    private static void SetProductCostByTier(Product product, string tier, decimal cost)
+    {
+        switch (NormalizeTierKey(tier))
+        {
+            case PricingTiers.CClass: product.PurchasePriceCClass = cost; break;
+            case PricingTiers.Elite: product.PurchasePriceElite = cost; break;
+            default: product.PurchasePrice = cost; break;
+        }
+    }
+
+    private static decimal? GetAlternativeCostByTier(ProductFactoryAlternative alternative, string? tier)
+    {
+        return NormalizeTierKey(tier) switch
+        {
+            PricingTiers.CClass => alternative.PurchasePriceCClass,
+            PricingTiers.Elite => alternative.PurchasePriceElite ?? alternative.PurchasePricePremium,
+            _ => alternative.PurchasePricePremium
+        };
+    }
+
+    private static void SetAlternativeCostByTier(ProductFactoryAlternative alternative, string tier, decimal cost)
+    {
+        switch (NormalizeTierKey(tier))
+        {
+            case PricingTiers.CClass: alternative.PurchasePriceCClass = cost; break;
+            case PricingTiers.Elite: alternative.PurchasePriceElite = cost; break;
+            default: alternative.PurchasePricePremium = cost; break;
+        }
+    }
+
+    private static string GetPriceTypeByTier(string? tier)
+    {
+        return NormalizeTierKey(tier) switch
+        {
+            PricingTiers.CClass => "CClass",
+            PricingTiers.Elite => "Elite",
+            _ => "Premium"
+        };
+    }
 }

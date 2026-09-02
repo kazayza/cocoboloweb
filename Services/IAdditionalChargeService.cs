@@ -5,7 +5,7 @@ namespace COCOBOLOERPNEW.Services;
 public interface IAdditionalChargeService
 {
     Task<PagedResult<AdditionalChargeListDto>> GetChargesAsync(AdditionalChargeFilterDto filter);
-    Task<AdditionalChargeStatsDto> GetStatsAsync();
+    Task<AdditionalChargeStatsDto> GetStatsAsync(AdditionalChargeFilterDto? filter = null);
     Task<AdditionalChargeFormDto?> GetChargeForEditAsync(int chargeId);
     Task<AdditionalChargeReceiptDto?> GetChargeReceiptAsync(int chargeId);
     Task<(bool Success, string Message, int? ChargeId)> CreateChargeAsync(AdditionalChargeFormDto dto, string currentUserName);

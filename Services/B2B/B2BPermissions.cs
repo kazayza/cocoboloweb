@@ -13,7 +13,7 @@ public static class B2BPermissions
 
     public static bool CanManage(ClaimsPrincipal user)
         => user.Identity?.IsAuthenticated == true &&
-           (user.IsInRole("Admin") || user.HasClaim("Permission", ViewClaim));
+           (user.IsInRole("Admin") || user.IsInRole("GeneralManager") || user.IsInRole("AccountManager") || user.HasClaim("Permission", ViewClaim));
 
     public static int? GetPortalUserId(ClaimsPrincipal user)
         => int.TryParse(user.FindFirst("PortalUserId")?.Value, out var id) ? id : null;

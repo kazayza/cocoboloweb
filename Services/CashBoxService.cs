@@ -26,12 +26,15 @@ public class CashBoxService : ICashBoxService
         if (activeOnly) query = query.Where(c => c.IsActive);
 
         var items = await query
-            .OrderByDescending(c => c.IsDefault)
+            .OrderBy(c => c.Branch != null ? c.Branch.BranchNameAr : "")
+            .ThenByDescending(c => c.IsDefault)
             .ThenByDescending(c => c.IsActive)
             .ThenBy(c => c.CashBoxName)
             .Select(c => new CashBoxListDto
             {
                 CashBoxId = c.CashBoxId,
+                BranchId = c.BranchId,
+                BranchName = c.Branch != null ? c.Branch.BranchNameAr : null,
                 CashBoxName = c.CashBoxName,
                 Description = c.Description,
                 CashBoxKind = c.CashBoxKind,
@@ -80,6 +83,7 @@ public class CashBoxService : ICashBoxService
         return new CashBoxFormDto
         {
             CashBoxId = c.CashBoxId,
+            BranchId = c.BranchId,
             CashBoxName = c.CashBoxName,
             Description = c.Description,
             CashBoxKind = c.CashBoxKind ?? "Cash",
@@ -97,6 +101,13 @@ public class CashBoxService : ICashBoxService
     {
         if (string.IsNullOrWhiteSpace(dto.CashBoxName))
             return (false, "اسم الخزينة مطلوب", null);
+        if (!dto.BranchId.HasValue)
+            return (false, "الفرع مطلوب", null);
+
+        var branchExists = await _db.Branches.AsNoTracking()
+            .AnyAsync(b => b.BranchId == dto.BranchId.Value && b.IsActive);
+        if (!branchExists)
+            return (false, "الفرع المحدد غير موجود أو غير نشط", null);
 
         try
         {
@@ -116,11 +127,23 @@ public class CashBoxService : ICashBoxService
             {
                 entity = await _db.CashBoxes.FindAsync(dto.CashBoxId)
                     ?? throw new Exception("الخزينة غير موجودة");
+
+                if (entity.BranchId != dto.BranchId)
+                {
+                    var hasMovements = await _db.CashboxTransactions
+                        .AsNoTracking()
+                        .AnyAsync(t => t.CashBoxId == entity.CashBoxId);
+
+                    if (hasMovements)
+                        return (false, "لا يمكن تغيير فرع خزينة عليها حركات سابقة. أنشئ خزينة جديدة للفرع الصحيح.", null);
+                }
+
                 entity.LastUpdatedBy = userName;
                 entity.LastUpdatedAt = DateTime.Now;
             }
 
             entity.CashBoxName = dto.CashBoxName;
+            entity.BranchId = dto.BranchId;
             entity.Description = dto.Description;
             entity.CashBoxKind = dto.CashBoxKind;
             entity.Icon = string.IsNullOrEmpty(dto.Icon)
@@ -148,22 +171,8 @@ public class CashBoxService : ICashBoxService
 
             await _db.SaveChangesAsync();
 
-            // عند الإنشاء + رصيد افتتاحي > 0 → اعمل CashboxTransaction
-            if (isNew && dto.OpeningBalance > 0)
-            {
-                _db.CashboxTransactions.Add(new CashboxTransaction
-                {
-                    CashBoxId = entity.CashBoxId,
-                    TransactionType = "قبض",
-                    ReferenceType = CashBoxRefTypes.OpeningBalance,
-                    Amount = dto.OpeningBalance,
-                    TransactionDate = dto.OpeningDate ?? DateTime.Now,
-                    Notes = $"الرصيد الافتتاحي للخزينة {entity.CashBoxName}",
-                    CreatedBy = userName,
-                    CreatedAt = DateTime.Now
-                });
-                await _db.SaveChangesAsync();
-            }
+            // ⭐ الرصيد الافتتاحي يُخزَّن في حقل الخزنة فقط (مصدر حقيقة واحد) ولا تُنشأ له حركة،
+            // حتى لا يُحتسب مرتين في قوائم الأرصدة ويظل متسقاً مع تقرير التدفقات النقدية
 
             await _audit.LogAsync<object>("CashBoxes", isNew ? "Insert" : "Update",
                 entity.CashBoxId.ToString(), null, entity, userName);
@@ -204,7 +213,8 @@ public class CashBoxService : ICashBoxService
             .Where(t => t.CashBoxId == cashBoxId && t.TransactionType == "صرف")
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
-        return totalIn - totalOut;
+        // يشمل الرصيد الافتتاحي المخزَّن على الخزنة نفسها (مطابق لمعادلة القوائم والملخصات)
+        return box.OpeningBalance + totalIn - totalOut;
     }
 
     // ============================================================
@@ -730,9 +740,14 @@ private async Task<(string? Title, string? Url, string? PartyName, string? Perso
                     break;
 
                 case ManualOperationTypes.OpeningBalance:
-                    id = await CreateManualTransAsync(dto.CashBoxId.Value, "قبض",
-                        CashBoxRefTypes.OpeningBalance, null, dto.Amount, dto.TransactionDate,
-                        BuildNote("رصيد افتتاحي", null, dto.Notes), userName);
+                    // ⭐ توحيد التمثيل: يُضاف إلى حقل الرصيد الافتتاحي في الخزنة نفسها (بدون إنشاء حركة)
+                    var obBox = await _db.CashBoxes.FirstOrDefaultAsync(c => c.CashBoxId == dto.CashBoxId.Value);
+                    if (obBox == null) return (false, "الخزينة غير موجودة", null);
+                    obBox.OpeningBalance += dto.Amount;
+                    if (!obBox.OpeningDate.HasValue || dto.TransactionDate < obBox.OpeningDate.Value)
+                        obBox.OpeningDate = dto.TransactionDate;
+                    await _db.SaveChangesAsync();
+                    id = obBox.CashBoxId;
                     break;
 
                 default:

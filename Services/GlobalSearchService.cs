@@ -24,8 +24,13 @@ public class SearchResult
 public class GlobalSearchService
 {
     private readonly db24804Context _db;
+    private readonly IHttpContextAccessor _http;
 
-    public GlobalSearchService(db24804Context db) => _db = db;
+    public GlobalSearchService(db24804Context db, IHttpContextAccessor http)
+    {
+        _db = db;
+        _http = http;
+    }
 
     public async Task<List<SearchResult>> SearchAsync(
         string query,
@@ -212,12 +217,21 @@ public class GlobalSearchService
         // البحث في: اسم العميل + رقم الفاتورة + ReferenceNumber
         if (perms.Contains("frm_PartiesInvoices:View"))
         {
+            // ⭐ نفس قيود شاشة الفواتير: سكوب التاريخ + حماية فواتير مديري الحسابات
+            var accessFrom = _http.GetCrmAccessFrom();
+            var protectedCreators = SalesInvoiceAccess.CanViewAccountManagerInvoices(_http.HttpContext?.User)
+                ? new List<string>()
+                : await SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(_db);
+
             var salesInvoices = await (
                 from t in _db.Transactions.AsNoTracking()
                 join p in _db.Parties.AsNoTracking()
                     on t.PartyId equals p.PartyId
                 where (t.TransactionType == TransactionTypes.Sale ||
                        t.TransactionType == TransactionTypes.SaleReturn) &&
+                      (accessFrom == null || t.TransactionDate >= accessFrom.Value) &&
+                      (t.TransactionType != TransactionTypes.Sale ||
+                       !protectedCreators.Contains(t.CreatedBy)) &&
                       (p.PartyName.Contains(q)                               ||
                        t.TransactionId.ToString() == q                       ||
                        (t.ReferenceNumber != null && t.ReferenceNumber.Contains(q)) ||
@@ -293,15 +307,23 @@ public class GlobalSearchService
         // البحث في: اسم العميل + ReferenceNumber + تليفون العميل
         if (perms.Contains("frmQuotationsList:View"))
         {
+            // ⭐ نفس قيود شاشة العروض: سكوب التاريخ + حماية عروض مديري الحسابات
+            var quoteAccessFrom = _http.GetCrmAccessFrom();
+            var protectedQuoteCreators = SalesInvoiceAccess.CanViewAccountManagerInvoices(_http.HttpContext?.User)
+                ? new List<string>()
+                : await SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(_db);
+
             var quotations = await (
                 from q2 in _db.Quotations.AsNoTracking()
                 join p in _db.Parties.AsNoTracking()
                     on q2.PartyId equals p.PartyId
-                where p.PartyName.Contains(q)                                    ||
-                      (q2.ReferenceNumber != null && q2.ReferenceNumber.Contains(q)) ||
-                      q2.QuotationId.ToString() == q                             ||
-                      (p.Phone  != null && p.Phone.Contains(q))                  ||
-                      (p.Phone2 != null && p.Phone2.Contains(q))
+                where (quoteAccessFrom == null || q2.QuotationDate >= quoteAccessFrom.Value) &&
+                      (q2.CreatedBy == null || !protectedQuoteCreators.Contains(q2.CreatedBy)) &&
+                      (p.PartyName.Contains(q)                                    ||
+                       (q2.ReferenceNumber != null && q2.ReferenceNumber.Contains(q)) ||
+                       q2.QuotationId.ToString() == q                             ||
+                       (p.Phone  != null && p.Phone.Contains(q))                  ||
+                       (p.Phone2 != null && p.Phone2.Contains(q)))
                 orderby q2.QuotationId descending
                 select new
                 {

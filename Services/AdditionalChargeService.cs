@@ -29,6 +29,29 @@ public class AdditionalChargeService : IAdditionalChargeService
 
     public async Task<PagedResult<AdditionalChargeListDto>> GetChargesAsync(AdditionalChargeFilterDto filter)
 {
+    var charges = await GetFilteredChargesAsync(filter);
+
+    var total = charges.Count;
+    var items = charges
+        .Skip((filter.PageNumber - 1) * filter.PageSize)
+        .Take(filter.PageSize)
+        .ToList();
+
+    return new PagedResult<AdditionalChargeListDto>
+    {
+        Items = items,
+        TotalCount = total,
+        PageNumber = filter.PageNumber,
+        PageSize = filter.PageSize
+    };
+}
+
+    // ═══════════════════════════════════════════════════════════
+    //  جلب الرسوم مع تطبيق الفلاتر — مصدر واحد للجدول وكروت الإحصائيات
+    //  (filter = null ⇒ كل الرسوم بدون فلترة)
+    // ═══════════════════════════════════════════════════════════
+    private async Task<List<AdditionalChargeListDto>> GetFilteredChargesAsync(AdditionalChargeFilterDto? filter)
+{
     // جلب البيانات بدون TryGetValue في الـ Expression
     var charges = await (from c in _db.AdditionalCharges.AsNoTracking()
                          join p in _db.Parties.AsNoTracking() on c.PartyId equals p.PartyId into pp
@@ -65,6 +88,8 @@ public class AdditionalChargeService : IAdditionalChargeService
         item.StatusName = ChargeStatuses.All.TryGetValue(item.Status ?? "", out var st) ? st : item.Status;
     }
 
+    if (filter == null) return charges;
+
     // فلاتر
     if (!string.IsNullOrWhiteSpace(filter.SearchText))
 {
@@ -89,32 +114,23 @@ public class AdditionalChargeService : IAdditionalChargeService
     if (filter.DateTo.HasValue)
         charges = charges.Where(x => x.CreatedAt <= filter.DateTo.Value.AddDays(1)).ToList();
 
-    var total = charges.Count;
-    var items = charges
-        .Skip((filter.PageNumber - 1) * filter.PageSize)
-        .Take(filter.PageSize)
-        .ToList();
-
-    return new PagedResult<AdditionalChargeListDto>
-    {
-        Items = items,
-        TotalCount = total,
-        PageNumber = filter.PageNumber,
-        PageSize = filter.PageSize
-    };
+    return charges;
 }
 
-    public async Task<AdditionalChargeStatsDto> GetStatsAsync()
+    public async Task<AdditionalChargeStatsDto> GetStatsAsync(AdditionalChargeFilterDto? filter = null)
     {
-        var charges = await _db.AdditionalCharges.AsNoTracking().ToListAsync();
+        // ⭐ الإحصائيات تتبع نفس فلتر الشاشة — تتحدث مع أي فلترة
+        var charges = await GetFilteredChargesAsync(filter);
 
         return new AdditionalChargeStatsDto
         {
-            TotalAmount = charges.Sum(c => c.ChargeAmount ?? 0),
-            PaidAmount = charges.Where(c => c.Status == ChargeStatuses.Paid).Sum(c => c.ChargeAmount ?? 0),
-            AppliedAmount = charges.Where(c => c.Status == ChargeStatuses.Applied).Sum(c => c.ChargeAmount ?? 0),
-            NonRefundableAmount = charges.Where(c => c.Status == ChargeStatuses.NonRefundable).Sum(c => c.ChargeAmount ?? 0),
-            PendingAmount = charges.Where(c => c.Status == ChargeStatuses.Paid).Sum(c => c.ChargeAmount ?? 0),
+            TotalAmount = charges.Sum(c => c.ChargeAmount),
+            PaidAmount = charges.Where(c => c.Status == ChargeStatuses.Paid).Sum(c => c.ChargeAmount),
+            AppliedAmount = charges.Where(c => c.Status == ChargeStatuses.Applied).Sum(c => c.ChargeAmount),
+            NonRefundableAmount = charges.Where(c => c.Status == ChargeStatuses.NonRefundable).Sum(c => c.ChargeAmount),
+            // ملاحظة: الحالات متعارضة (Paid / Applied / NonRefundable)
+            // ⇒ "المدفوعة غير المطبقة بعد" هي نفسها حالة Paid
+            PendingAmount = charges.Where(c => c.Status == ChargeStatuses.Paid).Sum(c => c.ChargeAmount),
             TotalCount = charges.Count
         };
     }
@@ -372,8 +388,8 @@ public class AdditionalChargeService : IAdditionalChargeService
     var transaction = await _db.Transactions.FirstOrDefaultAsync(t => t.TransactionId == transactionId);
     if (transaction == null) return (false, "الفاتورة غير موجودة.");
 
-    // ⭐ معاينة → تزود المدفوع
-    if (charge.ChargeType == ChargeTypes.Inspection)
+    // ⭐ معاينة / دفعة مقدمة → تزود المدفوع (تعتبر مدفوعة على الفاتورة)
+    if (ChargeTypes.AddsToPaid(charge.ChargeType))
     {
         transaction.PaidAmount += charge.ChargeAmount ?? 0;
     }
@@ -400,7 +416,7 @@ public class AdditionalChargeService : IAdditionalChargeService
     await _audit.LogAsync("AdditionalCharges", "Apply",
         chargeId.ToString(), null, new { transactionId, charge.ChargeType }, currentUserName);
 
-    var typeLabel = charge.ChargeType == ChargeTypes.Inspection ? "مدفوع" : "الإجمالي";
+    var typeLabel = ChargeTypes.AddsToPaid(charge.ChargeType) ? "المدفوع" : "الإجمالي";
     return (true, $"تم تطبيق الرسوم على فاتورة {transaction.ReferenceNumber} (أُضيف على {typeLabel}) بنجاح.");
 }
 
@@ -463,6 +479,9 @@ public class AdditionalChargeService : IAdditionalChargeService
         if (chargeType == ChargeTypes.Inspection || (description?.Contains("معاينة") ?? false))
             return "رسوم معاينة";
 
+        if (chargeType == ChargeTypes.Advance)
+            return "دفعة مقدمة";
+
         if (description?.Contains("عربون") ?? false)
             return "عربون";
 
@@ -477,6 +496,9 @@ public class AdditionalChargeService : IAdditionalChargeService
         if (chargeType == ChargeTypes.Inspection || (description?.Contains("معاينة") ?? false))
             return "إيصال استلام رسوم معاينة";
 
+        if (chargeType == ChargeTypes.Advance)
+            return "إيصال استلام دفعة مقدمة";
+
         if (description?.Contains("عربون") ?? false)
             return "إيصال استلام عربون";
 
@@ -490,7 +512,8 @@ public class AdditionalChargeService : IAdditionalChargeService
     {
         var prefix = chargeType == ChargeTypes.Inspection || (description?.Contains("معاينة") ?? false)
             ? "INS"
-            : ((description?.Contains("دفعة") ?? false) || (description?.Contains("عربون") ?? false) || (description?.Contains("مقدمة") ?? false)
+            : (chargeType == ChargeTypes.Advance
+                || (description?.Contains("دفعة") ?? false) || (description?.Contains("عربون") ?? false) || (description?.Contains("مقدمة") ?? false)
                 ? "ADV"
                 : "CHR");
 

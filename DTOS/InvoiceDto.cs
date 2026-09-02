@@ -154,6 +154,7 @@ public class CustomerAdvanceDto
 {
     public int ChargeId { get; set; }
     public int PartyId { get; set; }
+    public string? ChargeType { get; set; }
     public string? ChargeDescription { get; set; }
     public decimal ChargeAmount { get; set; }
     public string? Notes { get; set; }
@@ -162,6 +163,13 @@ public class CustomerAdvanceDto
     public bool IsApplied { get; set; }
     public int? AppliedToTransactionId { get; set; }
     public string? AppliedToReferenceNumber { get; set; }
+
+    // ⭐ الاسم العربي للنوع (للعرض في Dialog التحويل)
+    public string ChargeTypeName
+        => ChargeTypes.All.TryGetValue(ChargeType ?? "", out var name) ? name : "رسوم أخرى";
+
+    // ⭐ هل تُحدد تلقائياً عند تحويل عرض السعر؟ (رسوم المعاينة والدفعات المقدمة الصريحة فقط)
+    public bool AutoApplyOnConvert => ChargeTypes.AddsToPaid(ChargeType);
 }
 
 // ============================
@@ -321,9 +329,23 @@ public static class PaymentMethods
     public const string Visa = "Visa";
     public const string InstaPay = "InstaPay";
     public const string Credit = "Credit";
+    public const string Advance = "Advance";
     public const string Other = "Other";
 
     public static readonly Dictionary<string, string> All = new()
+    {
+        { Cash, "نقدى" },
+        { Bank, "تحويل بنكى" },
+        { Visa, "فيزا" },
+        { InstaPay, "InstaPay" },
+        { Credit, "آجل" },
+        { Advance, "دفعة مقدمة" },
+        { Other, "أخرى" }
+    };
+
+    // ⭐ طرق الدفع المتاحة للاختيار اليدوي في الشاشات
+    // (Advance مستثنى لأنه يُنشأ تلقائياً فقط عند تطبيق دفعة مقدمة على فاتورة)
+    public static readonly Dictionary<string, string> Selectable = new()
     {
         { Cash, "نقدى" },
         { Bank, "تحويل بنكى" },
@@ -400,6 +422,7 @@ public static class SystemRoles
     public const string Account = "Account";
     public const string SocialManager = "SocialManager";
     public const string ProductionManager = "ProductionManager";
+    public const string FactoryManager = "FactoryManager";
 }
 // === قائمة الرسوم ===
 public class AdditionalChargeListDto
@@ -500,6 +523,7 @@ public static class ChargeTypes
     public const string Inspection = "Inspection";
     public const string Shipping = "Shipping";
     public const string Installation = "Installation";
+    public const string Advance = "Advance";
     public const string Other = "Other";
 
     public static readonly Dictionary<string, string> All = new()
@@ -507,8 +531,14 @@ public static class ChargeTypes
         { Inspection, "رسوم معاينة" },
         { Shipping, "رسوم شحن" },
         { Installation, "رسوم تركيب" },
+        { Advance, "دفعة مقدمة" },
         { Other, "رسوم أخرى" }
     };
+
+    // ⭐ الأنواع التي تُعامل كمدفوع على الفاتورة (تزيد PaidAmount وليس GrandTotal)
+    // مثل رسوم المعاينة والدفعات المقدمة - تم جمعها هنا كمصدر واحد للحقيقة
+    public static bool AddsToPaid(string? chargeType)
+        => chargeType == Inspection || chargeType == Advance;
 }
 
 public static class ChargeStatuses

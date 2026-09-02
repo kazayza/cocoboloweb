@@ -48,6 +48,10 @@ public class MarketingDashboardDto
     public string ScoreLabel { get; set; } = "";
     public string ScoreClass { get; set; } = "score-excellent";
 
+    // 🏆 شفافية المؤشر (المعادلة الجديدة)
+    public bool ScoreCapped { get; set; }           // سقف 4/10 عند صفر عملاء/إيراد
+    public List<MarketingV2ScoreComponentDto> ScoreComponents { get; set; } = new();
+
     // 📈 الاتجاهات
     public List<MarketingTrendDto> LeadsTrend { get; set; } = new();
     public List<MarketingTrendDto> ConversionTrend { get; set; } = new();
@@ -55,6 +59,18 @@ public class MarketingDashboardDto
     public List<MarketingTrendDto> RoasTrend { get; set; } = new();
 
     public bool RevenueIsOverall { get; set; }
+}
+
+// ─────────────────────────────────────────────
+// 🏆 مكوّن من مكونات مؤشر الأداء (شفافية الحساب)
+// ─────────────────────────────────────────────
+public class MarketingV2ScoreComponentDto
+{
+    public string Label { get; set; } = "";
+    public double Earned { get; set; }           // من 10
+    public double Weight { get; set; }           // الوزن %
+    public string Detail { get; set; } = "";     // "3.0x من مستهدف 4x" مثلاً
+    public double Points => Math.Round(Earned * Weight / 10.0, 2);
 }
 
 // ─────────────────────────────────────────────
@@ -86,6 +102,9 @@ public class MarketingFunnelStageDto
     public double PercentOfFirst { get; set; }
     public double? Retention { get; set; }
     public double? DropOff { get; set; }
+    public bool IsSideStage { get; set; }        // "مرفوض" — مرحلة جانبية بدون تسرب تسلسلي
+    public string Color { get; set; } = "#1769d5";
+    public string ColorSoft { get; set; } = "#e8f1fd";
 }
 
 // ─────────────────────────────────────────────
@@ -145,6 +164,13 @@ public class MarketingVsSalesDto
     public decimal SalesValue { get; set; }
     public double ContactedRate { get; set; }
     public double QualifiedRate { get; set; }
+
+    // ⭐ نسب التسرب الفعلية بين المراحل (للأشرطة الحقيقية)
+    public double ContactedDrop { get; set; }
+    public double QualifiedDrop { get; set; }
+    public double OpportunitiesDrop { get; set; }
+    public double CustomersDrop { get; set; }
+
     public string StatusText { get; set; } = "";
     public string StatusClass { get; set; } = "";
 }

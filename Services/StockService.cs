@@ -817,4 +817,73 @@ public class StockService : IStockService
             return (false, "حدث خطأ: " + (ex.InnerException?.Message ?? ex.Message));
         }
     }
+
+    // ══════════════════════════════════════════════════════════════
+    // قيمة المخزون (تكلفة + بيع) — تُستدعى من شاشة Admin/AccountManager فقط
+    // priceTier: Premium (الأساسي) | CClass | Elite — مع سقوط تلقائي للسعر الأساسي عند غياب الباقة
+    // ══════════════════════════════════════════════════════════════
+    public async Task<(List<StockValueRowDto> Rows, StockValueSummaryDto Summary)> GetStockValueAsync(int? branchId, int? warehouseId, string? priceTier)
+    {
+        var tier = string.IsNullOrWhiteSpace(priceTier) ? "Premium" : priceTier.Trim();
+
+        var warehousesQuery = _db.Warehouses.AsNoTracking().Where(w => w.IsActive == true);
+        if (branchId.HasValue)
+            warehousesQuery = warehousesQuery.Where(w => w.BranchId == branchId.Value);
+        if (warehouseId.HasValue)
+            warehousesQuery = warehousesQuery.Where(w => w.WarehouseId == warehouseId.Value);
+
+        var raw = await (from sl in _db.StockLevels.AsNoTracking()
+                         join w in warehousesQuery on sl.WarehouseId equals w.WarehouseId
+                         join p in _db.Products.AsNoTracking() on sl.ProductId equals p.ProductId
+                         where sl.Quantity > 0
+                         select new
+                         {
+                             sl.ProductId,
+                             ProductName = p.ProductName,
+                             sl.WarehouseId,
+                             WarehouseName = w.WarehouseName,
+                             w.BranchId,
+                             BranchNameAr = w.Branch != null ? w.Branch.BranchNameAr : null,
+                             sl.Quantity,
+                             p.PurchasePrice,
+                             p.PurchasePriceCClass,
+                             p.PurchasePriceElite,
+                             p.SuggestedSalePrice,
+                             p.SuggestedSalePriceCClass,
+                             p.SuggestedSalePriceElite
+                         }).ToListAsync();
+
+        decimal PickPrice(decimal? basePrice, decimal? cclass, decimal? elite) => tier switch
+        {
+            "CClass" => cclass ?? basePrice ?? 0m,
+            "Elite" => elite ?? basePrice ?? 0m,
+            _ => basePrice ?? cclass ?? elite ?? 0m
+        };
+
+        var rows = raw.Select(x => new StockValueRowDto
+        {
+            ProductId = x.ProductId,
+            ProductName = x.ProductName,
+            WarehouseId = x.WarehouseId,
+            WarehouseName = x.WarehouseName,
+            BranchId = x.BranchId,
+            BranchNameAr = x.BranchNameAr,
+            Quantity = x.Quantity,
+            UnitCost = PickPrice(x.PurchasePrice, x.PurchasePriceCClass, x.PurchasePriceElite),
+            UnitSalePrice = PickPrice(x.SuggestedSalePrice, x.SuggestedSalePriceCClass, x.SuggestedSalePriceElite)
+        })
+        .OrderByDescending(r => r.SaleValue)
+        .ToList();
+
+        var summary = new StockValueSummaryDto
+        {
+            TotalCostValue = rows.Sum(r => r.CostValue),
+            TotalSaleValue = rows.Sum(r => r.SaleValue),
+            TotalProducts = rows.Select(r => r.ProductId).Distinct().Count(),
+            TotalQuantity = rows.Sum(r => (long)r.Quantity),
+            WarehousesCount = rows.Select(r => r.WarehouseId).Distinct().Count()
+        };
+
+        return (rows, summary);
+    }
 }

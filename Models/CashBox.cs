@@ -8,6 +8,8 @@ public partial class CashBox
 {
     public int CashBoxId { get; set; }
 
+    public int? BranchId { get; set; }
+
     public string CashBoxName { get; set; } = null!;
 
     public string? Description { get; set; }
@@ -30,5 +32,6 @@ public partial class CashBox
     public string? Color { get; set; }
 
     // Navigation
+    public virtual Branch? Branch { get; set; }
     public virtual ICollection<CashboxTransaction> CashboxTransactions { get; set; } = new List<CashboxTransaction>();
 }

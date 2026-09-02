@@ -660,7 +660,7 @@ else
 
         <MudSelect T="string" @bind-Value="_paymentMethod" Label="طريقة الدفع"
                    Variant="Variant.Outlined" Class="mb-3">
-            @foreach (var pm in PaymentMethods.All)
+            @foreach (var pm in PaymentMethods.Selectable)
             {
                 <MudSelectItem T="string" Value="@pm.Key">@pm.Value</MudSelectItem>
             }
@@ -1196,10 +1196,12 @@ else
     private bool _isLoading = true;
     private InvoiceDetailsDto? _details;
 
+    private bool _canViewInvoice;
     private bool _canEdit;
     private bool _canApproveEdit;
     private bool _canViewPurchases;
     private bool _isFactory;
+    private bool _isPureFactory;
     private bool _isProcessingEdit;
     private string? _currentUserName;
 
@@ -1238,11 +1240,28 @@ else
     {
         var auth = await AuthProvider.GetAuthenticationStateAsync();
         var user = auth.User;
+
+        // ⭐ بوابة صلاحية العرض — حماية من الوصول المباشر بالرابط من أي شاشة
+        // (صلاحية فواتير المبيعات أو Admin أو أدوار المصنع/الإنتاج — وكلهم يُقيَّدون بفواتير الشراء فقط عند التحميل)
+        var isSupplyViewer = user.IsInRole("factory")
+                             || user.IsInRole(SystemRoles.ProductionManager)
+                             || user.IsInRole(SystemRoles.FactoryManager);
+
+        _canViewInvoice = user.HasClaim("Permission", "frm_PartiesInvoices:View")
+                          || isSupplyViewer
+                          || user.IsInRole("Admin");
+        if (!_canViewInvoice)
+        {
+            Navigation.NavigateTo("/access-denied");
+            return;
+        }
+
         _currentUserName = user.Identity?.Name ?? "System";
         _canEdit = user.HasClaim("Permission", "frm_SalesInvoiveNew:Edit") || user.IsInRole("Admin");
         _canApproveEdit = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
         _canViewPurchases = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager) || user.IsInRole("Account") || user.IsInRole(SystemRoles.Account);
-        _isFactory = user.IsInRole("factory");
+        _isFactory = isSupplyViewer;
+        _isPureFactory = user.IsInRole("factory");
 
         _cashBoxes = await InvoiceService.GetCashBoxesAsync();
     }
@@ -1263,13 +1282,20 @@ else
     private async Task LoadInvoice()
     {
         _details = await InvoiceService.GetInvoiceDetailsAsync(Id);
+
+        // ⭐ مستخدم المصنع: يُقيَّد بفواتير الشراء فقط — أي نوع آخر يُعاد لمشتريات المصنع
+        if (_isFactory && _details?.Invoice?.TransactionType != TransactionTypes.Purchase)
+        {
+            Navigation.NavigateTo("/factory/purchases");
+            return;
+        }
     }
 
     private void GoBack()
     {
         if (_details?.Invoice?.TransactionType == TransactionTypes.Purchase)
         {
-            Navigation.NavigateTo("/factory/purchases");
+            Navigation.NavigateTo(_isPureFactory ? "/factory/purchases" : "/purchase-receipt-status");
             return;
         }
 

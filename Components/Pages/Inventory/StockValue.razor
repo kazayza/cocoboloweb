@@ -1,0 +1,232 @@
+@page "/inventory/stock-value"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudBlazor
+
+@attribute [Authorize]
+
+@inject IStockService StockService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+<PageTitle>قيمة المخزون</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="sv-loading">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" />
+        <MudText Typo="Typo.h6" Class="mt-4">جاري حساب قيمة المخزون...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="ma-4">
+        هذه شاشة مالية (قيمة المخزون) — متاحة لمدير النظام ومدير الحسابات فقط.
+    </MudAlert>
+}
+else
+{
+    <div class="sv-page" dir="rtl">
+        <div class="sv-hero">
+            <div class="sv-hero-bg"></div>
+            <div class="sv-hero-content">
+                <div>
+                    <h1>قيمة المخزون</h1>
+                    <p>تقييم مالي للمخزون: قيمة التكلفة وقيمة البيع المتوقعة — حسب الفلاتر وباقة السعر المختارة.</p>
+                </div>
+                <div class="sv-hero-icon"><MudIcon Icon="@Icons.Material.Rounded.Inventory2" Style="font-size:2.7rem" /></div>
+            </div>
+        </div>
+
+        <MudPaper Class="sv-filters" Elevation="0">
+            <MudSelect T="int?" Label="الفرع" Variant="Variant.Outlined" Dense="true" Value="_branchId" ValueChanged="OnBranchChanged">
+                <MudSelectItem T="int?" Value="@(null)">كل الفروع</MudSelectItem>
+                @foreach (var b in _branches)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)b.BranchId)">@b.BranchNameAr</MudSelectItem>
+                }
+            </MudSelect>
+            <MudSelect T="int?" Label="المخزن" Variant="Variant.Outlined" Dense="true" Value="_warehouseId" ValueChanged="OnWarehouseChanged" Disabled="@(!_warehouses.Any())">
+                <MudSelectItem T="int?" Value="@(null)">كل المخازن</MudSelectItem>
+                @foreach (var w in _warehouses)
+                {
+                    <MudSelectItem T="int?" Value="@((int?)w.WarehouseId)">@w.WarehouseName</MudSelectItem>
+                }
+            </MudSelect>
+            <MudSelect T="string" Label="باقة السعر" Variant="Variant.Outlined" Dense="true" Value="_tier" ValueChanged="OnTierChanged">
+                <MudSelectItem T="string" Value="@("Premium")">بريميوم (الأساسي)</MudSelectItem>
+                <MudSelectItem T="string" Value="@("CClass")">ستاندرد</MudSelectItem>
+                <MudSelectItem T="string" Value="@("Elite")">إيليت</MudSelectItem>
+            </MudSelect>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Rounded.Refresh"
+                       OnClick="LoadAsync" Disabled="_isBusy" Class="sv-refresh">
+                @(_isBusy ? "جاري التحديث..." : "تحديث")
+            </MudButton>
+        </MudPaper>
+
+        <div class="sv-kpis">
+            <div class="sv-kpi cost">
+                <span>إجمالي قيمة التكلفة</span>
+                <strong>@Fmt(_summary.TotalCostValue) ج</strong>
+            </div>
+            <div class="sv-kpi sale">
+                <span>إجمالي قيمة البيع</span>
+                <strong>@Fmt(_summary.TotalSaleValue) ج</strong>
+            </div>
+            <div class="sv-kpi profit">
+                <span>الربح المتوقع</span>
+                <strong>@Fmt(_summary.TotalExpectedProfit) ج</strong>
+            </div>
+            <div class="sv-kpi info">
+                <span>@_summary.TotalProducts صنف | @_summary.TotalQuantity وحدة | @_summary.WarehousesCount مخزن</span>
+                <strong>@_rows.Count سجل</strong>
+            </div>
+        </div>
+
+        <MudPaper Class="sv-table-card" Elevation="0">
+            @if (_isBusy)
+            {
+                <MudProgressLinear Indeterminate Color="Color.Primary" Class="mb-1" />
+            }
+            <MudTable T="StockValueRowDto" Items="@_rows" Hover="true" Dense="true" Striped="true" RowsPerPage="25">
+                <HeaderContent>
+                    <MudTh>الصنف</MudTh>
+                    <MudTh>المخزن</MudTh>
+                    <MudTh>الفرع</MudTh>
+                    <MudTh Class="text-center">الكمية</MudTh>
+                    <MudTh Class="text-center">تكلفة الوحدة</MudTh>
+                    <MudTh Class="text-center">قيمة التكلفة</MudTh>
+                    <MudTh Class="text-center">سعر البيع</MudTh>
+                    <MudTh Class="text-center">قيمة البيع</MudTh>
+                    <MudTh Class="text-center">الربح المتوقع</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="الصنف">
+                        <div class="sv-prod-cell">
+                            <strong>@context.ProductName</strong>
+                            <MudIconButton Icon="@Icons.Material.Rounded.OpenInNew" Size="Size.Small" Color="Color.Primary"
+                                           Title="فتح بيانات الصنف" OnClick="@(() => OpenProduct(context.ProductId))" />
+                        </div>
+                    </MudTd>
+                    <MudTd DataLabel="المخزن">@context.WarehouseName</MudTd>
+                    <MudTd DataLabel="الفرع">@(context.BranchNameAr ?? "—")</MudTd>
+                    <MudTd Class="text-center">@context.Quantity</MudTd>
+                    <MudTd Class="text-center">@FmtU(context.UnitCost)</MudTd>
+                    <MudTd Class="text-center cost-text">@Fmt(context.CostValue)</MudTd>
+                    <MudTd Class="text-center">@FmtU(context.UnitSalePrice)</MudTd>
+                    <MudTd Class="text-center sale-text">@Fmt(context.SaleValue)</MudTd>
+                    <MudTd Class="@(context.ExpectedProfit >= 0 ? "sale-text text-center" : "neg-text text-center")">@Fmt(context.ExpectedProfit)</MudTd>
+                </RowTemplate>
+                <PagerContent>
+                    <MudTablePager RowsPerPageString="صفوف بالصفحة" PageSizeOptions="@(new[] { 25, 50, 100 })" />
+                </PagerContent>
+            </MudTable>
+        </MudPaper>
+    </div>
+}
+
+<style>
+    .sv-loading { min-height: 55vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .sv-page { max-width: 1280px; margin: 0 auto; padding: 1rem; }
+    .sv-hero { position: relative; border-radius: 16px; overflow: hidden; color: #fff; padding: 1.6rem 1.8rem; }
+    .sv-hero-bg { position: absolute; inset: 0; background: linear-gradient(120deg, #1e293b 0%, #134e4a 60%, #166534 100%); opacity: .96; }
+    .sv-hero-content { position: relative; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .sv-hero h1 { margin: 0; font-weight: 900; font-size: 1.5rem; }
+    .sv-hero p { margin: .35rem 0 0; opacity: .85; font-size: .88rem; }
+    .sv-hero-icon { width: 72px; height: 72px; border-radius: 20px; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.28); display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 18px rgba(255,255,255,.08); }
+    .sv-prod-cell { display: flex; align-items: center; gap: .15rem; }
+    .sv-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .8rem; align-items: center; padding: 1rem 1.2rem; border-radius: 14px; margin-top: .9rem; border: 1px solid #e2e8f0; background: #fff; }
+    .sv-refresh { height: 52px; }
+    .sv-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: .9rem; margin-top: .9rem; }
+    .sv-kpi { border-radius: 14px; padding: 1rem 1.2rem; color: #fff; display: flex; flex-direction: column; gap: .3rem; box-shadow: 0 6px 18px rgba(15,23,42,.12); }
+    .sv-kpi span { font-size: .8rem; opacity: .92; font-weight: 700; }
+    .sv-kpi strong { font-size: 1.35rem; font-weight: 900; direction: ltr; text-align: right; }
+    .sv-kpi.cost { background: linear-gradient(135deg, #7c2d12, #b45309); }
+    .sv-kpi.sale { background: linear-gradient(135deg, #14532d, #16a34a); }
+    .sv-kpi.profit { background: linear-gradient(135deg, #1e3a8a, #2563eb); }
+    .sv-kpi.info { background: linear-gradient(135deg, #334155, #475569); }
+    .sv-table-card { border-radius: 14px; border: 1px solid #e2e8f0; margin-top: .9rem; background: #fff; padding: .4rem .6rem .8rem; overflow: hidden; }
+    .sv-table-card .cost-text { color: #b45309; font-weight: 800; }
+    .sv-table-card .sale-text { color: #15803d; font-weight: 800; }
+    .sv-table-card .neg-text { color: #b91c1c; font-weight: 800; }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _isBusy;
+    private bool _canView;
+
+    private int? _branchId;
+    private int? _warehouseId;
+    private string _tier = "Premium";
+
+    private List<BranchListDto> _branches = new();
+    private List<WarehouseListDto> _warehouses = new();
+    private List<StockValueRowDto> _rows = new();
+    private StockValueSummaryDto _summary = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _canView = user.IsInRole(SystemRoles.Admin) || user.IsInRole(SystemRoles.AccountManager);
+
+        if (_canView)
+        {
+            _branches = await StockService.GetBranchesAsync();
+            _warehouses = await StockService.GetWarehousesAsync(null);
+            await LoadAsync();
+        }
+
+        _isLoading = false;
+    }
+
+    private async Task OnBranchChanged(int? branchId)
+    {
+        _branchId = branchId;
+        _warehouseId = null;
+        _warehouses = await StockService.GetWarehousesAsync(branchId);
+        await LoadAsync();
+    }
+
+    private async Task OnWarehouseChanged(int? warehouseId)
+    {
+        _warehouseId = warehouseId;
+        await LoadAsync();
+    }
+
+    private async Task OnTierChanged(string tier)
+    {
+        _tier = tier ?? "Premium";
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _isBusy = true;
+        try
+        {
+            var (rows, summary) = await StockService.GetStockValueAsync(_branchId, _warehouseId, _tier);
+            _rows = rows;
+            _summary = summary;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("خطأ أثناء حساب قيمة المخزون: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _isBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OpenProduct(int productId) => Navigation.NavigateTo($"/products/form/{productId}");
+
+    private static string Fmt(decimal v) => string.Format("{0:N0}", v);
+    private static string FmtU(decimal v) => string.Format("{0:N2}", v);
+}

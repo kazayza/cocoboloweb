@@ -365,13 +365,19 @@
 
         //if (!string.IsNullOrWhiteSpace(notif.FormName) && notif.RelatedId.HasValue)
         //{
-          //  Navigation.NavigateTo($"/{notif.FormName}/{notif.RelatedId.Value}");
+        //  Navigation.NavigateTo($"/{notif.FormName}/{notif.RelatedId.Value}");
         //}
         var url = GetNotificationUrl(notif);
-if (!string.IsNullOrWhiteSpace(url))
-{
-    Navigation.NavigateTo(url);
-}
+        if (!string.IsNullOrWhiteSpace(url))
+        {
+            // ✨ لو الإشعار يشير لنفس الصفحة الحالية → Router لا يعيد التحميل لنفس الرابط (no-op)
+            // فنجبر إعادة تحميل كاملة حتى تظهر أحدث البيانات فوراً (لا نحتاج الخروج والعودة)
+            var targetPath = Navigation.ToAbsoluteUri(url).AbsolutePath;
+            var currentPath = new Uri(Navigation.Uri).AbsolutePath;
+            bool samePage = string.Equals(currentPath, targetPath, StringComparison.OrdinalIgnoreCase);
+
+            Navigation.NavigateTo(url, forceLoad: samePage);
+        }
     }
 
     private async Task MarkAllAsRead()
@@ -433,6 +439,23 @@ if (!string.IsNullOrWhiteSpace(url))
         return null;
 
     var form = notif.FormName.Trim().TrimStart('/');
+
+    // 📋 شاشات القوائم (لا تقبل id في المسار) — نتجاهل RelatedId نهائياً
+    if (string.Equals(form, "production/job-orders", StringComparison.OrdinalIgnoreCase))
+        return "/production/job-orders";
+
+    if (string.Equals(form, "purchase-receipt-status", StringComparison.OrdinalIgnoreCase))
+        return "/purchase-receipt-status";
+
+    // 🧾 فواتير المبيعات — القائمة أو تفاصيل فاتورة محددة
+    if (string.Equals(form, "sales/invoices", StringComparison.OrdinalIgnoreCase))
+        return notif.RelatedId.HasValue ? $"/sales/invoices/{notif.RelatedId.Value}" : "/sales";
+
+    // 🏭 أمر التصنيع: المسار مدمج كامل داخل FormName (sales/invoices/{id}/job-order)
+    // يجب ألا نضيف RelatedId بعده — وإلا أصبح رابطاً مكسوراً بمفتاح مكرر
+    if (form.StartsWith("sales/invoices/", StringComparison.OrdinalIgnoreCase)
+        && form.EndsWith("/job-order", StringComparison.OrdinalIgnoreCase))
+        return $"/{form}";
 
     if (string.Equals(form, "payments", StringComparison.OrdinalIgnoreCase))
     {

@@ -7,11 +7,19 @@ namespace COCOBOLOERPNEW.Services;
 public class FinancialReportsService : IFinancialReportsService
 {
     private readonly db24804Context _db;
+    private readonly IHttpContextAccessor _http;
 
-    public FinancialReportsService(db24804Context db)
+    public FinancialReportsService(db24804Context db, IHttpContextAccessor http)
     {
         _db = db;
+        _http = http;
     }
+
+    // ⭐ منشئو الفواتير المحمية (فواتير مديري الحسابات) — قائمة فارغة لو المستخدم مخوّل
+    private Task<List<string>> GetProtectedCreatorsAsync()
+        => SalesInvoiceAccess.CanViewAccountManagerInvoices(_http.HttpContext?.User)
+            ? Task.FromResult(new List<string>())
+            : SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(_db);
 
     // ============================================================
     //  ⭐ قائمة الدخل الكاملة (الـ Method الرئيسية)
@@ -97,11 +105,14 @@ public class FinancialReportsService : IFinancialReportsService
     // ============================================================
     private async Task CalculateRevenueAsync(IncomeStatementDto dto)
     {
+        var protectedCreators = await GetProtectedCreatorsAsync();
+
         var sales = await _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Sale
                 && t.InvoiceStatus != "Cancelled"
                 && t.TransactionDate >= dto.FromDate
                 && t.TransactionDate <= dto.ToDate)
+            .ExcludeProtectedSales(protectedCreators)
             .Select(t => new
             {
                 t.GrandTotal,
@@ -182,11 +193,14 @@ public class FinancialReportsService : IFinancialReportsService
         DateTime fromDate,
         DateTime toDate)
     {
+        var protectedCreators = await GetProtectedCreatorsAsync();
+
         var saleIds = await _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Sale
                         && t.InvoiceStatus != InvoiceStatuses.Cancelled
                         && t.TransactionDate >= fromDate
                         && t.TransactionDate <= toDate)
+            .ExcludeProtectedSales(protectedCreators)
             .Select(t => t.TransactionId)
             .ToListAsync();
 
@@ -562,6 +576,7 @@ if (prevYear.HasValue && prevYear.Value.Revenue > 0)
             && t.InvoiceStatus != "Cancelled"
             && t.TransactionDate >= fromDate
             && t.TransactionDate <= toDate)
+        .ExcludeProtectedSales(await GetProtectedCreatorsAsync())
         .SumAsync(t => (decimal?)(t.NetTotalAmount ?? t.GrandTotal)) ?? 0;
 
     // COGS من إجمالي فواتير الشراء المرآة المرتبطة بفواتير البيع

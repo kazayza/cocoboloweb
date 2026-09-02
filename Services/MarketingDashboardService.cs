@@ -233,7 +233,11 @@ public class MarketingDashboardService : IMarketingDashboardService
         // ── المستهدف ──
         result.Targets = BuildTargets(leadsCount, contacted, qualified, deals, revenue);
 
-        // ── التسويق مقابل المبيعات ──
+        // ── التسويق مقابل المبيعات (بتسربات فعلية) ──
+        double VsDrop(int from, int to) => from > 0 ? Math.Round(100 - (double)to / from * 100, 1) : 0;
+
+        var vsHealthy = qualified > 0 && customers > 0 && (double)customers / qualified * 100 >= 10;
+
         result.VsSales = new MarketingVsSalesDto
         {
             Leads = leadsCount,
@@ -245,13 +249,19 @@ public class MarketingDashboardService : IMarketingDashboardService
             SalesValue = revenue,
             ContactedRate = contactRate,
             QualifiedRate = convRate,
-            StatusText = convRate >= 20 ? "أداء التسويق ممتاز" : convRate >= 10 ? "أداء تسويقي جيد" : "يحتاج تحسين",
-            StatusClass = convRate >= 20 ? "vs-good" : convRate >= 10 ? "vs-mid" : "vs-bad",
+            ContactedDrop = VsDrop(leadsCount, contacted),
+            QualifiedDrop = VsDrop(contacted, qualified),
+            OpportunitiesDrop = VsDrop(qualified, filteredOpps.Count),
+            CustomersDrop = VsDrop(filteredOpps.Count, customers),
+            StatusText = vsHealthy ? "التسويق والمبيعات يعملان بشكل جيد" : "يوجد تسرب كبير بين التسويق والمبيعات",
+            StatusClass = vsHealthy ? "vs-good" : "vs-warn",
         };
 
-        // ── التنبيهات + المؤشر ──
-        result.Alerts = BuildAlerts(roas, convRate, contactRate, cac, spendF, leadsCount, customers);
-        (result.PerformanceScore, result.ScoreLabel, result.ScoreClass) = BuildScore(convRate, contactRate, roas);
+        // ── التنبيهات + المؤشر (المعادلة العادلة) ──
+        var custConvRate = leadsCount > 0 ? (double)customers / leadsCount * 100 : 0;
+        result.Alerts = BuildAlerts(roas, custConvRate, contactRate, cac, leadsCount, customers);
+        (result.PerformanceScore, result.ScoreLabel, result.ScoreClass, result.ScoreCapped, result.ScoreComponents) =
+            BuildScore(roas, custConvRate, cac, contactRate, convRate, leadsCount, customers, revenue);
 
         // ── الاتجاهات ──
         (result.LeadsTrend, result.ConversionTrend, result.CplTrend, result.RoasTrend) =
@@ -283,7 +293,8 @@ public class MarketingDashboardService : IMarketingDashboardService
             new() { Key = "leads", Label = "إجمالي المحتملين", Value = leads.ToString("N0"), Delta = DeltaPct(leads, prevLeads), Color = "#8b5cf6", Icon = "person_search" },
             new() { Key = "contacted", Label = "تم التواصل", Value = contacted.ToString("N0"), Delta = DeltaPct(contacted, prevContacted), Color = "#3b82f6", Icon = "phone_in_talk" },
             new() { Key = "qualified", Label = "مؤهل", Value = qualified.ToString("N0"), Delta = DeltaPct(qualified, prevQualified), Color = "#7447c6", Icon = "verified" },
-            new() { Key = "conv", Label = "معدل التحويل ", Value = convRate.ToString("0.0") + "%", Delta = DeltaPct(convRate, prevConvRate), Color = "#0ea5e9", Icon = "conv" },
+            new() { Key = "conv", Label = "تحويل ليد → فرصة", Value = convRate.ToString("0.0") + "%", Delta = DeltaPct(convRate, prevConvRate), Color = "#0ea5e9", Icon = "conv" },
+            new() { Key = "custconv", Label = "تحويل ليد → عميل", Value = (leads > 0 ? (double)customers / leads * 100 : 0).ToString("0.0") + "%", Delta = DeltaPct(leads > 0 ? (double)customers / leads * 100 : 0, prevLeads > 0 ? (double)prevCustomers / prevLeads * 100 : 0), Color = "#10b981", Icon = "swap_horiz" },
             new() { Key = "progress", Label = "فرص البيع", Value = inProgress.ToString("N0"), Delta = DeltaPct(inProgress, prevInProgress), Color = "#f59e0b", Icon = "trending_up" },
             new() { Key = "deals", Label = "صفقات مغلقة", Value = deals.ToString("N0"), Delta = DeltaPct(deals, prevDeals), Color = "#ef4444", Icon = "handshake" },
             new() { Key = "customers", Label = "العملاء", Value = customers.ToString("N0"), Sub = "مرتبطين بفرص تم بيع", Delta = DeltaPct(customers, prevCustomers), Color = "#14b8a6", Icon = "groups" },
@@ -301,35 +312,52 @@ public class MarketingDashboardService : IMarketingDashboardService
     private static double? DeltaPct(double cur, double prev) => prev != 0 ? (cur - prev) / prev * 100 : null;
 
     // ═══════════════════════════════════════════
-    // 🪜 القمع (5 مراحل)
+    // 🪜 القمع (5 مراحل) — بألوان معبرة وتسرب صحيح المنطق
     // ═══════════════════════════════════════════
     private static List<MarketingFunnelStageDto> BuildFunnel(
         int leads, int rejected, int qualified, int inProgress, int deals)
     {
-        var stages = new List<(string Name, string Sub, int Count)>
+        var stages = new (string Name, string Sub, int Count, bool IsSide, string Color, string ColorSoft)[]
         {
-            ("إجمالي اللييدز", "كل المحتملين", leads),
-            ("مرفوض", "من جدول اللييدز", rejected),
-            ("محول", "ليدز محولة في الفترة", qualified),
-            ("فرص بيع", "عالى الاهتمام + معلق", inProgress),
-            ("تم البيع", "المرحلة 3 + فاتورة", deals),
+            ("إجمالي اللييدز",   "كل المحتملين",            leads,      false, "#1769d5", "#e8f1fd"),
+            ("مرفوض",           "من جدول اللييدز",          rejected,   true,  "#e11d48", "#ffe4e6"),
+            ("محوّل لفرصة",      "ليدز محوّلة في الفترة",     qualified,  false, "#0e9488", "#e6fffa"),
+            ("فرص بيع",         "عالي الاهتمام + معلق",      inProgress, false, "#f59e0b", "#fef3c7"),
+            ("تم البيع",        "المرحلة 3 + فاتورة",       deals,      false, "#7c3aed", "#f3e8ff"),
         };
 
         var list = new List<MarketingFunnelStageDto>();
-        for (int i = 0; i < stages.Count; i++)
+        for (int i = 0; i < stages.Length; i++)
         {
-            var (name, sub, count) = stages[i];
-            var prev = i > 0 ? stages[i - 1].Count : 0;
-            double? retention = i == 0 || prev == 0 ? null : (double)count / prev * 100;
+            var (name, sub, count, isSide, color, soft) = stages[i];
+
+            // ⭐ التسرب: المحوّل بيتقارن بالإجمالي (لأن المرفوض جانبي)، والباقي بالسابقة مباشرة
+            double? drop;
+            if (i == 0 || isSide)
+                drop = null;
+            else if (i == 2)
+                drop = stages[0].Count > 0
+                    ? Math.Round(100 - (double)count / stages[0].Count * 100, 1)
+                    : null;
+            else
+                drop = stages[i - 1].Count > 0
+                    ? Math.Round(100 - (double)count / stages[i - 1].Count * 100, 1)
+                    : null;
+
+            double? retention = drop.HasValue ? 100 - drop : null;
+
             list.Add(new MarketingFunnelStageDto
             {
                 Step = i + 1,
                 Name = name,
                 Sub = sub,
                 Count = count,
-                PercentOfFirst = leads > 0 ? (double)count / leads * 100 : 0,
+                PercentOfFirst = leads > 0 ? Math.Round((double)count / leads * 100, 1) : 0,
                 Retention = retention,
-                DropOff = retention.HasValue ? 100 - retention.Value : null,
+                DropOff = drop,
+                IsSideStage = isSide,
+                Color = color,
+                ColorSoft = soft,
             });
         }
         return list;
@@ -456,11 +484,11 @@ public class MarketingDashboardService : IMarketingDashboardService
     }
 
     // ═══════════════════════════════════════════
-    // ⚠️ التنبيهات
+    // ⚠️ التنبيهات (نسخة محدثة — تحويل حقيقي + CAC)
     // ═══════════════════════════════════════════
     private static List<MarketingAlertDto> BuildAlerts(
-        decimal roas, double convRate, double contactRate, decimal cac,
-        decimal spend, int leads, int customers)
+        decimal roas, double custConvRate, double contactRate, decimal cac,
+        int leads, int customers)
     {
         var alerts = new List<MarketingAlertDto>();
 
@@ -471,49 +499,132 @@ public class MarketingDashboardService : IMarketingDashboardService
                 : new MarketingAlertDto { Type = "bad", Text = "العائد على الإنفاق منخفض", Detail = $"{roas:0.0}x — أقل من المستهدف (4x)" });
         }
 
-        if (convRate > 0)
+        if (leads > 0)
         {
-            alerts.Add(convRate >= 20
-                ? new MarketingAlertDto { Type = "good", Text = "معدل التحويل ممتاز", Detail = $"{convRate:0.0}% من اللييدز بيتحولوا لعملاء مؤهلين" }
-                : new MarketingAlertDto { Type = "warn", Text = "معدل التحويل يحتاج تحسين", Detail = $"{convRate:0.0}% (المستهدف 20%+)" });
+            alerts.Add(custConvRate >= 10
+                ? new MarketingAlertDto { Type = "good", Text = "معدل التحويل للعميل ممتاز", Detail = $"{custConvRate:0.0}% من اللييدز اتحولوا عملاء دفعوا (المستهدف 10%+)" }
+                : new MarketingAlertDto { Type = "warn", Text = "معدل التحويل للعميل منخفض", Detail = $"{custConvRate:0.0}% فقط اتحولوا عملاء (المستهدف 10%+)" });
         }
 
-        if (contactRate > 0)
+        if (leads > 0)
         {
             alerts.Add(contactRate >= 50
                 ? new MarketingAlertDto { Type = "good", Text = "نسبة التواصل ممتازة", Detail = $"{contactRate:0.0}% من اللييدز تم التواصل معهم" }
                 : new MarketingAlertDto { Type = "warn", Text = "نسبة التواصل منخفضة", Detail = $"{contactRate:0.0}% (المستهدف 50%+)" });
         }
 
-        var dropOff = leads > 0 ? 100 - (customers > 0 ? (double)customers / leads * 100 : 0) : 0;
-        alerts.Add(new MarketingAlertDto
+        if (customers > 0 && cac > 0)
         {
-            Type = dropOff <= 90 ? "info" : "warn",
-            Text = "التسرب من اللييد للعميل",
-            Detail = $"{dropOff:0.0}% من اللييدز لم يتحولوا لعملاء",
-        });
+            alerts.Add(new MarketingAlertDto { Type = cac > 15_000m ? "bad" : "info", Text = "تكلفة اكتساب العميل CAC", Detail = $"{cac:N0} ج لكل عميل جديد" });
+        }
+
+        if (leads > 0 && customers == 0)
+        {
+            alerts.Add(new MarketingAlertDto { Type = "bad", Text = "لا يوجد عملاء في هذه الفترة!", Detail = $"{leads} ليد بدون أي تحويل لعميل — راجع جودة الليدز والمبيعات" });
+        }
 
         return alerts.Take(5).ToList();
     }
 
     // ═══════════════════════════════════════════
-    // 📈 المؤشر (0..10)
+    // 🏆 المؤشر — المعادلة العادلة (6 مكونات مع تارجت الإيراد)
+    // ── تحويل ليد→عميل 25pts (≥6%) • CAC 15pts (≤15K) • ROAS 20pts (≥4x)
+    // ── 🎯 إنجاز تارجت الإيراد 20pts (3M) • تواصل 10pts (≥50%) • تأهيل 10pts (≥25%)
+    // ── 🚨 سقف 4/10 لو صفر عملاء أو صفر إيراد
     // ═══════════════════════════════════════════
-    private static (double Score, string Label, string Class) BuildScore(
-        double convRate, double contactRate, decimal roas)
+    private static (double Score, string Label, string Class, bool Capped, List<MarketingV2ScoreComponentDto> Components) BuildScore(
+        decimal roas, double custConvRate, decimal cac, double contactRate, double leadConvRate,
+        int leads, int customers, decimal revenue)
     {
-        var convScore = Math.Min(10, convRate / 25 * 10);
-        var contactScore = Math.Min(10, contactRate / 50 * 10);
-        var roasScore = Math.Min(10, (double)roas / 4 * 10);
+        const double TargetCustConv = 6.0;    // %
+        const decimal TargetCac = 15_000m;    // ج
+        const decimal TargetRoas = 4m;        // x
+        const double TargetContact = 50.0;    // %
+        const double TargetQual = 25.0;       // %
 
-        var score = Math.Round(0.5 * convScore + 0.2 * contactScore + 0.3 * roasScore, 1);
+        var components = new List<MarketingV2ScoreComponentDto>();
 
-        return score switch
+        // 1) تحويل ليد→عميل — 25 نقطة
+        var custConvScore = Math.Min(10, custConvRate / TargetCustConv * 10);
+        components.Add(new MarketingV2ScoreComponentDto
         {
-            >= 8 => (score, "ممتاز", "score-excellent"),
-            >= 5 => (score, "يحتاج تحسين", "score-needs"),
-            _ => (score, "ضعيف", "score-poor"),
+            Label = "تحويل ليد → عميل",
+            Earned = Math.Round(custConvScore, 1),
+            Weight = 25,
+            Detail = $"{custConvRate:0.0}% من مستهدف {TargetCustConv:0}%",
+        });
+
+        // 2) CAC — 15 نقطة (عكسي)
+        double cacScore;
+        if (customers == 0 || cac <= 0) cacScore = 0;
+        else cacScore = (double)Math.Min(10m, TargetCac / cac * 10m);
+        components.Add(new MarketingV2ScoreComponentDto
+        {
+            Label = "تكلفة العميل CAC",
+            Earned = Math.Round(cacScore, 1),
+            Weight = 15,
+            Detail = customers > 0 ? $"{cac:N0}ج — الكاملة عند ≤{TargetCac:N0}ج" : "لا يوجد عملاء",
+        });
+
+        // 3) ROAS — 20 نقطة
+        var roasScore = Math.Min(10, (double)roas / (double)TargetRoas * 10);
+        components.Add(new MarketingV2ScoreComponentDto
+        {
+            Label = "العائد ROAS",
+            Earned = Math.Round(roasScore, 1),
+            Weight = 20,
+            Detail = $"{roas:0.0}x من مستهدف {TargetRoas:0.0}x",
+        });
+
+        // 4) 🎯 إنجاز تارجت الإيراد (3 مليون) — 20 نقطة
+        var revenueTargetScore = MonthlyTarget > 0
+            ? Math.Min(10, (double)(revenue / MonthlyTarget * 10m))
+            : 0;
+        components.Add(new MarketingV2ScoreComponentDto
+        {
+            Label = "إنجاز تارجت الإيراد",
+            Earned = Math.Round(revenueTargetScore, 1),
+            Weight = 20,
+            Detail = $"{FmtMoney(revenue)} من {FmtMoney(MonthlyTarget)} ({(double)(revenue / MonthlyTarget * 100m):0.0}%)",
+        });
+
+        // 5) نسبة التواصل — 10 نقاط
+        var contactScore = Math.Min(10, contactRate / TargetContact * 10);
+        components.Add(new MarketingV2ScoreComponentDto
+        {
+            Label = "نسبة التواصل",
+            Earned = Math.Round(contactScore, 1),
+            Weight = 10,
+            Detail = $"{contactRate:0.0}% من مستهدف {TargetContact:0}%",
+        });
+
+        // 6) نسبة التأهيل — 10 نقاط
+        var qualScore = Math.Min(10, leadConvRate / TargetQual * 10);
+        components.Add(new MarketingV2ScoreComponentDto
+        {
+            Label = "نسبة التأهيل (ليد→فرصة)",
+            Earned = Math.Round(qualScore, 1),
+            Weight = 10,
+            Detail = $"{leadConvRate:0.0}% من مستهدف {TargetQual:0}%",
+        });
+
+        // ⭐ الإجمالي من 10
+        var score = Math.Round(components.Sum(c => c.Points) / 10.0, 1);
+
+        // 🚨 سقف الحماية
+        var capped = customers == 0 || revenue == 0;
+        if (capped) score = Math.Min(score, 4.0);
+
+        var (label, cls) = score switch
+        {
+            >= 9 => ("ممتاز", "score-excellent"),
+            >= 8 => ("جيد جداً", "score-vgood"),
+            >= 7 => ("جيد", "score-good"),
+            >= 6 => ("يحتاج تحسين", "score-needs"),
+            _ => ("ضعيف", "score-poor"),
         };
+
+        return (score, label, cls, capped, components);
     }
 
     // ═══════════════════════════════════════════

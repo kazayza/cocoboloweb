@@ -6,6 +6,8 @@ namespace COCOBOLOERPNEW.DTOs;
 public class CashBoxListDto
 {
     public int CashBoxId { get; set; }
+    public int? BranchId { get; set; }
+    public string? BranchName { get; set; }
     public string CashBoxName { get; set; } = "";
     public string? Description { get; set; }
     public string? CashBoxKind { get; set; }     // Cash / Bank / Wallet / Other
@@ -33,6 +35,7 @@ public class CashBoxListDto
 public class CashBoxFormDto
 {
     public int CashBoxId { get; set; }
+    public int? BranchId { get; set; }
     public string CashBoxName { get; set; } = "";
     public string? Description { get; set; }
     public string CashBoxKind { get; set; } = "Cash";

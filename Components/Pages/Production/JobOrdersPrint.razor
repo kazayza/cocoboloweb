@@ -1,0 +1,298 @@
+@page "/production/job-orders/print"
+@page "/factory/job-orders/print"
+@layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.EntityFrameworkCore
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>طباعة أوامر التشغيل غير المسلّمة</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else if (!_canView)
+{
+    <div class="not-found"><h2>الملف غير متاح</h2></div>
+}
+else
+{
+    <div class="print-actions no-print">
+        <button class="btn-action btn-print" @onclick="PrintNow">🖨️ طباعة</button>
+        <button class="btn-action btn-back" @onclick="GoBack">← رجوع</button>
+    </div>
+
+    <div class="print-page" dir="rtl">
+        <div class="jo-print-header">
+            <div class="jo-print-company">
+                @if (_logoSrc != null)
+                {
+                    <img src="@_logoSrc" class="jo-print-logo" alt="شعار الشركة" />
+                }
+                <div class="jo-print-company-text">
+                    @if (!string.IsNullOrWhiteSpace(_companyName))
+                    {
+                        <h2>@_companyName</h2>
+                        @if (!string.IsNullOrWhiteSpace(_companyContact))
+                        {
+                            <span>@_companyContact</span>
+                        }
+                    }
+                </div>
+            </div>
+            <div class="jo-print-title">
+                <h1>أوامر التشغيل غير المسلّمة</h1>
+                <span>تقرير تشغيلي — بدون مبالغ مالية</span>
+            </div>
+            <div class="jo-print-meta">
+                <div>تاريخ الإصدار: <strong>@DateTime.Now.ToString("yyyy/MM/dd HH:mm")</strong></div>
+                <div>عدد الأوامر: <strong>@_rows.Count</strong></div>
+                <div>التصفية: <strong>@_filterSummary</strong></div>
+            </div>
+        </div>
+
+        <table class="jo-print-table">
+            <thead>
+                <tr>
+                    <th style="width:36px;">#</th>
+                    <th style="width:60px;">النوع</th>
+                    <th>رقم الفاتورة</th>
+                    <th>العميل</th>
+                    <th>الموظف</th>
+                    <th>التليفون</th>
+                    <th>تاريخ الفاتورة</th>
+                    <th>التسليم المتوقع</th>
+                    <th style="width:60px;">عدد البنود</th>
+                    <th style="width:60px;">بدائل مختارة</th>
+                </tr>
+            </thead>
+            <tbody>
+                @{ int seq = 0; }
+                @foreach (var r in _rows)
+                {
+                    seq++;
+                    <tr>
+                        <td class="text-center">@seq</td>
+                        <td class="text-center">@(r.IsPurchase ? "توريد" : "بيع")</td>
+                        <td><strong>@r.ReferenceNumber</strong></td>
+                        <td>@r.PartyName</td>
+                        <td>@(string.IsNullOrWhiteSpace(r.EmpName) ? "—" : r.EmpName)</td>
+                        <td>@(string.IsNullOrWhiteSpace(r.Phone) ? "—" : r.Phone)</td>
+                        <td class="text-center">@r.TransactionDate.ToString("yyyy/MM/dd")</td>
+                        <td class="text-center">@(r.DueDate?.ToString("yyyy/MM/dd") ?? "—")</td>
+                        <td class="text-center">@r.ItemsCount</td>
+                        <td class="text-center">@r.AlternativeItemsCount</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        @if (_rows.Count == 0)
+        {
+            <div class="jo-print-empty">لا توجد أوامر تشغيل غير مسلّمة مطابقة للتصفية الحالية.</div>
+        }
+
+        <div class="jo-print-foot">
+            يعرض هذا التقرير أوامر التشغيل غير المسلّمة فقط، ولا يتضمن أي مبالغ مالية.
+        </div>
+    </div>
+}
+
+<style>
+    .loading-container { min-height: 60vh; display: flex; align-items: center; justify-content: center; }
+    .not-found { min-height: 60vh; display: flex; align-items: center; justify-content: center; color: #b91c1c; }
+
+    .print-actions.no-print { position: fixed; top: 14px; inset-inline-start: 14px; z-index: 50; display: flex; gap: .5rem; }
+    .btn-action { padding: .5rem 1rem; border: none; border-radius: 10px; font-weight: 800; cursor: pointer; font-family: inherit; font-size: .85rem; }
+    .btn-print { background: #1e3a8a; color: #fff; }
+    .btn-back { background: #e2e8f0; color: #0f172a; }
+
+    .print-page { max-width: 1000px; margin: 3.5rem auto 2rem; background: #fff; padding: 1.4rem 1.6rem; border-radius: 14px; box-shadow: 0 6px 24px rgba(15,23,42,.08); }
+
+    .jo-print-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; border-bottom: 2px solid #0f172a; padding-bottom: .8rem; margin-bottom: 1rem; }
+    .jo-print-company { display: flex; align-items: center; gap: .65rem; }
+    .jo-print-logo { width: 56px; height: 56px; object-fit: contain; border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; padding: 2px; flex: 0 0 auto; }
+    .jo-print-company h2 { margin: 0; font-size: 1.05rem; font-weight: 900; color: #0f172a; }
+    .jo-print-company span { font-size: .78rem; color: #475569; }
+    .jo-print-title h1 { margin: 0; font-size: 1.35rem; font-weight: 900; color: #1e3a8a; text-align: center; }
+    .jo-print-title span { display: block; text-align: center; font-size: .78rem; color: #64748b; margin-top: .15rem; }
+    .jo-print-meta { font-size: .75rem; color: #334155; display: grid; gap: .15rem; min-width: 210px; }
+
+    .jo-print-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+    .jo-print-table th { background: #0f172a; color: #fff; padding: .5rem .45rem; font-weight: 800; border: 1px solid #0f172a; }
+    .jo-print-table td { padding: .42rem .45rem; border: 1px solid #cbd5e1; }
+    .jo-print-table tbody tr:nth-child(even) { background: #f8fafc; }
+    .text-center { text-align: center; }
+
+    .jo-print-empty { text-align: center; padding: 2rem; color: #64748b; font-weight: 700; }
+    .jo-print-foot { margin-top: 1rem; font-size: .72rem; color: #94a3b8; text-align: center; border-top: 1px dashed #cbd5e1; padding-top: .5rem; }
+
+    @@media print {
+        .no-print { display: none !important; }
+        .print-page { box-shadow: none; margin: 0 auto; max-width: 100%; padding: 0; border-radius: 0; }
+        .jo-print-table { font-size: .72rem; }
+        .jo-print-table th, .jo-print-table td { border: 1px solid #64748b; }
+        .jo-print-table thead { display: table-header-group; }
+        body { background: #fff; }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;
+    private bool _canView;
+    private bool _didAutoPrint;
+    private string? _companyName;
+    private string? _companyContact;
+    private string? _logoSrc;
+    private string _filterSummary = "الكل";
+    private string? _q;
+    private DateTime? _from;
+    private DateTime? _to;
+    private string _type = "all";
+    private List<JobOrderRow> _rows = new();
+
+    private sealed class JobOrderRow
+    {
+        public string ReferenceNumber { get; set; } = "";
+        public string TransactionType { get; set; } = TransactionTypes.Sale;
+        public bool IsPurchase => string.Equals(TransactionType, TransactionTypes.Purchase, StringComparison.OrdinalIgnoreCase);
+        public string PartyName { get; set; } = "";
+        public string? EmpName { get; set; }
+        public string? Phone { get; set; }
+        public DateTime TransactionDate { get; set; }
+        public DateTime? DueDate { get; set; }
+        public int ItemsCount { get; set; }
+        public int AlternativeItemsCount { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        _canView = user.IsInRole(SystemRoles.Admin)
+                   || user.IsInRole(SystemRoles.SalesManager)
+                   || user.IsInRole(SystemRoles.Sales)
+                   || user.IsInRole(SystemRoles.AccountManager)
+                   || user.IsInRole(SystemRoles.HrManager)
+                   || user.IsInRole(SystemRoles.ProductionManager)
+                   || user.IsInRole(SystemRoles.FactoryManager)
+                   || user.IsInRole("factory");
+
+        var uri = new Uri(Navigation.Uri);
+        var pars = QueryHelpers.ParseQuery(uri.Query);
+        if (pars.TryGetValue("q", out var qv))
+            _q = qv.ToString();
+        if (pars.TryGetValue("from", out var fv) && DateTime.TryParse(fv.ToString(), out var f))
+            _from = f;
+        if (pars.TryGetValue("to", out var tv) && DateTime.TryParse(tv.ToString(), out var t))
+            _to = t;
+        if (pars.TryGetValue("type", out var tyv))
+            _type = tyv.ToString().ToLowerInvariant();
+
+        if (_canView)
+            await LoadAsync();
+
+        _isLoading = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_didAutoPrint && !_isLoading)
+        {
+            _didAutoPrint = true;
+            await JS.InvokeVoidAsync("window.print");
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        var query = Db.Transactions
+            .AsNoTracking()
+            .Where(t => t.InvoiceStatus != InvoiceStatuses.Cancelled
+                && t.IsDelivered != true // ⭐ غير المسلّمة فقط — دائماً
+                && ((t.TransactionType == TransactionTypes.Sale)
+                 || (t.TransactionType == TransactionTypes.Purchase
+                     && (t.ReferenceType == null || !t.ReferenceType.StartsWith("MirrorOf:")))));
+
+        if (string.Equals(_type, "sale", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(t => t.TransactionType == TransactionTypes.Sale);
+        else if (string.Equals(_type, "purchase", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(t => t.TransactionType == TransactionTypes.Purchase);
+
+        if (_from.HasValue)
+            query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= _from.Value.Date);
+
+        if (_to.HasValue)
+            query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value <= _to.Value.Date.AddDays(1).AddTicks(-1));
+
+        // ⭐ القناع على مستوى البيانات: GrandTotal لا يُختار من قاعدة البيانات نهائياً
+        var projected = query.Select(t => new JobOrderRow
+        {
+            ReferenceNumber = t.ReferenceNumber ?? $"#{t.TransactionId}",
+            TransactionType = t.TransactionType,
+            TransactionDate = t.TransactionDate,
+            DueDate = t.DueDate,
+            PartyName = Db.Parties.Where(p => p.PartyId == t.PartyId).Select(p => p.PartyName).FirstOrDefault() ?? "",
+            Phone = Db.Parties.Where(p => p.PartyId == t.PartyId).Select(p => p.Phone).FirstOrDefault(),
+            EmpName = t.EmpId == null ? null : Db.Employees.Where(e => e.EmployeeId == t.EmpId).Select(e => e.FullName).FirstOrDefault(),
+            ItemsCount = Db.TransactionDetails.Count(d => d.TransactionId == t.TransactionId),
+            AlternativeItemsCount = Db.TransactionDetails.Count(d => d.TransactionId == t.TransactionId && d.SelectedAlternativeId != null)
+        });
+
+        _rows = await projected
+            .OrderByDescending(x => x.TransactionDate)
+            .Take(400)
+            .ToListAsync();
+
+        if (!string.IsNullOrWhiteSpace(_q))
+        {
+            var term = _q.Trim();
+            _rows = _rows.Where(x =>
+                    (x.ReferenceNumber ?? string.Empty).Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || (x.PartyName ?? string.Empty).ContainsArabic(term)
+                    || (x.Phone ?? string.Empty).ContainsArabic(term))
+                .ToList();
+        }
+
+        var info = await Db.CompanyInfos.AsNoTracking().OrderBy(c => c.CompanyId).FirstOrDefaultAsync();
+        if (info != null)
+        {
+            _companyName = info.CompanyName;
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(info.Address)) parts.Add(info.Address);
+            if (!string.IsNullOrWhiteSpace(info.Phone1)) parts.Add("ت: " + info.Phone1);
+            _companyContact = string.Join(" — ", parts);
+
+            // ⭐ الشعار: bytes المخزنة في القاعدة أولاً ثم LogoPath كاحتياطي — نفس آلية شاشة الشركة
+            _logoSrc = info.Logo is { Length: > 0 }
+                ? $"data:image/png;base64,{Convert.ToBase64String(info.Logo)}"
+                : (string.IsNullOrWhiteSpace(info.LogoPath) ? null : info.LogoPath);
+        }
+
+        var fparts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(_q)) fparts.Add($"بحث: {_q.Trim()}");
+        if (_from.HasValue) fparts.Add($"من: {_from.Value:yyyy/MM/dd}");
+        if (_to.HasValue) fparts.Add($"إلى: {_to.Value:yyyy/MM/dd}");
+        if (string.Equals(_type, "sale", StringComparison.OrdinalIgnoreCase)) fparts.Add("النوع: بيع");
+        else if (string.Equals(_type, "purchase", StringComparison.OrdinalIgnoreCase)) fparts.Add("النوع: توريد");
+        _filterSummary = fparts.Count > 0 ? string.Join(" | ", fparts) : "بدون تصفية (كل غير المسلّمة)";
+    }
+
+    private async Task PrintNow() => await JS.InvokeVoidAsync("window.print");
+
+    private void GoBack() => Navigation.NavigateTo("/production/job-orders");
+}
