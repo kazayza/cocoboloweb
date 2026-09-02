@@ -263,6 +263,14 @@ public class PayrollStatsDto
     public decimal AverageNetSalary     { get; set; }
 }
 
+// ── ملخص شهر لاختيار الشهر (شرائح سجل المرتبات) ──────────────
+public class PayrollMonthSummaryDto
+{
+    public string  Month        { get; set; } = "";  // "yyyy-MM"
+    public int     PayrollCount { get; set; }
+    public decimal TotalNet     { get; set; }
+}
+
 public class OffPayrollPaymentFormDto
 {
     public int      PayrollID     { get; set; }

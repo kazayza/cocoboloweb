@@ -6,6 +6,7 @@
 @using Microsoft.AspNetCore.Components.Web
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.WebUtilities
 @using MudBlazor
 
 @inject IPayrollService PayrollService
@@ -90,6 +91,37 @@
     </MudGrid>
 }
 
+<div class="month-picker-row">
+    <span class="month-picker-label">
+        <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Size="Size.Small" />
+        اختر الشهر
+    </span>
+    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight"
+                   Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                   Class="month-nav-btn" Title="شهر أقدم"
+                   Disabled="@(!_canNavigateMonths)"
+                   OnClick="GoToPrevMonthAsync" />
+    @foreach (var m in _monthChips)
+    {
+        <button type="button"
+                class="month-chip @(IsMonthActive(m.Month) ? "active" : "")"
+                @onclick="() => SelectMonthAsync(m.Month)">
+            <span class="month-chip-name">@FormatMonth(m.Month)</span>
+            <span class="month-chip-meta">@(m.PayrollCount > 0 ? $"{m.PayrollCount} مرتب · {FormatCompactMoney(m.TotalNet)}" : "لا مرتبات")</span>
+        </button>
+    }
+    <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft"
+                   Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                   Class="month-nav-btn" Title="شهر أحدث"
+                   Disabled="@(!_canNavigateMonths)"
+                   OnClick="GoToNextMonthAsync" />
+    <button type="button"
+            class="month-chip all-chip @(string.IsNullOrEmpty(_filter.PayrollMonth) ? "active" : "")"
+            @onclick="SelectAllMonthsAsync">
+        <span class="month-chip-name">كل الشهور</span>
+    </button>
+</div>
+
 <div class="sticky-filter-shell">
     <MudPaper Class="pa-3 mb-3 rounded-xl d-flex align-center gap-3 flex-wrap">
         <MudTextField @bind-Value="_filter.SearchText"
@@ -102,12 +134,19 @@
                       Clearable="true"
                       OnKeyUp="OnSearchKeyUp" />
 
-        <MudTextField @bind-Value="_filter.PayrollMonth"
-                      Placeholder="الشهر 2026-05"
-                      Style="max-width:150px"
-                      Variant="Variant.Outlined"
-                      Margin="Margin.Dense"
-                      OnKeyUp="OnSearchKeyUp" />
+        <MudSelect T="string"
+                   Value="_filter.PayrollMonth"
+                   ValueChanged="OnMonthSelectChangedAsync"
+                   Placeholder="كل الشهور"
+                   Style="min-width:175px"
+                   Variant="Variant.Outlined"
+                   Margin="Margin.Dense"
+                   Clearable="true">
+            @foreach (var m in _months)
+            {
+                <MudSelectItem T="string" Value="@m.Month">@FormatMonth(m.Month) (@m.PayrollCount)</MudSelectItem>
+            }
+        </MudSelect>
 
         <MudSelect T="string"
                    @bind-Value="_selectedStatus"
@@ -298,6 +337,20 @@
     </DialogActions>
 </MudDialog>
 
+<style>
+    .month-picker-row { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; margin: 0 0 .8rem; }
+    .month-picker-label { display: inline-flex; align-items: center; gap: .3rem; font-weight: 800; color: #334155; font-size: .85rem; }
+    .month-chip { display: flex; flex-direction: column; align-items: center; gap: .1rem; border: 1px solid #e2e8f0; background: #fff; border-radius: 12px; padding: .45rem .8rem; cursor: pointer; transition: all .15s ease; min-width: 112px; }
+    .month-chip:hover { border-color: #2563eb; box-shadow: 0 3px 10px rgba(37,99,235,.12); }
+    .month-chip.active { background: linear-gradient(135deg, #2563eb, #1d4ed8); border-color: transparent; }
+    .month-chip-name { font-weight: 800; font-size: .85rem; color: #0f172a; white-space: nowrap; }
+    .month-chip-meta { font-size: .7rem; color: #64748b; direction: ltr; white-space: nowrap; }
+    .month-chip.active .month-chip-name { color: #fff; }
+    .month-chip.active .month-chip-meta { color: rgba(255,255,255,.88); }
+    .month-chip.all-chip { background: #f8fafc; }
+    .month-nav-btn { flex: 0 0 auto; }
+</style>
+
 @code {
     private List<PayrollListDto> _payrolls = new();
     private PayrollStatsDto? _stats;
@@ -307,6 +360,9 @@
         PageSize = 20
     };
 
+    private string _currentMonth = DateTime.Today.ToString("yyyy-MM");
+    private List<PayrollMonthSummaryDto> _months = new();
+    private List<PayrollMonthSummaryDto> _monthChips = new();
     private string _selectedStatus = string.Empty;
     private bool _loading = true;
     private bool _exporting;
@@ -347,7 +403,20 @@
             return;
         }
 
+        // قراءة الشهر من الرابط ?month=2026-05 (لينك قابل للمشاركة وزر رجوع سليم)
+        try
+        {
+            var query = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+            if (query.TryGetValue("month", out var monthValue)
+                && !string.IsNullOrWhiteSpace(monthValue))
+            {
+                _filter.PayrollMonth = monthValue.ToString();
+            }
+        }
+        catch { }
+
         _cashBoxes = await CashBoxService.GetCashBoxesAsync(activeOnly: true);
+        await LoadMonthSummariesAsync();
         await LoadAsync();
         await LoadStatsAsync();
     }
@@ -385,6 +454,84 @@
             _stats = null;
         }
     }
+
+    // ── اختيار الشهر: شرائح + قائمة + تنقل ‹ › ──────────────────
+    private bool _canNavigateMonths =>
+        !string.IsNullOrEmpty(_filter.PayrollMonth) && _months.Count > 1;
+
+    private async Task LoadMonthSummariesAsync()
+    {
+        try
+        {
+            _months = await PayrollService.GetMonthSummariesAsync();
+        }
+        catch
+        {
+            _months = new List<PayrollMonthSummaryDto>();
+        }
+
+        // الشهر الحالي يظهر دائماً حتى لو فاضي (بعدد 0)
+        if (_months.All(m => m.Month != _currentMonth))
+            _months.Insert(0, new PayrollMonthSummaryDto { Month = _currentMonth });
+
+        if (string.IsNullOrWhiteSpace(_filter.PayrollMonth))
+            _filter.PayrollMonth = _currentMonth;
+
+        _monthChips = _months.Take(6).ToList();
+    }
+
+    private bool IsMonthActive(string month) => _filter.PayrollMonth == month;
+
+    private async Task SelectMonthAsync(string month)
+    {
+        if (_filter.PayrollMonth == month) return;
+        _filter.PayrollMonth = month;
+        _filter.PageNumber = 1;
+        await SearchAsync();
+        SyncMonthInUrl();
+    }
+
+    private async Task SelectAllMonthsAsync()
+    {
+        _filter.PayrollMonth = null;
+        _filter.PageNumber = 1;
+        await SearchAsync();
+        SyncMonthInUrl();
+    }
+
+    private async Task OnMonthSelectChangedAsync(string? month)
+    {
+        _filter.PayrollMonth = string.IsNullOrWhiteSpace(month) ? null : month;
+        _filter.PageNumber = 1;
+        await SearchAsync();
+        SyncMonthInUrl();
+    }
+
+    private async Task GoToPrevMonthAsync() // شهر أقدم
+    {
+        var idx = _months.FindIndex(m => m.Month == _filter.PayrollMonth);
+        if (idx < 0 || idx >= _months.Count - 1) return;
+        await SelectMonthAsync(_months[idx + 1].Month);
+    }
+
+    private async Task GoToNextMonthAsync() // شهر أحدث
+    {
+        var idx = _months.FindIndex(m => m.Month == _filter.PayrollMonth);
+        if (idx <= 0) return;
+        await SelectMonthAsync(_months[idx - 1].Month);
+    }
+
+    private void SyncMonthInUrl()
+    {
+        try
+        {
+            Nav.NavigateTo(Nav.GetUriWithQueryParameter("month", (string?)_filter.PayrollMonth), replace: true);
+        }
+        catch { }
+    }
+
+    private static string FormatCompactMoney(decimal v) =>
+        v >= 1_000_000m ? $"{v / 1_000_000m:N1} مليون ج" : $"{v / 1_000m:N0} ألف ج";
 
     private async Task OnSearchKeyUp(KeyboardEventArgs e)
     {

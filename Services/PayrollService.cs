@@ -903,6 +903,27 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
         };
     }
 
+    // ============================================================
+    // ملخصات الشهور المتاحة (شرائح اختيار الشهر في سجل المرتبات)
+    // يستثني دفعات خارج الراتب (OffPayrollMarker) كما في GetStatsAsync
+    // ============================================================
+    public async Task<List<PayrollMonthSummaryDto>> GetMonthSummariesAsync(int take = 36)
+    {
+        return await _db.Payrolls.AsNoTracking()
+            .Where(p => p.PayrollMonth != null
+                     && (p.Notes == null || !p.Notes.Contains(OffPayrollMarker)))
+            .GroupBy(p => p.PayrollMonth)
+            .Select(g => new PayrollMonthSummaryDto
+            {
+                Month        = g.Key,
+                PayrollCount = g.Count(),
+                TotalNet     = g.Sum(x => x.NetSalary ?? 0)
+            })
+            .OrderByDescending(m => m.Month)
+            .Take(take)
+            .ToListAsync();
+    }
+
     public async Task<List<PayrollRunDto>> GetRunsAsync(string? month = null)
     {
         var q = _db.PayrollRuns.AsNoTracking()

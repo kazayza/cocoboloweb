@@ -8,6 +8,7 @@ public interface IPayrollService
     Task<PagedResult<PayrollListDto>>   GetPayrollsAsync(PayrollFilterDto filter);
     Task<PayslipDto?>                   GetPayslipAsync(int payrollId);
     Task<PayrollStatsDto>               GetStatsAsync(string month);
+    Task<List<PayrollMonthSummaryDto>>  GetMonthSummariesAsync(int take = 36);
     Task<List<PayrollRunDto>>           GetRunsAsync(string? month = null);
 
     // ── حساب (بدون حفظ) ─────────────────────────────────────
