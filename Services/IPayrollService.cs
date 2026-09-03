@@ -1,4 +1,4 @@
-using COCOBOLOERPNEW.DTOs;
+﻿using COCOBOLOERPNEW.DTOs;
 
 namespace COCOBOLOERPNEW.Services;
 
@@ -8,7 +8,7 @@ public interface IPayrollService
     Task<PagedResult<PayrollListDto>>   GetPayrollsAsync(PayrollFilterDto filter);
     Task<PayslipDto?>                   GetPayslipAsync(int payrollId);
     Task<PayrollStatsDto>               GetStatsAsync(string month);
-    Task<List<PayrollMonthSummaryDto>>  GetMonthSummariesAsync(int take = 36);
+    Task<List<PayrollMonthSummaryDto>>  GetMonthSummariesAsync(int take = 36, bool offPayrollOnly = false);
     Task<List<PayrollRunDto>>           GetRunsAsync(string? month = null);
 
     // ── حساب (بدون حفظ) ─────────────────────────────────────

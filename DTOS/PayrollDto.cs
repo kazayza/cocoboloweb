@@ -1,4 +1,4 @@
-namespace COCOBOLOERPNEW.DTOs;
+﻿namespace COCOBOLOERPNEW.DTOs;
 
 // ============================================================
 // DTOs نظام المرتبات - النسخة النهائية
@@ -279,6 +279,10 @@ public class OffPayrollPaymentFormDto
     public string?  Department    { get; set; }
     public DateTime PaymentDate   { get; set; } = DateTime.Today;
     public string   PaymentMonth  => PaymentDate.ToString("yyyy-MM");
+
+    // شهر استحقاق الدفعة (قد يختلف عن شهر الصرف) — فارغ = شهر تاريخ الدفعة
+    public string?  ReferenceMonth { get; set; }
+    public string   EffectiveMonth => string.IsNullOrWhiteSpace(ReferenceMonth) ? PaymentMonth : ReferenceMonth.Trim();
     public string   PaymentType   { get; set; } = "BonusSeparate";
     public string   PaymentTypeAr => PaymentType switch
     {

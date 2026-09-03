@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // ✅ PayrollService.cs - النسخة المُصلَحة الكاملة
 // بناءً على الـ SQL Script الفعلي للـ Database
 // ============================================================
@@ -907,11 +907,15 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     // ملخصات الشهور المتاحة (شرائح اختيار الشهر في سجل المرتبات)
     // يستثني دفعات خارج الراتب (OffPayrollMarker) كما في GetStatsAsync
     // ============================================================
-    public async Task<List<PayrollMonthSummaryDto>> GetMonthSummariesAsync(int take = 36)
+    public async Task<List<PayrollMonthSummaryDto>> GetMonthSummariesAsync(int take = 36, bool offPayrollOnly = false)
     {
-        return await _db.Payrolls.AsNoTracking()
-            .Where(p => p.PayrollMonth != null
-                     && (p.Notes == null || !p.Notes.Contains(OffPayrollMarker)))
+        var baseQuery = _db.Payrolls.AsNoTracking()
+            .Where(p => p.PayrollMonth != null);
+        baseQuery = offPayrollOnly
+            ? baseQuery.Where(p => p.Notes != null && p.Notes.Contains(OffPayrollMarker))
+            : baseQuery.Where(p => p.Notes == null || !p.Notes.Contains(OffPayrollMarker));
+
+        return await baseQuery
             .GroupBy(p => p.PayrollMonth)
             .Select(g => new PayrollMonthSummaryDto
             {
@@ -1039,7 +1043,7 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
         {
             run = new PayrollRun
             {
-                PayrollMonth    = dto.PaymentMonth,
+                PayrollMonth    = dto.EffectiveMonth,
                 Status          = "PendingReview",
                 Notes           = $"{OffPayrollMarker} دفعة خارج الراتب للموظف {employee.FullName}",
                 TotalEmployees  = 1,
@@ -1055,7 +1059,7 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
             var payroll = new Payroll
             {
                 EmployeeId         = employee.EmployeeId,
-                PayrollMonth       = dto.PaymentMonth,
+                PayrollMonth       = dto.EffectiveMonth,
                 BasicSalary        = 0,
                 BonusInPayroll     = 0,
                 Allowances         = 0,

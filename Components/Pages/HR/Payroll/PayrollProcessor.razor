@@ -1,4 +1,4 @@
-@page "/hr/payroll/processor"
+﻿@page "/hr/payroll/processor"
 @attribute [Authorize]
 
 @using Microsoft.AspNetCore.Authorization
@@ -25,14 +25,21 @@
 
     <MudSpacer />
 
-    <MudTextField @bind-Value="_selectedMonth"
-                  Label="الشهر"
-                  Placeholder="2026-05"
-                  Variant="Variant.Outlined"
-                  Style="max-width:160px"
-                  Margin="Margin.Dense"
-                  Adornment="Adornment.Start"
-                  AdornmentIcon="@Icons.Material.Filled.CalendarMonth" />
+    <MudSelect T="string"
+               Value="_selectedMonth"
+               ValueChanged="OnMonthChangedAsync"
+               Label="الشهر"
+               Variant="Variant.Outlined"
+               Style="min-width:185px"
+               Margin="Margin.Dense">
+        @foreach (var m in _monthOptions)
+        {
+            <MudSelectItem T="string" Value="@m.Month">@FormatMonth(m.Month)@(m.PayrollCount > 0 ? " — مسجل" : "")</MudSelectItem>
+        }
+    </MudSelect>
+
+    <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="@(() => QuickMonthAsync(0))">الشهر الحالي</MudButton>
+    <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="@(() => QuickMonthAsync(-1))">الشهر السابق</MudButton>
 
     <MudButton Variant="Variant.Filled"
                Color="Color.Primary"
@@ -268,6 +275,7 @@ else
 
 @code {
     private string _selectedMonth = DateTime.Today.ToString("yyyy-MM");
+    private List<PayrollMonthSummaryDto> _monthOptions = new();
     private bool _calculating;
     private bool _processing;
     private bool _allSelected = true;
@@ -285,6 +293,8 @@ else
         var auth = await AuthProvider.GetAuthenticationStateAsync();
         var user = auth.User;
         _currentUser = user.Identity?.Name ?? "system";
+
+        await LoadMonthOptionsAsync();
 
         var canView = user.IsInRole("Admin")
                       || user.IsInRole("HrManager")
@@ -419,6 +429,47 @@ else
     }
 
     private static string FormatMoney(decimal amount) => amount <= 0 ? "—" : amount.ToString("N2") + " جـ";
+
+    // ── اختيار الشهر: قائمة الشهور الحالية/السابقة/المسجلة ──
+    private async Task LoadMonthOptionsAsync()
+    {
+        try
+        {
+            _monthOptions = await PayrollService.GetMonthSummariesAsync();
+        }
+        catch
+        {
+            _monthOptions = new List<PayrollMonthSummaryDto>();
+        }
+
+        var currentMonth = DateTime.Today.ToString("yyyy-MM");
+        if (_monthOptions.All(m => m.Month != currentMonth))
+            _monthOptions.Insert(0, new PayrollMonthSummaryDto { Month = currentMonth });
+        var prevMonth = DateTime.Today.AddMonths(-1).ToString("yyyy-MM");
+        if (_monthOptions.All(m => m.Month != prevMonth))
+            _monthOptions.Insert(1, new PayrollMonthSummaryDto { Month = prevMonth });
+    }
+
+    private async Task OnMonthChangedAsync(string? month)
+    {
+        _selectedMonth = string.IsNullOrWhiteSpace(month)
+            ? DateTime.Today.ToString("yyyy-MM")
+            : month;
+    }
+
+    private async Task QuickMonthAsync(int monthsOffset)
+    {
+        _selectedMonth = DateTime.Today.AddMonths(monthsOffset).ToString("yyyy-MM");
+        StateHasChanged();
+    }
+
+    private static string FormatMonth(string? month) =>
+        string.IsNullOrWhiteSpace(month)
+            ? "—"
+            : DateTime.TryParseExact(month + "-01", "yyyy-MM-dd", null,
+                System.Globalization.DateTimeStyles.None, out var date)
+                ? date.ToString("MMMM yyyy", new System.Globalization.CultureInfo("ar-EG"))
+                : month;
 
     private static bool ValidateMonth(string? month) =>
         !string.IsNullOrWhiteSpace(month)
