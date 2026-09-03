@@ -125,7 +125,8 @@
                 </MudItem>
 
                 <MudItem xs="12" sm="6">
-                    <MudDatePicker @bind-Date="_paymentDate"
+                    <MudDatePicker Date="_paymentDate"
+                                   DateChanged="OnPaymentDateChangedAsync"
                                    Label="تاريخ الدفعة"
                                    Variant="Variant.Outlined"
                                    DateFormat="dd/MM/yyyy"
@@ -155,17 +156,32 @@
                 </MudItem>
 
                 <MudItem xs="12" sm="6">
-                    <MudSelect T="string"
-                               @bind-Value="_referenceMonth"
-                               Label="الشهر المرجعي *"
-                               Variant="Variant.Outlined"
-                               Margin="Margin.Dense">
-                        @foreach (var m in _referenceMonthOptions)
-                        {
-                            <MudSelectItem T="string" Value="@m.Month">@FormatMonth(m.Month)</MudSelectItem>
-                        }
-                    </MudSelect>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary">شهر استحقاق الدفعة — يمكن أن يختلف عن شهر الصرف</MudText>
+                    <MudTextField T="string"
+                                  Value="_referenceMonth"
+                                  ValueChanged="OnReferenceMonthChanged"
+                                  Label="الشهر المرجعي *"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Placeholder="مثال: 2026-08"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.CalendarMonth"
+                                  Validation="@(new System.Collections.Generic.List<System.Func<string, System.Collections.Generic.IEnumerable<string>>> { ValidateReferenceMonth })"
+                                  HelperText="شهر استحقاق الدفعة (yyyy-MM) — حر تماماً ومستقل عن تاريخ الصرف" />
+                    @if (IsReferenceMonthMismatch)
+                    {
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-2">
+                            <div class="d-flex align-center gap-2 flex-wrap">
+                                <MudIcon Icon="@Icons.Material.Filled.SwapHoriz" />
+                                <MudText Typo="Typo.body2">
+                                    الشهر المرجعي <b>@(string.IsNullOrWhiteSpace(_referenceMonth) ? "—" : FormatMonth(_referenceMonth))</b>
+                                    يختلف عن شهر الصرف <b>@FormatMonth(_paymentDateMonth)</b> — هذا مقصود (مكافأة متأخرة / مقدمة).
+                                </MudText>
+                                <MudSpacer />
+                                <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="SyncReferenceMonthToPaymentDate"
+                                           StartIcon="@Icons.Material.Filled.Sync">مزامنة مع شهر الصرف</MudButton>
+                            </div>
+                        </MudAlert>
+                    }
                 </MudItem>
 
                 <MudItem xs="12">
@@ -462,6 +478,10 @@
     };
 
     private string _referenceMonth = DateTime.Today.ToString("yyyy-MM");
+    private bool _userEditedReferenceMonth;
+    private bool _userEditedPaymentDate;
+    private string _paymentDateMonth => (_paymentDate ?? DateTime.Today).ToString("yyyy-MM");
+    private bool IsReferenceMonthMismatch => !string.IsNullOrWhiteSpace(_referenceMonth) && _referenceMonth != _paymentDateMonth;
     private List<PayrollMonthSummaryDto> _offPayrollMonths = new();
     private List<PayrollMonthSummaryDto> _offPayrollMonthChips = new();
     private List<PayrollMonthSummaryDto> _referenceMonthOptions = new();
@@ -558,6 +578,12 @@
             return;
         }
 
+        if (NormalizeMonthOrNull(_referenceMonth) is null)
+        {
+            Snackbar.Add("صيغة الشهر المرجعي غير صحيحة — اكتب yyyy-MM", Severity.Warning);
+            return;
+        }
+
         _saving = true;
         StateHasChanged();
 
@@ -567,6 +593,7 @@
             _formModel.EmployeeName = _selectedEmployee.FullName;
             _formModel.Department = _selectedEmployee.Department;
             _formModel.PaymentDate = _paymentDate ?? DateTime.Today;
+        _formModel.ReferenceMonth = NormalizeMonthOrNull(_referenceMonth) ?? _formModel.PaymentDate.ToString("yyyy-MM");
             _formModel.ReferenceMonth = _referenceMonth;
 
             var (ok, msg, _) = await PayrollService.SaveOffPayrollPaymentAsync(_formModel, _currentUser);
@@ -594,6 +621,8 @@
         _selectedEmployee = null;
         _paymentDate = DateTime.Today;
         _referenceMonth = DateTime.Today.ToString("yyyy-MM");
+        _userEditedReferenceMonth = false;
+        _userEditedPaymentDate = false;
         _formModel = new OffPayrollPaymentFormDto
         {
             PaymentDate = DateTime.Today,
@@ -740,6 +769,48 @@
         "CommissionSeparate" => "عمولة منفصلة",
         _ => "مكافأة منفصلة"
     };
+
+    // يقبل أي صيغة شهر شائعة (yyyy-MM, yyyy/MM, MM/yyyy, M/yyyy...) ويعيد yyyy-MM أو null لو غير صالح
+    private static string? NormalizeMonthOrNull(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var s = raw.Trim().Replace("/", "-").Replace(".", "-");
+        if (DateTime.TryParseExact(s, new[] { "yyyy-MM", "yyyy-M", "MM-yyyy", "M-yyyy", "yyyy-MM-dd", "yyyy-M-d" }, null,
+            System.Globalization.DateTimeStyles.None, out var d))
+            return d.ToString("yyyy-MM");
+        if (DateTime.TryParse(s, out d))
+            return d.ToString("yyyy-MM");
+        return null;
+    }
+
+    private async Task OnPaymentDateChangedAsync(DateTime? value)
+    {
+        _paymentDate = value;
+        _userEditedPaymentDate = true;
+        if (!_userEditedReferenceMonth)
+            _referenceMonth = (value ?? DateTime.Today).ToString("yyyy-MM");
+    }
+
+    private void OnReferenceMonthChanged(string? value)
+    {
+        _referenceMonth = value ?? string.Empty;
+        _userEditedReferenceMonth = true;
+    }
+
+    private void SyncReferenceMonthToPaymentDate()
+    {
+        _referenceMonth = _paymentDateMonth;
+        _userEditedReferenceMonth = false;
+    }
+
+    // validator: يقبل صيغ متعددة ويعيد رسالة خطأ عربية أو null
+    private static System.Collections.Generic.IEnumerable<string> ValidateReferenceMonth(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            yield return "الشهر المرجعي مطلوب";
+        else if (NormalizeMonthOrNull(value) is null)
+            yield return "صيغة غير صحيحة — اكتب الشهر بصيغة yyyy-MM (مثال: 2026-08)";
+    }
 
     private static string FormatMonth(string? month) =>
         string.IsNullOrWhiteSpace(month)
