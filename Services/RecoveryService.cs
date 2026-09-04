@@ -769,7 +769,7 @@ public class RecoveryService
     // ═══════════════════════════════════════════════════════════
     //  تقرير الاسترداد الشامل (P4)
     // ═══════════════════════════════════════════════════════════
-    public async Task<RecoveryReportResultDto> GetRecoveryReportAsync(RecoveryReportFilterDto f)
+    public async Task<RecoveryReportResultDto> GetRecoveryReportAsync(RecoveryReportFilterDto f, int pageIndex = 1, int pageSize = 50)
     {
         var result = new RecoveryReportResultDto { Rows = new List<RecoveryReportRowDto>() };
         await using var db = await _dbFactory.CreateDbContextAsync();
@@ -1027,6 +1027,17 @@ public class RecoveryService
         result.ContactedCount = result.Rows.Count(r => r.StatusAr == "قيد المتابعة");
         result.RejectedCount = result.Rows.Count(r => r.StatusAr == "رفض نهائي");
         result.RevivedCount = result.Rows.Count(r => r.StatusAr == "مُسترد");
+
+        // ⭐ ترقيم الصفحات في الخادم — يحدّ الصفوف المُرْسَلة عبر WebSocket (يعالج ثقل البحث)
+        //    pageSize <= 0 = كل الصفوف (يُستخدم للتصدير Excel الكامل فقط)
+        var total = result.Rows.Count;
+        result.PageSize = pageSize;
+        result.PageIndex = Math.Clamp(pageIndex, 1, Math.Max(1, (int)Math.Ceiling(total / (double)Math.Max(1, pageSize))));
+        result.Rows = (pageSize > 0 && total > 0)
+            ? result.Rows.Skip((result.PageIndex - 1) * pageSize).Take(pageSize).ToList()
+            : result.Rows;
+        result.HasMore = pageSize > 0 && result.PageIndex * pageSize < total;
+
         return result;
     }
 

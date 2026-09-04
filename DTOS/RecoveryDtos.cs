@@ -186,7 +186,7 @@ public class RecoveryReportRowDto
     public string StatusAr { get; set; } = "";
 }
 
-/// <summary>نتيجة تقرير الاسترداد (سطور + ملخص).</summary>
+/// <summary>نتيجة تقرير الاسترداد (سطور مرقّمة + ملخص).</summary>
 public class RecoveryReportResultDto
 {
     public List<RecoveryReportRowDto> Rows { get; set; } = new();
@@ -196,4 +196,10 @@ public class RecoveryReportResultDto
     public int ContactedCount { get; set; }
     public int RejectedCount { get; set; }
     public int RevivedCount { get; set; }
+
+    // ترقيم الصفحات — يحدّ إرسال الصفوف عبر WebSocket (يعالج ثقل البحث)
+    public int PageIndex { get; set; } = 1;
+    public int PageSize { get; set; } = 50;
+    public bool HasMore { get; set; }
+    public int TotalPages => PageSize > 0 ? (int)Math.Ceiling(RowCount / (double)PageSize) : 0;
 }
