@@ -12,12 +12,13 @@ public class OpportunityService : IOpportunityService
     private readonly IHttpContextAccessor _http;
     private readonly ILogger<OpportunityService> _logger;
     private readonly NotificationService _notify;
+    private readonly RecoveryService _recovery;
 
     private static readonly HashSet<string> WonKeywords  = new() { "تم البيع", "بيع", "Closed Deal" };
     private static readonly HashSet<string> LostKeywords = new() { "خسارة", "Lost", "غير مهتم", "Not Interested" };
 
-    public OpportunityService(db24804Context db, IHttpContextAccessor http, ILogger<OpportunityService> logger, NotificationService notify)
-    { _db = db; _http = http; _logger = logger; _notify = notify; }
+    public OpportunityService(db24804Context db, IHttpContextAccessor http, ILogger<OpportunityService> logger, NotificationService notify, RecoveryService recovery)
+    { _db = db; _http = http; _logger = logger; _notify = notify; _recovery = recovery; }
 
     // ════════════════════ LIST ════════════════════
     public async Task<PagedResult<OpportunityListDto>> GetOpportunitiesAsync(OpportunityFilterDto filter)
@@ -100,6 +101,11 @@ public class OpportunityService : IOpportunityService
         var party = await _db.Parties.FindAsync(opp.PartyId);
         if (party != null) party.LastContactDate = now;
         await _db.SaveChangesAsync();
+
+        // 🔁 نقل للخسارة/غير المهتم مباشرة → إشعار + مهمة لخدمة العملاء فورًا
+        if (IsExitStageId(newStageId))
+            await _recovery.EnsureRecoveryAssignmentAsync(opportunityId);
+
         return (true, $"تم النقل إلى {(newStage?.StageNameAr ?? newStage?.StageName ?? "—")}");
     }
     catch (Exception ex) { _logger.LogError(ex, "MoveStage failed"); return (false, $"خطأ: {ex.Message}"); }
@@ -448,6 +454,10 @@ if (f.DateTo.HasValue)
 
                 await NotifyOpportunityReassignedAsync(opp.OpportunityId, dto.PartyId, oldEmployeeId, dto.EmployeeId.Value, userName, dto.ReassignmentComment);
             }
+
+            // 🔁 حفظ الخسارة/غير المهتم مباشرة (صاحب صلاحية إغلاق مباشر) → إشعار + مهمة لخدمة العملاء فورًا
+            if (IsExitStageId(dto.StageId))
+                await _recovery.EnsureRecoveryAssignmentAsync(opp.OpportunityId);
 
             return (true, isNew ? "تم إضافة الفرصة بنجاح" : "تم تعديل الفرصة بنجاح", opp.OpportunityId);
         }
@@ -1624,7 +1634,8 @@ if (stageBefore == 0 || dto.StageId != (stageBefore == 0 ? null : stageBefore) |
 
     private bool CanApproveClosureRequests() => CanDirectCloseOpportunities();
 
-    private static bool IsExitStageId(int stageId) => stageId == 4 || stageId == 5;
+    // ⭐ مصدر واحد للحقيقة — النسخة القديمة كانت مكررة هنا وفي RecoveryService
+    private static bool IsExitStageId(int stageId) => CrmStages.IsExitStage(stageId);
     private static bool IsClosedStageId(int stageId) => stageId == 3 || stageId == 4 || stageId == 5;
 
     private static int CalculateLifecycleDays(DateTime createdAt, DateTime? closedAt)

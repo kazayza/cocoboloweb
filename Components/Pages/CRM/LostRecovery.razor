@@ -1,0 +1,1242 @@
+@page "/crm/lost-recovery"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+@using System.Security.Claims
+@using ClosedXML.Excel
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudSize = MudBlazor.Size
+@using MudColor = MudBlazor.Color
+
+@inject RecoveryService Recovery
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider Auth
+@inject IJSRuntime JS
+
+<div class="lr-page" dir="rtl">
+
+    <!-- ═══════════ HERO ═══════════ -->
+    <div class="lr-hero">
+        <div class="lr-hero-bg"></div>
+        <div class="lr-hero-content">
+            <div class="lr-hero-title">
+                <div class="lr-hero-icon">🔁</div>
+                <div>
+                    <h1>استرداد الفرص الخاسرة</h1>
+                    <p>وحدة متابعة العملاء — تواصل مع العملاء اللي وصلوا مرحلة خسارة/غير مهتم وأعدهم لدورة البيع</p>
+                </div>
+            </div>
+            <div class="lr-hero-btns">
+                <button class="lr-btn lr-btn-light" @onclick="ReloadAll">
+                    <span class="lr-btn-ico">↻</span>
+                    <span>تحديث</span>
+                </button>
+                <button class="lr-btn lr-btn-light" @onclick="GoToReport" title="تقرير شامل بالاسترداد">
+                    <span class="lr-btn-ico">📄</span>
+                    <span>التقرير</span>
+                </button>
+                <button class="lr-btn lr-btn-light" @onclick="ExportExcelAsync"
+                        disabled="@(_exporting || _items.Count == 0)" title="تصدير الطابور الحالي Excel (بحد أقصى 5000 صف)">
+                    <span class="lr-btn-ico">⬇</span>
+                    <span>@(_exporting ? "جارٍ التصدير..." : "تصدير Excel")</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_successMsg))
+    {
+        <div class="lr-toast" @onclick="DismissToast" title="اضغط للإغلاق">
+            <span>@_successMsg</span>
+            <span class="lr-toast-x">✕</span>
+        </div>
+    }
+
+    @if (_loading)
+    {
+        <div class="lr-loading"><div class="lr-spin"></div><span>يتم الآن تجهيز فرص المتابعة…</span></div>
+    }
+    else
+    {
+        <!-- ═══════════ KPI CARDS ═══════════ -->
+        <div class="lr-kpis">
+            <div class="lr-kpi lr-kpi-red">
+                <div class="lr-kpi-ico">📉</div>
+                <div class="lr-kpi-body">
+                    <span class="lr-kpi-val">@_stats.LostCount.ToString("N0")</span>
+                    <span class="lr-kpi-lbl">فرصة خاسرة بانتظار المتابعة</span>
+                </div>
+            </div>
+            <div class="lr-kpi lr-kpi-indigo">
+                <div class="lr-kpi-ico">💰</div>
+                <div class="lr-kpi-body">
+                    <span class="lr-kpi-val">@Money(_stats.LostValue)</span>
+                    <span class="lr-kpi-lbl">إجمالي القيمة المتوقعة</span>
+                </div>
+            </div>
+            <div class="lr-kpi lr-kpi-amber">
+                <div class="lr-kpi-ico">⏳</div>
+                <div class="lr-kpi-body">
+                    <span class="lr-kpi-val">@_stats.UnassignedCount.ToString("N0")</span>
+                    <span class="lr-kpi-lbl">بانتظار التوزيع التلقائي</span>
+                </div>
+            </div>
+            <div class="lr-kpi lr-kpi-green">
+                <div class="lr-kpi-ico">✅</div>
+                <div class="lr-kpi-body">
+                    <span class="lr-kpi-val">@_stats.RevivedThisMonth.ToString("N0")</span>
+                    <span class="lr-kpi-lbl">عميل استُرد هذا الشهر</span>
+                </div>
+            </div>
+            <div class="lr-kpi lr-kpi-rose">
+                <div class="lr-kpi-ico">📞</div>
+                <div class="lr-kpi-body">
+                    <span class="lr-kpi-val">@_stats.UncontactedCount.ToString("N0")</span>
+                    <span class="lr-kpi-lbl">مسندة ولم يُتواصل معها بعد</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════ FILTER BAR ═══════════ -->
+        <div class="lr-filters">
+            <div class="lr-search">
+                <span class="lr-search-ico">🔍</span>
+                <input type="text" placeholder="ابحث بالعميل أو الهاتف..." value="@_q"
+                       @oninput="OnSearchTyped" @onkeydown="OnSearchKey" />
+                @if (!string.IsNullOrWhiteSpace(_q))
+                {
+                    <button class="lr-search-clear" @onclick="ClearSearch" title="مسح البحث">×</button>
+                }
+            </div>
+
+            <select class="lr-sort" value="@_sortBy" @onchange="OnSortChange" title="ترتيب القائمة">
+                <option value="value">الأعلى قيمة</option>
+                <option value="recent">الأحدث خسارة</option>
+                <option value="days">الأقدم خسارة</option>
+                <option value="followup">الأقرب موعد متابعة</option>
+            </select>
+
+            <div class="lr-chips">
+                <button class="lr-chip @(_kind == "all" ? "lr-chip-on" : "")" @onclick='() => SetKind("all")'>الكل</button>
+                <button class="lr-chip @(_kind == "lost" ? "lr-chip-on" : "")" @onclick='() => SetKind("lost")'>خسارة</button>
+                <button class="lr-chip @(_kind == "notinterested" ? "lr-chip-on" : "")" @onclick='() => SetKind("notinterested")'>غير مهتم</button>
+                <button class="lr-chip @(_candidateOnly ? "lr-chip-on" : "")" @onclick="ToggleCandidate"
+                        title="الفرص اللي مندوب المبيعات رشّحها للاسترداد">⭐ مرشحة للاسترداد</button>
+                <button class="lr-chip @(_lateOnly ? "lr-chip-late" : "")" @onclick="ToggleLate"
+                        title="الفرص اللي فات موعد المتابعة المحدد ليها">⏰ متأخرة فقط</button>
+                @if (_myEmpId > 0)
+                {
+                    <button class="lr-chip @(_mineOnly ? "lr-chip-on" : "")" @onclick="ToggleMine"
+                            title="القضايا المسندة لي أنا فقط">👤 قضاياي</button>
+                }
+            </div>
+        </div>
+
+        @if (_items.Count == 0)
+        {
+            <div class="lr-empty">
+                <div class="lr-empty-ico"></div>
+                <h3>لا توجد فرص خاسرة مطابقة</h3>
+                <p>لو فيه فرصة اتقفلت بخسارة هتظهر هنا تلقائيًا وبيتواصل معاها فريق خدمة العملاء.</p>
+                <button class="lr-btn lr-btn-ghost" @onclick="ReloadAll">فحص الخسائر الجديدة</button>
+            </div>
+        }
+        else
+        {
+            @if (_searching)
+            {
+                <div class="lr-searching">🔍 جارٍ البحث وتحديث القائمة…</div>
+            }
+            <!-- ═══════════ QUEUE CARDS ═══════════ -->
+            <div class="lr-queue">
+                @foreach (var it in _items)
+                {
+                    <div class="lr-card @(it.IsRecoveryCandidate == true ? "lr-card-cand" : "")">
+                        <div class="lr-avatar" style="background:@SoftColor(it.StageColor)">@AvatarLetter(it.ClientName)</div>
+
+                        <div class="lr-main">
+                            <div class="lr-name-row">
+                                <span class="lr-name">@it.ClientName</span>
+                                @if (it.IsRecoveryCandidate == true)
+                                {
+                                    <span class="lr-badge lr-badge-green">⭐ قابل للاسترداد</span>
+                                }
+                                <span class="lr-badge @(it.IsNotInterested ? "lr-badge-gray" : "lr-badge-red")">@it.StageNameAr</span>
+                                @if (!string.IsNullOrEmpty(it.Phone))
+                                {
+                                    <a class="lr-phone" href="@($"tel:{it.Phone}")" title="اتصال">@it.Phone</a>
+                                }
+                            </div>
+                            <div class="lr-sub">
+                                <a class="lr-op-link" href="@($"/crm/opportunities/{it.OpportunityId}")"
+                                   title="فتح تفاصيل الفرصة في صفحة جديدة">#OP-@it.OpportunityId ↗</a>
+                                <span>·</span>
+                                <span>مغلق منذ <b>@it.DaysSinceClosed</b> يوم</span>
+                                @if (it.ClosedAt.HasValue)
+                                {
+                                    <span>·</span>
+                                    <span>@it.ClosedAt.Value.ToString("yyyy/MM/dd")</span>
+                                }
+                                @if (!string.IsNullOrEmpty(it.PreviousEmployeeName))
+                                {
+                                    <span>·</span>
+                                    <span>المندوب: @it.PreviousEmployeeName</span>
+                                }
+                            </div>
+                            <div class="lr-reason">
+                                @if (!string.IsNullOrEmpty(it.LostReasonNameAr))
+                                {
+                                    <span class="lr-reason-chip">السبب: @it.LostReasonNameAr</span>
+                                }
+                                @if (!string.IsNullOrEmpty(it.LostNotes))
+                                {
+                                    <span class="lr-reason-note" title="@it.LostNotes">@it.LostNotes</span>
+                                }
+                            </div>
+
+                            @if (it.LastCsDate.HasValue)
+                            {
+                                <div class="lr-last-cs" title="@it.LastCsSummary">
+                                    <span>🕘 آخر تواصل بعد الخسارة:</span>
+                                    <b>@Trunc(it.LastCsSummary, 60)</b>
+                                    <span>@it.LastCsDate.Value.ToString("yyyy/MM/dd HH:mm")</span>
+                                    @if (!string.IsNullOrEmpty(it.LastCsBy))
+                                    {
+                                        <span>· @it.LastCsBy</span>
+                                    }
+                                </div>
+                            }
+                        </div>
+
+                        <div class="lr-side">
+                            <div class="lr-value">@Money(it.ExpectedValue)</div>
+                            <div class="lr-value-caption">قيمة متوقعة</div>
+
+                            @if (it.NextFollowUpDate.HasValue)
+                            {
+                                <div class="lr-follow @(it.IsFollowUpOverdue ? "lr-follow-late" : "")">
+                                    📅 المتابعة: @it.NextFollowUpDate.Value.ToString("yyyy/MM/dd")
+                                    @(it.IsFollowUpOverdue ? "· متأخرة" : "")
+                                </div>
+                            }
+
+                            <div class="lr-assign-line">
+                                @if (it.RecoveryEmployeeName is not null)
+                                {
+                                    <span class="lr-assign-ok" title="مسؤول المتابعة من خدمة العملاء">👤 المتابعة: @it.RecoveryEmployeeName</span>
+                                }
+                                else
+                                {
+                                    <span class="lr-assign-wait">سيُتابَع تلقائيًا من خدمة العملاء</span>
+                                }
+                            </div>
+
+                            <div class="lr-actions">
+                                <a class="lr-act lr-act-wa" href="@WaHref(it.Phone)" title="واتساب سريع"
+                                   target="_blank" rel="noopener">
+                                    <MudIcon Icon="@Icons.Custom.Brands.WhatsApp" Size="MudSize.Small" Color="MudColor.Success" />
+                                </a>
+                                <a class="lr-act lr-act-call" href="@($"tel:{it.Phone}")" title="اتصال">
+                                    <MudIcon Icon="@Icons.Material.Filled.Phone" Size="MudSize.Small" />
+                                </a>
+                                <button class="lr-act lr-act-info" title="ملف العميل"
+                                        @onclick='() => Nav.NavigateTo($"/crm/customers/{it.PartyId}")'>
+                                    <MudIcon Icon="@Icons.Material.Rounded.AccountCircle" Size="MudSize.Small" />
+                                </button>
+                                <button class="lr-act lr-act-hist" title="سجل التواصل بعد الخسارة"
+                                        @onclick='() => OpenHistory(it)'>
+                                    <MudIcon Icon="@Icons.Material.Rounded.History" Size="MudSize.Small" />
+                                </button>
+                            </div>
+                        </div>
+
+                        @if (_canRevive)
+                        {
+                            <div class="lr-foot-actions">
+                                <button class="lr-btn lr-btn-contact" @onclick='() => OpenContact(it)'>
+                                    📝 سجّل محاولة تواصل
+                                </button>
+                                <button class="lr-btn lr-btn-revive" @onclick='() => OpenRevive(it)'>
+                                    🔁 العميل راجع — استرداد
+                                </button>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="lr-pager">
+                <span>عرض @_items.Count من @_total فرصة</span>
+                @if (_hasMore)
+                {
+                    <button class="lr-btn lr-btn-ghost" @onclick="LoadMoreAsync" disabled="@_loadingMore">
+                        @(_loadingMore ? "جارٍ تحميل المزيد..." : "تحميل المزيد ⬇")
+                    </button>
+                }
+            </div>
+        }
+    }
+
+    <!-- ═══════════ MODAL: تواصل ═══════════ -->
+    @if (_showContact && _sel != null)
+    {
+        <div class="lr-overlay" @onclick="CloseModals">
+            <div class="lr-modal" @onclick="Noop" @onclick:stopPropagation>
+                <div class="lr-modal-head">
+                    <div><span class="lr-modal-ico">📝</span> تسجيل محاولة تواصل</div>
+                    <button class="lr-x" @onclick="CloseModals">×</button>
+                </div>
+                <div class="lr-modal-body">
+                    <div class="lr-callout">
+                        <b>@_sel.ClientName</b> · #OP-@_sel.OpportunityId · مغلق منذ @_sel.DaysSinceClosed يوم ·
+                        القيمة: @Money(_sel.ExpectedValue)
+                        @if (!string.IsNullOrEmpty(_sel.LostReasonNameAr))
+                        {
+                            <div class="lr-callout-sub">سبب الخسارة: @_sel.LostReasonNameAr — @_sel.LostNotes</div>
+                        }
+                    </div>
+
+                    <div class="lr-field">
+                        <label>قناة التواصل</label>
+                        <select @bind="_channel">
+                            <option value="اتصال">اتصال هاتفي</option>
+                            <option value="واتساب">واتساب</option>
+                            <option value="زيارة">زيارة ميدانية</option>
+                            <option value="بريد">بريد إلكتروني</option>
+                        </select>
+                    </div>
+
+                    <div class="lr-field">
+                        <label>ملخص التواصل / نتيجة المكالمة</label>
+                        <textarea rows="3" placeholder="مثال: تحدثت مع المدير المالي، طلب عرضًا جديدًا بخصم 10%..." @bind="_summary"></textarea>
+                    </div>
+
+                    <div class="lr-field">
+                        <label>نتيجة التواصل *</label>
+                        <select @bind="_outcome">
+                            <option value="تم التواصل">تم التواصل</option>
+                            <option value="لم يرد">لم يرد</option>
+                            <option value="طلب مهلة">طلب مهلة</option>
+                            <option value="رفض نهائي">رفض نهائي — إغلاق ملف المتابعة نهائيًا</option>
+                        </select>
+                    </div>
+
+                    @if (_outcome == "رفض نهائي")
+                    {
+                        <div class="lr-warn">⚠ تنبيه: باختيار "رفض نهائي" تُغلق فرصة الاسترداد نهائيًا، ولا تظهر في قائمة المتابعة ولا تُرسَل لها إشعارات مرة أخرى.</div>
+                    }
+
+                    <div class="lr-field">
+                        <label>موعد المتابعة القادمة (اختياري)</label>
+                        <input type="date" value="@_followUp?.ToString("yyyy-MM-dd")" @onchange="OnFollowUpChange" />
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_errorMsg))
+                    {
+                        <div class="lr-err">⚠ @_errorMsg</div>
+                    }
+                </div>
+                <div class="lr-modal-foot">
+                    <button class="lr-btn lr-btn-ghost" @onclick="CloseModals">إلغاء</button>
+                    <button class="lr-btn lr-btn-primary" @onclick="SubmitContact" disabled="@_busy">
+                        @(_busy ? "جارٍ الحفظ..." : "حفظ المحاولة")
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- ═══════════ MODAL: العميل راجع ═══════════ -->
+    @if (_showRevive && _sel != null)
+    {
+        <div class="lr-overlay" @onclick="CloseModals">
+            <div class="lr-modal lr-modal-lg" @onclick="Noop" @onclick:stopPropagation>
+                <div class="lr-modal-head lr-modal-head-green">
+                    <div><span class="lr-modal-ico">🔁</span> العميل راجع — إعادة تفعيل</div>
+                    <button class="lr-x" @onclick="CloseModals">×</button>
+                </div>
+                <div class="lr-modal-body">
+                    <div class="lr-callout lr-callout-green">
+                        <b>@_sel.ClientName</b> عاد بعد خسارة #OP-@_sel.OpportunityId بقيمة @Money(_sel.ExpectedValue)
+                    </div>
+
+                    <div class="lr-radio-row">
+                        <label class="lr-radio">
+                            <input type="radio" checked="@_same" @onchange='() => _same = true' name="reviveMode" />
+                            <span><b>نفس الفرصة</b> — نفس الاحتياج والمنتج (التاريخ والسجل يكملوا)</span>
+                        </label>
+                        <label class="lr-radio">
+                            <input type="radio" checked="@(!_same)" @onchange='() => _same = false' name="reviveMode" />
+                            <span><b>فرصة جديدة</b> — احتياج/منتج مختلف، مرتبطة بالخاسرة</span>
+                        </label>
+                    </div>
+
+                    <div class="lr-grid2">
+                        <div class="lr-field">
+                            <label>المرحلة الجديدة *</label>
+                            <select @bind="_revStageId">
+                                @foreach (var s in _stages)
+                                {
+                                    <option value="@s.StageId">@(s.StageNameAr ?? s.StageName)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="lr-field">
+                            <label>القيمة المتوقعة (ج.م)</label>
+                            <input type="number" min="0" step="any" value="@_revValue" @onchange="OnRevValueChange" />
+                        </div>
+                    </div>
+
+                    @if (!_same)
+                    {
+                        <div class="lr-field">
+                            <label>المنتج / الخدمة المطلوبة (للفرصة الجديدة)</label>
+                            <input type="text" placeholder="مثال: نظام محاسبة لفرع جديد..." @bind="_revProduct" />
+                        </div>
+                    }
+
+                    <div class="lr-field">
+                        <label>ملاحظات (اختياري)</label>
+                        <textarea rows="2" placeholder="أي تفاصيل عن اتفاق العودة..." @bind="_revNotes"></textarea>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_errorMsg))
+                    {
+                        <div class="lr-err">⚠ @_errorMsg</div>
+                    }
+                </div>
+                <div class="lr-modal-foot">
+                    <button class="lr-btn lr-btn-ghost" @onclick="CloseModals">إلغاء</button>
+                    <button class="lr-btn lr-btn-revive" @onclick="SubmitRevive" disabled="@_busy || _revStageId == 0">
+                        @(_busy ? "جارٍ التنفيذ..." : (_same ? "تفعيل الفرصة" : "إنشاء فرصة جديدة"))
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- ═══════════ MODAL: سجل التواصل بعد الخسارة ═══════════ -->
+    @if (_showHistory && _sel != null)
+    {
+        <div class="lr-overlay" @onclick="CloseModals">
+            <div class="lr-modal lr-modal-lg" @onclick="Noop" @onclick:stopPropagation>
+                <div class="lr-modal-head">
+                    <div><span class="lr-modal-ico">🕘</span> سجل التواصل بعد الخسارة</div>
+                    <button class="lr-x" @onclick="CloseModals">×</button>
+                </div>
+                <div class="lr-modal-body">
+                    <div class="lr-callout">
+                        <b>@_sel.ClientName</b> · #OP-@_sel.OpportunityId · مغلق منذ @_sel.DaysSinceClosed يوم
+                        @if (_sel.RecoveryEmployeeName is not null)
+                        {
+                            <span>· المتابعة: @_sel.RecoveryEmployeeName</span>
+                        }
+                    </div>
+
+                    @if (_history.Count == 0)
+                    {
+                        <div class="lr-hist-empty">لا توجد محاولات تواصل مسجلة بعد الخسارة حتى الآن.</div>
+                    }
+                    else
+                    {
+                        <div class="lr-hist-list">
+                            @foreach (var h in _history)
+                            {
+                                <div class="lr-hist-item">
+                                    <div class="lr-hist-top">
+                                        <span class="lr-hist-date">@h.Date.ToString("yyyy/MM/dd HH:mm")</span>
+                                        @if (!string.IsNullOrEmpty(h.Channel))
+                                        {
+                                            <span class="lr-hist-channel">@h.Channel</span>
+                                        }
+                                        <span class="lr-hist-who">@h.EmployeeName</span>
+                                    </div>
+                                    <div class="lr-hist-sum">@h.Summary</div>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(_errorMsg))
+                    {
+                        <div class="lr-err">⚠ @_errorMsg</div>
+                    }
+                </div>
+                <div class="lr-modal-foot">
+                    <button class="lr-btn lr-btn-ghost" @onclick="CloseModals">إغلاق</button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<style>
+    .lr-page {
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        display: flex; flex-direction: column; gap: 18px;
+        max-width: 1280px; margin: 0 auto; padding: 18px;
+        --lr-indigo: #4f46e5; --lr-ink: #0f172a; --lr-mut: #64748b;
+        --lr-line: #e2e8f0; --lr-bg-soft: #f1f5f9;
+    }
+
+    /* ───── HERO ───── */
+    .lr-hero { position: relative; overflow: hidden; border-radius: 20px;
+        background: linear-gradient(135deg, #312e81 0%, #4f46e5 55%, #6d28d9 100%);
+        color: #fff; box-shadow: 0 18px 40px rgba(79, 70, 229, .25); }
+    .lr-hero-bg { position: absolute; inset: 0; opacity: .16;
+        background-image: radial-gradient(circle at 15% 20%, #fff 1.5px, transparent 1.5px),
+                          radial-gradient(circle at 85% 80%, #fff 1.5px, transparent 1.5px);
+        background-size: 34px 34px; }
+    .lr-hero-content { position: relative; display: flex; align-items: center;
+        justify-content: space-between; gap: 14px; padding: 24px 26px; flex-wrap: wrap; }
+    .lr-hero-title { display: flex; align-items: center; gap: 16px; }
+    .lr-hero-btns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .lr-hero-icon { width: 58px; height: 58px; border-radius: 16px; display: grid; place-items: center;
+        font-size: 28px; background: rgba(255, 255, 255, .14); border: 1px solid rgba(255, 255, 255, .25); }
+    .lr-hero-title h1 { margin: 0; font-size: 1.5rem; font-weight: 800; }
+    .lr-hero-title p { margin: 4px 0 0; font-size: .88rem; opacity: .85; max-width: 640px; }
+
+    /* ───── أزرار عامة ───── */
+    .lr-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+        border: 0; border-radius: 12px; padding: 10px 18px; font-family: inherit;
+        font-size: .88rem; font-weight: 800; cursor: pointer; transition: all .15s ease; color: #fff; }
+    .lr-btn:disabled { opacity: .55; cursor: not-allowed; }
+    .lr-btn:not(:disabled):hover { transform: translateY(-2px); filter: brightness(1.05); }
+    .lr-btn-light { background: rgba(255, 255, 255, .16); border: 1px solid rgba(255, 255, 255, .3); }
+    .lr-btn-primary { background: linear-gradient(135deg, #4f46e5, #6366f1); }
+    .lr-btn-revive { background: linear-gradient(135deg, #059669, #10b981); }
+    .lr-btn-contact { background: linear-gradient(135deg, #d97706, #f59e0b); }
+    .lr-btn-ghost { background: #eef2f7; color: #334155; }
+    .lr-btn-ghost:hover { background: #e2e8f0; }
+    .lr-btn-ico { font-size: 1.1rem; }
+
+    /* ───── KPI ───── */
+    .lr-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 14px; }
+    .lr-kpi { display: flex; align-items: center; gap: 14px; background: #fff;
+        border: 1px solid var(--lr-line); border-radius: 16px; padding: 16px;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, .04); }
+    .lr-kpi-ico { width: 48px; height: 48px; border-radius: 13px; display: grid; place-items: center; font-size: 22px; }
+    .lr-kpi-red .lr-kpi-ico { background: #fee2e2; } .lr-kpi-red .lr-kpi-val { color: #dc2626; }
+    .lr-kpi-indigo .lr-kpi-ico { background: #e0e7ff; } .lr-kpi-indigo .lr-kpi-val { color: #4f46e5; }
+    .lr-kpi-amber .lr-kpi-ico { background: #fef3c7; } .lr-kpi-amber .lr-kpi-val { color: #d97706; }
+    .lr-kpi-green .lr-kpi-ico { background: #d1fae5; } .lr-kpi-green .lr-kpi-val { color: #059669; }
+    .lr-kpi-rose .lr-kpi-ico { background: #fce7f3; } .lr-kpi-rose .lr-kpi-val { color: #db2777; }
+    .lr-kpi-body { display: flex; flex-direction: column; min-width: 0; }
+    .lr-kpi-val { font-size: 1.45rem; font-weight: 900; line-height: 1.2; white-space: nowrap; }
+    .lr-kpi-lbl { font-size: .76rem; color: var(--lr-mut); font-weight: 600; }
+
+    /* ───── FILTERS ───── */
+    .lr-filters { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+        background: #fff; border: 1px solid var(--lr-line); border-radius: 16px; padding: 12px 14px; }
+    .lr-search { flex: 1; min-width: 240px; display: flex; align-items: center; gap: 8px;
+        background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 0 12px; }
+    .lr-search:focus-within { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, .12); }
+    .lr-search input { flex: 1; border: 0; outline: 0; background: transparent;
+        padding: 10px 0; font-family: inherit; font-size: .9rem; color: #1e293b; }
+    .lr-search-ico { opacity: .55; }
+    .lr-search-clear { border: 0; background: #e2e8f0; width: 22px; height: 22px; border-radius: 50%;
+        color: #475569; cursor: pointer; font-size: 1rem; line-height: 1; }
+    .lr-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .lr-chip { border: 1px solid #dbe3f3; background: #fff; color: #475569; border-radius: 100px;
+        padding: 8px 14px; font-family: inherit; font-size: .8rem; font-weight: 700; cursor: pointer; transition: all .15s ease; }
+    .lr-chip:hover { border-color: #6366f1; color: #4338ca; }
+    .lr-chip-on { background: linear-gradient(135deg, #4f46e5, #6366f1); color: #fff; border-color: transparent; }
+    .lr-chip-late { background: linear-gradient(135deg, #f59e0b, #f97316); color: #fff; border-color: transparent; }
+    .lr-sort { border: 1px solid #dbe3f3; background: #fff; color: #475569;
+        border-radius: 100px; padding: 7px 12px; font-family: inherit; font-size: .82rem;
+        font-weight: 700; outline: 0; cursor: pointer; }
+    .lr-sort:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, .12); }
+
+    /* ───── QUEUE ───── */
+    .lr-queue { display: flex; flex-direction: column; gap: 12px; }
+    .lr-card { position: relative; display: grid; grid-template-columns: 58px minmax(0, 1fr) auto;
+        gap: 16px; align-items: center; background: #fff; border: 1px solid var(--lr-line);
+        border-radius: 16px; padding: 16px 18px; box-shadow: 0 6px 20px rgba(15, 23, 42, .04);
+        transition: all .18s ease; }
+    .lr-card:hover { box-shadow: 0 12px 30px rgba(79, 70, 229, .1); transform: translateY(-2px); }
+    .lr-card-cand { border-color: #a7f3d0; box-shadow: 0 0 0 1px #a7f3d0, 0 8px 22px rgba(5, 150, 105, .1); }
+    .lr-avatar { width: 54px; height: 54px; border-radius: 15px; display: grid; place-items: center;
+        font-weight: 900; font-size: 1.3rem; color: #0f172a; }
+    .lr-main { min-width: 0; }
+    .lr-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .lr-name { font-size: 1.08rem; font-weight: 800; color: var(--lr-ink); }
+    .lr-phone { color: #4f46e5; font-size: .82rem; font-weight: 700; text-decoration: none;
+        background: #eef2ff; padding: 2px 10px; border-radius: 100px; }
+    .lr-badge { display: inline-flex; align-items: center; font-size: .74rem; font-weight: 800;
+        padding: 3px 10px; border-radius: 100px; white-space: nowrap; }
+    .lr-badge-red { background: #fee2e2; color: #b91c1c; }
+    .lr-badge-green { background: #d1fae5; color: #047857; }
+    .lr-badge-gray { background: #e2e8f0; color: #475569; }
+    .lr-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+        color: var(--lr-mut); font-size: .8rem; margin-top: 6px; }
+    .lr-sub b { color: #334155; }
+    .lr-reason { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .lr-reason-chip { background: #fef3c7; color: #92400e; font-size: .76rem; font-weight: 700;
+        padding: 3px 10px; border-radius: 8px; }
+    .lr-reason-note { background: #f8fafc; color: #475569; font-size: .78rem;
+        padding: 3px 10px; border-radius: 8px; border: 1px dashed #dbe3f3;
+        max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lr-reason-note-gray { background: #f1f5f9; border-color: #cbd5e1; }
+    .lr-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 130px; }
+    .lr-value { font-size: 1.2rem; font-weight: 900; color: var(--lr-ink); white-space: nowrap; }
+    .lr-value-caption { font-size: .72rem; color: var(--lr-mut); font-weight: 600; }
+    .lr-assign-line { display: flex; justify-content: flex-end; }
+    .lr-assign-ok { font-size: .76rem; font-weight: 800; color: #047857; background: #d1fae5; padding: 3px 10px; border-radius: 100px; }
+    .lr-assign-wait { font-size: .76rem; font-weight: 800; color: #92400e; background: #fef3c7; padding: 3px 10px; border-radius: 100px; }
+    .lr-actions { display: flex; gap: 6px; margin-top: 6px; justify-content: flex-end; }
+    .lr-act { width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--lr-line);
+        background: #f8fafc; color: #475569; display: inline-flex; align-items: center;
+        justify-content: center; font-size: 16px; text-decoration: none; cursor: pointer;
+        transition: all .15s ease; }
+    .lr-act:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(15, 23, 42, .12); }
+    .lr-act-wa:hover { background: #d1fae5; border-color: #34d399; }
+    .lr-act-call:hover { background: #e0e7ff; border-color: #6366f1; }
+    .lr-act-info:hover { background: #fef3c7; border-color: #f59e0b; }
+    .lr-act-assign:hover { background: #ede9fe; border-color: #a78bfa; }
+    .lr-foot-actions { grid-column: 1 / -1; display: flex; gap: 10px; flex-wrap: wrap;
+        padding-top: 12px; border-top: 1px dashed var(--lr-line); }
+
+    /* ───── loading & empty ───── */
+    .lr-loading { display: flex; align-items: center; justify-content: center; gap: 12px;
+        padding: 70px 0; color: var(--lr-mut); font-weight: 700; }
+    .lr-spin { width: 26px; height: 26px; border-radius: 50%;
+        border: 3px solid #e0e7ff; border-top-color: #4f46e5; animation: lrspin .8s linear infinite; }
+    @@keyframes lrspin { to { transform: rotate(360deg); } }
+    .lr-empty { text-align: center; padding: 60px 20px; background: #fff;
+        border: 1px dashed #c7d2fe; border-radius: 18px; }
+    .lr-empty-ico { font-size: 46px; margin-bottom: 8px; }
+    .lr-empty h3 { margin: 0 0 6px; color: var(--lr-ink); }
+    .lr-empty p { margin: 0 0 18px; color: var(--lr-mut); font-size: .9rem; }
+
+    /* ───── MODALS ───── */
+    .lr-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, .5);
+        backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center;
+        z-index: 1200; padding: 16px; }
+    .lr-modal { width: min(560px, 100%); max-height: 92vh; overflow: auto; background: #fff;
+        border-radius: 20px; box-shadow: 0 30px 80px rgba(2, 6, 23, .35); }
+    .lr-modal-sm { width: min(460px, 100%); }
+    .lr-modal-lg { width: min(660px, 100%); }
+    .lr-modal-head { display: flex; align-items: center; justify-content: space-between;
+        padding: 16px 20px; border-bottom: 1px solid var(--lr-line);
+        font-weight: 800; font-size: 1rem; color: var(--lr-ink);
+        background: linear-gradient(135deg, #eef2ff, #f8fafc); border-radius: 20px 20px 0 0; }
+    .lr-modal-head-green { background: linear-gradient(135deg, #ecfdf5, #f0fdf4); }
+    .lr-modal-ico { margin-left: 6px; }
+    .lr-x { width: 30px; height: 30px; border-radius: 10px; border: 0; background: #e2e8f0;
+        color: #475569; font-size: 1.15rem; cursor: pointer; }
+    .lr-x:hover { background: #cbd5e1; }
+    .lr-modal-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+    .lr-modal-foot { padding: 14px 20px; border-top: 1px solid var(--lr-line);
+        display: flex; justify-content: flex-start; gap: 10px; }
+    .lr-callout { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px;
+        padding: 10px 14px; font-size: .86rem; color: #7c2d12; }
+    .lr-callout-green { background: #ecfdf5; border-color: #a7f3d0; color: #064e3b; }
+    .lr-callout-sub { margin-top: 4px; font-size: .8rem; color: #9a3412; }
+    .lr-field { display: flex; flex-direction: column; gap: 6px; }
+    .lr-field label { font-size: .8rem; font-weight: 800; color: #334155; }
+    .lr-field select, .lr-field input, .lr-field textarea { border: 1px solid #dbe3f3;
+        border-radius: 12px; padding: 10px 12px; font-family: inherit; font-size: .9rem;
+        outline: 0; background: #f8fafc; color: #1e293b; width: 100%; box-sizing: border-box; }
+    .lr-field select:focus, .lr-field input:focus, .lr-field textarea:focus {
+        border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, .12); background: #fff; }
+    .lr-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .lr-radio-row { display: flex; flex-direction: column; gap: 8px; }
+    .lr-radio { display: flex; align-items: flex-start; gap: 10px; border: 1px solid var(--lr-line);
+        border-radius: 12px; padding: 10px 12px; cursor: pointer; font-size: .86rem;
+        transition: all .15s ease; }
+    .lr-radio:hover { border-color: #a7f3d0; background: #f0fdf4; }
+    .lr-radio input { margin-top: 3px; accent-color: #059669; width: 16px; height: 16px; }
+    .lr-err { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c;
+        border-radius: 10px; padding: 8px 12px; font-size: .82rem; font-weight: 600; }
+    .lr-assign-target { margin: 0; color: #334155; font-size: .9rem; }
+    .lr-act-hist:hover { background: #fce7f3; border-color: #ec4899; }
+    .lr-warn { background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c;
+        border-radius: 10px; padding: 8px 12px; font-size: .82rem; font-weight: 700; }
+    .lr-toast { position: fixed; left: 20px; bottom: 20px; z-index: 1400; display: flex;
+        align-items: center; gap: 10px; background: #065f46; color: #fff; font-weight: 700;
+        padding: 12px 16px; border-radius: 12px; box-shadow: 0 14px 30px rgba(2, 6, 23, .3);
+        cursor: pointer; max-width: min(460px, 90vw); font-size: .88rem; }
+    .lr-toast-x { font-weight: 900; opacity: .8; margin-right: 6px; }
+    .lr-hist-empty { text-align: center; color: var(--lr-mut); padding: 18px; font-size: .9rem;
+        background: #f8fafc; border-radius: 12px; }
+    .lr-hist-list { display: flex; flex-direction: column; gap: 10px; max-height: 55vh; overflow: auto; }
+    .lr-hist-item { border: 1px solid var(--lr-line); border-radius: 12px; padding: 10px 12px;
+        background: #fff; }
+    .lr-hist-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+    .lr-hist-date { font-size: .76rem; font-weight: 800; color: #334155; }
+    .lr-hist-channel { font-size: .72rem; font-weight: 800; color: #4f46e5; background: #eef2ff;
+        padding: 2px 8px; border-radius: 100px; }
+    .lr-hist-who { font-size: .76rem; font-weight: 700; color: var(--lr-mut); }
+    .lr-hist-sum { font-size: .86rem; color: #1e293b; line-height: 1.6; }
+    .lr-op-link { color: #4f46e5; font-weight: 800; text-decoration: none;
+        border-bottom: 1px dashed #c7d2fe; cursor: pointer; }
+    .lr-op-link:hover { color: #4338ca; border-bottom-style: solid; }
+    .lr-last-cs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+        margin-top: 8px; font-size: .78rem; color: #475569; background: #f8fafc;
+        border: 1px solid #e2e8f0; border-radius: 10px; padding: 6px 10px; }
+    .lr-last-cs b { color: #0f172a; font-weight: 700; }
+    .lr-follow { display: inline-flex; font-size: .74rem; font-weight: 800;
+        color: #4f46e5; background: #eef2ff; padding: 3px 10px; border-radius: 100px; }
+    .lr-follow-late { color: #b91c1c; background: #fee2e2; }
+    .lr-pager { display: flex; align-items: center; justify-content: space-between;
+        gap: 10px; flex-wrap: wrap; padding: 4px 2px; color: var(--lr-mut);
+        font-size: .85rem; font-weight: 700; }
+    .lr-searching { display: flex; align-items: center; justify-content: center;
+        gap: 8px; color: var(--lr-mut); font-size: .85rem; font-weight: 700;
+        padding: 10px; background: #f8fafc; border: 1px dashed #c7d2fe;
+        border-radius: 12px; margin-bottom: 10px; }
+</style>
+
+@code {
+    private string _userName = "";
+    private ClaimsPrincipal? _user;   // ⭐ تُمرَّر للخدمة — التحصين في طبقة الخدمة لا الواجهة فقط
+    private bool _canView;
+    private bool _canRevive;
+
+    private bool _loading = true;
+    private bool _busy;
+    private bool _exporting;
+
+    private RecoveryStatsDto _stats = new();
+    private List<LostRecoveryItemDto> _items = new();
+    private List<SalesStage> _stages = new();
+    private List<RecoveryHistoryDto> _history = new();
+
+    private string? _successMsg;
+
+    private string _q = "";
+    private string _kind = "all";
+    private bool _candidateOnly;
+    private bool _mineOnly;
+    private bool _lateOnly;
+    private string _sortBy = "value";
+    private int _myEmpId;
+
+    // ترحيل / تحميل تدريجي
+    private const int _pageSize = 12;
+    private int _page = 1;
+    private int _total;
+    private bool _hasMore;
+    private bool _loadingMore;
+    private bool _searching;      // مؤشر بحث خفيف (بدون محو القائمة)
+    private int _loadSeq;         // تسلسل يمنع عرض نتائج قديمة متأخرة
+    private int _restoredPages;   // صفحات محفوظة تُعاد عند الرجوع
+
+    // نوافذ
+    private LostRecoveryItemDto? _sel;
+    private bool _showContact;
+    private bool _showHistory;
+    private bool _showRevive;
+    private string? _errorMsg;
+
+    // نموذج التواصل
+    private string _channel = "اتصال";
+    private string _outcome = "تم التواصل";
+    private string _summary = "";
+    private DateTime? _followUp;
+
+    // نموذج الاسترداد
+    private bool _same = true;
+    private int _revStageId;
+    private string _revProduct = "";
+    private string _revNotes = "";
+    private decimal? _revValue;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await Auth.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _user = user;
+        _canView = RecoveryPermissions.CanView(user);
+        if (!_canView)
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+
+        _canRevive = RecoveryPermissions.CanRevive(user);
+        _userName = user.Identity?.Name ?? "";
+
+        RestoreSavedState();
+        await LoadInitialAsync();
+    }
+
+    // ───── تثبيت الحالة (فلتر + مكان "تحميل المزيد") عند الرجوع للصفحة ─────
+    private void RestoreSavedState()
+    {
+        var s = Recovery.QueueState;
+        if (!s.Saved) return;
+        _q = s.SearchText ?? "";
+        _kind = s.Kind;
+        _candidateOnly = s.CandidateOnly;
+        _mineOnly = s.MineOnly;
+        _lateOnly = s.LateOnly;
+        _sortBy = s.SortBy;
+        _restoredPages = Math.Clamp((int)Math.Ceiling(s.LoadedCount / (double)_pageSize), 0, 60);
+    }
+
+    private void SaveState()
+    {
+        var s = Recovery.QueueState;
+        s.Saved = true;
+        s.SearchText = _q;
+        s.Kind = _kind;
+        s.CandidateOnly = _candidateOnly;
+        s.MineOnly = _mineOnly;
+        s.LateOnly = _lateOnly;
+        s.SortBy = _sortBy;
+        s.LoadedCount = _items.Count;
+        s.TotalCount = _total;
+    }
+
+    private LostRecoveryFilterDto CurrentFilter() => new()
+    {
+        SearchText = string.IsNullOrWhiteSpace(_q) ? null : _q.Trim(),
+        Kind = _kind,
+        CandidateOnly = _candidateOnly ? true : null,
+        MineOnly = _mineOnly,
+        LateOnly = _lateOnly ? true : null,
+        SortBy = _sortBy,
+        MinValue = null
+    };
+
+    // التحميل الأولي عند الدخول أو زر "تحديث" — ينفّذ الصيانة (توزيع + تذكير) مرة واحدة فقط
+    private async Task LoadInitialAsync()
+    {
+        _loading = true;
+        _errorMsg = null;
+        try
+        {
+            await Recovery.RunQueueMaintenanceAsync();
+
+            _stages = await Recovery.GetRecoveryStagesAsync();
+            _myEmpId = await Recovery.GetCurrentCsEmployeeIdAsync(_userName);
+            _stats = await Recovery.GetStatsAsync();
+
+            var page = await Recovery.GetQueueAsync(CurrentFilter(), 1, _pageSize, _userName);
+            _items = page.Items;
+            _total = page.TotalCount;
+            _page = page.PageIndex;
+            _hasMore = page.HasMore;
+
+            // استعادة نفس عدد الصفحات التي كان وصل إليها المستخدم عبر "تحميل المزيد"
+            for (int p = 2; p <= _restoredPages && _hasMore; p++)
+            {
+                var extra = await Recovery.GetQueueAsync(CurrentFilter(), p, _pageSize, _userName);
+                if (extra.Items.Count == 0)
+                {
+                    _hasMore = extra.HasMore;
+                    break;
+                }
+                _items.AddRange(extra.Items);
+                _total = extra.TotalCount;
+                _page = extra.PageIndex;
+                _hasMore = extra.HasMore;
+            }
+            _restoredPages = 0;
+
+            if (_revStageId == 0 && _stages.Count > 0)
+                _revStageId = _stages.First().StageId;
+
+            SaveState();
+        }
+        catch (Exception ex)
+        {
+            _errorMsg = "فشل التحميل: " + ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    // تحديث هادئ بعد إجراء (حفظ تواصل / استرداد) بنفس الفلاتر الحالية — بدون صيانة
+    private async Task RefreshAsync()
+    {
+        _errorMsg = null;
+        try
+        {
+            _stats = await Recovery.GetStatsAsync();
+            var page = await Recovery.GetQueueAsync(CurrentFilter(), 1, _pageSize, _userName);
+            _items = page.Items;
+            _total = page.TotalCount;
+            _page = page.PageIndex;
+            _hasMore = page.HasMore;
+            SaveState();
+        }
+        catch (Exception ex)
+        {
+            _errorMsg = "فشل التحديث: " + ex.Message;
+        }
+    }
+
+    private async Task ReloadAll() => await LoadInitialAsync();
+
+    // ───── التقرير الشامل ─────
+    private void GoToReport() => Nav.NavigateTo("/crm/lost-recovery/report");
+
+    // ───── تصدير Excel للطابور حسب الفلاتر الحالية ─────
+    private async Task ExportExcelAsync()
+    {
+        if (_exporting || _items.Count == 0) return;
+        _exporting = true;
+        _errorMsg = null;
+        try
+        {
+            var filter = new LostRecoveryFilterDto
+            {
+                SearchText = string.IsNullOrWhiteSpace(_q) ? null : _q.Trim(),
+                Kind = _kind,
+                CandidateOnly = _candidateOnly ? true : null,
+                MineOnly = _mineOnly,
+                LateOnly = _lateOnly ? true : null,
+                SortBy = _sortBy,
+                MinValue = null
+            };
+            var page = await Recovery.GetQueueAsync(filter, 1, 5000, _userName);
+            var rows = page.Items;
+            if (rows.Count == 0)
+            {
+                _successMsg = "لا توجد بيانات مطابقة للتصدير.";
+                return;
+            }
+
+            using var wb = new XLWorkbook();
+            var ws = wb.Worksheets.Add("الاسترداد");
+            string[] hdrs =
+            {
+                "#", "العميل", "الهاتف", "القيمة (ج.م)", "الحالة", "سبب الخسارة",
+                "تاريخ الإغلاق", "أيام منذ الإغلاق", "موظف المتابعة",
+                "آخر تواصل", "موعد المتابعة", "متأخرة"
+            };
+            for (int i = 0; i < hdrs.Length; i++)
+            {
+                var c = ws.Cell(1, i + 1);
+                c.Value = hdrs[i];
+                c.Style.Font.Bold = true;
+                c.Style.Fill.BackgroundColor = XLColor.FromHtml("#4f46e5");
+                c.Style.Font.FontColor = XLColor.White;
+            }
+
+            int row = 2;
+            foreach (var it in rows)
+            {
+                ws.Cell(row, 1).Value = it.OpportunityId;
+                ws.Cell(row, 2).Value = it.ClientName;
+                ws.Cell(row, 3).Value = it.Phone ?? "";
+                ws.Cell(row, 4).Value = it.ExpectedValue.HasValue
+                    ? (double)it.ExpectedValue.Value : 0d;
+                ws.Cell(row, 5).Value = it.StageNameAr ?? "";
+                ws.Cell(row, 6).Value = it.LostReasonNameAr ?? "";
+                ws.Cell(row, 7).Value = it.ClosedAt.HasValue
+                    ? it.ClosedAt.Value.ToString("yyyy/MM/dd") : "";
+                ws.Cell(row, 8).Value = it.DaysSinceClosed;
+                ws.Cell(row, 9).Value = it.RecoveryEmployeeName ?? "";
+                ws.Cell(row, 10).Value = it.LastCsDate.HasValue
+                    ? $"{it.LastCsDate.Value:yyyy/MM/dd} {it.LastCsBy}".Trim() : "";
+                ws.Cell(row, 11).Value = it.NextFollowUpDate.HasValue
+                    ? it.NextFollowUpDate.Value.ToString("yyyy/MM/dd") : "";
+                ws.Cell(row, 12).Value = it.IsFollowUpOverdue ? "نعم" : "لا";
+                row++;
+            }
+
+            ws.Columns().AdjustToContents();
+            ws.RightToLeft = true;
+            ws.SheetView.FreezeRows(1);
+
+            using var ms = new MemoryStream();
+            wb.SaveAs(ms);
+            var b64 = Convert.ToBase64String(ms.ToArray());
+            await JS.InvokeVoidAsync("downloadFile",
+                $"LostRecovery_{DateTime.Now:yyyyMMdd_HHmm}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                b64);
+            _successMsg = $"تم تصدير {rows.Count} فرصة ✓";
+        }
+        catch (Exception ex)
+        {
+            _errorMsg = "فشل التصدير: " + ex.Message;
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    // ───── الفلاتر ─────
+    private CancellationTokenSource? _cts;
+
+    private void OnSearchTyped(ChangeEventArgs e)
+    {
+        _q = e.Value?.ToString() ?? "";
+        _ = DelayedApply();
+    }
+
+    private async Task DelayedApply()
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+        try
+        {
+            await Task.Delay(350, token);
+            if (!token.IsCancellationRequested)
+                await ApplyFilters();
+        }
+        catch (TaskCanceledException) { /* تجاهل */ }
+    }
+
+    private void OnSearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            _cts?.Cancel();
+            _ = ApplyFilters();
+        }
+    }
+
+    private void ClearSearch()
+    {
+        _q = "";
+        _ = ApplyFilters();
+    }
+
+    private void SetKind(string k)
+    {
+        _kind = k;
+        _ = ApplyFilters();
+    }
+
+    private void ToggleCandidate()
+    {
+        _candidateOnly = !_candidateOnly;
+        _ = ApplyFilters();
+    }
+
+    private void ToggleMine()
+    {
+        _mineOnly = !_mineOnly;
+        _ = ApplyFilters();
+    }
+
+    private void ToggleLate()
+    {
+        _lateOnly = !_lateOnly;
+        _ = ApplyFilters();
+    }
+
+    private void OnSortChange(ChangeEventArgs e)
+    {
+        _sortBy = e.Value?.ToString() ?? "value";
+        _ = ApplyFilters();
+    }
+
+    private async Task ApplyFilters()
+    {
+        var seq = ++_loadSeq;
+        _searching = true;
+        try
+        {
+            var page = await Recovery.GetQueueAsync(CurrentFilter(), 1, _pageSize, _userName);
+            if (seq != _loadSeq) return; // وصل طلب أحدث — نتجاهل النتيجة القديمة
+            _items = page.Items;
+            _total = page.TotalCount;
+            _page = page.PageIndex;
+            _hasMore = page.HasMore;
+            SaveState();
+        }
+        catch (Exception ex)
+        {
+            if (seq == _loadSeq) _errorMsg = "فشل البحث: " + ex.Message;
+        }
+        finally
+        {
+            if (seq == _loadSeq) _searching = false;
+        }
+    }
+
+    // ───── التحميل التدريجي: الصفحة التالية ─────
+    private async Task LoadMoreAsync()
+    {
+        if (_busy || _loadingMore || !_hasMore) return;
+        _loadingMore = true;
+        try
+        {
+            var page = await Recovery.GetQueueAsync(CurrentFilter(), _page + 1, _pageSize, _userName);
+            _items.AddRange(page.Items);
+            _total = page.TotalCount;
+            _page = page.PageIndex;
+            _hasMore = page.HasMore;
+            SaveState();
+        }
+        finally
+        {
+            _loadingMore = false;
+        }
+    }
+
+    // ───── التواصل ─────
+    private void OpenContact(LostRecoveryItemDto it)
+    {
+        _sel = it;
+        _channel = "اتصال";
+        _outcome = "تم التواصل";
+        _summary = "";
+        _followUp = null;
+        _errorMsg = null;
+        _showContact = true;
+    }
+
+    private void OnFollowUpChange(ChangeEventArgs e)
+    {
+        var s = e.Value?.ToString();
+        _followUp = DateTime.TryParse(s, out var d) ? d : (DateTime?)null;
+    }
+
+    private async Task SubmitContact()
+    {
+        if (_sel == null) return;
+        if (string.IsNullOrWhiteSpace(_summary))
+        {
+            _errorMsg = "اكتب ملخص التواصل أولًا.";
+            return;
+        }
+
+        _busy = true;
+        _errorMsg = null;
+        try
+        {
+            var outcome = _outcome;
+            var (ok, msg) = await Recovery.LogContactAsync(new RecoveryContactDto
+            {
+                OpportunityId = _sel.OpportunityId,
+                PartyId = _sel.PartyId,
+                Channel = _channel,
+                Outcome = outcome,
+                Summary = _summary.Trim(),
+                NextFollowUpDate = _followUp
+            }, _userName, _user);
+
+            if (ok)
+            {
+                CloseModals();
+                await RefreshAsync();
+                _successMsg = msg;
+            }
+            else
+            {
+                _errorMsg = msg;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // ───── سجل التواصل بعد الخسارة ─────
+    private async Task OpenHistory(LostRecoveryItemDto it)
+    {
+        _sel = it;
+        _history = new List<RecoveryHistoryDto>();
+        _errorMsg = null;
+        _showHistory = true;
+        try
+        {
+            _history = await Recovery.GetRecoveryHistoryAsync(it.OpportunityId);
+        }
+        catch (Exception ex)
+        {
+            _errorMsg = ex.Message;
+        }
+    }
+
+    // ───── الاسترداد ─────
+    private void OpenRevive(LostRecoveryItemDto it)
+    {
+        _sel = it;
+        _same = true;
+        _revStageId = _stages.Count > 0 ? _stages.First().StageId : 0;
+        _revValue = it.ExpectedValue;
+        _revProduct = it.InterestedProduct ?? "";
+        _revNotes = "";
+        _errorMsg = null;
+        _showRevive = true;
+    }
+
+    private void OnRevValueChange(ChangeEventArgs e)
+    {
+        var s = e.Value?.ToString();
+        _revValue = decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) ? v : (decimal?)null;
+    }
+
+    private async Task SubmitRevive()
+    {
+        if (_sel == null) return;
+        _busy = true;
+        _errorMsg = null;
+        try
+        {
+            var (ok, msg, newId) = await Recovery.ReviveAsync(new RecoveryReviveDto
+            {
+                OpportunityId = _sel.OpportunityId,
+                SameOpportunity = _same,
+                NewStageId = _revStageId,
+                ExpectedValue = _revValue,
+                NextFollowUpDate = DateTime.Today.AddDays(3),
+                NewInterestedProduct = _same ? null : _revProduct,
+                Notes = string.IsNullOrWhiteSpace(_revNotes) ? null : _revNotes.Trim()
+            }, _userName, _user);
+
+            if (ok)
+            {
+                CloseModals();
+                await RefreshAsync();
+            }
+            else
+            {
+                _errorMsg = msg;
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // ───── عام ─────
+    private void CloseModals()
+    {
+        _showContact = false;
+        _showHistory = false;
+        _showRevive = false;
+        _sel = null;
+        _errorMsg = null;
+    }
+
+    private void DismissToast() => _successMsg = null;
+
+    private void Noop() { } // لالتقاط أحداث النقر داخل النافذة ومنعها من إغلاقها
+
+    private static string Money(decimal? v)
+        => v.HasValue ? v.Value.ToString("N0", CultureInfo.InvariantCulture) + " ج.م" : "—";
+    private static string? Trunc(string? s, int n)
+        => string.IsNullOrWhiteSpace(s) ? null : (s.Length <= n ? s : s[..n] + "…");
+    private static string AvatarLetter(string name)
+        => string.IsNullOrWhiteSpace(name) ? "؟" : name.Trim()[..1].ToString();
+
+    private static string SoftColor(string? hex)
+        => string.IsNullOrWhiteSpace(hex) ? "#eef2f7" : hex + "33";
+
+    private static string WaHref(string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return "#";
+        var digits = new string(phone.Where(char.IsDigit).ToArray());
+        return "https://wa.me/2" + digits;
+    }
+}

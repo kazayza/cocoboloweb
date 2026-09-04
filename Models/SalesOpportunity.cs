@@ -38,6 +38,16 @@ public partial class SalesOpportunity
 
     public string? LostNotes { get; set; }
 
+    // ⭐ حقول استرداد الفرص الخاسرة (قسم خدمة العملاء)
+    // false = غير مرشحة (وضع طبيعي يظهر في الاسترداد) / true = مرشحة "⭐"
+    public bool IsRecoveryCandidate { get; set; }
+    public string? RecoveryNotes { get; set; }
+
+    // true = رفض نهائي من العميل — مستبعدة نهائيًا من الاسترداد
+    // (منفصلة عن IsRecoveryCandidate حتى لا يحبس الـ false الافتراضي الفرص)
+    // ملاحظة: bool? لتحمّل صفوف قديمة قيمتها NULL في قاعدة البيانات
+    public bool? IsRecoveryRejected { get; set; }
+
     public string? Notes { get; set; }
 
     public string? Guidance { get; set; }

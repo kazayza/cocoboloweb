@@ -1689,6 +1689,13 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.Property(e => e.LastUpdatedBy).HasMaxLength(50);
             entity.Property(e => e.ClosedAt).HasColumnType("datetime");
             entity.Property(e => e.ClosedBy).HasMaxLength(100);
+
+            // ⭐ حقول استرداد الفرص الخاسرة (قسم خدمة العملاء)
+            //   العمودان مضافان يدويًا عبر RecoveryModule.sql — يجب بقاؤهما مطابقين للنموذج
+            entity.Property(e => e.IsRecoveryCandidate).HasColumnType("bit");
+            entity.Property(e => e.RecoveryNotes).HasColumnType("nvarchar(max)");
+            entity.Property(e => e.IsRecoveryRejected).HasColumnType("bit");
+
             entity.Property(e => e.Location).HasMaxLength(200);
             entity.Property(e => e.LostNotes).HasMaxLength(500);
             entity.Property(e => e.LostReasonId).HasColumnName("LostReasonID");

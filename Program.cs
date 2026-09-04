@@ -120,6 +120,7 @@ builder.Services.AddHttpClient();
 // ── Services ────────────────────────────────────────────────
 builder.Services.AddScoped<IProductService,           ProductService>();
 builder.Services.AddScoped<NotificationService>();
+builder.Services.AddScoped<RecoveryService>(); // 🔁 استرداد الفرص الخاسرة (خدمة العملاء)
 builder.Services.AddScoped<IAuditService,             AuditService>();
 builder.Services.AddScoped<PartyService>();
 builder.Services.AddScoped<IInvoiceService,           InvoiceService>();

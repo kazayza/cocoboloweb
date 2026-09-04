@@ -1,0 +1,466 @@
+@page "/crm/lost-recovery/report"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+@using ClosedXML.Excel
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject RecoveryService Recovery
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider Auth
+@inject IJSRuntime JS
+
+<div class="rp-page" dir="rtl">
+
+    <div class="rp-head">
+        <div>
+            <h1>📄 تقرير استرداد الفرص الخاسرة</h1>
+            <p>صورة كاملة: الفرص في طابور الاسترداد الآن + نتائج التواصل والرفض والعودة — وفلاتر حسب الفترة للتضييق</p>
+        </div>
+        <div class="rp-head-btns">
+            <button class="rp-btn rp-btn-ghost" @onclick="GoBack">↩ عودة للطابور</button>
+            <button class="rp-btn rp-btn-primary" @onclick="LoadReportAsync" disabled="@_loading">
+                @(_loading ? "جارٍ التحميل..." : "بحث / تحديث")
+            </button>
+            <button class="rp-btn rp-btn-primary" @onclick="ExportExcelAsync"
+                    disabled="@(_exporting || _result.Rows.Count == 0)">
+                @(_exporting ? "جارٍ التصدير..." : "⬇ تصدير Excel")
+            </button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_errorMsg))
+    {
+        <div class="rp-err">⚠ @_errorMsg</div>
+    }
+
+    <div class="rp-filters">
+        <div class="rp-f">
+            <label>من تاريخ</label>
+            <input type="date" value="@_from?.ToString("yyyy-MM-dd")" @onchange="OnFromChange" />
+        </div>
+        <div class="rp-f">
+            <label>إلى تاريخ</label>
+            <input type="date" value="@_to?.ToString("yyyy-MM-dd")" @onchange="OnToChange" />
+        </div>
+        <div class="rp-f">
+            <label>الحالة</label>
+            <select value="@_status" @onchange="OnStatusChange">
+                <option value="all">كل الحالات</option>
+                <option value="uncontacted">لم يُتواصل</option>
+                <option value="contacting">قيد المتابعة</option>
+                <option value="rejected">رفض نهائي</option>
+                <option value="revived">مُسترد</option>
+            </select>
+        </div>
+        <div class="rp-f">
+            <label>موظف خدمة العملاء</label>
+            <select value="@(_empId?.ToString() ?? "")" @onchange="OnEmpChange">
+                <option value="">الكل</option>
+                @foreach (var e in _csEmployees)
+                {
+                    <option value="@e.EmployeeId">@e.FullName</option>
+                }
+            </select>
+        </div>
+        <div class="rp-f rp-f-grow">
+            <label>بحث بالعميل / الهاتف</label>
+            <input type="text" placeholder="اسم العميل أو رقم الهاتف..." value="@_q"
+                   @onkeydown="OnSearchKey" @oninput="OnSearchTyped" />
+        </div>
+    </div>
+
+    <div class="rp-quick" title="نطاقات زمنية سريعة">
+        <button type="button" class="rp-chip @(_quick == "month" ? "rp-chip-on" : "")" @onclick="OnQuickMonth">آخر شهر</button>
+        <button type="button" class="rp-chip @(_quick == "quarter" ? "rp-chip-on" : "")" @onclick="OnQuickQuarter">آخر 3 شهور</button>
+        <button type="button" class="rp-chip @(_quick == "year" ? "rp-chip-on" : "")" @onclick="OnQuickYear">من أول السنة</button>
+        <button type="button" class="rp-chip @(_quick == "all" ? "rp-chip-on" : "")" @onclick="OnQuickAll">كل الفترات</button>
+    </div>
+
+    <div class="rp-kpis">
+        <div class="rp-kpi rp-k-blue"><span class="rp-k-v">@_result.RowCount.ToString("N0")</span><span>إجمالي الفرص</span></div>
+        <div class="rp-kpi rp-k-indigo"><span class="rp-k-v">@Money(_result.TotalValue)</span><span>إجمالي القيمة</span></div>
+        <div class="rp-kpi rp-k-gray"><span class="rp-k-v">@_result.UncontactedCount.ToString("N0")</span><span>لم يُتواصل</span></div>
+        <div class="rp-kpi rp-k-amber"><span class="rp-k-v">@_result.ContactedCount.ToString("N0")</span><span>قيد المتابعة</span></div>
+        <div class="rp-kpi rp-k-red"><span class="rp-k-v">@_result.RejectedCount.ToString("N0")</span><span>رفض نهائي</span></div>
+        <div class="rp-kpi rp-k-green"><span class="rp-k-v">@_result.RevivedCount.ToString("N0")</span><span>مُسترد</span></div>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="rp-loading"><span class="rp-spin"></span><span>يتم تجهيز بيانات التقرير…</span></div>
+    }
+    else if (_result.Rows.Count == 0)
+    {
+        <div class="rp-empty">لا توجد بيانات مطابقة للفلاتر الحالية.</div>
+    }
+    else
+    {
+        <div class="rp-legend">
+            <span><b>لم يُتواصل</b> = لا توجد محاولة تواصل مسجلة بعد الخسارة.</span>
+            <span><b>قيد المتابعة</b> = تم التواصل مع العميل ولم يُحسم الأمر بعد.</span>
+            <span><b>رفض نهائي</b> = العميل رفض نهائيًا وأُغلق ملف متابعة الاسترداد.</span>
+            <span><b>مُسترد</b> = العميل عاد لدورة البيع (نفس الفرصة أو بفرصة بديلة جديدة).</span>
+        </div>
+        @if (_result.Rows.Count > 1000)
+        {
+            <div class="rp-note">يوجد @_result.RowCount.ToString("N0") نتيجة — يعرض الجدول أول 1000 للتصدير الكامل استخدم زر Excel.</div>
+        }
+        <div class="rp-table-wrap">
+            <table class="rp-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>العميل</th>
+                        <th>القيمة</th>
+                        <th>الحالة</th>
+                        <th>سبب الخسارة</th>
+                        <th>الإغلاق</th>
+                        <th>موظف المتابعة</th>
+                        <th>عدد التواصل</th>
+                        <th>آخر نشاط</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _result.Rows.Take(1000))
+                    {
+                        <tr>
+                            <td class="rp-mono">
+                                <a class="rp-link" href="@($"/crm/opportunities/{r.OpportunityId}")" title="فتح الفرصة">@r.OpportunityId</a>
+                            </td>
+                            <td>
+                                <b>@r.ClientName</b>
+                                @if (!string.IsNullOrWhiteSpace(r.Phone))
+                                {
+                                    <div class="rp-sub">@r.Phone</div>
+                                }
+                            </td>
+                            <td class="rp-val">@Money(r.ExpectedValue)</td>
+                            <td><span class="rp-badge @StatusClass(r.StatusAr)">@r.StatusAr</span></td>
+                            <td>@(r.LostReasonName ?? "—")</td>
+                            <td class="rp-mono">@(r.ClosedAt.HasValue ? r.ClosedAt.Value.ToString("yyyy/MM/dd") : "—")</td>
+                            <td>@(r.CsEmployeeName ?? "—")</td>
+                            <td class="rp-center">@r.ContactCount</td>
+                            <td>
+                                @if (r.RevivedDate.HasValue)
+                                {
+                                    <span class="rp-mono rp-rev">↩ عودة @r.RevivedDate.Value.ToString("yyyy/MM/dd")</span>
+                                    @if (r.LastCsDate.HasValue && !string.IsNullOrWhiteSpace(r.LastCsSummary))
+                                    {
+                                        <div class="rp-sub" title="@r.LastCsSummary">تواصل: @Trunc(r.LastCsSummary, 40)</div>
+                                    }
+                                }
+                                else if (r.LastCsDate.HasValue)
+                                {
+                                    <span class="rp-mono">@r.LastCsDate.Value.ToString("yyyy/MM/dd HH:mm")</span>
+                                    @if (!string.IsNullOrWhiteSpace(r.LastCsSummary))
+                                    {
+                                        <div class="rp-sub" title="@r.LastCsSummary">@Trunc(r.LastCsSummary, 40)</div>
+                                    }
+                                }
+                                else
+                                {
+                                    <span class="rp-dim">—</span>
+                                }
+                            </td>
+                            <td>
+                                <a class="rp-mini" href="@($"/crm/customers/{r.PartyId}")" title="ملف العميل">🧾</a>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+<style>
+    .rp-page { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        display: flex; flex-direction: column; gap: 14px;
+        max-width: 1280px; margin: 0 auto; padding: 18px;
+        --r-ink: #0f172a; --r-mut: #64748b; --r-line: #e2e8f0; }
+    .rp-head { display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; flex-wrap: wrap; }
+    .rp-head h1 { margin: 0; font-size: 1.35rem; color: var(--r-ink); }
+    .rp-head p { margin: 4px 0 0; font-size: .85rem; color: var(--r-mut); }
+    .rp-head-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+    .rp-btn { border: 0; border-radius: 12px; padding: 10px 16px; cursor: pointer;
+        font-family: inherit; font-weight: 800; font-size: .85rem;
+        display: inline-flex; align-items: center; gap: 6px; transition: all .15s ease; }
+    .rp-btn:disabled { opacity: .55; cursor: not-allowed; }
+    .rp-btn-primary { background: linear-gradient(135deg, #4f46e5, #6366f1); color: #fff; }
+    .rp-btn-ghost { background: #f1f5f9; color: #334155; }
+    .rp-btn:not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.03); }
+    .rp-err { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c;
+        border-radius: 10px; padding: 10px 14px; font-size: .84rem; font-weight: 600; }
+    .rp-filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+        background: #fff; border: 1px solid var(--r-line); border-radius: 16px; padding: 14px; }
+    .rp-f { display: flex; flex-direction: column; gap: 5px; min-width: 150px; }
+    .rp-f-grow { flex: 1 1 220px; }
+    .rp-f label { font-size: .76rem; font-weight: 800; color: #334155; }
+    .rp-f input, .rp-f select { border: 1px solid #dbe3f3; border-radius: 10px;
+        padding: 9px 10px; font-family: inherit; font-size: .86rem; outline: 0;
+        background: #f8fafc; color: #1e293b; }
+    .rp-f input:focus, .rp-f select:focus { border-color: #6366f1;
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, .12); background: #fff; }
+    .rp-quick { display: flex; gap: 8px; flex-wrap: wrap; }
+    .rp-chip { border: 1px solid #dbe3f3; background: #fff; color: #475569;
+        border-radius: 100px; padding: 7px 14px; font-family: inherit; font-size: .8rem;
+        font-weight: 700; cursor: pointer; transition: all .15s ease; }
+    .rp-chip:hover { border-color: #6366f1; color: #4338ca; }
+    .rp-chip-on { background: linear-gradient(135deg, #4f46e5, #6366f1); color: #fff; border-color: transparent; }
+    .rp-legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 10px 14px;
+        background: #f8fafc; border: 1px dashed #c7d2fe; border-radius: 12px;
+        color: var(--r-mut); font-size: .78rem; line-height: 1.6; }
+    .rp-legend b { color: #334155; }
+    .rp-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px; }
+    .rp-kpi { background: #fff; border: 1px solid var(--r-line); border-radius: 14px;
+        padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+    .rp-k-v { font-size: 1.3rem; font-weight: 900; }
+    .rp-kpi span:last-child { font-size: .74rem; color: var(--r-mut); font-weight: 600; }
+    .rp-k-blue .rp-k-v { color: #2563eb; } .rp-k-indigo .rp-k-v { color: #4f46e5; }
+    .rp-k-gray .rp-k-v { color: #64748b; } .rp-k-amber .rp-k-v { color: #d97706; }
+    .rp-k-red .rp-k-v { color: #dc2626; } .rp-k-green .rp-k-v { color: #059669; }
+    .rp-loading { display: flex; align-items: center; justify-content: center; gap: 10px;
+        padding: 60px 0; color: var(--r-mut); font-weight: 700; }
+    .rp-spin { width: 24px; height: 24px; border-radius: 50%;
+        border: 3px solid #e0e7ff; border-top-color: #4f46e5;
+        animation: rpspin .8s linear infinite; }
+    @@keyframes rpspin { to { transform: rotate(360deg); } }
+    .rp-empty, .rp-note { text-align: center; color: var(--r-mut); padding: 20px;
+        background: #fff; border: 1px dashed #c7d2fe; border-radius: 14px;
+        font-size: .9rem; }
+    .rp-note { text-align: right; font-size: .8rem; }
+    .rp-table-wrap { background: #fff; border: 1px solid var(--r-line);
+        border-radius: 16px; overflow: auto; max-height: 65vh; }
+    .rp-table { border-collapse: collapse; width: 100%; min-width: 980px; font-size: .84rem; }
+    .rp-table th { position: sticky; top: 0; background: #f8fafc; color: #334155;
+        font-weight: 800; text-align: right; padding: 10px 12px;
+        border-bottom: 2px solid var(--r-line); white-space: nowrap; }
+    .rp-table td { padding: 9px 12px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+    .rp-table tbody tr:hover { background: #f8fafc; }
+    .rp-mono { font-size: .8rem; color: #475569; white-space: nowrap; }
+    .rp-val { font-weight: 800; color: var(--r-ink); white-space: nowrap; }
+    .rp-center { text-align: center; }
+    .rp-sub { font-size: .74rem; color: var(--r-mut); margin-top: 2px; }
+    .rp-dim { color: #cbd5e1; }
+    .rp-rev { color: #047857; font-weight: 800; }
+    .rp-link { color: #4f46e5; font-weight: 700; text-decoration: none; }
+    .rp-link:hover { text-decoration: underline; }
+    .rp-mini { text-decoration: none; }
+    .rp-badge { display: inline-flex; font-size: .73rem; font-weight: 800;
+        padding: 3px 10px; border-radius: 100px; white-space: nowrap; }
+    .rp-b-red { background: #fee2e2; color: #b91c1c; }
+    .rp-b-green { background: #d1fae5; color: #047857; }
+    .rp-b-amber { background: #fef3c7; color: #92400e; }
+    .rp-b-gray { background: #e2e8f0; color: #475569; }
+    .rp-b-indigo { background: #e0e7ff; color: #4338ca; }
+</style>
+
+@code {
+    private string _userName = "";
+    private bool _canView;
+    private bool _loading = true;
+    private bool _exporting;
+
+    private DateTime? _from;
+    private DateTime? _to;
+    private string _quick = "all";
+    private string _status = "all";
+    private int? _empId;
+    private string _q = "";
+    private string? _errorMsg;
+
+    private List<RecoveryEmployeeOptionDto> _csEmployees = new();
+    private RecoveryReportResultDto _result = new();
+    private CancellationTokenSource? _cts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await Auth.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _canView = RecoveryPermissions.CanView(user);
+        if (!_canView)
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+        _userName = user.Identity?.Name ?? "";
+        await LoadReportAsync();
+    }
+
+    private async Task LoadReportAsync()
+    {
+        _loading = true;
+        _errorMsg = null;
+        try
+        {
+            if (_csEmployees.Count == 0)
+                _csEmployees = await Recovery.GetCustomerServiceEmployeesLightAsync();
+
+            _result = await Recovery.GetRecoveryReportAsync(new RecoveryReportFilterDto
+            {
+                From = _from,
+                To = _to,
+                Status = _status,
+                CsEmployeeId = _empId,
+                SearchText = string.IsNullOrWhiteSpace(_q) ? null : _q.Trim()
+            });
+        }
+        catch (Exception ex)
+        {
+            _errorMsg = "خطأ في تحميل التقرير: " + ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void GoBack() => Nav.NavigateTo("/crm/lost-recovery");
+
+    private void SetQuick(string k)
+    {
+        _quick = k;
+        var today = DateTime.Today;
+        switch (k)
+        {
+            case "month": _from = today.AddMonths(-1); _to = today; break;
+            case "year": _from = new DateTime(today.Year, 1, 1); _to = today; break;
+            case "all": _from = null; _to = null; break;
+            default: _from = today.AddMonths(-3); _to = today; break;
+        }
+        _ = LoadReportAsync();
+    }
+
+    // معالجات أزرار النطاقات الزمنية السريعة (بدون وسائط لتجنّب اقتباسات داخل خصائص HTML)
+    private void OnQuickMonth() => SetQuick("month");
+    private void OnQuickQuarter() => SetQuick("quarter");
+    private void OnQuickYear() => SetQuick("year");
+    private void OnQuickAll() => SetQuick("all");
+
+    private void OnFromChange(ChangeEventArgs e) => _from = ParseDate(e.Value?.ToString());
+    private void OnToChange(ChangeEventArgs e) => _to = ParseDate(e.Value?.ToString());
+    private void OnStatusChange(ChangeEventArgs e) => _status = e.Value?.ToString() ?? "all";
+    private void OnEmpChange(ChangeEventArgs e)
+    {
+        var s = e.Value?.ToString();
+        _empId = string.IsNullOrWhiteSpace(s) ? (int?)null : (int.TryParse(s, out var v) ? v : (int?)null);
+    }
+
+    private static DateTime? ParseDate(string? s)
+        => DateTime.TryParse(s, out var d) ? d : (DateTime?)null;
+
+    private void OnSearchTyped(ChangeEventArgs e)
+    {
+        _q = e.Value?.ToString() ?? "";
+        _ = DelayedSearch();
+    }
+
+    private async Task DelayedSearch()
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+        try
+        {
+            await Task.Delay(400, token);
+            if (!token.IsCancellationRequested)
+                await LoadReportAsync();
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private void OnSearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            _cts?.Cancel();
+            _ = LoadReportAsync();
+        }
+    }
+
+    private async Task ExportExcelAsync()
+    {
+        if (_exporting || _result.Rows.Count == 0) return;
+        _exporting = true;
+        _errorMsg = null;
+        try
+        {
+            using var wb = new XLWorkbook();
+            var ws = wb.Worksheets.Add("تقرير الاسترداد");
+            string[] hdrs =
+            {
+                "#", "العميل", "الهاتف", "القيمة (ج.م)", "الحالة", "سبب الخسارة",
+                "تاريخ الإغلاق", "موظف المتابعة", "عدد التواصل",
+                "آخر تواصل (تاريخ)", "آخر تواصل (موضوع)", "تاريخ العودة"
+            };
+            for (int i = 0; i < hdrs.Length; i++)
+            {
+                var c = ws.Cell(1, i + 1);
+                c.Value = hdrs[i];
+                c.Style.Font.Bold = true;
+                c.Style.Fill.BackgroundColor = XLColor.FromHtml("#1e3a8a");
+                c.Style.Font.FontColor = XLColor.White;
+            }
+            int row = 2;
+            foreach (var r in _result.Rows)
+            {
+                ws.Cell(row, 1).Value = r.OpportunityId;
+                ws.Cell(row, 2).Value = r.ClientName;
+                ws.Cell(row, 3).Value = r.Phone ?? "";
+                ws.Cell(row, 4).Value = r.ExpectedValue.HasValue ? (double)r.ExpectedValue.Value : 0d;
+                ws.Cell(row, 5).Value = r.StatusAr;
+                ws.Cell(row, 6).Value = r.LostReasonName ?? "";
+                ws.Cell(row, 7).Value = r.ClosedAt.HasValue ? r.ClosedAt.Value.ToString("yyyy/MM/dd") : "";
+                ws.Cell(row, 8).Value = r.CsEmployeeName ?? "";
+                ws.Cell(row, 9).Value = r.ContactCount;
+                ws.Cell(row, 10).Value = r.LastCsDate.HasValue ? r.LastCsDate.Value.ToString("yyyy/MM/dd HH:mm") : "";
+                ws.Cell(row, 11).Value = r.LastCsSummary ?? "";
+                ws.Cell(row, 12).Value = r.RevivedDate.HasValue ? r.RevivedDate.Value.ToString("yyyy/MM/dd") : "";
+                row++;
+            }
+            ws.Columns().AdjustToContents();
+            ws.RightToLeft = true;
+            ws.SheetView.FreezeRows(1);
+
+            using var ms = new MemoryStream();
+            wb.SaveAs(ms);
+            var b64 = Convert.ToBase64String(ms.ToArray());
+            await JS.InvokeVoidAsync("downloadFile",
+                $"RecoveryReport_{DateTime.Now:yyyyMMdd_HHmm}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                b64);
+        }
+        catch (Exception ex)
+        {
+            _errorMsg = "فشل التصدير: " + ex.Message;
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private static string Money(decimal? v)
+        => v.HasValue ? v.Value.ToString("N0", CultureInfo.InvariantCulture) + " ج.م" : "—";
+
+    private static string? Trunc(string? s, int n)
+        => string.IsNullOrWhiteSpace(s) ? null : (s.Length <= n ? s : s[..n] + "…");
+
+    private static string StatusClass(string status) => status switch
+    {
+        "رفض نهائي" => "rp-b-red",
+        "مُسترد" => "rp-b-green",
+        "قيد المتابعة" => "rp-b-amber",
+        "لم يُتواصل" => "rp-b-gray",
+        _ => "rp-b-indigo"
+    };
+}

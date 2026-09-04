@@ -9,9 +9,10 @@ public class InteractionService : IInteractionService
 {
     private readonly db24804Context _db;
     private readonly IHttpContextAccessor _http;
+    private readonly RecoveryService _recovery;
 
-    public InteractionService(db24804Context db, IHttpContextAccessor http)
-    { _db = db; _http = http; }
+    public InteractionService(db24804Context db, IHttpContextAccessor http, RecoveryService recovery)
+    { _db = db; _http = http; _recovery = recovery; }
 
     public async Task<PagedResult<InteractionListDto>> GetInteractionsAsync(InteractionFilterDto filter)
     {
@@ -253,6 +254,11 @@ public class InteractionService : IInteractionService
             if (party != null) party.LastContactDate = now;
 
             await _db.SaveChangesAsync();
+
+            // 🔁 تحويل للخسارة/غير المهتم → إشعار + مهمة لخدمة العملاء فورًا
+            if (newStageId == 4 || newStageId == 5)
+                await _recovery.EnsureRecoveryAssignmentAsync(dto.OpportunityId);
+
             return (true, "تم إضافة التفاعل بنجاح");
         }
         catch (Exception ex)

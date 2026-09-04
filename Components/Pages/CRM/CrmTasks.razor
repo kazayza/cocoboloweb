@@ -12,6 +12,7 @@
 
 @inject ITaskService TaskService
 @inject IOpportunityService OppService
+@inject RecoveryService Recovery
 @inject NavigationManager Nav
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
@@ -1090,12 +1091,25 @@ else
             _canExport = user.HasClaim("Permission", "frmTasks:Export") || user.IsInRole("Admin");
             _crmAccessFrom = user.GetAccessFromDate();
             _employees = await OppService.GetActiveEmployeesAsync();
-            // ✅ فلتر الموظفين: إدارة المبيعات أو إدارة العلاقات العامة فقط
+            // ✅ فلتر الموظفين: المبيعات / العلاقات العامة / خدمة العملاء (مهام الاسترداد)
             _employees = _employees
-                .Where(e => e.Department == "المبيعات" || e.Department == "إدارة العلاقات العامة")
+                .Where(e => e.Department == "المبيعات"
+                    || e.Department == "إدارة العلاقات العامة"
+                    || e.Department == "خدمة العملاء")
                 .OrderBy(e => e.FullName)
                 .ToList();
             // _taskTypes = await TaskService.GetTaskTypesAsync();
+
+            // لو موظف خدمة عملاء (مسؤول عن الاسترداد) → اعرض مهامه تلقائيًا
+            var empInfo = await Recovery.GetCurrentUserEmployeeAsync(_currentUser);
+            if (empInfo.HasValue
+                && empInfo.Value.Department == "خدمة العملاء"
+                && user.HasClaim(c => c.Type == "Permission" && c.Value == "frm_LostRecovery:View")
+                && !QsAssignedTo.HasValue
+                && !_filter.AssignedTo.HasValue)
+            {
+                _filter.AssignedTo = empInfo.Value.EmployeeId;
+            }
 
             // لو جاى من MyLeads ومفلتر بموظف
             if (QsAssignedTo.HasValue)
