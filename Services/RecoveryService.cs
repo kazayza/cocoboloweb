@@ -407,6 +407,7 @@ public class RecoveryService
     {
         await SyncNewLossesAsync();
         await SendOverdueRemindersAsync();
+        InvalidateReportCache(); // توزيعات/مهام جديدة قد تغيّر عمود موظف المتابعة في التقرير
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -650,6 +651,8 @@ public class RecoveryService
                 null,
                 new { OpportunityId = opportunityId, PartyId = opp.PartyId, AssignedTo = chosen.EmployeeId, AssignedToName = chosen.FullName, StageId = opp.StageId, Value = opp.ExpectedValue, Source = "EnsureRecoveryAssignment" },
                 "RecoverySystem");
+
+            InvalidateReportCache(); // مهمة جديدة تغيّر موظف المتابعة في التقرير
         }
         catch (DbUpdateException dex) when (IsUniqueViolation(dex))
         {
@@ -768,10 +771,40 @@ public class RecoveryService
 
     // ═══════════════════════════════════════════════════════════
     //  تقرير الاسترداد الشامل (P4)
+    //  الأداء: تُبنى "لقطة" كاملة من قاعدة البيانات مرة واحدة كل بضع ثوانٍ
+    //  (أو تُبطَل فورًا عند أي إجراء يغيّر الاسترداد)، ثم تُنفَّذ كل الفلاتر
+    //  والبحث والترقيم والتصدير في الذاكرة فوق اللقطة — بدل إعادة
+    //  استعلامات ثقيلة متكررة مع كل ضغطة زر/حرف/صفحة.
     // ═══════════════════════════════════════════════════════════
-    public async Task<RecoveryReportResultDto> GetRecoveryReportAsync(RecoveryReportFilterDto f, int pageIndex = 1, int pageSize = 50)
+    private static readonly object _snapLock = new();
+    private static List<RecoveryReportRowDto>? _snap;
+    private static DateTime _snapAt = DateTime.MinValue;
+    private const double SnapTtlSeconds = 90;
+
+    /// <summary>إبطال اللقطة المؤقتة بعد أي إجراء يغيّر بيانات الاسترداد (تواصل/استرداد/توزيع).</summary>
+    public static void InvalidateReportCache()
     {
-        var result = new RecoveryReportResultDto { Rows = new List<RecoveryReportRowDto>() };
+        lock (_snapLock) { _snap = null; }
+    }
+
+    private async Task<List<RecoveryReportRowDto>> GetReportSnapshotAsync()
+    {
+        if (_snap != null && (DateTime.UtcNow - _snapAt).TotalSeconds < SnapTtlSeconds)
+            return _snap;
+
+        var built = await BuildReportSnapshotAsync();
+
+        lock (_snapLock)
+        {
+            _snap = built;
+            _snapAt = DateTime.UtcNow;
+        }
+        return built;
+    }
+
+    private async Task<List<RecoveryReportRowDto>> BuildReportSnapshotAsync()
+    {
+        var rowsOut = new List<RecoveryReportRowDto>();
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         // 1) الفرص الحالية الخاسرة / غير المهتم (النشطة) = حالات مفتوحة في الاسترداد
@@ -794,7 +827,7 @@ public class RecoveryService
             .ToDictionary(g => g.Key, g => g.Max(x => x.InteractionDate));
 
         var allIds = lostIds.Concat(revivedByOpp.Keys).Distinct().ToList();
-        if (allIds.Count == 0) return result;
+        if (allIds.Count == 0) return rowsOut;
 
         var opps = await db.SalesOpportunities.AsNoTracking()
             .Where(o => allIds.Contains(o.OpportunityId))
@@ -882,7 +915,7 @@ public class RecoveryService
                 userMap[u.Username] = (u.FullName ?? u.Username, u.EmployeeId ?? 0);
         }
 
-        // 6) بناء السطور
+        // 6) بناء سطر لكل فرصة داخل نطاق التقرير (بلا فلاتر — الفلترة تتم لاحقًا في الذاكرة)
         foreach (var o in opps)
         {
             // هل الفرصة خاسرة الآن فعلا؟ (في طابور الاسترداد)
@@ -905,7 +938,7 @@ public class RecoveryService
             if (csList.Count > 0)
                 lastCs = csList.OrderByDescending(c => c.Date).First();
 
-            // حالة السطر — حسب الوضع الحالي الفعلي للفرصة (الأهم: لا "مُسترد" لفرصة خاسرة الآن)
+            // حالة السطر — حسب الوضع الحالي الفعلي للفرصة
             string statusAr;
             if (isCurrentlyLost)
             {
@@ -918,11 +951,7 @@ public class RecoveryService
                 statusAr = "مُسترد";
             }
 
-            // تاريخ الأساس لفلترة الفترة = تاريخ "حدث الحالة" نفسه:
-            //  - مُسترد        → تاريخ العودة (سجل العودة)
-            //  - قيد المتابعة  → تاريخ آخر تواصل (نشاط التواصل في الفترة)
-            //  - رفض نهائي     → تاريخ آخر تواصل (لحظة تسجيل الرفض، أو ClosedAt إن لم يوجد)
-            //  - لم يُتواصل    → تاريخ الخسارة ClosedAt (لا يوجد تواصل يسند إليه)
+            // تاريخ الأساس لفلترة الفترة = تاريخ "حدث الحالة"
             DateTime? anchorDate;
             string? csName = null;
 
@@ -938,66 +967,38 @@ public class RecoveryService
             else if (statusAr == "لم يُتواصل")
             {
                 anchorDate = o.ClosedAt ?? o.LastContactDate ?? o.CreatedAt;
-                // الموظف المسؤول: من المهمة المفتوحة فقط (لا يوجد تواصل حتى يُنسب إليه)
                 if (empByOpp.TryGetValue(o.OpportunityId, out var eid)
                     && empNameMap.TryGetValue(eid, out var en)) csName = en;
             }
-            else // قيد المتابعة أو رفض نهائي — يوجد تواصل مسجل (أو رفض مسجل كتواصل)
+            else // قيد المتابعة أو رفض نهائي — يوجد تواصل مسجل
             {
                 anchorDate = lastCs.HasValue
                     ? lastCs.Value.Date
                     : (o.ClosedAt ?? o.LastContactDate ?? o.CreatedAt);
 
-                // الموظف: من المهمة المفتوحة، وإلا فمنفّذ آخر تواصل
                 if (empByOpp.TryGetValue(o.OpportunityId, out var eid2)
                     && empNameMap.TryGetValue(eid2, out var en2)) csName = en2;
                 else if (lastCs.HasValue && !string.IsNullOrWhiteSpace(lastCs.Value.By)
                     && userMap.TryGetValue(lastCs.Value.By, out var u1)) csName = u1.Name;
             }
 
-            // فلترة الفترة — حسب تاريخ حدث الحالة أعلاه
-            if (f.From.HasValue && (!anchorDate.HasValue || anchorDate.Value.Date < f.From.Value.Date)) continue;
-            if (f.To.HasValue && (!anchorDate.HasValue || anchorDate.Value.Date > f.To.Value.Date)) continue;
+            // الموظف المسؤول بالرقم (لأساس فلتر الموظف في التقرير)
+            int? ownerEmp = null;
+            if (empByOpp.TryGetValue(o.OpportunityId, out var oe)) ownerEmp = oe;
+            else if (lastCs.HasValue && !string.IsNullOrWhiteSpace(lastCs.Value.By)
+                && userMap.TryGetValue(lastCs.Value.By, out var u3) && u3.EmpId != 0) ownerEmp = u3.EmpId;
+            else if (!isCurrentlyLost)
+            {
+                var lr = revivedRows
+                    .Where(r => r.OpportunityId == o.OpportunityId && r.InteractionDate == reviveDate)
+                    .FirstOrDefault();
+                if (lr != null && !string.IsNullOrWhiteSpace(lr.CreatedBy)
+                    && userMap.TryGetValue(lr.CreatedBy, out var u4) && u4.EmpId != 0) ownerEmp = u4.EmpId;
+            }
 
             var clientName = partyMap.TryGetValue(o.PartyId, out var pn2) ? pn2 : $"عميل #{o.PartyId}";
-            if (!string.IsNullOrWhiteSpace(f.SearchText))
-            {
-                var s = f.SearchText.Trim();
-                var phone = phoneMap.TryGetValue(o.PartyId, out var ph) ? (ph ?? "") : "";
-                if (!(clientName.Contains(s, StringComparison.OrdinalIgnoreCase)
-                    || phone.Contains(s, StringComparison.OrdinalIgnoreCase)))
-                    continue;
-            }
 
-            // فلترة الموظف المسؤول
-            if (f.CsEmployeeId.HasValue)
-            {
-                int? ownerEmp = null;
-                if (empByOpp.TryGetValue(o.OpportunityId, out var oe)) ownerEmp = oe;
-                else if (lastCs.HasValue && !string.IsNullOrWhiteSpace(lastCs.Value.By)
-                    && userMap.TryGetValue(lastCs.Value.By, out var u3) && u3.EmpId != 0) ownerEmp = u3.EmpId;
-                else if (!isCurrentlyLost)
-                {
-                    var lr = revivedRows
-                        .Where(r => r.OpportunityId == o.OpportunityId && r.InteractionDate == reviveDate)
-                        .FirstOrDefault();
-                    if (lr != null && !string.IsNullOrWhiteSpace(lr.CreatedBy)
-                        && userMap.TryGetValue(lr.CreatedBy, out var u4) && u4.EmpId != 0) ownerEmp = u4.EmpId;
-                }
-                if (ownerEmp != f.CsEmployeeId.Value) continue;
-            }
-
-            // فلترة الحالة
-            if (f.Status != "all")
-            {
-                var matches = (f.Status == "rejected" && statusAr == "رفض نهائي")
-                    || (f.Status == "revived" && statusAr == "مُسترد")
-                    || (f.Status == "contacting" && statusAr == "قيد المتابعة")
-                    || (f.Status == "uncontacted" && statusAr == "لم يُتواصل");
-                if (!matches) continue;
-            }
-
-            result.Rows.Add(new RecoveryReportRowDto
+            rowsOut.Add(new RecoveryReportRowDto
             {
                 OpportunityId = o.OpportunityId,
                 PartyId = o.PartyId,
@@ -1012,30 +1013,76 @@ public class RecoveryService
                 LastCsDate = lastCs?.Date,
                 LastCsSummary = lastCs != null ? StripChannelPrefix(lastCs.Value.Summary) : null,
                 RevivedDate = (!isCurrentlyLost && hasRevive) ? reviveDate : null,
-                StatusAr = statusAr
+                StatusAr = statusAr,
+                AnchorDate = anchorDate,
+                CsEmpId = ownerEmp
             });
         }
 
+        return rowsOut;
+    }
+
+    public async Task<RecoveryReportResultDto> GetRecoveryReportAsync(
+        RecoveryReportFilterDto f, int pageIndex = 1, int pageSize = 50)
+    {
+        var result = new RecoveryReportResultDto { Rows = new List<RecoveryReportRowDto>() };
+
+        // اللقطة تُبنى من DB مرة كل 90 ثانية فقط — الفلاتر أدناه في الذاكرة
+        var snapshot = await GetReportSnapshotAsync();
+        if (snapshot.Count == 0) return result;
+
+        var filtered = snapshot.Where(r =>
+        {
+            // فلترة الفترة على تاريخ "حدث الحالة"
+            if (f.From.HasValue && (!r.AnchorDate.HasValue || r.AnchorDate.Value.Date < f.From.Value.Date)) return false;
+            if (f.To.HasValue && (!r.AnchorDate.HasValue || r.AnchorDate.Value.Date > f.To.Value.Date)) return false;
+
+            // فلترة الموظف المسؤول
+            if (f.CsEmployeeId.HasValue && r.CsEmpId != f.CsEmployeeId.Value) return false;
+
+            // فلترة الحالة
+            if (f.Status != "all")
+            {
+                var matches = (f.Status == "rejected" && r.StatusAr == "رفض نهائي")
+                    || (f.Status == "revived" && r.StatusAr == "مُسترد")
+                    || (f.Status == "contacting" && r.StatusAr == "قيد المتابعة")
+                    || (f.Status == "uncontacted" && r.StatusAr == "لم يُتواصل");
+                if (!matches) return false;
+            }
+
+            // بحث بالعميل / الهاتف
+            if (!string.IsNullOrWhiteSpace(f.SearchText))
+            {
+                var s = f.SearchText.Trim();
+                var phone = r.Phone ?? "";
+                if (!(r.ClientName.Contains(s, StringComparison.OrdinalIgnoreCase)
+                    || phone.Contains(s, StringComparison.OrdinalIgnoreCase)))
+                    return false;
+            }
+
+            return true;
+        }).ToList();
+
         // ترتيب: الأحدث نشاطًا أولًا
-        result.Rows = result.Rows
+        var ordered = filtered
             .OrderByDescending(r => r.RevivedDate ?? r.LastCsDate ?? r.ClosedAt)
             .ToList();
 
-        result.RowCount = result.Rows.Count;
-        result.TotalValue = result.Rows.Where(r => r.ExpectedValue.HasValue).Sum(r => r.ExpectedValue!.Value);
-        result.UncontactedCount = result.Rows.Count(r => r.StatusAr == "لم يُتواصل");
-        result.ContactedCount = result.Rows.Count(r => r.StatusAr == "قيد المتابعة");
-        result.RejectedCount = result.Rows.Count(r => r.StatusAr == "رفض نهائي");
-        result.RevivedCount = result.Rows.Count(r => r.StatusAr == "مُسترد");
+        result.RowCount = ordered.Count;
+        result.TotalValue = ordered.Where(r => r.ExpectedValue.HasValue).Sum(r => r.ExpectedValue!.Value);
+        result.UncontactedCount = ordered.Count(r => r.StatusAr == "لم يُتواصل");
+        result.ContactedCount = ordered.Count(r => r.StatusAr == "قيد المتابعة");
+        result.RejectedCount = ordered.Count(r => r.StatusAr == "رفض نهائي");
+        result.RevivedCount = ordered.Count(r => r.StatusAr == "مُسترد");
 
-        // ⭐ ترقيم الصفحات في الخادم — يحدّ الصفوف المُرْسَلة عبر WebSocket (يعالج ثقل البحث)
+        // ترقيم الصفحات في الخادم — يحدّ الصفوف المُرْسَلة عبر WebSocket
         //    pageSize <= 0 = كل الصفوف (يُستخدم للتصدير Excel الكامل فقط)
-        var total = result.Rows.Count;
+        var total = ordered.Count;
         result.PageSize = pageSize;
         result.PageIndex = Math.Clamp(pageIndex, 1, Math.Max(1, (int)Math.Ceiling(total / (double)Math.Max(1, pageSize))));
         result.Rows = (pageSize > 0 && total > 0)
-            ? result.Rows.Skip((result.PageIndex - 1) * pageSize).Take(pageSize).ToList()
-            : result.Rows;
+            ? ordered.Skip((result.PageIndex - 1) * pageSize).Take(pageSize).ToList()
+            : ordered;
         result.HasMore = pageSize > 0 && result.PageIndex * pageSize < total;
 
         return result;
@@ -1151,6 +1198,8 @@ public class RecoveryService
                 new { dto.OpportunityId, dto.PartyId, dto.Channel, dto.Summary, Actor = actor },
                 actor);
         }
+
+        InvalidateReportCache(); // تواصل/رفض جديد يغيّر حالة السطر في التقرير — يُبنى من جديد عند الطلب التالي
 
         return isDefinitive
             ? (true, "تم تسجيل الرفض النهائي — لن تظهر الفرصة في طابور المتابعة مرة أخرى.")
@@ -1329,6 +1378,7 @@ public class RecoveryService
             new { dto.OpportunityId, PartyId = opp.PartyId, Mode = dto.SameOpportunity ? "SameOpportunity" : "NewOpportunity", NewStageId = dto.NewStageId, NewOpportunityId = newId, ExpectedValue = dto.ExpectedValue, Actor = actor },
             actor);
 
+        InvalidateReportCache(); // حالة الفرصة/العودة تغيّرت — التقرير يُبنى من جديد عند الطلب التالي
         return (true,
             dto.SameOpportunity
                 ? $"تم استرداد العميل {partyName} — عادت الفرصة إلى مرحلة {stageAr}."

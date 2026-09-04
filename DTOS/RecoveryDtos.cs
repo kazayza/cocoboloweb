@@ -184,6 +184,10 @@ public class RecoveryReportRowDto
 
     // قيد المتابعة | لم يُتواصل | رفض نهائي | مُسترد
     public string StatusAr { get; set; } = "";
+
+    // ── حقول مساعدة داخلية للفلترة (لا تُعرض في الجدول/التصدير) ──
+    public DateTime? AnchorDate { get; set; }   // تاريخ "حدث الحالة" (أساس فلترة الفترة)
+    public int? CsEmpId { get; set; }           // موظف خدمة العملاء المسؤول (أساس فلتر الموظف)
 }
 
 /// <summary>نتيجة تقرير الاسترداد (سطور مرقّمة + ملخص).</summary>
