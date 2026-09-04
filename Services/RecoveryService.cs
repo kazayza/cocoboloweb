@@ -196,6 +196,29 @@ public class RecoveryService
             q = q.Where(o => o.NextFollowUpDate.HasValue
                 && o.NextFollowUpDate.Value.Date < DateTime.Today);
 
+        // شريحة "بانتظار التوزيع التلقائي": بلا مهمة استرداد مفتوحة
+        if (filter.UnassignedOnly)
+            q = q.Where(o => !db.CrmTasks.Any(t => t.OpportunityId == o.OpportunityId
+                && t.TaskScope == "Recovery" && t.Status == TaskPending && t.IsActive));
+
+        // شريحة "مُسندة ولم يُتواصل": لها مهمة مفتوحة ولا يوجد تواصل بعد الخسارة
+        if (filter.UncontactedOnly)
+            q = q.Where(o =>
+                db.CrmTasks.Any(t => t.OpportunityId == o.OpportunityId
+                    && t.TaskScope == "Recovery" && t.Status == TaskPending && t.IsActive)
+                && !db.CustomerInteractions.Any(i => i.OpportunityId == o.OpportunityId
+                    && i.StageBeforeId.HasValue
+                    && (i.StageBeforeId == LostStageId || i.StageBeforeId == NotInterestedStageId)
+                    && i.StageAfterId.HasValue
+                    && (i.StageAfterId == LostStageId || i.StageAfterId == NotInterestedStageId)
+                    && !i.Summary.StartsWith("نقل تلقائي")));
+
+        // فلترة تاريخ الإغلاق
+        if (filter.ClosedFrom.HasValue)
+            q = q.Where(o => o.ClosedAt.HasValue && o.ClosedAt.Value.Date >= filter.ClosedFrom.Value.Date);
+        if (filter.ClosedTo.HasValue)
+            q = q.Where(o => o.ClosedAt.HasValue && o.ClosedAt.Value.Date <= filter.ClosedTo.Value.Date);
+
         var total = await q.CountAsync();
 
         // الترتيب حسب اختيار المستخدم
@@ -1084,8 +1107,127 @@ public class RecoveryService
             ? ordered.Skip((result.PageIndex - 1) * pageSize).Take(pageSize).ToList()
             : ordered;
         result.HasMore = pageSize > 0 && result.PageIndex * pageSize < total;
+        result.AsOfUtc = ReportSnapshotAsOfUtc;
 
         return result;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  تحليلات التقرير (اتجاه شهري / أداء الموظفين / أسباب الخسارة)
+    //  كلها تُحسب من "اللقطة" المخزّنة — بدون أي استعلامات قاعدة بيانات إضافية
+    // ═══════════════════════════════════════════════════════════
+    public static DateTime? ReportSnapshotAsOfUtc => _snap != null ? (DateTime?)_snapAt : null;
+
+    /// <summary>الاتجاه الشهري لآخر N شهرًا — من اللقطة نفسها.</summary>
+    public async Task<List<RecoveryTrendPoint>> GetReportTrendAsync(int months = 12)
+    {
+        if (months < 2) months = 2;
+        if (months > 24) months = 24;
+
+        var snap = await GetReportSnapshotAsync();
+        var today = DateTime.Today;
+        var start = new DateTime(today.Year, today.Month, 1).AddMonths(-(months - 1));
+
+        var points = new List<RecoveryTrendPoint>();
+        for (int i = 0; i < months; i++)
+        {
+            var m = start.AddMonths(i);
+            points.Add(new RecoveryTrendPoint { Label = m.ToString("yyyy/MM") });
+        }
+
+        foreach (var r in snap)
+        {
+            if (!r.AnchorDate.HasValue) continue;
+            var m = r.AnchorDate.Value.Date;
+            if (m < start || m > today) continue;
+            var idx = (m.Year - start.Year) * 12 + (m.Month - start.Month);
+            if (idx < 0 || idx >= points.Count) continue;
+            switch (r.StatusAr)
+            {
+                case "لم يُتواصل": points[idx].Uncontacted++; break;
+                case "قيد المتابعة": points[idx].Contacting++; break;
+                case "رفض نهائي": points[idx].Rejected++; break;
+                case "مُسترد": points[idx].Revived++; break;
+            }
+        }
+        return points;
+    }
+
+    /// <summary>أداء كل موظف خدمة عملاء — من اللقطة (الصفوف المنسوبة لكل موظف).</summary>
+    public async Task<List<RecoveryEmployeePerfDto>> GetEmployeePerformanceAsync()
+    {
+        var snap = await GetReportSnapshotAsync();
+        var byEmp = snap
+            .Where(r => r.CsEmpId.HasValue)
+            .GroupBy(r => r.CsEmpId!.Value);
+
+        var list = new List<RecoveryEmployeePerfDto>();
+        foreach (var g in byEmp)
+        {
+            var rows = g.ToList();
+            var dto = new RecoveryEmployeePerfDto
+            {
+                EmployeeId = g.Key,
+                FullName = rows.FirstOrDefault(r => !string.IsNullOrWhiteSpace(r.CsEmployeeName))?.CsEmployeeName ?? $"موظف #{g.Key}",
+                Assigned = rows.Count,
+                Uncontacted = rows.Count(r => r.StatusAr == "لم يُتواصل"),
+                Contacting = rows.Count(r => r.StatusAr == "قيد المتابعة"),
+                Rejected = rows.Count(r => r.StatusAr == "رفض نهائي"),
+                Revived = rows.Count(r => r.StatusAr == "مُسترد"),
+                RevivedValue = rows.Where(r => r.StatusAr == "مُسترد" && r.ExpectedValue.HasValue).Sum(r => r.ExpectedValue!.Value)
+            };
+            list.Add(dto);
+        }
+        return list
+            .OrderByDescending(x => x.RevivedValue)
+            .ThenByDescending(x => x.Revived)
+            .ThenByDescending(x => x.Assigned)
+            .ToList();
+    }
+
+    /// <summary>تحليل أسباب الخسارة: لكل سبب عدد الفرص ونسبة من استُردت.</summary>
+    public async Task<List<RecoveryReasonStatDto>> GetLostReasonAnalysisAsync()
+    {
+        var snap = await GetReportSnapshotAsync();
+        return snap
+            .Where(r => !string.IsNullOrWhiteSpace(r.LostReasonName))
+            .GroupBy(r => r.LostReasonName!)
+            .Select(g => new RecoveryReasonStatDto
+            {
+                ReasonName = g.Key,
+                Total = g.Count(),
+                Revived = g.Count(r => r.StatusAr == "مُسترد")
+            })
+            .OrderByDescending(x => x.Total)
+            .ThenByDescending(x => x.ReviveRate)
+            .ToList();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  عدّادات سريعة لشاشة الطابور
+    // ═══════════════════════════════════════════════════════════
+    /// <summary>عدد الفرص الخاسرة المتأخرة عن موعد المتابعة (شارة على زر "متأخرة").</summary>
+    public async Task<int> GetLateCountAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        return await db.SalesOpportunities.AsNoTracking()
+            .CountAsync(o => (o.StageId == LostStageId || o.StageId == NotInterestedStageId)
+                && o.IsActive
+                && (o.IsRecoveryRejected == null || o.IsRecoveryRejected == false)
+                && o.NextFollowUpDate.HasValue
+                && o.NextFollowUpDate.Value.Date < DateTime.Today);
+    }
+
+    /// <summary>عدد الخسائر الجديدة غير المعالَجة (بلا مهمة استرداد) — للفحص الدوري أثناء فتح الشاشة.</summary>
+    public async Task<int> GetUnprocessedNewLossesCountAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        return await db.SalesOpportunities.AsNoTracking()
+            .CountAsync(o => (o.StageId == LostStageId || o.StageId == NotInterestedStageId)
+                && o.IsActive
+                && (o.IsRecoveryRejected == null || o.IsRecoveryRejected == false)
+                && !db.CrmTasks.Any(t => t.OpportunityId == o.OpportunityId
+                    && t.TaskScope == "Recovery" && t.Status == TaskPending && t.IsActive));
     }
 
     // ═══════════════════════════════════════════════════════════

@@ -17,6 +17,7 @@
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider Auth
 @inject IJSRuntime JS
+@implements IDisposable
 
 <div class="lr-page" dir="rtl">
 
@@ -62,6 +63,15 @@
         <div class="lr-banner-err" @onclick="DismissError" title="اضغط للإغلاق">⚠ @_errorMsg</div>
     }
 
+    @if (_pendingNew > 0 && !_loading)
+    {
+        <div class="lr-banner-new">
+            <span>🔁 يوجد @_pendingNew.ToString("N0") فرصة خاسرة جديدة بانتظار الاستقبال (تم رصدها للتو).</span>
+            <button type="button" class="lr-btn lr-btn-accept" @onclick="AcceptNewNow">↻ استقبال الآن</button>
+            <button type="button" class="lr-banner-new-x" @onclick="DismissPending" title="تجاهل">✕</button>
+        </div>
+    }
+
     @if (_loading)
     {
         <div class="lr-loading"><div class="lr-spin"></div><span>يتم الآن تجهيز فرص المتابعة…</span></div>
@@ -70,35 +80,40 @@
     {
         <!-- ═══════════ KPI CARDS ═══════════ -->
         <div class="lr-kpis">
-            <div class="lr-kpi lr-kpi-red">
+            <div class="lr-kpi lr-kpi-red lr-kpi-click @(_kind == "all" && !_unassignedOnly && !_uncontactedOnly && !_candidateOnly && !_lateOnly && !_mineOnly ? "lr-kpi-on" : "")"
+                 @onclick="KpiShowAll" title="النقر: إظهار كامل طابور الفرص الخاسرة">
                 <div class="lr-kpi-ico">📉</div>
                 <div class="lr-kpi-body">
                     <span class="lr-kpi-val">@_stats.LostCount.ToString("N0")</span>
                     <span class="lr-kpi-lbl">فرصة خاسرة بانتظار المتابعة</span>
                 </div>
             </div>
-            <div class="lr-kpi lr-kpi-indigo">
+            <div class="lr-kpi lr-kpi-indigo lr-kpi-click"
+                 @onclick="KpiSortValue" title="النقر: عرض كامل الطابور مرتبًا بالأعلى قيمة">
                 <div class="lr-kpi-ico">💰</div>
                 <div class="lr-kpi-body">
                     <span class="lr-kpi-val">@Money(_stats.LostValue)</span>
                     <span class="lr-kpi-lbl">إجمالي القيمة المتوقعة</span>
                 </div>
             </div>
-            <div class="lr-kpi lr-kpi-amber">
+            <div class="lr-kpi lr-kpi-amber lr-kpi-click @(_unassignedOnly ? "lr-kpi-on" : "")"
+                 @onclick="ToggleUnassignedOnly" title="النقر: عرض الفرص التي لم تُسند بعد لموظف خدمة عملاء">
                 <div class="lr-kpi-ico">⏳</div>
                 <div class="lr-kpi-body">
                     <span class="lr-kpi-val">@_stats.UnassignedCount.ToString("N0")</span>
                     <span class="lr-kpi-lbl">بانتظار التوزيع التلقائي</span>
                 </div>
             </div>
-            <div class="lr-kpi lr-kpi-green">
+            <div class="lr-kpi lr-kpi-green lr-kpi-click"
+                 @onclick="GoToRevivedReport" title="النقر: فتح تقرير الاسترداد لعمليات العودة (مُسترد) لهذا الشهر">
                 <div class="lr-kpi-ico">✅</div>
                 <div class="lr-kpi-body">
                     <span class="lr-kpi-val">@_stats.RevivedThisMonth.ToString("N0")</span>
                     <span class="lr-kpi-lbl">عميل استُرد هذا الشهر</span>
                 </div>
             </div>
-            <div class="lr-kpi lr-kpi-rose">
+            <div class="lr-kpi lr-kpi-rose lr-kpi-click @(_uncontactedOnly ? "lr-kpi-on" : "")"
+                 @onclick="ToggleUncontactedOnly" title="النقر: عرض القضايا المُسندة التي لم يُسجَّل عليها أي تواصل">
                 <div class="lr-kpi-ico">📞</div>
                 <div class="lr-kpi-body">
                     <span class="lr-kpi-val">@_stats.UncontactedCount.ToString("N0")</span>
@@ -135,12 +150,15 @@
                 <button class="lr-chip @(_candidateOnly ? "lr-chip-on" : "")" @onclick="ToggleCandidate"
                         title="الفرص اللي مندوب المبيعات رشّحها للاسترداد">⭐ مرشحة للاسترداد</button>
                 <button class="lr-chip @(_lateOnly ? "lr-chip-late" : "")" @onclick="ToggleLate"
-                        title="الفرص اللي فات موعد المتابعة المحدد ليها">⏰ متأخرة فقط</button>
+                        title="الفرص اللي فات موعد المتابعة المحدد ليها">⏰ متأخرة فقط@(_lateCount > 0 ? $" ({_lateCount:N0})" : "")</button>
                 @if (_myEmpId > 0)
                 {
                     <button class="lr-chip @(_mineOnly ? "lr-chip-on" : "")" @onclick="ToggleMine"
                             title="القضايا المسندة لي أنا فقط">👤 قضاياي</button>
                 }
+                <button class="lr-chip @(_closedFrom.HasValue || _closedTo.HasValue || _showDate ? "lr-chip-on" : "")"
+                        @onclick="ToggleDateFilter"
+                        title="الفلترة بتاريخ الإغلاق (من/إلى)">🗓 تاريخ الإغلاق@(_closedFrom.HasValue || _closedTo.HasValue ? " ✓" : "")</button>
                 @if (HasActiveFilters)
                 {
                     <button class="lr-chip lr-chip-clearall" @onclick="ClearAllFilters"
@@ -149,6 +167,22 @@
                     </button>
                 }
             </div>
+
+            @if (_showDate)
+            {
+                <div class="lr-datef">
+                    <span class="lr-datef-lbl">🗓 تاريخ الإغلاق</span>
+                    <span>من</span>
+                    <input type="date" value="@_closedFrom?.ToString("yyyy-MM-dd")" @onchange="OnClosedFromChange" />
+                    <span>إلى</span>
+                    <input type="date" value="@_closedTo?.ToString("yyyy-MM-dd")" @onchange="OnClosedToChange" />
+                    @if (_closedFrom.HasValue || _closedTo.HasValue)
+                    {
+                        <button type="button" class="lr-chip lr-chip-clearall" @onclick="ClearClosedDates" title="إلغاء فلتر تاريخ الإغلاق">✕ مسح التواريخ</button>
+                    }
+                    <button type="button" class="lr-datef-close" @onclick="ToggleDateFilter" title="إغلاق">✕</button>
+                </div>
+            }
         </div>
 
         @if (_items.Count == 0)
@@ -693,6 +727,35 @@
     .lr-banner-err { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c;
         border-radius: 12px; padding: 11px 14px; font-size: .85rem; font-weight: 700;
         cursor: pointer; box-shadow: 0 8px 20px rgba(185, 28, 28, .12); }
+    .lr-banner-new { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8;
+        border-radius: 12px; padding: 10px 14px; font-size: .85rem; font-weight: 700;
+        box-shadow: 0 8px 20px rgba(29, 78, 216, .12); }
+    .lr-btn-accept { background: linear-gradient(135deg, #059669, #10b981); color: #fff;
+        border: 0; border-radius: 10px; padding: 8px 16px; cursor: pointer;
+        font-family: inherit; font-weight: 900; font-size: .82rem;
+        display: inline-flex; align-items: center; gap: 5px;
+        box-shadow: 0 6px 16px rgba(5, 150, 105, .35); transition: all .15s ease; }
+    .lr-btn-accept:hover { filter: brightness(1.08); transform: translateY(-1px); }
+    .lr-banner-new-x { border: 0; background: transparent; color: #1d4ed8; cursor: pointer;
+        font-size: .85rem; font-weight: 900; margin-inline-start: auto; }
+    .lr-kpi-click { cursor: pointer; position: relative; transition: transform .12s ease, box-shadow .12s ease; }
+    .lr-kpi-click::after { content: "↳"; position: absolute; top: 8px; left: 10px; font-size: .8rem;
+        color: #94a3b8; opacity: 0; transition: opacity .12s ease; }
+    .lr-kpi-click:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(15, 23, 42, .12); }
+    .lr-kpi-click:hover::after { opacity: 1; }
+    .lr-kpi-on { outline: 3px solid #6366f1; outline-offset: 2px; }
+    .lr-datef { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%;
+        padding: 10px 12px; margin-top: 8px; background: #f8fafc; border: 1px dashed #c7d2fe;
+        border-radius: 12px; }
+    .lr-datef span { font-size: .76rem; font-weight: 800; color: #475569; }
+    .lr-datef-lbl { color: #4338ca !important; }
+    .lr-datef-close { border: 0; background: transparent; color: #94a3b8; cursor: pointer;
+        font-weight: 900; font-size: .8rem; margin-inline-start: auto; }
+    .lr-datef-close:hover { color: #dc2626; }
+    .lr-datef input { border: 1px solid #dbe3f3; border-radius: 8px; padding: 6px 8px;
+        font-family: inherit; font-size: .8rem; background: #f8fafc; color: #1e293b; outline: 0; }
+    .lr-datef input:focus { border-color: #6366f1; background: #fff; }
     .lr-toast { position: fixed; left: 20px; bottom: 20px; z-index: 1400; display: flex;
         align-items: center; gap: 10px; background: #065f46; color: #fff; font-weight: 700;
         padding: 12px 16px; border-radius: 12px; box-shadow: 0 14px 30px rgba(2, 6, 23, .3);
@@ -763,6 +826,17 @@
     private int _loadSeq;         // تسلسل يمنع عرض نتائج قديمة متأخرة
     private int _restoredPages;   // صفحات محفوظة تُعاد عند الرجوع
 
+    // شرائح KPI التفاعلية + فلتر تاريخ الإغلاق + عدّادات
+    private bool _unassignedOnly;   // بانتظار التوزيع التلقائي
+    private bool _uncontactedOnly;  // مُسندة ولم يُتواصل معها بعد
+    private DateTime? _closedFrom;
+    private DateTime? _closedTo;
+    private bool _showDate;         // إظهار/إخفاء سطر فلترة تاريخ الإغلاق
+    private int _lateCount;         // شارة زر "متأخرة فقط"
+    private int _pendingNew;        // خسائر جديدة رُصدت أثناء فتح الشاشة
+    private bool _disposed;
+    private System.Threading.Timer? _autoTimer;
+
     // نوافذ
     private LostRecoveryItemDto? _sel;
     private bool _showContact;
@@ -800,6 +874,8 @@
 
         RestoreSavedState();
         await LoadInitialAsync();
+        _autoTimer ??= new System.Threading.Timer(_ => _ = AutoCheckAsync(), null,
+            TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(20));
     }
 
     // ───── تثبيت الحالة (فلتر + مكان "تحميل المزيد") عند الرجوع للصفحة ─────
@@ -838,7 +914,11 @@
         MineOnly = _mineOnly,
         LateOnly = _lateOnly ? true : null,
         SortBy = _sortBy,
-        MinValue = null
+        MinValue = null,
+        UnassignedOnly = _unassignedOnly,
+        UncontactedOnly = _uncontactedOnly,
+        ClosedFrom = _closedFrom,
+        ClosedTo = _closedTo
     };
 
     // التحميل الأولي عند الدخول أو زر "تحديث" — ينفّذ الصيانة (توزيع + تذكير) مرة واحدة فقط
@@ -853,6 +933,7 @@
             _stages = await Recovery.GetRecoveryStagesAsync();
             _myEmpId = await Recovery.GetCurrentCsEmployeeIdAsync(_userName);
             _stats = await Recovery.GetStatsAsync();
+            _lateCount = await Recovery.GetLateCountAsync();
 
             var page = await Recovery.GetQueueAsync(CurrentFilter(), 1, _pageSize, _userName);
             _items = page.Items;
@@ -898,6 +979,7 @@
         try
         {
             _stats = await Recovery.GetStatsAsync();
+            _lateCount = await Recovery.GetLateCountAsync();
             var page = await Recovery.GetQueueAsync(CurrentFilter(), 1, _pageSize, _userName);
             _items = page.Items;
             _total = page.TotalCount;
@@ -1059,6 +1141,11 @@
         _lateOnly = false;
         _mineOnly = false;
         _sortBy = "value";
+        _unassignedOnly = false;
+        _uncontactedOnly = false;
+        _closedFrom = null;
+        _closedTo = null;
+        _showDate = false;
         _cts?.Cancel();
         _ = ApplyFilters();
     }
@@ -1069,14 +1156,119 @@
         || _kind != "all"
         || _candidateOnly
         || _lateOnly
-        || _mineOnly;
+        || _mineOnly
+        || _unassignedOnly
+        || _uncontactedOnly
+        || _closedFrom.HasValue
+        || _closedTo.HasValue;
 
     private int ActiveFilterCount =>
         (string.IsNullOrWhiteSpace(_q) ? 0 : 1)
         + (_kind != "all" ? 1 : 0)
         + (_candidateOnly ? 1 : 0)
         + (_lateOnly ? 1 : 0)
-        + (_mineOnly ? 1 : 0);
+        + (_mineOnly ? 1 : 0)
+        + (_unassignedOnly ? 1 : 0)
+        + (_uncontactedOnly ? 1 : 0)
+        + (_closedFrom.HasValue ? 1 : 0)
+        + (_closedTo.HasValue ? 1 : 0);
+
+    // ═══════════ شرائح KPI التفاعلية + تاريخ الإغلاق + رصد الخسائر الجديدة ═══════════
+    private void KpiShowAll()
+    {
+        _q = ""; _kind = "all"; _candidateOnly = false; _lateOnly = false; _mineOnly = false;
+        _unassignedOnly = false; _uncontactedOnly = false;
+        _closedFrom = null; _closedTo = null;
+        _cts?.Cancel();
+        _ = ApplyFilters();
+    }
+
+    private void KpiSortValue()
+    {
+        _q = ""; _kind = "all"; _candidateOnly = false; _lateOnly = false; _mineOnly = false;
+        _unassignedOnly = false; _uncontactedOnly = false;
+        _closedFrom = null; _closedTo = null;
+        _sortBy = "value";
+        _cts?.Cancel();
+        _ = ApplyFilters();
+    }
+
+    private void GoToRevivedReport()
+    {
+        var today = DateTime.Today;
+        var first = new DateTime(today.Year, today.Month, 1);
+        Nav.NavigateTo(
+            $"/crm/lost-recovery/report?status=revived&from={first:yyyy-MM-dd}&to={today:yyyy-MM-dd}");
+    }
+
+    private void ToggleUnassignedOnly()
+    {
+        _unassignedOnly = !_unassignedOnly;
+        if (_unassignedOnly) _uncontactedOnly = false;
+        _ = ApplyFilters();
+    }
+
+    private void ToggleUncontactedOnly()
+    {
+        _uncontactedOnly = !_uncontactedOnly;
+        if (_uncontactedOnly) _unassignedOnly = false;
+        _ = ApplyFilters();
+    }
+
+    private void OnClosedFromChange(ChangeEventArgs e)
+    {
+        _closedFrom = DateTime.TryParse(e.Value?.ToString(), out var d) ? d : (DateTime?)null;
+        _ = ApplyFilters();
+    }
+
+    private void OnClosedToChange(ChangeEventArgs e)
+    {
+        _closedTo = DateTime.TryParse(e.Value?.ToString(), out var d) ? d : (DateTime?)null;
+        _ = ApplyFilters();
+    }
+
+    private void ToggleDateFilter()
+    {
+        _showDate = !_showDate;
+        StateHasChanged();
+    }
+
+    private void ClearClosedDates()
+    {
+        _closedFrom = null; _closedTo = null;
+        _showDate = false;
+        _ = ApplyFilters();
+    }
+
+    private async Task AcceptNewNow()
+    {
+        _pendingNew = 0;
+        await LoadInitialAsync(); // يجري الصيانة (توزيع + تذكير) ثم يعيد التحميل
+    }
+
+    private void DismissPending() => _pendingNew = 0;
+
+    private async Task AutoCheckAsync()
+    {
+        if (_disposed || _loading || _busy || _showContact || _showHistory || _showRevive || _pendingNew > 0)
+            return;
+        try
+        {
+            var c = await Recovery.GetUnprocessedNewLossesCountAsync();
+            if (c > _pendingNew)
+            {
+                _pendingNew = c;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch { /* تجاهل أخطاء الفحص الدوري */ }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _autoTimer?.Dispose();
+    }
 
     private void SetKind(string k)
     {

@@ -5,6 +5,7 @@
 @using COCOBOLOERPNEW.Models
 @using COCOBOLOERPNEW.Services
 @using System.Globalization
+@using ApexCharts
 @using ClosedXML.Excel
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components
@@ -14,6 +15,7 @@
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider Auth
 @inject IJSRuntime JS
+@implements IDisposable
 
 <div class="rp-page" dir="rtl">
 
@@ -140,6 +142,18 @@
             <button type="button" class="rp-chip rp-chip-clearall" @onclick="ClearAllFilters"
                     title="إلغاء كل الفلاتر والبحث وإعادة التحميل">✕ مسح الكل (@ActiveFilterCount)</button>
         }
+        <span class="rp-stamp">🕒 آخر تحديث: @AsOfText()</span>
+        <label class="rp-autoref" title="تحديث هادئ كل 45 ثانية مع الحفاظ على صفحتك الحالية">
+            <input type="checkbox" checked="@_autoRefresh" @onchange="ToggleAutoRefresh" /> تحديث تلقائي
+        </label>
+    </div>
+
+    <!-- ═══════════ TAB BAR ═══════════ -->
+    <div class="rp-tabs">
+        <button type="button" class="rp-tab @(_tab == "table" ? "rp-tab-on" : "")" @onclick="SwitchTable">📋 الجدول</button>
+        <button type="button" class="rp-tab @(_tab == "trend" ? "rp-tab-on" : "")" @onclick="SwitchTrend">📈 الاتجاه الشهري</button>
+        <button type="button" class="rp-tab @(_tab == "staff" ? "rp-tab-on" : "")" @onclick="SwitchStaff">👥 أداء الموظفين</button>
+        <button type="button" class="rp-tab @(_tab == "reasons" ? "rp-tab-on" : "")" @onclick="SwitchReasons">🧩 أسباب الخسارة</button>
     </div>
 
     @if (_loading)
@@ -150,107 +164,255 @@
     {
         <div class="rp-loading"><span class="rp-spin"></span><span>جارٍ البحث…</span></div>
     }
-    else if (_result.Rows.Count == 0)
+    else if (_tab == "trend")
     {
-        <div class="rp-empty">
-            @if (HasActiveFilters)
-            {
-                <h3>لا توجد نتائج مطابقة للبحث أو الفلاتر</h3>
-                <p>جرّب تعديل الفلترة أو البحث لعرض نطاق أوسع.</p>
-            }
-            else
-            {
-                <h3>لا توجد بيانات لتقرير الاسترداد بعد</h3>
-            }
-        </div>
+        @if (_trend.Count == 0)
+        {
+            <div class="rp-empty"><h3>لا توجد بيانات كافية للرسم بعد</h3><p>سيظهر الاتجاه الشهري فور توفر سجلات (تواصل/عودة/رفض) في نطاق التقرير.</p></div>
+        }
+        else
+        {
+            <section class="rp-sec">
+                <div class="rp-sec-head">
+                    <h3>📈 الاتجاه الشهري — آخر 12 شهرًا</h3>
+                    <p>عدد الفرص حسب حالة الصف وتاريخ "حدث الحالة" (العودة/آخر تواصل/الخسارة) — على كامل البيانات دون التقيد بفلتر الفترة الحالي.</p>
+                </div>
+                <ApexChart TItem="RecoveryTrendPoint" Options="_trendOpts" Height="370">
+                    <ApexPointSeries TItem="RecoveryTrendPoint" Items="_trend" Name="مُسترد" SeriesType="SeriesType.Line" XValue="x => x.Label" YValue="x => x.Revived" />
+                    <ApexPointSeries TItem="RecoveryTrendPoint" Items="_trend" Name="قيد المتابعة" SeriesType="SeriesType.Line" XValue="x => x.Label" YValue="x => x.Contacting" />
+                    <ApexPointSeries TItem="RecoveryTrendPoint" Items="_trend" Name="رفض نهائي" SeriesType="SeriesType.Line" XValue="x => x.Label" YValue="x => x.Rejected" />
+                    <ApexPointSeries TItem="RecoveryTrendPoint" Items="_trend" Name="لم يُتواصل" SeriesType="SeriesType.Line" XValue="x => x.Label" YValue="x => x.Uncontacted" />
+                </ApexChart>
+            </section>
+        }
+    }
+    else if (_tab == "staff")
+    {
+        @if (_staff.Count == 0)
+        {
+            <div class="rp-empty"><h3>لا توجد بيانات أداء بعد</h3><p>تظهر بيانات كل موظف خدمة عملاء فور تسجيل تواصل أو استرداد يحمل اسمه.</p></div>
+        }
+        else
+        {
+            <section class="rp-sec">
+                <div class="rp-sec-head">
+                    <h3>👥 أداء موظفي خدمة العملاء</h3>
+                    <p>الصفوف المنسوبة لكل موظف داخل نطاق التقرير (مهمة مفتوحة أو منفّذ آخر تواصل/عودة) — مرتبة بإجمالي القيمة المُستردة.</p>
+                </div>
+                <div class="rp-table-wrap">
+                    <table class="rp-table">
+                        <thead>
+                            <tr>
+                                <th>الموظف</th><th>القضايا</th><th>لم يُتواصل</th><th>قيد المتابعة</th>
+                                <th>رفض نهائي</th><th>مُسترد</th><th>قيمة مُستردة</th><th>نسبة الاسترداد</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var s in _staff)
+                            {
+                                <tr>
+                                    <td><b>@s.FullName</b></td>
+                                    <td class="rp-center">@s.Assigned</td>
+                                    <td class="rp-center">@s.Uncontacted</td>
+                                    <td class="rp-center">@s.Contacting</td>
+                                    <td class="rp-center">@s.Rejected</td>
+                                    <td class="rp-center rp-rev">@s.Revived</td>
+                                    <td class="rp-val">@Money(s.RevivedValue)</td>
+                                    <td>
+                                        <span class="rp-rate" style="--w:@((int)Math.Round(s.ReviveRate))%">
+                                            <i></i><b>@((int)Math.Round(s.ReviveRate))%</b>
+                                        </span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
+    }
+    else if (_tab == "reasons")
+    {
+        @if (_reasons.Count == 0)
+        {
+            <div class="rp-empty"><h3>لا توجد أسباب مسجلة بعد</h3><p>تظهر أسباب الخسارة فور تسجيلها على الفرص داخل التقرير.</p></div>
+        }
+        else
+        {
+            <section class="rp-sec">
+                <div class="rp-sec-head">
+                    <h3>🧩 أسباب الخسارة ونِسَب الاسترداد</h3>
+                    <p>لكل سبب: عدد الفرص، ومنها ما عاد لدورة البيع — لمعرفة أين تتركز فرص الاسترداد.</p>
+                </div>
+                <div class="rp-table-wrap">
+                    <table class="rp-table">
+                        <thead>
+                            <tr><th>سبب الخسارة</th><th>عدد الفرص</th><th>مُسترد</th><th>نسبة الاسترداد</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var rz in _reasons)
+                            {
+                                <tr>
+                                    <td><b>@rz.ReasonName</b></td>
+                                    <td class="rp-center">@rz.Total</td>
+                                    <td class="rp-center rp-rev">@rz.Revived</td>
+                                    <td>
+                                        <span class="rp-rate" style="--w:@((int)Math.Round(rz.ReviveRate))%">
+                                            <i></i><b>@((int)Math.Round(rz.ReviveRate))%</b>
+                                        </span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
     }
     else
     {
-        <div class="rp-legend">
-            <span><b>لم يُتواصل</b> = لا توجد محاولة تواصل مسجلة بعد الخسارة.</span>
-            <span><b>قيد المتابعة</b> = تم التواصل ولم يُحسم الأمر بعد.</span>
-            <span><b>رفض نهائي</b> = أُغلق ملف متابعة الاسترداد.</span>
-            <span><b>مُسترد</b> = عاد العميل لدورة البيع.</span>
-        </div>
-
-        @if (_result.RowCount > _result.PageSize)
+        @if (_result.Rows.Count == 0)
         {
-            <div class="rp-note">يعرض الجدول @_result.Rows.Count من إجمالي @_result.RowCount.ToString("N0") — للتصدير الكامل استخدم زر Excel.</div>
-        }
-<div class="rp-table-wrap">
-            <table class="rp-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>العميل</th>
-                        <th>القيمة</th>
-                        <th>الحالة</th>
-                        <th>سبب الخسارة</th>
-                        <th>الإغلاق</th>
-                        <th>موظف المتابعة</th>
-                        <th>التواصل</th>
-                        <th>آخر نشاط</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var r in _result.Rows)
-                    {
-                        <tr>
-                            <td class="rp-mono">
-                                <a class="rp-link" href="@($"/crm/opportunities/{r.OpportunityId}")" title="فتح الفرصة">@r.OpportunityId</a>
-                            </td>
-                            <td>
-                                <b>@r.ClientName</b>
-                                @if (!string.IsNullOrWhiteSpace(r.Phone))
-                                {
-                                    <div class="rp-sub">@r.Phone</div>
-                                }
-                            </td>
-                            <td class="rp-val">@Money(r.ExpectedValue)</td>
-                            <td><span class="rp-badge @StatusClass(r.StatusAr)">@r.StatusAr</span></td>
-                            <td>@(r.LostReasonName ?? "—")</td>
-                            <td class="rp-mono">@(r.ClosedAt.HasValue ? r.ClosedAt.Value.ToString("yyyy/MM/dd") : "—")</td>
-                            <td>@(r.CsEmployeeName ?? "—")</td>
-                            <td class="rp-center">@r.ContactCount</td>
-                            <td>
-                                @if (r.RevivedDate.HasValue)
-                                {
-                                    <span class="rp-mono rp-rev">↩ @r.RevivedDate.Value.ToString("yyyy/MM/dd")</span>
-                                    @if (!string.IsNullOrWhiteSpace(r.LastCsSummary))
-                                    {
-                                        <div class="rp-sub" title="@r.LastCsSummary">@Trunc(r.LastCsSummary, 36)</div>
-                                    }
-                                }
-                                else if (r.LastCsDate.HasValue)
-                                {
-                                    <span class="rp-mono">@r.LastCsDate.Value.ToString("yyyy/MM/dd HH:mm")</span>
-                                    @if (!string.IsNullOrWhiteSpace(r.LastCsSummary))
-                                    {
-                                        <div class="rp-sub" title="@r.LastCsSummary">@Trunc(r.LastCsSummary, 36)</div>
-                                    }
-                                }
-                                else
-                                {
-                                    <span class="rp-dim">—</span>
-                                }
-                            </td>
-                            <td><a class="rp-mini" href="@($"/crm/customers/{r.PartyId}")" title="ملف العميل">🧾</a></td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-
-        <!-- ═══════════ PAGER ═══════════ -->
-        @if (_result.TotalPages > 1)
-        {
-            <div class="rp-pager">
-                <button class="rp-btn rp-btn-outline" @onclick="PrevPage" disabled="@(_result.PageIndex <= 1 || _searching)">→ السابق</button>
-                <span>صفحة @_result.PageIndex من @_result.TotalPages</span>
-                <button class="rp-btn rp-btn-outline" @onclick="NextPage" disabled="@(!_result.HasMore || _searching)">التالي ←</button>
+            <div class="rp-empty">
+                @if (HasActiveFilters)
+                {
+                    <h3>لا توجد نتائج مطابقة للبحث أو الفلاتر</h3>
+                    <p>جرّب تعديل الفلترة أو البحث لعرض نطاق أوسع — أو شاهد تبويبات التحليل أعلاه.</p>
+                }
+                else
+                {
+                    <h3>لا توجد بيانات لتقرير الاسترداد بعد</h3>
+                }
             </div>
         }
+        else
+        {
+            <div class="rp-legend">
+                <span><b>لم يُتواصل</b> = لا توجد محاولة تواصل مسجلة بعد الخسارة.</span>
+                <span><b>قيد المتابعة</b> = تم التواصل ولم يُحسم الأمر بعد.</span>
+                <span><b>رفض نهائي</b> = أُغلق ملف متابعة الاسترداد.</span>
+                <span><b>مُسترد</b> = عاد العميل لدورة البيع.</span>
+            </div>
+
+            @if (_result.RowCount > _result.PageSize)
+            {
+                <div class="rp-note">يعرض الجدول @_result.Rows.Count من إجمالي @_result.RowCount.ToString("N0") — للتصدير الكامل استخدم زر Excel.</div>
+            }
+            <div class="rp-table-wrap">
+                <table class="rp-table">
+                    <thead>
+                        <tr>
+                            <th>#</th><th>العميل</th><th>القيمة</th><th>الحالة</th><th>سبب الخسارة</th>
+                            <th>الإغلاق</th><th>موظف المتابعة</th><th>التواصل</th><th>آخر نشاط</th><th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in _result.Rows)
+                        {
+                            <tr>
+                                <td class="rp-mono">
+                                    <a class="rp-link" href="@($"/crm/opportunities/{r.OpportunityId}")" title="فتح الفرصة">@r.OpportunityId</a>
+                                </td>
+                                <td>
+                                    <b>@r.ClientName</b>
+                                    @if (!string.IsNullOrWhiteSpace(r.Phone))
+                                    {
+                                        <div class="rp-sub">@r.Phone</div>
+                                    }
+                                </td>
+                                <td class="rp-val">@Money(r.ExpectedValue)</td>
+                                <td><span class="rp-badge @StatusClass(r.StatusAr)">@r.StatusAr</span></td>
+                                <td>@(r.LostReasonName ?? "—")</td>
+                                <td class="rp-mono">@(r.ClosedAt.HasValue ? r.ClosedAt.Value.ToString("yyyy/MM/dd") : "—")</td>
+                                <td>@(r.CsEmployeeName ?? "—")</td>
+                                <td class="rp-center">@r.ContactCount</td>
+                                <td>
+                                    @if (r.RevivedDate.HasValue)
+                                    {
+                                        <span class="rp-mono rp-rev">↩ @r.RevivedDate.Value.ToString("yyyy/MM/dd")</span>
+                                        @if (!string.IsNullOrWhiteSpace(r.LastCsSummary))
+                                        {
+                                            <div class="rp-sub" title="@r.LastCsSummary">@Trunc(r.LastCsSummary, 36)</div>
+                                        }
+                                    }
+                                    else if (r.LastCsDate.HasValue)
+                                    {
+                                        <span class="rp-mono">@r.LastCsDate.Value.ToString("yyyy/MM/dd HH:mm")</span>
+                                        @if (!string.IsNullOrWhiteSpace(r.LastCsSummary))
+                                        {
+                                            <div class="rp-sub" title="@r.LastCsSummary">@Trunc(r.LastCsSummary, 36)</div>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span class="rp-dim">—</span>
+                                    }
+                                </td>
+                                <td>
+                                    <a class="rp-mini" href="@($"/crm/customers/{r.PartyId}")" title="ملف العميل">🧾</a>
+                                    <button type="button" class="rp-mini rp-mini-btn" @onclick="() => OpenRowHistory(r.OpportunityId)" title="سجل التواصل بعد الخسارة">🕘</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (_result.TotalPages > 1)
+            {
+                <div class="rp-pager">
+                    <button class="rp-btn rp-btn-outline" @onclick="PrevPage" disabled="@(_result.PageIndex <= 1 || _searching)">→ السابق</button>
+                    <span>صفحة @_result.PageIndex من @_result.TotalPages</span>
+                    <button class="rp-btn rp-btn-outline" @onclick="NextPage" disabled="@(!_result.HasMore || _searching)">التالي ←</button>
+                </div>
+            }
+        }
+    }
+
+    <!-- ═══════════ سجل الفرصة (لوحة جانبية) ═══════════ -->
+    @if (_panelOppId.HasValue)
+    {
+        <div class="rp-overlay" @onclick="CloseRowHistory">
+            <div class="rp-drawer" @onclick="Noop" @onclick:stopPropagation>
+                <div class="rp-drawer-head">
+                    <div>
+                        <h3>🕘 سجل التواصل بعد الخسارة</h3>
+                        <p class="rp-sub">الفرصة #@_panelOppId — عميل: @_panelClientName</p>
+                    </div>
+                    <button type="button" class="rp-x" @onclick="CloseRowHistory">✕</button>
+                </div>
+                <div class="rp-drawer-body">
+                    @if (_panelLoading)
+                    {
+                        <div class="rp-loading"><span class="rp-spin"></span><span>جارٍ تحميل السجل…</span></div>
+                    }
+                    else if (_panelHistory.Count == 0)
+                    {
+                        <div class="rp-empty"><h3>لا يوجد سجل تواصل بعد الخسارة</h3><p>لم يُسجَّل أي محاولة تواصل على هذه الفرصة بعد وصولها للخسارة.</p></div>
+                    }
+                    else
+                    {
+                        <div class="rp-hist-list">
+                            @foreach (var h in _panelHistory)
+                            {
+                                <div class="rp-hist-item">
+                                    <span class="rp-hist-date">@h.Date.ToString("yyyy/MM/dd HH:mm")</span>
+                                    @if (!string.IsNullOrWhiteSpace(h.Channel))
+                                    {
+                                        <span class="rp-hist-channel">@h.Channel</span>
+                                    }
+                                    <div class="rp-hist-sum">@h.Summary</div>
+                                    <div class="rp-hist-by">بواسطة: @(string.IsNullOrWhiteSpace(h.EmployeeName) ? h.CreatedBy : h.EmployeeName)</div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+                <div class="rp-drawer-foot">
+                    <a class="rp-btn rp-btn-primary" href="@($"/crm/opportunities/{_panelOppId}")">فتح الفرصة كاملة ↗</a>
+                </div>
+            </div>
+        </div>
     }
 </div>
 <style>
@@ -368,6 +530,54 @@
     .rp-b-gray { background: #e2e8f0; color: #475569; }
     .rp-b-indigo { background: #e0e7ff; color: #4338ca; }
     .rp-pager { display: flex; align-items: center; justify-content: center; gap: 12px; }
+
+    /* تبويبات */
+    .rp-tabs { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .rp-tab { border: 1px solid #dbe3f3; background: #fff; color: #475569; border-radius: 12px;
+        padding: 8px 14px; font-family: inherit; font-size: .82rem; font-weight: 800; cursor: pointer; }
+    .rp-tab:hover { border-color: #6366f1; color: #4338ca; }
+    .rp-tab-on { background: linear-gradient(135deg, #4f46e5, #6366f1); color: #fff; border-color: transparent; }
+    /* طابع آخر تحديث + تحديث تلقائي */
+    .rp-stamp { margin-inline-start: auto; color: var(--r-mut); font-size: .75rem; font-weight: 700;
+        display: inline-flex; align-items: center; gap: 4px; }
+    .rp-autoref { display: inline-flex; align-items: center; gap: 5px; font-size: .76rem; font-weight: 700;
+        color: #475569; cursor: pointer; user-select: none; }
+    .rp-autoref input { accent-color: #4f46e5; width: 15px; height: 15px; cursor: pointer; }
+    /* أقسام التحليل */
+    .rp-sec { background: #fff; border: 1px solid var(--r-line); border-radius: 16px; padding: 16px; }
+    .rp-sec-head h3 { margin: 0; font-size: 1.05rem; color: #1e293b; }
+    .rp-sec-head p { margin: 4px 0 14px; font-size: .8rem; color: var(--r-mut); }
+    .rp-rev { color: #047857; font-weight: 800; }
+    /* شريط نسبة الاسترداد */
+    .rp-rate { position: relative; display: inline-flex; align-items: center; gap: 8px; min-width: 130px;
+        height: 18px; background: #eef2f7; border-radius: 100px; overflow: hidden; padding: 0 8px; }
+    .rp-rate i { position: absolute; inset: 0 auto 0 0; width: var(--w, 0%); background: linear-gradient(90deg, #10b981, #34d399);
+        border-radius: 100px; }
+    .rp-rate b { position: relative; z-index: 1; font-size: .74rem; color: #065f46; }
+    /* لوحة سجل الفرصة */
+    .rp-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); z-index: 1300;
+        display: flex; justify-content: flex-start; }
+    .rp-drawer { width: min(460px, 94vw); height: 100%; background: #fff; box-shadow: -10px 0 40px rgba(2, 6, 23, .25);
+        display: flex; flex-direction: column; animation: rpslide .18s ease; }
+    .rp-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+        padding: 16px 18px; border-bottom: 1px solid var(--r-line); }
+    .rp-drawer-head h3 { margin: 0; font-size: 1rem; color: #1e293b; }
+    .rp-drawer-body { flex: 1; overflow: auto; padding: 14px 18px; }
+    .rp-drawer-foot { padding: 12px 18px; border-top: 1px solid var(--r-line); }
+    .rp-x { border: 0; background: #f1f5f9; color: #475569; width: 30px; height: 30px; border-radius: 9px;
+        cursor: pointer; font-size: .9rem; }
+    .rp-x:hover { background: #fee2e2; color: #b91c1c; }
+    .rp-hist-list { display: flex; flex-direction: column; gap: 10px; }
+    .rp-hist-item { border: 1px solid #eef2f7; border-radius: 12px; padding: 10px 12px; background: #f8fafc; }
+    .rp-hist-date { font-size: .74rem; color: #6366f1; font-weight: 800; }
+    .rp-hist-channel { font-size: .7rem; font-weight: 800; color: #b45309; background: #fef3c7;
+        padding: 2px 8px; border-radius: 100px; margin-inline-start: 6px; }
+    .rp-hist-sum { font-size: .86rem; color: #1e293b; margin: 6px 0; line-height: 1.7; }
+    .rp-hist-by { font-size: .72rem; color: var(--r-mut); }
+    .rp-mini-btn { border: 0; background: transparent; cursor: pointer; padding: 2px; margin-inline-start: 4px; }
+    .rp-mini-btn:hover { opacity: .8; }
+    @@keyframes rpslide { from { transform: translateX(-18px); opacity: 0; } to { transform: none; opacity: 1; } }
+
 </style>
 @code {
     private string _userName = "";
@@ -402,7 +612,11 @@
             return;
         }
         _userName = user.Identity?.Name ?? "";
+        ApplyQueryToFilters();
         await LoadReportAsync();
+        await LoadAnalyticsAsync();
+        _autoTimer ??= new System.Threading.Timer(_ => _ = AutoTickAsync(), null,
+            TimeSpan.FromSeconds(45), TimeSpan.FromSeconds(45));
     }
 
     private async Task LoadReportAsync()
@@ -435,6 +649,7 @@
                 // ⭐ البحث/الفلاتر/الشرائح تُطلق من أحداث void (fire-and-forget) —
                 //    بدون StateHasChanged لا يُعاد رسم الجدول بعد اكتمال الاستعلام
                 StateHasChanged();
+                if (_errorMsg == null) SyncUrl(); // مشاركة الفلاتر عبر الرابط
             }
         }
     }
@@ -651,4 +866,179 @@ private static DateTime? ParseDate(string? s)
         "لم يُتواصل" => "rp-b-gray",
         _ => "rp-b-indigo"
     };
+
+    // ═══════════ تبويبات التحليل ═══════════
+    private string _tab = "table";
+    private List<RecoveryTrendPoint> _trend = new();
+    private List<RecoveryEmployeePerfDto> _staff = new();
+    private List<RecoveryReasonStatDto> _reasons = new();
+    private ApexChartOptions<RecoveryTrendPoint> _trendOpts = new();
+    private bool _analyticsLoaded;
+
+    private void SwitchTable() => SwitchTab("table");
+    private void SwitchTrend() => SwitchTab("trend");
+    private void SwitchStaff() => SwitchTab("staff");
+    private void SwitchReasons() => SwitchTab("reasons");
+    private void SwitchTab(string t)
+    {
+        _tab = t;
+        StateHasChanged();
+    }
+
+    // ═══════════ آخر تحديث + تحديث تلقائي ═══════════
+    private string AsOfText()
+        => _result.AsOfUtc.HasValue
+            ? _result.AsOfUtc.Value.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss")
+            : "—";
+
+    private bool _autoRefresh = true;
+    private bool _disposed;
+    private System.Threading.Timer? _autoTimer;
+
+    private void ToggleAutoRefresh()
+    {
+        _autoRefresh = !_autoRefresh;
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _autoTimer?.Dispose();
+    }
+
+    private async Task AutoTickAsync()
+    {
+        if (_disposed || !_autoRefresh || _loading || _searching || _exporting || _panelOppId.HasValue)
+            return;
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                var seq = ++_loadSeq;
+                var pg = _result.PageIndex < 1 ? 1 : _result.PageIndex;
+                _result = await Recovery.GetRecoveryReportAsync(CurrentFilter(), pg, _pageSize);
+                if (seq == _loadSeq) StateHasChanged();
+            });
+        }
+        catch { /* تجاهل أخطاء التحديث الهادئ */ }
+    }
+
+    // ═══════════ تحميل التحليلات (من اللقطة — بدون استعلامات إضافية ثقيلة) ═══════════
+    private async Task LoadAnalyticsAsync()
+    {
+        if (_analyticsLoaded) return;
+        _analyticsLoaded = true;
+        try
+        {
+            _trend = await Recovery.GetReportTrendAsync(12);
+            _staff = await Recovery.GetEmployeePerformanceAsync();
+            _reasons = await Recovery.GetLostReasonAnalysisAsync();
+            ConfigureTrendChart();
+        }
+        catch (Exception ex)
+        {
+            _errorMsg = "تعذّر تحميل التحليلات: " + ex.Message;
+        }
+    }
+
+    private void ConfigureTrendChart()
+    {
+        _trendOpts = new ApexChartOptions<RecoveryTrendPoint>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent",
+                FontFamily = "inherit"
+            },
+            Colors = new List<string> { "#10b981", "#f59e0b", "#ef4444", "#94a3b8" },
+            DataLabels = new DataLabels { Enabled = false },
+            Stroke = new Stroke { Curve = Curve.Straight, Width = new List<double> { 3, 3, 3, 3 } },
+            Markers = new Markers { Size = 3 },
+            Legend = new Legend { Position = LegendPosition.Top, HorizontalAlign = ApexCharts.Align.Right },
+            Grid = new Grid { BorderColor = "rgba(148,163,184,.18)" },
+            Xaxis = new XAxis { Labels = new XAxisLabels { Rotate = -35 } },
+            Yaxis = new List<YAxis> { new YAxis { DecimalsInFloat = 0 } },
+            Tooltip = new Tooltip { Shared = true, Intersect = false }
+        };
+    }
+
+    // ═══════════ مشاركة الفلاتر عبر الرابط ═══════════
+    private Dictionary<string, string> ParseQuery()
+    {
+        var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var u = Nav.Uri;
+        var i = u.IndexOf('?');
+        if (i < 0) return d;
+        foreach (var part in u[(i + 1)..].Split('&'))
+        {
+            if (string.IsNullOrWhiteSpace(part)) continue;
+            var kv = part.Split('=', 2);
+            var k = Uri.UnescapeDataString(kv[0]);
+            var v = kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : "";
+            d[k] = v;
+        }
+        return d;
+    }
+
+    private void ApplyQueryToFilters()
+    {
+        var q = ParseQuery();
+        if (q.Count == 0)
+        {
+            // افتراضي: كل الفترات
+            _from = null; _to = null; _quick = "all"; _status = "all"; _empId = null; _q = "";
+            return;
+        }
+        if (q.TryGetValue("from", out var f) && DateTime.TryParse(f, out var fd)) { _from = fd; _quick = null; }
+        if (q.TryGetValue("to", out var tt) && DateTime.TryParse(tt, out var td)) { _to = td; _quick = null; }
+        if (!_from.HasValue && !_to.HasValue) _quick = "all";
+        _status = q.TryGetValue("status", out var st) ? st : "all";
+        _empId = q.TryGetValue("emp", out var em) && int.TryParse(em, out var ev) ? ev : (int?)null;
+        _q = q.TryGetValue("q", out var qq) ? qq : "";
+    }
+
+    private void SyncUrl()
+    {
+        var path = Nav.ToAbsoluteUri(Nav.Uri).GetLeftPart(UriPartial.Path);
+        var parts = new List<string>();
+        if (_from.HasValue) parts.Add("from=" + _from.Value.ToString("yyyy-MM-dd"));
+        if (_to.HasValue) parts.Add("to=" + _to.Value.ToString("yyyy-MM-dd"));
+        if (_status != "all") parts.Add("status=" + Uri.EscapeDataString(_status));
+        if (_empId.HasValue) parts.Add("emp=" + _empId.Value);
+        if (!string.IsNullOrWhiteSpace(_q)) parts.Add("q=" + Uri.EscapeDataString(_q.Trim()));
+        var url = parts.Count > 0 ? path + "?" + string.Join("&", parts) : path;
+        if (!string.Equals(Nav.Uri, url, StringComparison.OrdinalIgnoreCase))
+            Nav.NavigateTo(url, new NavigationOptions { ReplaceHistoryEntry = true });
+    }
+
+    // ═══════════ لوحة سجل الفرصة ═══════════
+    private int? _panelOppId;
+    private string _panelClientName = "";
+    private bool _panelLoading;
+    private List<RecoveryHistoryDto> _panelHistory = new();
+
+    private async Task OpenRowHistory(int oppId)
+    {
+        _panelOppId = oppId;
+        _panelClientName = _result.Rows.FirstOrDefault(r => r.OpportunityId == oppId)?.ClientName ?? "";
+        _panelHistory = new List<RecoveryHistoryDto>();
+        _panelLoading = true;
+        try
+        {
+            _panelHistory = await Recovery.GetRecoveryHistoryAsync(oppId);
+        }
+        catch (Exception ex)
+        {
+            _errorMsg = "تعذّر تحميل السجل: " + ex.Message;
+        }
+        finally
+        {
+            _panelLoading = false;
+        }
+    }
+
+    private void CloseRowHistory() => _panelOppId = null;
+    private void Noop() { }
 }

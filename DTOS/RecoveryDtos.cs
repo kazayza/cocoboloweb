@@ -71,6 +71,14 @@ public class LostRecoveryFilterDto
     public decimal? MinValue { get; set; }
     public bool? LateOnly { get; set; }
 
+    // شرائح إضافية (من كروت KPI التفاعلية)
+    public bool UnassignedOnly { get; set; }   // بانتظار التوزيع التلقائي (بلا مهمة مفتوحة)
+    public bool UncontactedOnly { get; set; }  // مُسندة ولم يُتواصل معها بعد
+
+    // فلترة بتاريخ الإغلاق
+    public DateTime? ClosedFrom { get; set; }
+    public DateTime? ClosedTo { get; set; }
+
     // ترتيب الطابور: value | recent | days | followup
     public string SortBy { get; set; } = "value";
 }
@@ -206,4 +214,40 @@ public class RecoveryReportResultDto
     public int PageSize { get; set; } = 50;
     public bool HasMore { get; set; }
     public int TotalPages => PageSize > 0 ? (int)Math.Ceiling(RowCount / (double)PageSize) : 0;
+
+    // توقيت آخر بناء للبيانات من قاعدة البيانات (UTC) — يظهر للمستخدم "آخر تحديث"
+    public DateTime? AsOfUtc { get; set; }
+}
+
+/// <summary>نقطة واحدة في الاتجاه الشهري (لرسم بياني).</summary>
+public class RecoveryTrendPoint
+{
+    public string Label { get; set; } = "";
+    public int Uncontacted { get; set; }
+    public int Contacting { get; set; }
+    public int Rejected { get; set; }
+    public int Revived { get; set; }
+}
+
+/// <summary>صف أداء موظف خدمة عملاء (يُحسب من لقطة التقرير — بدون استعلامات إضافية).</summary>
+public class RecoveryEmployeePerfDto
+{
+    public int EmployeeId { get; set; }
+    public string FullName { get; set; } = "";
+    public int Assigned { get; set; }        // كل الصفوف المنسوبة له داخل نطاق التقرير
+    public int Uncontacted { get; set; }     // لم يُتواصل
+    public int Contacting { get; set; }      // قيد المتابعة
+    public int Rejected { get; set; }        // رفض نهائي
+    public int Revived { get; set; }         // مُسترد
+    public decimal RevivedValue { get; set; } // إجمالي قيمة الفرص المُستردة
+    public double ReviveRate => Assigned > 0 ? Revived * 100.0 / Assigned : 0;
+}
+
+/// <summary>صف تحليل سبب خسارة.</summary>
+public class RecoveryReasonStatDto
+{
+    public string ReasonName { get; set; } = "";
+    public int Total { get; set; }
+    public int Revived { get; set; }
+    public double ReviveRate => Total > 0 ? Revived * 100.0 / Total : 0;
 }
