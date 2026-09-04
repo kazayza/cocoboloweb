@@ -256,19 +256,22 @@ else
 
                     @if (selectedBox != null && _form.Amount > 0)
                     {
-                        var afterBalance = selectedBox.CurrentBalance - _form.Amount;
-                        <div class="after-bal" style="background: @(afterBalance < 0 ? "rgba(239,68,68,0.08)" : "rgba(16,185,129,0.08)"); border-color: @(afterBalance < 0 ? "rgba(239,68,68,0.3)" : "rgba(16,185,129,0.3)");">
-                            <span>الرصيد بعد الخصم:</span>
-                            <strong style="color: @(afterBalance < 0 ? "#ef4444" : "#10b981");">
-                                @afterBalance.ToString("N2", CultureInfo.InvariantCulture) ج
-                            </strong>
-                        </div>
-
-                        @if (afterBalance < 0)
+                        @if (GetAfterBalance(selectedBox) is { } afterBalance)
                         {
-                            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">
-                                ⚠️ الرصيد غير كافي
-                            </MudAlert>
+                            var bal = afterBalance;
+                            <div class="after-bal" style="background: @(bal < 0 ? "rgba(239,68,68,0.08)" : "rgba(16,185,129,0.08)"); border-color: @(bal < 0 ? "rgba(239,68,68,0.3)" : "rgba(16,185,129,0.3)");">
+                                <span>الرصيد بعد العملية:</span>
+                                <strong style="color: @(bal < 0 ? "#ef4444" : "#10b981");">
+                                    @bal.ToString("N2", CultureInfo.InvariantCulture) ج
+                                </strong>
+                            </div>
+
+                            @if (bal < 0)
+                            {
+                                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">
+                                    ⚠️ الرصيد غير كافي
+                                </MudAlert>
+                            }
                         }
                     }
 
@@ -483,6 +486,10 @@ else
     // Previous expenses cache for auto-suggesting
     private List<ExpenseListDto> _previousExpenses = new();
 
+    // ⭐ النسخة الأصلية (لحالة التعديل) لحساب الأثر الصحيح على رصيد الخزينة
+    private decimal _originalAmount = 0;
+    private int? _originalCashBoxId;
+
     private bool CanSave =>
         !string.IsNullOrWhiteSpace(_form.ExpenseName) &&
         _form.BranchId.HasValue &&
@@ -513,6 +520,8 @@ else
                 return;
             }
             _form = loaded;
+            _originalAmount = loaded.Amount;
+            _originalCashBoxId = loaded.CashBoxId;
             EnsureCashBoxMatchesBranch();
         }
         else
@@ -631,6 +640,25 @@ else
             if (preferredBox != null)
                 _form.CashBoxId = preferredBox.CashBoxId;
         }
+    }
+
+    // ⭐ الرصيد المتوقع بعد تنفيذ العملية (حساب صحيح لحالتي الإضافة والتعديل)
+    private decimal? GetAfterBalance(CashBoxListDto box)
+    {
+        if (box == null || _form.Amount <= 0)
+            return null;
+
+        // مصروف جديد: هيتخصم كامل المبلغ من الخزينة
+        if (!IsEdit)
+            return box.CurrentBalance - _form.Amount;
+
+        // تعديل:
+        //  - نفس الخزينة القديمة: القديم متخصوم أصلًا → الأثر هو الفرق فقط (زيادة أو استرداد)
+        //  - خزينة مختلفة: الخزينة الجديدة هتسدّد كامل المبلغ
+        if (_originalCashBoxId.HasValue && _originalCashBoxId.Value == box.CashBoxId)
+            return box.CurrentBalance - (_form.Amount - _originalAmount);
+
+        return box.CurrentBalance - _form.Amount;
     }
 
     private async Task Save()

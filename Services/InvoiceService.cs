@@ -82,7 +82,10 @@ public class InvoiceService : IInvoiceService
             query = query.Where(t => t.TransactionDate >= filter.DateFrom.Value.Date);
 
         if (filter.DateTo.HasValue)
-            query = query.Where(t => t.TransactionDate <= filter.DateTo.Value.Date.AddDays(1).AddTicks(-1));
+            // ⚠️ نهاية حصرية (< اليوم التالي) — لازم تكون كذلك: النمط القديم (<= اليوم+1 ناقص تيك)
+            //    لما بيترجم لعمود datetime في SQL (دقة 1/300 ثانية) بيتقرّب للأعلى فيشمّل
+            //    فاتورة اليوم الأول من الشهر التالي عند منتصف الليل بالظبط.
+            query = query.Where(t => t.TransactionDate < filter.DateTo.Value.Date.AddDays(1));
 
         if (!string.IsNullOrWhiteSpace(filter.InvoiceStatus))
             query = query.Where(t => t.InvoiceStatus == filter.InvoiceStatus);
@@ -468,7 +471,7 @@ public class InvoiceService : IInvoiceService
 
         if (accessFrom.HasValue) query = query.Where(t => t.TransactionDate >= accessFrom.Value);
         if (from.HasValue) query = query.Where(t => t.TransactionDate >= from.Value.Date);
-        if (to.HasValue) query = query.Where(t => t.TransactionDate <= to.Value.Date.AddDays(1).AddTicks(-1));
+        if (to.HasValue) query = query.Where(t => t.TransactionDate < to.Value.Date.AddDays(1)); // ⚠️ حصرية — نفس سبب GetInvoicesAsync
         query = query.ExcludeProtectedSales(protectedCreators);
 
         var today = DateTime.Today;

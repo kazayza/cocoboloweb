@@ -2,13 +2,18 @@
 
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Helpers
 @using System.Globalization
+@using ApexCharts
 
 @inject IExpenseService ExpenseService
 @inject ICashBoxService CashBoxService
 @inject IBranchService BranchService
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
+
+@implements IDisposable
 
 <div class="exp-report-page" dir="rtl">
 
@@ -18,34 +23,34 @@
         <div class="hero-content">
             <div class="hero-title-block">
                 <div class="hero-icon-wrap">
-                    <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Large" />
+                    <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="MudBlazor.Size.Large" />
                 </div>
                 <div>
                     <h1>تقرير المصروفات</h1>
-                    <p>مراجعة وفلترة المصروفات مع إمكانية الطباعة والتصدير</p>
+                    <p>تقرير تفصيلي أو إجمالي شهري مع فلترة ذكية وطباعة وتصدير</p>
                 </div>
             </div>
 
             <div class="hero-actions">
-                <button class="hero-btn hero-btn-glass" @onclick="@(() => Navigation.NavigateTo("/expenses/dashboard"))">
-                    <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="Size.Small" />
+                <button class="hero-btn hero-btn-glass" @onclick='@(() => Navigation.NavigateTo("/expenses/dashboard"))'>
+                    <MudIcon Icon="@Icons.Material.Filled.Dashboard" Size="MudBlazor.Size.Small" />
                     <span>لوحة التحكم</span>
                 </button>
-                <button class="hero-btn hero-btn-glass" @onclick="@(() => Navigation.NavigateTo("/expenses"))">
-                    <MudIcon Icon="@Icons.Material.Filled.List" Size="Size.Small" />
+                <button class="hero-btn hero-btn-glass" @onclick='@(() => Navigation.NavigateTo("/expenses"))'>
+                    <MudIcon Icon="@Icons.Material.Filled.List" Size="MudBlazor.Size.Small" />
                     <span>إدارة المصروفات</span>
                 </button>
             </div>
         </div>
     </div>
 
-    <!-- ============ KPI CARDS ============ -->
+    <!-- ============ KPI CARDS (ديناميك حسب الوضع) ============ -->
     <div class="kpi-grid">
         <div class="kpi-card kpi-blue">
             <div class="kpi-icon"><MudIcon Icon="@Icons.Material.Filled.AccountBalanceWallet" /></div>
             <div class="kpi-body">
                 <span class="kpi-label">إجمالي المصروفات</span>
-                <span class="kpi-value">@_totalAmount.ToString("N0", CultureInfo.InvariantCulture) <small>ج</small></span>
+                <span class="kpi-value">@N0(KpiTotal) <small>ج</small></span>
             </div>
         </div>
 
@@ -53,276 +58,382 @@
             <div class="kpi-icon"><MudIcon Icon="@Icons.Material.Filled.Receipt" /></div>
             <div class="kpi-body">
                 <span class="kpi-label">عدد العمليات</span>
-                <span class="kpi-value">@_expenses.Count</span>
+                <span class="kpi-value">@KpiCount</span>
             </div>
         </div>
 
         <div class="kpi-card kpi-green">
             <div class="kpi-icon"><MudIcon Icon="@Icons.Material.Filled.TrendingUp" /></div>
             <div class="kpi-body">
-                <span class="kpi-label">متوسط المصروف</span>
-                <span class="kpi-value">@_avgAmount.ToString("N0", CultureInfo.InvariantCulture) <small>ج</small></span>
+                <span class="kpi-label">@KpiAvgLabel</span>
+                <span class="kpi-value">@N0(KpiAvg) <small>ج</small></span>
             </div>
         </div>
 
         <div class="kpi-card kpi-red">
             <div class="kpi-icon"><MudIcon Icon="@Icons.Material.Filled.ArrowUpward" /></div>
             <div class="kpi-body">
-                <span class="kpi-label">أعلى مصروف</span>
-                <span class="kpi-value">@_maxAmount.ToString("N0", CultureInfo.InvariantCulture) <small>ج</small></span>
+                <span class="kpi-label">@KpiMaxLabel</span>
+                <span class="kpi-value">@N0(KpiMax) <small>ج</small></span>
             </div>
         </div>
     </div>
 
-    <!-- ============ FILTERS ============ -->
+    <!-- ============ التحكم: تفصيلي / إجمالي شهري ============ -->
     <div class="filters-card filters-card--compact">
-        <div class="filters-toolbar-head">
-            <div class="filters-toolbar-title">
-                <span class="filters-toolbar-icon"><MudIcon Icon="@Icons.Material.Filled.Tune" Size="Size.Small" /></span>
-                <div>
-                    <h3>شريط الفلاتر</h3>
-                    <p>فلترة سريعة واحترافية لتقرير المصروفات</p>
-                </div>
+
+        <div class="mode-toolbar">
+            <div class="mode-switch" role="tablist" aria-label="نوع التقرير">
+                <button type="button" class="mode-btn @(_mode == ModeDetail ? "active" : "")"
+                        @onclick='() => SetModeAsync(ModeDetail)'>
+                    <MudIcon Icon="@Icons.Material.Filled.ReceiptLong" Size="MudBlazor.Size.Small" />
+                    <span>تقرير تفصيلي</span>
+                </button>
+                <button type="button" class="mode-btn @(_mode == ModeSummary ? "active" : "")"
+                        @onclick='() => SetModeAsync(ModeSummary)'>
+                    <MudIcon Icon="@Icons.Material.Filled.CalendarViewMonth" Size="MudBlazor.Size.Small" />
+                    <span>تقرير إجمالي شهري</span>
+                </button>
             </div>
             <div class="filters-toolbar-meta">
                 <span class="filters-count">@GetActiveFiltersCount() فلتر نشط</span>
-                <span class="filters-note">نوع المصروف يعمل بشكل مستقل عن المجموعة الرئيسية</span>
-            </div>
-        </div>
-
-        <div class="filters-quick-row">
-            <div class="quick-range-group">
-                <span class="quick-range-label">فلاتر سريعة:</span>
-                <button class="quick-chip @(IsQuickRangeActive("today") ? "active" : "")" @onclick='() => ApplyQuickRangeAsync("today")'>اليوم</button>
-                <button class="quick-chip @(IsQuickRangeActive("month") ? "active" : "")" @onclick='() => ApplyQuickRangeAsync("month")'>هذا الشهر</button>
-                <button class="quick-chip @(IsQuickRangeActive("lastMonth") ? "active" : "")" @onclick='() => ApplyQuickRangeAsync("lastMonth")'>الشهر السابق</button>
-                <button class="quick-chip @(IsQuickRangeActive("year") ? "active" : "")" @onclick='() => ApplyQuickRangeAsync("year")'>هذه السنة</button>
-                <button class="quick-chip @(IsQuickRangeActive("all") ? "active" : "")" @onclick='() => ApplyQuickRangeAsync("all")'>كل الفترات</button>
-            </div>
-
-            @if (ActiveFilterLabels.Any())
-            {
-                <div class="active-filter-strip">
-                    @foreach (var chip in ActiveFilterLabels)
-                    {
-                        <span class="active-filter-chip">@chip</span>
-                    }
-                </div>
-            }
-        </div>
-
-        <div class="filters-toolbar-row">
-            <div class="toolbar-field toolbar-field--search">
-                <MudTextField T="string" @bind-Value="_filter.SearchText"
-                              Label="بحث نصي"
-                              Placeholder="اسم المصروف / النوع / المجموعة / المستفيد / الملاحظات"
-                              Variant="Variant.Outlined"
-                              Margin="Margin.Dense"
-                              Dense="true"
-                              Clearable="true"
-                              Adornment="Adornment.Start"
-                              AdornmentIcon="@Icons.Material.Filled.Search"
-                              Class="toolbar-control" />
-            </div>
-
-            <div class="toolbar-field toolbar-field--date">
-                <MudDatePicker Date="_dateFrom"
-                               DateChanged="@(d => { _dateFrom = d; _filter.DateFrom = d; })"
-                               Label="من"
-                               Variant="Variant.Outlined"
-                               Margin="Margin.Dense"
-                               Clearable="true"
-                               Class="toolbar-control" />
-            </div>
-
-            <div class="toolbar-field toolbar-field--date">
-                <MudDatePicker Date="_dateTo"
-                               DateChanged="@(d => { _dateTo = d; _filter.DateTo = d; })"
-                               Label="إلى"
-                               Variant="Variant.Outlined"
-                               Margin="Margin.Dense"
-                               Clearable="true"
-                               Class="toolbar-control" />
-            </div>
-
-            <div class="toolbar-field toolbar-field--branch">
-                <MudSelect T="int?" @bind-Value="_filter.BranchId"
-                           Label="الفرع"
-                           Variant="Variant.Outlined"
-                           Margin="Margin.Dense"
-                           Dense="true"
-                           Clearable="true"
-                           Class="toolbar-control">
-                    @foreach (var branch in _branches)
-                    {
-                        <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">@branch.BranchNameAr</MudSelectItem>
-                    }
-                </MudSelect>
-            </div>
-
-            <div class="toolbar-field toolbar-field--group">
-                <MudSelect T="int?" Value="@_filter.ParentGroupId"
-                           ValueChanged="OnParentGroupChanged"
-                           Label="المجموعة الرئيسية"
-                           Variant="Variant.Outlined"
-                           Margin="Margin.Dense"
-                           Dense="true"
-                           Clearable="true"
-                           Class="toolbar-control">
-                    @foreach (var g in _mainGroups)
-                    {
-                        <MudSelectItem T="int?" Value="@((int?)g.ExpenseGroupId)">@g.ExpenseGroupName</MudSelectItem>
-                    }
-                </MudSelect>
-            </div>
-
-            <div class="toolbar-field toolbar-field--type">
-                <MudSelect T="int?" @bind-Value="_filter.ExpenseGroupId"
-                           Label="نوع المصروف"
-                           Variant="Variant.Outlined"
-                           Margin="Margin.Dense"
-                           Dense="true"
-                           Clearable="true"
-                           Class="toolbar-control">
-                    @foreach (var g in _typeGroups)
-                    {
-                        <MudSelectItem T="int?" Value="@((int?)g.ExpenseGroupId)">@GetGroupOptionLabel(g)</MudSelectItem>
-                    }
-                </MudSelect>
-            </div>
-
-            <div class="toolbar-field toolbar-field--cashbox">
-                <MudSelect T="int?" @bind-Value="_filter.CashBoxId"
-                           Label="الخزينة"
-                           Variant="Variant.Outlined"
-                           Margin="Margin.Dense"
-                           Dense="true"
-                           Clearable="true"
-                           Class="toolbar-control">
-                    @foreach (var box in GetFilterCashBoxes())
-                    {
-                        <MudSelectItem T="int?" Value="@((int?)box.CashBoxId)">@box.CashBoxName</MudSelectItem>
-                    }
-                </MudSelect>
-            </div>
-
-            <div class="toolbar-actions">
-                <button class="btn btn-primary" @onclick="LoadData">
-                    <MudIcon Icon="@Icons.Material.Filled.Search" Size="Size.Small" />
-                    <span>بحث</span>
-                </button>
-                <button class="btn btn-ghost" @onclick="ClearFilters">
-                    <MudIcon Icon="@Icons.Material.Filled.Clear" Size="Size.Small" />
-                    <span>تفريغ</span>
-                </button>
-                <button class="btn btn-purple" disabled="@(!_expenses.Any())" @onclick="PrintReport">
-                    <MudIcon Icon="@Icons.Material.Filled.Print" Size="Size.Small" />
-                    <span>PDF</span>
-                </button>
-                <button class="btn btn-success" disabled="@(!_expenses.Any())" @onclick="ExportExcel">
-                    <MudIcon Icon="@Icons.Material.Filled.TableView" Size="Size.Small" />
-                    <span>Excel</span>
+                <button type="button" class="filters-toggle" @onclick="ToggleFilters"
+                        title='@(_filtersExpanded ? "إخفاء لوحة الفلاتر" : "عرض لوحة الفلاتر لتعديلها")'>
+                    <MudIcon Icon="@Icons.Material.Filled.Tune" Size="MudBlazor.Size.Small" />
+                    <span>@(_filtersExpanded ? "إخفاء الفلاتر" : "عرض الفلاتر")</span>
                 </button>
             </div>
         </div>
-    </div>
 
-    <!-- ============ DATA TABLE ============ -->
-    <div class="table-card">
-        <div class="card-header">
-            <div class="card-title">
-                <MudIcon Icon="@Icons.Material.Filled.TableChart" />
-                <h3>نتائج التقرير</h3>
-            </div>
-            @if (_expenses.Any())
-            {
-                <span class="results-count">@_expenses.Count سجل</span>
-            }
-        </div>
-
-        @if (_isLoading)
+        @if (ActiveFilterTags.Any())
         {
-            <div class="skeleton-wrap">
-                @for (int i = 0; i < 5; i++)
+            <div class="active-filter-strip">
+                @foreach (var chip in ActiveFilterTags)
                 {
-                    <div class="skeleton-row"></div>
+                    <span class="active-filter-chip">
+                        @chip.Label
+                        <button type="button" class="chip-x" @onclick='@(() => RemoveFilterAsync(chip.Key))'
+                                title="إزالة الفلتر">
+                            <MudIcon Icon="@Icons.Material.Filled.Close" Size="MudBlazor.Size.Small" />
+                        </button>
+                    </span>
                 }
             </div>
         }
-        else if (!_expenses.Any())
+
+        @if (_filtersExpanded)
         {
-            <div class="empty-state">
-                <div class="empty-icon">
-                    <MudIcon Icon="@Icons.Material.Outlined.SearchOff" Size="Size.Large" />
+            <!-- الفلاتر -->
+            <div class="filters-sections">
+            <!-- الفترة الزمنية -->
+            <div class="fsection">
+                <p class="fsection-title">
+                    <MudIcon Icon="@Icons.Material.Filled.DateRange" Size="MudBlazor.Size.Small" />
+                    الفترة الزمنية
+                </p>
+                <div class="filters-quick-row" style="margin-bottom:10px;">
+                    <div class="quick-range-group">
+                        <button class="quick-chip @(IsQuickRangeActive("today") ? "active" : "")" @onclick='() => ApplyQuickRangeAsync("today")'>اليوم</button>
+                        <button class="quick-chip @(IsQuickRangeActive("month") ? "active" : "")" @onclick='() => ApplyQuickRangeAsync("month")'>هذا الشهر</button>
+                        <button class="quick-chip @(IsQuickRangeActive("lastMonth") ? "active" : "")" @onclick='() => ApplyQuickRangeAsync("lastMonth")'>الشهر السابق</button>
+                        <button class="quick-chip @(IsQuickRangeActive("year") ? "active" : "")" @onclick='() => ApplyQuickRangeAsync("year")'>هذه السنة</button>
+                        <button class="quick-chip @(IsQuickRangeActive("all") ? "active" : "")" @onclick='() => ApplyQuickRangeAsync("all")'>كل الفترات</button>
+                    </div>
                 </div>
-                <h4>لا توجد نتائج</h4>
-                <p>لم نعثر على أي مصروفات مطابقة للفلاتر المحددة. جرّب تعديل الفلاتر أو إعادة تعيينها.</p>
-                <button class="btn btn-ghost" @onclick="ClearFilters">
-                    <MudIcon Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" />
-                    <span>إعادة تعيين الفلاتر</span>
-                </button>
+                <div class="fs-grid">
+                    <MudDatePicker Date="@_dateFrom"
+                                   DateChanged="@(OnDateFromChanged)"
+                                   Label="من تاريخ" Variant="Variant.Outlined"
+                                   Margin="Margin.Dense" Dense="true" Clearable="true" Class="toolbar-control" />
+                    <MudDatePicker Date="@_dateTo"
+                                   DateChanged="@(OnDateToChanged)"
+                                   Label="إلى تاريخ" Variant="Variant.Outlined"
+                                   Margin="Margin.Dense" Dense="true" Clearable="true" Class="toolbar-control" />
+                </div>
             </div>
-        }
-        else
-        {
-            <div class="table-responsive">
-                <table class="report-table">
-                    <thead>
-                        <tr>
-                            <th>التاريخ</th>
-                            <th>الفرع</th>
-                            <th>المصروف</th>
-                            <th>المجموعة</th>
-                            <th>الخزينة</th>
-                            <th>المستلم</th>
-                            <th class="text-left">المبلغ</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var exp in _expenses)
+
+            <!-- التصنيف والفرع -->
+            <div class="fsection">
+                <p class="fsection-title">
+                    <MudIcon Icon="@Icons.Material.Filled.FilterAlt" Size="MudBlazor.Size.Small" />
+                    البحث والتصنيف
+                </p>
+                <div class="fs-grid">
+                    <div class="fs-cell--full">
+                        <MudTextField T="string" Value="@_searchDisplay" ValueChanged="OnSearchChanged"
+                                      Label="بحث نصي" Placeholder="اسم المصروف / المستلم / الملاحظات / المجموعة"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true"
+                                      Clearable="true" Adornment="Adornment.Start"
+                                      AdornmentIcon="@Icons.Material.Filled.Search"
+                                      Class="toolbar-control" />
+                    </div>
+                    <MudSelect T="int?" Value="@_filter.BranchId" ValueChanged="@(OnBranchChanged)"
+                               Label="الفرع" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Dense="true" Clearable="true" Class="toolbar-control">
+                        @foreach (var branch in _branches)
                         {
+                            <MudSelectItem T="int?" Value="@((int?)branch.BranchId)">@branch.BranchNameAr</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="int?" Value="@_filter.CashBoxId" ValueChanged="@(OnCashBoxChanged)"
+                               Label="الخزينة" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Dense="true" Clearable="true" Class="toolbar-control">
+                        @foreach (var box in GetFilterCashBoxes())
+                        {
+                            <MudSelectItem T="int?" Value="@((int?)box.CashBoxId)">@box.CashBoxName</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="int?" Value="@_filter.ParentGroupId" ValueChanged="@(OnParentGroupChanged)"
+                               Label="المجموعة الرئيسية" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Dense="true" Clearable="true" Class="toolbar-control">
+                        @foreach (var g in _mainGroups)
+                        {
+                            <MudSelectItem T="int?" Value="@((int?)g.ExpenseGroupId)">@g.ExpenseGroupName</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudAutocomplete T="ExpenseGroupDto"
+                                     Value="@_selectedType"
+                                     ValueChanged="@(OnTypeSelected)"
+                                     SearchFunc="@SearchTypeGroups"
+                                     ToStringFunc="@(TypeGroupLabel)"
+                                     Label="نوع المصروف (ابحث واختر)"
+                                     Placeholder="اكتب لتبحث في أنواع المصروفات..."
+                                     Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     Dense="true" Clearable="true" ResetValueOnEmptyText="true"
+                                     MinCharacters="0"
+                                     Adornment="Adornment.Start"
+                                     AdornmentIcon="@Icons.Material.Filled.Search"
+                                     Class="toolbar-control">
+                        <ItemTemplate>
+                            <div class="type-option">
+                                <MudIcon Icon="@Icons.Material.Filled.Folder" Size="MudBlazor.Size.Small" />
+                                <span>@TypeGroupLabel(context)</span>
+                            </div>
+                        </ItemTemplate>
+                    </MudAutocomplete>
+                </div>
+                <p class="fsection-hint">النوع يعمل مستقلًا عن المجموعة الرئيسية</p>
+            </div>
+        </div>
+        }
+
+        <div class="fs-actions">
+            <button class="btn btn-ghost" @onclick="ClearFilters">
+                <MudIcon Icon="@Icons.Material.Filled.Clear" Size="MudBlazor.Size.Small" />
+                <span>تفريغ الفلاتر</span>
+            </button>
+            <button class="btn btn-purple" disabled="@(!HasResults)" @onclick="PrintReport">
+                <MudIcon Icon="@Icons.Material.Filled.Print" Size="MudBlazor.Size.Small" />
+                <span>PDF</span>
+            </button>
+            <button class="btn btn-success" disabled="@(!HasResults)" @onclick="ExportExcel">
+                <MudIcon Icon="@Icons.Material.Filled.TableView" Size="MudBlazor.Size.Small" />
+                <span>Excel</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ============ RESULTS ============ -->
+    @if (_mode == ModeSummary)
+    {
+        <div class="table-card">
+            <div class="card-header">
+                <div class="card-title">
+                    <MudIcon Icon="@Icons.Material.Filled.CalendarViewMonth" />
+                    <h3>ملخص المصروفات الشهري</h3>
+                </div>
+                @if (_summary is { Months.Count: > 0 })
+                {
+                    <span class="results-count">@_summary.Months.Count شهر • @_summary.TotalCount عملية</span>
+                }
+            </div>
+
+            @if (_isLoading)
+            {
+                <div class="skeleton-wrap">
+                    @for (int i = 0; i < 5; i++)
+                    {
+                        <div class="skeleton-row"></div>
+                    }
+                </div>
+            }
+            else if (_summary is null || !_summary.Months.Any())
+            {
+                <div class="empty-state">
+                    <div class="empty-icon">
+                        <MudIcon Icon="@Icons.Material.Outlined.SearchOff" Size="MudBlazor.Size.Large" />
+                    </div>
+                    <h4>لا توجد بيانات</h4>
+                    <p>لا توجد مصروفات مطابقة للفلاتر الحالية لتجميعها شهريًا.</p>
+                </div>
+            }
+            else
+            {
+                <div class="summary-chart">
+                    <ApexChart TItem="ExpenseMonthlySummaryDto" Height="320" Options="_summaryChartOptions">
+                        <ApexPointSeries TItem="ExpenseMonthlySummaryDto"
+                                         Items="_summary.Months"
+                                         SeriesType="SeriesType.Bar"
+                                         Name="@(ChartTxt("المصروفات"))"
+                                         XValue="e => ChartTxt(e.MonthShort)"
+                                         YValue="e => e.Total" />
+                    </ApexChart>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="report-table">
+                        <thead>
                             <tr>
-                                <td>
-                                    <div class="date-cell">
-                                        <span class="date-day">@exp.ExpenseDate.ToString("dd")</span>
-                                        <span class="date-rest">@exp.ExpenseDate.ToString("MM/yyyy")</span>
-                                    </div>
-                                </td>
-                                <td><span class="badge badge-group">@(exp.BranchName ?? "غير محدد")</span></td>
-                                <td>
-                                    <div class="name-cell">
-                                        <strong>@exp.ExpenseName</strong>
-                                        @if (exp.IsAdvance)
+                                <th>الشهر</th>
+                                <th>عدد العمليات</th>
+                                <th class="text-left">الإجمالي</th>
+                                <th class="text-left">التغير عن السابق</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var m in _summary.Months)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="month-cell">
+                                            <strong>@m.MonthLabel</strong>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="badge badge-group">@m.Count عملية</span>
+                                    </td>
+                                    <td class="text-left amount">
+                                        @m.Total.ToString("N2", CultureInfo.InvariantCulture) <small>ج</small>
+                                    </td>
+                                    <td class="text-left">
+                                        @if (m.HasPrevious)
                                         {
-                                            <span class="badge badge-advance">مقدم</span>
+                                            <span class="@GetChangeClass(m.ChangePercent)">
+                                                @GetChangeText(m.ChangePercent)
+                                            </span>
                                         }
-                                    </div>
+                                        else
+                                        {
+                                            <span class="flat">—</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <td colspan="2" class="text-left foot-label sum-foot-label">إجمالي الفترة</td>
+                                <td class="text-left foot-total">@N2(_summary.GrandTotal) <small>ج</small></td>
+                                <td></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                    <span class="sum-avg-note">
+                        <MudIcon Icon="@Icons.Material.Filled.Functions" Size="MudBlazor.Size.Small" />
+                        متوسط المصروف الشهري خلال الفترة: @N2(_summary.MonthlyAverage) ج
+                    </span>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="table-card">
+            <div class="card-header">
+                <div class="card-title">
+                    <MudIcon Icon="@Icons.Material.Filled.TableChart" />
+                    <h3>نتائج التقرير التفصيلي</h3>
+                </div>
+                @if (_expenses.Any())
+                {
+                    <span class="results-count">@_expenses.Count سجل</span>
+                }
+            </div>
+
+            @if (_isLoading)
+            {
+                <div class="skeleton-wrap">
+                    @for (int i = 0; i < 5; i++)
+                    {
+                        <div class="skeleton-row"></div>
+                    }
+                </div>
+            }
+            else if (!_expenses.Any())
+            {
+                <div class="empty-state">
+                    <div class="empty-icon">
+                        <MudIcon Icon="@Icons.Material.Outlined.SearchOff" Size="MudBlazor.Size.Large" />
+                    </div>
+                    <h4>لا توجد نتائج</h4>
+                    <p>لم نعثر على أي مصروفات مطابقة للفلاتر المحددة. جرّب تعديل الفلاتر أو إعادة تعيينها.</p>
+                    <button class="btn btn-ghost" @onclick="ClearFilters">
+                        <MudIcon Icon="@Icons.Material.Filled.Refresh" Size="MudBlazor.Size.Small" />
+                        <span>إعادة تعيين الفلاتر</span>
+                    </button>
+                </div>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="report-table">
+                        <thead>
+                            <tr>
+                                <th>التاريخ</th>
+                                <th>الفرع</th>
+                                <th>المصروف</th>
+                                <th>المجموعة</th>
+                                <th>الخزينة</th>
+                                <th>المستلم</th>
+                                <th class="text-left">المبلغ</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var exp in _expenses)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="date-cell">
+                                            <span class="date-day">@exp.ExpenseDate.ToString("dd")</span>
+                                            <span class="date-rest">@exp.ExpenseDate.ToString("MM/yyyy")</span>
+                                        </div>
+                                    </td>
+                                    <td><span class="badge badge-group">@(exp.BranchName ?? "غير محدد")</span></td>
+                                    <td>
+                                        <div class="name-cell">
+                                            <strong>@exp.ExpenseName</strong>
+                                            @if (exp.IsAdvance)
+                                            {
+                                                <span class="badge badge-advance">مقدم</span>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td><span class="badge badge-group">@(string.IsNullOrWhiteSpace(exp.FullGroupPath) ? exp.ExpenseGroupName : exp.FullGroupPath)</span></td>
+                                    <td>@exp.CashBoxName</td>
+                                    <td>@exp.Recipient</td>
+                                    <td class="text-left amount">
+                                        @exp.Amount.ToString("N2", CultureInfo.InvariantCulture)
+                                        <small>ج</small>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <td colspan="6" class="text-left foot-label">
+                                    <MudIcon Icon="@Icons.Material.Filled.Functions" Size="MudBlazor.Size.Small" />
+                                    إجمالي المصروفات
                                 </td>
-                                <td><span class="badge badge-group">@(string.IsNullOrWhiteSpace(exp.FullGroupPath) ? exp.ExpenseGroupName : exp.FullGroupPath)</span></td>
-                                <td>@exp.CashBoxName</td>
-                                <td>@exp.Recipient</td>
-                                <td class="text-left amount">
-                                    @exp.Amount.ToString("N2", CultureInfo.InvariantCulture)
-                                    <small>ج</small>
+                                <td class="text-left foot-total">
+                                    @_totalAmount.ToString("N2", CultureInfo.InvariantCulture) <small>ج</small>
                                 </td>
                             </tr>
-                        }
-                    </tbody>
-                    <tfoot>
-                        <tr>
-                            <td colspan="6" class="text-left foot-label">
-                                <MudIcon Icon="@Icons.Material.Filled.Functions" Size="Size.Small" />
-                                إجمالي المصروفات
-                            </td>
-                            <td class="text-left foot-total">
-                                @_totalAmount.ToString("N2", CultureInfo.InvariantCulture) <small>ج</small>
-                            </td>
-                        </tr>
-                    </tfoot>
-                </table>
-            </div>
-        }
-    </div>
+                        </tfoot>
+                    </table>
+                </div>
+            }
+        </div>
+    }
 </div>
 
 <style>
@@ -460,12 +571,8 @@
     }
 
     .filters-card--compact {
-        position: sticky;
-        top: 1rem;
-        z-index: 20;
-        padding: 1.1rem 1.25rem 1.25rem;
+        padding: 1rem 1.25rem 1.15rem;
         background: linear-gradient(180deg, rgba(255,255,255,.96) 0%, rgba(250,251,255,.98) 100%);
-        backdrop-filter: blur(14px);
         box-shadow: 0 10px 30px rgba(79, 70, 229, 0.06);
     }
 
@@ -840,61 +947,232 @@
             justify-content: center;
         }
     }
-</style>
+    /* ════════════════════════════════════════════════════════════════
+       جديد: أزرار وضع التقرير + فلاتر مقسمة + ملخص شهري
+       ════════════════════════════════════════════════════════════════ */
+    .mode-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    .mode-switch { display:inline-flex; background:#eef2f7; border-radius:12px; padding:4px; gap:4px; }
+    .mode-btn { display:inline-flex; align-items:center; gap:6px; border:0; background:transparent; color:#64748b;
+                font-weight:700; font-size:.85rem; padding:8px 16px; border-radius:9px; cursor:pointer;
+                transition:all .15s ease; font-family:inherit; }
+    .mode-btn:hover { color:#1e293b; }
+    .mode-btn.active { background:#fff; color:#0f172a; box-shadow:0 1px 4px rgba(15,23,42,.14); }
 
+    .filters-sections { display:grid; grid-template-columns:1.15fr 1.6fr; gap:14px; margin-top:4px; }
+    @@media (max-width:1100px){ .filters-sections { grid-template-columns:1fr; } }
+    .fsection { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:13px 14px; }
+    .fsection-title { display:flex; align-items:center; gap:6px; font-size:.78rem; font-weight:800; color:#64748b;
+                      margin:0 0 10px; text-transform:uppercase; letter-spacing:.3px; }
+    .fsection-title .mud-icon-root { font-size:16px !important; }
+    .fs-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:start; }
+    .fs-grid--3 { grid-template-columns:repeat(3,1fr); }
+    @@media (max-width:900px){ .fs-grid, .fs-grid--3 { grid-template-columns:1fr; } }
+    .fs-cell--full { grid-column:1 / -1; }
+    .fs-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; justify-content:flex-end; }
+    /* زر طي/عرض لوحة الفلاتر */
+    .filters-toggle { display:inline-flex; align-items:center; gap:7px; border:1px solid #dbe3f3;
+                      background:#fff; color:#4338ca; font-weight:800; font-size:.8rem;
+                      padding:.4rem 1rem; border-radius:100px; cursor:pointer; transition:all .15s ease;
+                      font-family:inherit; box-shadow:0 1px 2px rgba(15,23,42,.05); }
+    .filters-toggle:hover { background:#eef2ff; border-color:#a5b4fc; transform:translateY(-1px); }
+    .fsection-hint { margin:10px 0 0; font-size:.74rem; color:#94a3b8; font-weight:600; }
+    .chip-x { display:inline-flex; align-items:center; justify-content:center; border:0; background:transparent;
+              color:inherit; margin-inline-start:4px; cursor:pointer; border-radius:50%; width:16px; height:16px;
+              font-size:12px; line-height:1; padding:0; }
+    .chip-x:hover { background:rgba(15,23,42,.15); }
+    .summary-chart { margin:4px 0 16px; }
+    .month-cell strong { display:block; font-size:.92rem; font-weight:800; color:#0f172a; }
+    .month-cell small { font-size:.72rem; color:#64748b; }
+    .pos { color:#059669 !important; } .neg { color:#dc2626 !important; } .flat { color:#64748b !important; }
+    .sum-foot-label { font-weight:800; color:#0f172a; }
+
+
+    /* ═══ خط تقارير المصروفات: Tajawal ═══ */
+    .exp-report-page,
+    .exp-report-page p, .exp-report-page h1, .exp-report-page h2, .exp-report-page h3, .exp-report-page h4,
+    .exp-report-page span, .exp-report-page strong, .exp-report-page small, .exp-report-page td, .exp-report-page th,
+    .exp-report-page label, .exp-report-page button, .exp-report-page .mud-input, .exp-report-page .mud-input-slot,
+    .exp-report-page .mud-input-label, .exp-report-page .mud-button-label, .exp-report-page .mud-typography,
+    .exp-report-page .mud-chip, .exp-report-page .mud-alert, .exp-report-page .mud-paper
+    { font-family:'Tajawal','Segoe UI',Tahoma,Arial,sans-serif !important; }
+    .mud-popover .mud-list-item, .mud-popover .mud-menu-item, .mud-popover .mud-select-item { font-family:'Tajawal','Segoe UI',Tahoma,Arial,sans-serif; }
+
+
+    .type-option { display:flex; align-items:center; gap:8px; padding:2px 0; }
+    .type-option .mud-icon-root { font-size:16px !important; color:#64748b; }
+    .type-option span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+</style>
 @code {
+    // ═══════════════════════════════════════════════════════════════════
+    // MODE
+    private const string ModeDetail = "detail";
+    private const string ModeSummary = "summary";
+    private string _mode = ModeDetail;
+
+    // لوحة الفلاتر مطوية افتراضيًا (المساحة للنتائج) — تُفتح بضغطة "عرض الفلاتر"
+    private bool _filtersExpanded = false;
+    private void ToggleFilters() => _filtersExpanded = !_filtersExpanded;
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STATE
     private bool _isLoading = true;
+    private bool _disposed = false;
+
+    // ⛔ بوابة تسلسل: تمنع تنفيذ تحميلين متزامنين على نفس الـ DbContext
+    //    (لو حصل استدعاء LoadData أثناء تحميل جارٍ — من مؤقت بحث أو حدث — ينتظر دوره)
+    private readonly SemaphoreSlim _loadGate = new(1, 1);
+
     private ExpenseFilterDto _filter = new() { ExcludeAdvanceHeaders = true };
     private DateTime? _dateFrom;
     private DateTime? _dateTo;
+    private string _searchDisplay = "";
 
     private List<ExpenseListDto> _expenses = new();
     private decimal _totalAmount = 0;
     private decimal _avgAmount = 0;
     private decimal _maxAmount = 0;
 
+    private ExpenseSummaryReportDto? _summary;
+    private ApexChartOptions<ExpenseMonthlySummaryDto> _summaryChartOptions = new();
+
     private List<ExpenseGroupDto> _allGroups = new();
     private List<ExpenseGroupDto> _mainGroups = new();
-    private List<ExpenseGroupDto> _typeGroups = new();
-
     private List<BranchListDto> _branches = new();
     private List<CashBoxListDto> _boxes = new();
 
+    // الكائن المختار في حقل "نوع المصروف" (Autocomplete)
+    private ExpenseGroupDto? _selectedType;
+
+    private readonly CultureInfo _ar = new("ar-EG");
+    private System.Timers.Timer? _searchTimer;
+
+    // ═══════════════════════════════════════════════════════════════════
+    // LIFECYCLE
     protected override async Task OnInitializedAsync()
     {
+        // ⛔ فحص الصلاحية: تقرير المصروفات (تفصيلي/إجمالي/تصدير) يتطلب صلاحية عرض القائمة
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var canView = user.HasClaim("Permission", "frm_ExpensesList:View") || user.IsInRole("Admin");
+        if (!canView)
+        {
+            Navigation.NavigateTo("/");
+            return;
+        }
+
         _allGroups = await ExpenseService.GetExpenseGroupsAsync();
         _mainGroups = _allGroups
             .Where(g => g.ParentGroupId == null)
             .OrderBy(g => g.ExpenseGroupName)
             .ToList();
-        _typeGroups = _allGroups
-            .OrderBy(g => g.ParentGroupId.HasValue ? 0 : 1)
-            .ThenBy(g => g.ParentGroupName)
-            .ThenBy(g => g.ExpenseGroupName)
-            .ToList();
 
         _branches = (await BranchService.GetBranchesAsync()).Where(b => b.IsActive).ToList();
         _boxes = await CashBoxService.GetCashBoxesAsync();
 
+        // الافتتاح الافتراضي: الشهر الحالي
         var today = DateTime.Today;
         _dateFrom = new DateTime(today.Year, today.Month, 1);
         _dateTo = _dateFrom.Value.AddMonths(1).AddDays(-1);
         _filter.DateFrom = _dateFrom;
         _filter.DateTo = _dateTo;
 
+        InitChartOptions();
         await LoadData();
     }
 
-    private void OnParentGroupChanged(int? parentId)
+    public void Dispose()
     {
-        _filter.ParentGroupId = parentId;
+        _disposed = true;
+        _searchTimer?.Stop();
+        _searchTimer?.Dispose();
+        _searchTimer = null;
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // KPI (ديناميك حسب الوضع)
+    private decimal KpiTotal => _mode == ModeSummary ? (_summary?.GrandTotal ?? 0) : _totalAmount;
+    private int KpiCount => _mode == ModeSummary ? (_summary?.TotalCount ?? 0) : _expenses.Count;
+    private string KpiAvgLabel => _mode == ModeSummary ? "متوسط الشهر" : "متوسط المصروف";
+    private decimal KpiAvg => _mode == ModeSummary ? (_summary?.MonthlyAverage ?? 0) : _avgAmount;
+    private string KpiMaxLabel => _mode == ModeSummary ? "أعلى شهر" : "أعلى مصروف";
+    private decimal KpiMax
+    {
+        get
+        {
+            if (_mode == ModeSummary)
+                return _summary is { Months.Count: > 0 } ? _summary.Months.Max(m => m.Total) : 0;
+            return _maxAmount;
+        }
+    }
+
+    private bool HasResults => _mode == ModeSummary
+        ? (_summary is { Months.Count: > 0 })
+        : _expenses.Any();
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MODE
+    private async Task SetModeAsync(string mode)
+    {
+        if (_mode == mode) return;
+        _mode = mode;
+        await LoadData();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // DATA
     private async Task LoadData()
+    {
+        if (_disposed) return;
+
+        await _loadGate.WaitAsync();
+        try
+        {
+            if (_disposed) return;
+            await LoadDataCoreAsync();
+        }
+        finally
+        {
+            _loadGate.Release();
+        }
+    }
+
+    // 🛡️ التنفيذ الفعلي مع إعادة محاولة تلقائية عند تعارض DbContext المؤقت
+    private async Task LoadDataCoreAsync()
     {
         _isLoading = true;
         StateHasChanged();
 
+        try
+        {
+            // في تطبيق Blazor التفاعلي الـ DbContext Scoped مشترك على مستوى الـ circuit كله،
+            // فلو كان فيه استعلام قديم لسه شغال (من صفحة/تنقل سابق) بيحصل خطأ
+            // "A second operation was started..." → إعادة المحاولة بعد لحظات بتنضف التعارض.
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    await LoadDataOnceAsync();
+                    break;
+                }
+                catch (InvalidOperationException ex) when (
+                    attempt < 2 &&
+                    ex.Message.Contains("second operation", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (_disposed) return;
+                    await Task.Delay(250 * (attempt + 1));
+                }
+            }
+        }
+        finally
+        {
+            _isLoading = false;
+            if (!_disposed)
+                StateHasChanged();
+        }
+    }
+
+    private async Task LoadDataOnceAsync()
+    {
         if (_filter.BranchId.HasValue && _filter.CashBoxId.HasValue)
         {
             var selectedBox = _boxes.FirstOrDefault(b => b.CashBoxId == _filter.CashBoxId.Value);
@@ -902,87 +1180,296 @@
                 _filter.CashBoxId = null;
         }
 
-        _filter.PageSize = 5000;
-        var result = await ExpenseService.GetExpensesAsync(_filter);
+        if (_mode == ModeSummary)
+        {
+            var f = CopyFilter();
+            _summary = await ExpenseService.GetMonthlySummaryAsync(f);
+            _expenses = new();
+            _totalAmount = _avgAmount = _maxAmount = 0;
+        }
+        else
+        {
+            var f = CopyFilter();
+            f.PageNumber = 1;
+            f.PageSize = 5000;
+            var result = await ExpenseService.GetExpensesAsync(f);
 
-        _expenses = result.Items.ToList();
-        _totalAmount = _expenses.Sum(e => e.Amount);
-        _avgAmount = _expenses.Any() ? _expenses.Average(e => e.Amount) : 0;
-        _maxAmount = _expenses.Any() ? _expenses.Max(e => e.Amount) : 0;
+            _expenses = result.Items.ToList();
+            _totalAmount = _expenses.Sum(e => e.Amount);
+            _avgAmount = _expenses.Any() ? _expenses.Average(e => e.Amount) : 0;
+            _maxAmount = _expenses.Any() ? _expenses.Max(e => e.Amount) : 0;
+            _summary = null;
+        }
+    }
 
-        _isLoading = false;
-        StateHasChanged();
+    private ExpenseFilterDto CopyFilter() => new()
+    {
+        SearchText = string.IsNullOrWhiteSpace(_filter.SearchText) ? null : _filter.SearchText,
+        BranchId = _filter.BranchId,
+        ParentGroupId = _filter.ParentGroupId,
+        ExpenseGroupId = _filter.ExpenseGroupId,
+        CashBoxId = _filter.CashBoxId,
+        DateFrom = _filter.DateFrom,
+        DateTo = _filter.DateTo,
+        AmountFrom = _filter.AmountFrom,
+        AmountTo = _filter.AmountTo,
+        IsAdvance = _filter.IsAdvance,
+        OnlyParents = _filter.OnlyParents,
+        ExcludeAdvanceHeaders = _filter.ExcludeAdvanceHeaders,
+        PageNumber = _filter.PageNumber,
+        PageSize = _filter.PageSize,
+        SortBy = _filter.SortBy,
+        SortDescending = _filter.SortDescending
+    };
+
+    // ═══════════════════════════════════════════════════════════════════
+    // FILTERS
+    private void OnSearchChanged(string? value)
+    {
+        var v = value ?? "";
+        _searchDisplay = v;
+        _filter.SearchText = string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+
+        _searchTimer?.Stop();
+        _searchTimer?.Dispose();
+        _searchTimer = new System.Timers.Timer(400);
+        _searchTimer.Elapsed += async (_, _) =>
+        {
+            _searchTimer?.Stop();
+            await InvokeAsync(async () =>
+            {
+                if (_disposed) return;
+                await LoadData();
+            });
+        };
+        _searchTimer.AutoReset = false;
+        _searchTimer.Start();
+    }
+
+    private async Task OnDateFromChanged(DateTime? d)
+    {
+        _dateFrom = d;
+        _filter.DateFrom = d;
+        await LoadData();
+    }
+
+    private async Task OnDateToChanged(DateTime? d)
+    {
+        _dateTo = d;
+        _filter.DateTo = d;
+        await LoadData();
+    }
+
+    private async Task OnBranchChanged(int? v)
+    {
+        _filter.BranchId = v;
+        await LoadData();
+    }
+
+    private async Task OnCashBoxChanged(int? v)
+    {
+        _filter.CashBoxId = v;
+        await LoadData();
+    }
+
+    private async Task OnParentGroupChanged(int? v)
+    {
+        _filter.ParentGroupId = v;
+
+        // لو كان فيه نوع مختار ومبقاش جوه المجموعة الجديدة → امسحه (حتى ما يبقاش في فلاتر متناقضة)
+        if (v.HasValue && _filter.ExpenseGroupId.HasValue
+            && !IsGroupInSubtree(_filter.ExpenseGroupId.Value, v.Value))
+        {
+            _filter.ExpenseGroupId = null;
+            _selectedType = null;
+        }
+
+        await LoadData();
+    }
+
+    private async Task OnTypeSelected(ExpenseGroupDto? group)
+    {
+        _selectedType = group;
+        _filter.ExpenseGroupId = group?.ExpenseGroupId;
+        await LoadData();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // النوع (Autocomplete): تقييده حسب المجموعة المختارة + بحث فوري
+    // ═══════════════════════════════════════════════════════════════════
+    private List<ExpenseGroupDto> GetTypeGroupOptions()
+    {
+        if (!_filter.ParentGroupId.HasValue)
+            return _allGroups;
+
+        var rootId = _filter.ParentGroupId.Value;
+        return _allGroups.Where(g => IsGroupInSubtree(g.ExpenseGroupId, rootId)).ToList();
+    }
+
+    private Task<IEnumerable<ExpenseGroupDto>> SearchTypeGroups(string? value, CancellationToken token)
+    {
+        var source = GetTypeGroupOptions();
+        var q = value?.Trim() ?? "";
+
+        IEnumerable<ExpenseGroupDto> res = source;
+        if (q.Length > 0)
+        {
+            res = source.Where(g =>
+                TypeGroupLabel(g).Contains(q, StringComparison.OrdinalIgnoreCase)
+                || g.ExpenseGroupName.Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var ordered = res
+            .OrderBy(g => TypeGroupLabel(g))
+            .Take(80)
+            .ToList();
+
+        return Task.FromResult<IEnumerable<ExpenseGroupDto>>(ordered);
+    }
+
+    private bool IsGroupInSubtree(int groupId, int rootId)
+    {
+        var current = _allGroups.FirstOrDefault(g => g.ExpenseGroupId == groupId);
+        int safety = 15;
+        while (current != null && safety-- > 0)
+        {
+            if (current.ExpenseGroupId == rootId) return true;
+            if (!current.ParentGroupId.HasValue) return false;
+            current = _allGroups.FirstOrDefault(g => g.ExpenseGroupId == current.ParentGroupId.Value);
+        }
+        return false;
+    }
+
+    // تسمية النوع: لو في مجموعة رئيسية مختارة → مسار نسبي من عندها؛ غير كده المسار الكامل
+    // (MudAutocomplete بيستدعي ToStringFunc بقيمة null أثناء التهيئة → لازم حماية)
+    private string TypeGroupLabel(ExpenseGroupDto group)
+    {
+        if (group is null)
+            return string.Empty;
+
+        if (_filter.ParentGroupId.HasValue)
+        {
+            var path = new List<string> { group.ExpenseGroupName };
+            int? pid = group.ParentGroupId;
+            int safety = 10;
+            while (pid.HasValue && pid.Value != _filter.ParentGroupId.Value && safety-- > 0)
+            {
+                var p = _allGroups.FirstOrDefault(g => g.ExpenseGroupId == pid.Value);
+                if (p == null) break;
+                path.Insert(0, p.ExpenseGroupName);
+                pid = p.ParentGroupId;
+            }
+            return string.Join(" / ", path);
+        }
+
+        return GetGroupOptionLabel(group);
     }
 
     private async Task ClearFilters()
     {
-        _filter = new ExpenseFilterDto { PageSize = 5000, ExcludeAdvanceHeaders = true };
+        _searchTimer?.Stop();
+        _searchDisplay = "";
+        _filter = new ExpenseFilterDto { ExcludeAdvanceHeaders = true, PageSize = 5000 };
         _dateFrom = null;
         _dateTo = null;
+        _selectedType = null;
         await LoadData();
     }
 
-    private string GetGroupOptionLabel(ExpenseGroupDto group)
-    {
-        if (string.IsNullOrWhiteSpace(group.ParentGroupName))
-            return group.ExpenseGroupName;
+    // ═══════════════════════════════════════════════════════════════════
+    // ACTIVE FILTER CHIPS
+    private sealed record FilterTag(string Key, string Label);
 
-        return $"{group.ParentGroupName} / {group.ExpenseGroupName}";
-    }
-
-    private List<CashBoxListDto> GetFilterCashBoxes()
-    {
-        return _boxes
-            .Where(b => !_filter.BranchId.HasValue || b.BranchId == _filter.BranchId.Value)
-            .OrderBy(b => b.BranchName)
-            .ThenBy(b => b.CashBoxName)
-            .ToList();
-    }
-
-    private IEnumerable<string> ActiveFilterLabels
+    private List<FilterTag> ActiveFilterTags
     {
         get
         {
-            if (!string.IsNullOrWhiteSpace(_filter.SearchText))
-                yield return $"بحث: {_filter.SearchText}";
+            var tags = new List<FilterTag>();
 
-            if (_filter.DateFrom.HasValue || _filter.DateTo.HasValue)
+            if (!string.IsNullOrWhiteSpace(_searchDisplay))
+                tags.Add(new("search", $"بحث: {_searchDisplay}"));
+
+            if (_dateFrom.HasValue || _dateTo.HasValue)
             {
-                var fromText = _filter.DateFrom?.ToString("yyyy/MM/dd") ?? "البداية";
-                var toText = _filter.DateTo?.ToString("yyyy/MM/dd") ?? "النهاية";
-                yield return $"الفترة: {fromText} → {toText}";
+                var fromText = _dateFrom?.ToString("yyyy/MM/dd") ?? "البداية";
+                var toText = _dateTo?.ToString("yyyy/MM/dd") ?? "النهاية";
+                tags.Add(new("period", $"الفترة: {fromText} ← {toText}"));
             }
 
             if (_filter.BranchId.HasValue)
             {
                 var branch = _branches.FirstOrDefault(b => b.BranchId == _filter.BranchId.Value);
-                if (branch != null)
-                    yield return $"الفرع: {branch.BranchNameAr}";
+                if (branch != null) tags.Add(new("branch", $"الفرع: {branch.BranchNameAr}"));
             }
 
             if (_filter.ParentGroupId.HasValue)
             {
                 var parent = _mainGroups.FirstOrDefault(g => g.ExpenseGroupId == _filter.ParentGroupId.Value);
-                if (parent != null)
-                    yield return $"المجموعة: {parent.ExpenseGroupName}";
+                if (parent != null) tags.Add(new("parentgroup", $"المجموعة: {parent.ExpenseGroupName}"));
             }
 
             if (_filter.ExpenseGroupId.HasValue)
             {
-                var group = _typeGroups.FirstOrDefault(g => g.ExpenseGroupId == _filter.ExpenseGroupId.Value);
-                if (group != null)
-                    yield return $"النوع: {GetGroupOptionLabel(group)}";
+                var group = _allGroups.FirstOrDefault(g => g.ExpenseGroupId == _filter.ExpenseGroupId.Value);
+                if (group != null) tags.Add(new("type", $"النوع: {TypeGroupLabel(group)}"));
             }
 
             if (_filter.CashBoxId.HasValue)
             {
                 var box = _boxes.FirstOrDefault(b => b.CashBoxId == _filter.CashBoxId.Value);
-                if (box != null)
-                    yield return $"الخزينة: {box.CashBoxName}";
+                if (box != null) tags.Add(new("cashbox", $"الخزينة: {box.CashBoxName}"));
             }
+
+            return tags;
         }
     }
 
+    private int GetActiveFiltersCount()
+    {
+        int count = 0;
+        if (!string.IsNullOrWhiteSpace(_searchDisplay)) count++;
+        if (_dateFrom.HasValue || _dateTo.HasValue) count++;
+        if (_filter.BranchId.HasValue) count++;
+        if (_filter.ParentGroupId.HasValue) count++;
+        if (_filter.ExpenseGroupId.HasValue) count++;
+        if (_filter.CashBoxId.HasValue) count++;
+        return count;
+    }
+
+    private async Task RemoveFilterAsync(string key)
+    {
+        switch (key)
+        {
+            case "search":
+                _searchDisplay = "";
+                _filter.SearchText = null;
+                break;
+            case "period":
+                _dateFrom = null;
+                _dateTo = null;
+                _filter.DateFrom = null;
+                _filter.DateTo = null;
+                break;
+            case "branch":
+                _filter.BranchId = null;
+                break;
+            case "parentgroup":
+                _filter.ParentGroupId = null;
+                break;
+            case "type":
+                _filter.ExpenseGroupId = null;
+                _selectedType = null;
+                break;
+            case "cashbox":
+                _filter.CashBoxId = null;
+                break;
+        }
+
+        await LoadData();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // QUICK RANGES
     private async Task ApplyQuickRangeAsync(string preset)
     {
         var (from, to) = GetQuickRange(preset);
@@ -1013,38 +1500,148 @@
         };
     }
 
-    private int GetActiveFiltersCount()
+    // ═══════════════════════════════════════════════════════════════════
+    // HELPERS
+    private List<CashBoxListDto> GetFilterCashBoxes()
     {
-        int count = 0;
-        if (!string.IsNullOrWhiteSpace(_filter.SearchText)) count++;
-        if (_filter.DateFrom.HasValue) count++;
-        if (_filter.DateTo.HasValue) count++;
-        if (_filter.BranchId.HasValue) count++;
-        if (_filter.ParentGroupId.HasValue) count++;
-        if (_filter.ExpenseGroupId.HasValue) count++;
-        if (_filter.CashBoxId.HasValue) count++;
-        return count;
+        return _boxes
+            .Where(b => !_filter.BranchId.HasValue || b.BranchId == _filter.BranchId.Value)
+            .OrderBy(b => b.BranchName)
+            .ThenBy(b => b.CashBoxName)
+            .ToList();
+    }
+
+    private string GetGroupOptionLabel(ExpenseGroupDto group)
+    {
+        if (group is null)
+            return string.Empty;
+
+        if (string.IsNullOrWhiteSpace(group.ParentGroupName))
+            return group.ExpenseGroupName;
+
+        return $"{group.ParentGroupName} / {group.ExpenseGroupName}";
+    }
+
+    private string N0(decimal v) => v.ToString("N0", CultureInfo.InvariantCulture);
+    private string N2(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
+    private static string ChartTxt(string? value) => ChartTextHelper.Safe(value);
+
+    private static string GetChangeText(decimal change)
+    {
+        var abs = Math.Abs(change);
+        if (change > 0) return $"↑ {abs:N1}%";
+        if (change < 0) return $"↓ {abs:N1}%";
+        return "بدون تغيير";
+    }
+
+    private static string GetChangeClass(decimal change)
+    {
+        if (change > 0) return "neg";
+        if (change < 0) return "pos";
+        return "flat";
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PRINT & EXPORT
+    private string BuildReportUrl()
+    {
+        var q = new List<string> { $"Mode={_mode}" };
+        if (!string.IsNullOrWhiteSpace(_searchDisplay))
+            q.Add($"SearchText={Uri.EscapeDataString(_searchDisplay.Trim())}");
+        if (_dateFrom.HasValue) q.Add($"DateFrom={_dateFrom.Value:yyyy-MM-dd}");
+        if (_dateTo.HasValue) q.Add($"DateTo={_dateTo.Value:yyyy-MM-dd}");
+        if (_filter.BranchId.HasValue) q.Add($"BranchId={_filter.BranchId.Value}");
+        if (_filter.ParentGroupId.HasValue) q.Add($"ParentGroupId={_filter.ParentGroupId.Value}");
+        if (_filter.ExpenseGroupId.HasValue) q.Add($"GroupId={_filter.ExpenseGroupId.Value}");
+        if (_filter.CashBoxId.HasValue) q.Add($"BoxId={_filter.CashBoxId.Value}");
+
+        return "/expenses/print" + (q.Any() ? "?" + string.Join("&", q) : "");
     }
 
     private async Task PrintReport()
     {
-        var query = new List<string>();
-        if (!string.IsNullOrWhiteSpace(_filter.SearchText)) query.Add($"SearchText={Uri.EscapeDataString(_filter.SearchText.Trim())}");
-        if (_filter.DateFrom.HasValue) query.Add($"DateFrom={_filter.DateFrom.Value:yyyy-MM-dd}");
-        if (_filter.DateTo.HasValue) query.Add($"DateTo={_filter.DateTo.Value:yyyy-MM-dd}");
-        if (_filter.BranchId.HasValue) query.Add($"BranchId={_filter.BranchId.Value}");
-        if (_filter.ParentGroupId.HasValue) query.Add($"ParentGroupId={_filter.ParentGroupId.Value}");
-        if (_filter.ExpenseGroupId.HasValue) query.Add($"GroupId={_filter.ExpenseGroupId.Value}");
-        if (_filter.CashBoxId.HasValue) query.Add($"BoxId={_filter.CashBoxId.Value}");
-
-        var url = "/expenses/print" + (query.Any() ? "?" + string.Join("&", query) : "");
+        var url = BuildReportUrl();
         await JS.InvokeVoidAsync("window.open", url, "_blank");
     }
 
     private async Task ExportExcel()
     {
-        var fileBytes = await ExpenseService.ExportExpensesToExcelAsync(_filter);
+        byte[] fileBytes;
+        string fileName;
+
+        if (_mode == ModeSummary)
+        {
+            fileBytes = await ExpenseService.ExportMonthlySummaryToExcelAsync(CopyFilter());
+            fileName = "ExpenseMonthlySummary.xlsx";
+        }
+        else
+        {
+            fileBytes = await ExpenseService.ExportExpensesToExcelAsync(CopyFilter());
+            fileName = "ExpenseReport.xlsx";
+        }
+
         var base64 = Convert.ToBase64String(fileBytes);
-        await JS.InvokeVoidAsync("downloadFileFromBase64", base64, "ExpenseReport.xlsx");
+        await JS.InvokeVoidAsync("downloadFileFromBase64", base64, fileName);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CHART
+    private void InitChartOptions()
+    {
+        _summaryChartOptions = new ApexChartOptions<ExpenseMonthlySummaryDto>
+        {
+            Chart = new Chart
+            {
+                Toolbar = new Toolbar { Show = false },
+                FontFamily = "inherit",
+                Animations = new Animations { Enabled = true }
+            },
+            Colors = new List<string> { "#0f766e" },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar
+                {
+                    BorderRadius = 6,
+                    ColumnWidth = "52%"
+                }
+            },
+            DataLabels = new DataLabels { Enabled = false },
+            Grid = new Grid
+            {
+                BorderColor = "#eef2f7",
+                StrokeDashArray = 4
+            },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels
+                {
+                    Style = new AxisLabelStyle { FontSize = "11px" }
+                }
+            },
+            Yaxis = new List<YAxis>
+            {
+                new YAxis
+                {
+                    Labels = new YAxisLabels
+                    {
+                        Formatter = @"function(val){
+                            if(val>=1000000) return (val/1000000).toFixed(1)+'M';
+                            if(val>=1000) return (val/1000).toFixed(0)+'K';
+                            return val.toFixed(0);
+                        }"
+                    }
+                }
+            },
+            Tooltip = new Tooltip
+            {
+                Y = new TooltipY
+                {
+                    Formatter = @"function(val){
+                        return val.toLocaleString('ar-EG') + ' ج';
+                    }"
+                }
+            }
+        };
     }
 }
+

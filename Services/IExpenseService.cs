@@ -6,7 +6,9 @@ public interface IExpenseService
 {
     Task<PagedResult<ExpenseListDto>> GetExpensesAsync(ExpenseFilterDto filter);
     Task<ExpenseFormDto?> GetExpenseForEditAsync(int id);
-    Task<ExpenseStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null, int? branchId = null);
+
+    // ⭐ الإحصائيات بتحترم الفلتر بالكامل (نفس فلتر الجدول بالظبط)
+    Task<ExpenseStatsDto> GetStatsAsync(ExpenseFilterDto filter);
     Task<ExpenseDashboardDto> GetDashboardDataAsync(int? branchId = null);
 
     Task<(bool Success, string Message, int? Id)> SaveExpenseAsync(
@@ -16,6 +18,10 @@ public interface IExpenseService
 
     // ⭐ دالة التصدير للإكسيل الجديدة
     Task<byte[]> ExportExpensesToExcelAsync(ExpenseFilterDto filter);
+
+    // 🆕 التقرير الإجمالي الشهري (Summary)
+    Task<ExpenseSummaryReportDto> GetMonthlySummaryAsync(ExpenseFilterDto filter);
+    Task<byte[]> ExportMonthlySummaryToExcelAsync(ExpenseFilterDto filter);
 
     // Expense Groups
     Task<List<ExpenseGroupDto>> GetExpenseGroupsAsync(bool asTree = false);

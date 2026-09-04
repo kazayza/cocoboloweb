@@ -6,9 +6,9 @@
 @using System.Globalization
 
 @inject IExpenseService ExpenseService
+@inject IBranchService BranchService
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
-
 <div class="print-container" dir="rtl">
     <div class="letterhead-bg"></div>
 
@@ -19,21 +19,21 @@
                 <td><div class="header-space"></div></td>
             </tr>
         </thead>
-        
+
         <!-- المحتوى الفعلي للتقرير -->
         <tbody>
             <tr>
                 <td>
                     <div class="content-wrapper">
                         <div class="report-header">
-                            <h2>تقرير المصروفات التفصيلي</h2>
+                            <h2>@(IsSummary ? "التقرير الإجمالي الشهري للمصروفات" : "تقرير المصروفات التفصيلي")</h2>
                             <div class="report-meta">
                                 <span>تاريخ الطباعة: @DateTime.Now.ToString("yyyy/MM/dd HH:mm")</span>
                                 @if (DateFrom.HasValue || DateTo.HasValue)
                                 {
                                     <span>
-                                        الفترة: 
-                                        @(DateFrom?.ToString("yyyy/MM/dd") ?? "البداية") - 
+                                        الفترة:
+                                        @(DateFrom?.ToString("yyyy/MM/dd") ?? "البداية") -
                                         @(DateTo?.ToString("yyyy/MM/dd") ?? "النهاية")
                                     </span>
                                 }
@@ -43,7 +43,7 @@
                                 }
                                 @if (BranchId.HasValue)
                                 {
-                                    <span>الفرع: @(_expenses.FirstOrDefault()?.BranchName ?? "—")</span>
+                                    <span>الفرع: @(_branchName ?? "—")</span>
                                 }
                             </div>
                         </div>
@@ -52,57 +52,111 @@
                         {
                             <div class="text-center py-5">جاري التحميل...</div>
                         }
-                        else if (_expenses != null && _expenses.Any())
+                        else if (IsSummary)
                         {
-                            <table class="data-table">
-                                <thead>
-                                    <tr>
-                                        <th width="12%">التاريخ</th>
-                                        <th width="15%">الفرع</th>
-                                        <th width="23%">اسم المصروف</th>
-                                        <th width="18%">المجموعة / النوع</th>
-                                        <th width="12%">الخزينة</th>
-                                        <th width="10%">المستلم</th>
-                                        <th width="10%" class="text-left">المبلغ</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    @foreach (var exp in _expenses)
-                                    {
+                            @if (_summary is { Months.Count: > 0 })
+                            {
+                                <table class="data-table">
+                                    <thead>
                                         <tr>
-                                            <td>@exp.ExpenseDate.ToString("yyyy/MM/dd")</td>
-                                            <td>@(exp.BranchName ?? "غير محدد")</td>
-                                            <td>
-                                                <strong>@exp.ExpenseName</strong>
-                                                @if (exp.IsAdvance)
-                                                {
-                                                    <br /><small class="text-muted">مقدم (@exp.AdvanceMonths شهور)</small>
-                                                }
-                                            </td>
-                                            <td>@(exp.FullGroupPath ?? exp.ExpenseGroupName)</td>
-                                            <td>@exp.CashBoxName</td>
-                                            <td>@(string.IsNullOrEmpty(exp.Recipient) ? "—" : exp.Recipient)</td>
-                                            <td class="text-left amount-col">@exp.Amount.ToString("N2", CultureInfo.InvariantCulture) ج</td>
+                                            <th>الشهر</th>
+                                            <th>عدد العمليات</th>
+                                            <th class="text-left">الإجمالي</th>
+                                            <th class="text-left">التغير عن السابق</th>
                                         </tr>
-                                    }
-                                </tbody>
-                                <tfoot>
-                                    <tr>
-                                        <td colspan="6" class="text-left foot-label">إجمالي المصروفات:</td>
-                                        <td class="text-left foot-total">@_totalAmount.ToString("N2", CultureInfo.InvariantCulture) ج</td>
-                                    </tr>
-                                </tfoot>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var m in _summary.Months)
+                                        {
+                                            <tr>
+                                                <td><span class="sum-month">@m.MonthLabel</span></td>
+                                                <td>@m.Count عملية</td>
+                                                <td class="text-left amount-col">@m.Total.ToString("N2", CultureInfo.InvariantCulture) ج</td>
+                                                <td class="text-left">
+                                                    @if (m.HasPrevious)
+                                                    {
+                                                        <span class="@GetChangeClass(m.ChangePercent)">@GetChangeText(m.ChangePercent)</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="flat">—</span>
+                                                    }
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                    <tfoot>
+                                        <tr>
+                                            <td colspan="2" class="text-left foot-label">الإجمالي</td>
+                                            <td class="text-left foot-total">@_summary.GrandTotal.ToString("N2", CultureInfo.InvariantCulture) ج</td>
+                                            <td></td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                                <p class="grand-note">
+                                    عدد الشهور: @_summary.Months.Count • عدد العمليات: @_summary.TotalCount •
+                                    متوسط الشهر: @_summary.MonthlyAverage.ToString("N2", CultureInfo.InvariantCulture) ج
+                                </p>
+                            }
+                            else
+                            {
+                                <div class="text-center py-5">لا توجد بيانات متاحة للطباعة بهذه الفلاتر.</div>
+                            }
                         }
                         else
                         {
-                            <div class="text-center py-5">لا توجد بيانات متاحة للطباعة بهذه الفلاتر.</div>
+                            @if (_expenses is { Count: > 0 })
+                            {
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th width="12%">التاريخ</th>
+                                            <th width="15%">الفرع</th>
+                                            <th width="23%">اسم المصروف</th>
+                                            <th width="18%">المجموعة / النوع</th>
+                                            <th width="12%">الخزينة</th>
+                                            <th width="10%">المستلم</th>
+                                            <th width="10%" class="text-left">المبلغ</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var exp in _expenses)
+                                        {
+                                            <tr>
+                                                <td>@exp.ExpenseDate.ToString("yyyy/MM/dd")</td>
+                                                <td>@(exp.BranchName ?? "غير محدد")</td>
+                                                <td>
+                                                    <strong>@exp.ExpenseName</strong>
+                                                    @if (exp.IsAdvance)
+                                                    {
+                                                        <br /><small class="text-muted">مقدم (@exp.AdvanceMonths شهور)</small>
+                                                    }
+                                                </td>
+                                                <td>@(exp.FullGroupPath ?? exp.ExpenseGroupName)</td>
+                                                <td>@exp.CashBoxName</td>
+                                                <td>@(string.IsNullOrEmpty(exp.Recipient) ? "—" : exp.Recipient)</td>
+                                                <td class="text-left amount-col">@exp.Amount.ToString("N2", CultureInfo.InvariantCulture) ج</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                    <tfoot>
+                                        <tr>
+                                            <td colspan="6" class="text-left foot-label">إجمالي المصروفات:</td>
+                                            <td class="text-left foot-total">@_totalAmount.ToString("N2", CultureInfo.InvariantCulture) ج</td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            }
+                            else
+                            {
+                                <div class="text-center py-5">لا توجد بيانات متاحة للطباعة بهذه الفلاتر.</div>
+                            }
                         }
                     </div>
                 </td>
             </tr>
         </tbody>
-        
+
         <!-- مساحة الفوتر الثابتة في كل صفحة -->
         <tfoot>
             <tr>
@@ -177,9 +231,28 @@
         /* منع انقسام الصفوف بين الصفحات */
         .data-table tr { page-break-inside: avoid; }
     }
-</style>
+    /* وضع الملخص الشهري */
+    .sum-title { font-size:.95rem; font-weight:800; color:#0f172a; }
+    .sum-month { font-weight:800; color:#0f172a; }
+    .pos { color:#047857 !important; }
+    .neg { color:#b91c1c !important; }
+    .flat { color:#64748b !important; }
+    .grand-note { font-size:.85rem; font-weight:700; }
 
+
+    /* ═══ خط تقارير المصروفات: Tajawal ═══ */
+    .print-container,
+    .print-container p, .print-container h1, .print-container h2, .print-container h3, .print-container h4,
+    .print-container span, .print-container strong, .print-container small, .print-container td, .print-container th,
+    .print-container label, .print-container button, .print-container .mud-input, .print-container .mud-input-slot,
+    .print-container .mud-input-label, .print-container .mud-button-label, .print-container .mud-typography,
+    .print-container .mud-chip, .print-container .mud-alert, .print-container .mud-paper
+    { font-family:'Tajawal','Segoe UI',Tahoma,Arial,sans-serif !important; }
+    .mud-popover .mud-list-item, .mud-popover .mud-menu-item, .mud-popover .mud-select-item { font-family:'Tajawal','Segoe UI',Tahoma,Arial,sans-serif; }
+
+</style>
 @code {
+    [SupplyParameterFromQuery] public string? Mode { get; set; }
     [SupplyParameterFromQuery] public string? SearchText { get; set; }
     [SupplyParameterFromQuery] public DateTime? DateFrom { get; set; }
     [SupplyParameterFromQuery] public DateTime? DateTo { get; set; }
@@ -187,16 +260,27 @@
     [SupplyParameterFromQuery] public int? ParentGroupId { get; set; }
     [SupplyParameterFromQuery] public int? GroupId { get; set; }
     [SupplyParameterFromQuery] public int? BoxId { get; set; }
-    
+
+    private bool IsSummary => string.Equals(Mode, "summary", StringComparison.OrdinalIgnoreCase);
+
     private bool _isLoading = true;
     private List<ExpenseListDto> _expenses = new();
+    private ExpenseSummaryReportDto? _summary;
     private decimal _totalAmount = 0;
+    private string? _branchName;
 
     protected override async Task OnInitializedAsync()
     {
+        if (BranchId.HasValue)
+        {
+            var branch = (await BranchService.GetBranchesAsync())
+                .FirstOrDefault(b => b.BranchId == BranchId.Value);
+            _branchName = branch?.BranchNameAr;
+        }
+
         var filter = new ExpenseFilterDto
         {
-            SearchText = SearchText,
+            SearchText = string.IsNullOrWhiteSpace(SearchText) ? null : SearchText,
             DateFrom = DateFrom,
             DateTo = DateTo,
             BranchId = BranchId,
@@ -204,23 +288,50 @@
             ExpenseGroupId = GroupId,
             CashBoxId = BoxId,
             ExcludeAdvanceHeaders = true,
-            PageSize = 10000 // Get all
+            PageSize = 10000
         };
 
-        var result = await ExpenseService.GetExpensesAsync(filter);
-        _expenses = result.Items.ToList();
-        _totalAmount = _expenses.Sum(e => e.Amount);
-        
+        if (IsSummary)
+        {
+            _summary = await ExpenseService.GetMonthlySummaryAsync(filter);
+        }
+        else
+        {
+            var result = await ExpenseService.GetExpensesAsync(filter);
+            _expenses = result.Items.ToList();
+            _totalAmount = _expenses.Sum(e => e.Amount);
+        }
+
         _isLoading = false;
         StateHasChanged();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!_isLoading && _expenses.Any() && firstRender)
+        var hasData = IsSummary
+            ? _summary is { Months.Count: > 0 }
+            : _expenses.Count > 0;
+
+        if (!_isLoading && hasData && firstRender)
         {
             await Task.Delay(500); // إعطاء فرصة لتحميل الصورة
             await JS.InvokeVoidAsync("window.print");
         }
     }
+
+    private static string GetChangeText(decimal change)
+    {
+        var abs = Math.Abs(change);
+        if (change > 0) return $"↑ {abs:N1}%";
+        if (change < 0) return $"↓ {abs:N1}%";
+        return "بدون تغيير";
+    }
+
+    private static string GetChangeClass(decimal change)
+    {
+        if (change > 0) return "neg";
+        if (change < 0) return "pos";
+        return "flat";
+    }
 }
+

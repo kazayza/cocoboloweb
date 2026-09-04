@@ -43,10 +43,12 @@ public class ExpenseService : IExpenseService
     // ============================================================
     //  ⭐ Expenses List - محسّن للسرعة (5x أسرع)
     // ============================================================
-        public async Task<PagedResult<ExpenseListDto>> GetExpensesAsync(ExpenseFilterDto filter)
-    {
-        var query = _db.Expenses.AsNoTracking().AsQueryable();
 
+    // ⭐ تطبيق كل فلاتر المصروفات (مشترك بين اللسته والإحصائيات والتقارير)
+    //    لأي تعديل جوه الفلاتر هنا يتأثر في كل الأماكن تلقائيًا
+    private async Task<IQueryable<Expense>> ApplyExpenseFiltersAsync(
+        IQueryable<Expense> query, ExpenseFilterDto filter)
+    {
         if (filter.BranchId.HasValue)
             query = query.Where(e => e.BranchId == filter.BranchId.Value);
 
@@ -85,7 +87,7 @@ public class ExpenseService : IExpenseService
                 || (e.Torecipient != null && e.Torecipient.Contains(s))
                 || matchingGroupIds.Contains(e.ExpenseGroupId));
         }
-            
+
         if (filter.CashBoxId.HasValue)
             query = query.Where(e => e.CashBoxId == filter.CashBoxId.Value);
         if (filter.DateFrom.HasValue)
@@ -105,6 +107,14 @@ public class ExpenseService : IExpenseService
             query = query.Where(e => !(e.IsAdvance == true
                 && e.AdvanceParentExpenseId == null
                 && e.AdvanceMonthIndex == 0));
+
+        return query;
+    }
+
+    public async Task<PagedResult<ExpenseListDto>> GetExpensesAsync(ExpenseFilterDto filter)
+    {
+        var query = await ApplyExpenseFiltersAsync(
+            _db.Expenses.AsNoTracking().AsQueryable(), filter);
 
         var totalCount = await query.CountAsync();
 
@@ -276,25 +286,31 @@ public class ExpenseService : IExpenseService
         return children;
     }
 
-    public async Task<ExpenseStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null, int? branchId = null)
+    // ⭐ الإحصائيات بتحترم الفلتر بالكامل (نفس فلتر الجدول)
+    //    الكروت: (اليوم / الشهر / السنة / الإجمالي) بتتحسب جوه نطاق الفلتر الحالي
+    public async Task<ExpenseStatsDto> GetStatsAsync(ExpenseFilterDto filter)
     {
-        var query = BuildRecognizedExpensesQuery(branchId);
-        if (from.HasValue) query = query.Where(e => e.ExpenseDate >= from.Value.Date);
-        if (to.HasValue) query = query.Where(e => e.ExpenseDate <= to.Value.Date.AddDays(1).AddTicks(-1));
+        var query = await ApplyExpenseFiltersAsync(
+            _db.Expenses.AsNoTracking().AsQueryable(), filter);
 
         var today = DateTime.Today;
         var monthStart = new DateTime(today.Year, today.Month, 1);
+        var monthEnd = monthStart.AddMonths(1);          // أول الشهر الجاي (نهاية مفتوحة)
         var yearStart = new DateTime(today.Year, 1, 1);
+        var yearEnd = yearStart.AddYears(1);             // أول السنة الجاية (نهاية مفتوحة)
 
+        // ⚠️ النوافذ لازم تكون مقفولة من الجهتين (بداية + نهاية مفتوحة) عشان سطور
+        //    "المصروف المقدم" لشهور قادمة (تواريخها في المستقبل) ماتتسحبش في
+        //    كارت الشهر/السنة الحاليين — الشهر = من أول يوم لآخر يوم بس.
         var stats = new ExpenseStatsDto
         {
             TotalCount = await query.CountAsync(),
             TotalAmount = await query.SumAsync(e => (decimal?)e.Amount) ?? 0,
-            TodayAmount = await query.Where(e => e.ExpenseDate.Date == today)
+            TodayAmount = await query.Where(e => e.ExpenseDate >= today && e.ExpenseDate < today.AddDays(1))
                 .SumAsync(e => (decimal?)e.Amount) ?? 0,
-            MonthAmount = await query.Where(e => e.ExpenseDate >= monthStart)
+            MonthAmount = await query.Where(e => e.ExpenseDate >= monthStart && e.ExpenseDate < monthEnd)
                 .SumAsync(e => (decimal?)e.Amount) ?? 0,
-            YearAmount = await query.Where(e => e.ExpenseDate >= yearStart)
+            YearAmount = await query.Where(e => e.ExpenseDate >= yearStart && e.ExpenseDate < yearEnd)
                 .SumAsync(e => (decimal?)e.Amount) ?? 0
         };
 
@@ -579,17 +595,32 @@ public class ExpenseService : IExpenseService
         }
         else
         {
-            // عند التعديل: نحسب الفرق
-            var oldAmount = await _db.Expenses.AsNoTracking()
+            // عند التعديل: نجيب بيانات المصروف القديم (المبلغ + الخزينة القديمة)
+            var existingExpense = await _db.Expenses.AsNoTracking()
                 .Where(e => e.ExpenseId == dto.ExpenseId)
-                .Select(e => e.Amount).FirstOrDefaultAsync();
+                .Select(e => new { e.Amount, e.CashBoxId })
+                .FirstOrDefaultAsync()
+                ?? throw new Exception("المصروف غير موجود");
 
-            var diff = dto.Amount - oldAmount;
-            if (diff > 0)
+            var oldAmount = existingExpense.Amount;
+            var cashBoxChanged = existingExpense.CashBoxId != dto.CashBoxId.Value;
+
+            // ⭐ المبلغ الفعلي اللي الخزينة هتدفعه بعد التعديل:
+            //  - لو الخزينة اتغيرت عن القديمة: الخزينة الجديدة هتسدّد كامل المبلغ
+            //    (لأن الخصم القديم كان على الخزينة التانية وهيتشال منها تلقائياً)
+            //  - لو نفس الخزينة: القديم متخصوم منها أصلًا → نحتاج فقط تأمين قيمة الزيادة (الفرق)
+            var requiredAmount = cashBoxChanged
+                ? dto.Amount
+                : Math.Max(dto.Amount - oldAmount, 0m);
+
+            if (requiredAmount > 0)
             {
                 var cashBoxBalance = await GetCashBoxBalanceAsync(dto.CashBoxId.Value);
-                if (cashBoxBalance < diff)
-                    return (false, $"رصيد الخزينة غير كافي للزيادة. المتاح: {cashBoxBalance:N2}", null);
+                if (cashBoxBalance < requiredAmount)
+                    return (false, "رصيد الخزينة غير كافي" +
+                        (cashBoxChanged
+                            ? $". الخزينة الجديدة هتدفع المبلغ كامل ({requiredAmount:N2}) والمتاح: {cashBoxBalance:N2}"
+                            : $". قيمة الزيادة المطلوبة: {requiredAmount:N2} والمتاح: {cashBoxBalance:N2}"), null);
             }
         }
 
@@ -887,6 +918,31 @@ public class ExpenseService : IExpenseService
         if (string.IsNullOrWhiteSpace(dto.ExpenseGroupName))
             return (false, "اسم المجموعة مطلوب", null);
 
+        // ⛔ منع الدورات (Cycles) في شجرة المجموعات قبل أي حفظ
+        if (dto.ParentGroupId.HasValue)
+        {
+            // الأب لا يكون المجموعة نفسها (أثناء التعديل)
+            if (dto.ExpenseGroupId != 0 && dto.ParentGroupId.Value == dto.ExpenseGroupId)
+                return (false, "لا يمكن جعل المجموعة أبًا لنفسها", null);
+
+            // الأب المحدد يجب أن يكون موجودًا فعلًا
+            var parentExists = await _db.ExpenseGroups.AsNoTracking()
+                .AnyAsync(g => g.ExpenseGroupId == dto.ParentGroupId.Value);
+            if (!parentExists)
+                return (false, "المجموعة الأم المحددة غير موجودة", null);
+
+            // أثناء التعديل: لا يصح اختيار مجموعة من أحفاد هذه المجموعة كأب لها
+            // (وإلا أصبحت المجموعة أبًا لجدّها → دورة تنهار معها الشجرة)
+            if (dto.ExpenseGroupId != 0)
+            {
+                var descendantIds = await GetExpenseGroupDescendantIdsAsync(dto.ExpenseGroupId);
+                if (descendantIds.Contains(dto.ParentGroupId.Value))
+                    return (false,
+                        "لا يمكن جعل مجموعة فرعية من هذه المجموعة أبًا لها — هذا سينشئ دورة في الشجرة",
+                        null);
+            }
+        }
+
         try
         {
             var isNew = dto.ExpenseGroupId == 0;
@@ -1055,6 +1111,151 @@ public class ExpenseService : IExpenseService
         workbook.SaveAs(stream);
         return stream.ToArray();
     }
-    
-    
+
+    // ============================================================
+    //  🆕 التقرير الإجمالي الشهري (Summary)
+    // ============================================================
+    public async Task<ExpenseSummaryReportDto> GetMonthlySummaryAsync(ExpenseFilterDto filter)
+    {
+        var query = await ApplyExpenseFiltersAsync(
+            _db.Expenses.AsNoTracking().AsQueryable(), filter);
+
+        var grouped = await query
+            .GroupBy(e => new { e.ExpenseDate.Year, e.ExpenseDate.Month })
+            .Select(g => new
+            {
+                g.Key.Year,
+                g.Key.Month,
+                Count = g.Count(),
+                Total = g.Sum(x => x.Amount)
+            })
+            .ToListAsync();
+
+        var byMonth = grouped.ToDictionary(
+            x => (x.Year, x.Month),
+            x => (x.Count, x.Total));
+
+        // بناء خط زمني متصل (شهور صفرية تُملأ) من بداية الفلتر إلى نهايته
+        DateTime start;
+        DateTime end;
+
+        if (filter.DateFrom.HasValue)
+            start = new DateTime(filter.DateFrom.Value.Year, filter.DateFrom.Value.Month, 1);
+        else if (grouped.Any())
+            start = new DateTime(grouped.Min(g => g.Year), grouped.Min(g => g.Month), 1);
+        else
+            start = DateTime.Today;
+
+        if (filter.DateTo.HasValue)
+            end = new DateTime(filter.DateTo.Value.Year, filter.DateTo.Value.Month, 1);
+        else if (grouped.Any())
+            end = new DateTime(grouped.Max(g => g.Year), grouped.Max(g => g.Month), 1);
+        else
+            end = start;
+
+        var ar = new System.Globalization.CultureInfo("ar-EG");
+        var result = new ExpenseSummaryReportDto();
+
+        var monthItems = new List<ExpenseMonthlySummaryDto>();
+
+        for (var dt = start; dt <= end; dt = dt.AddMonths(1))
+        {
+            var has = byMonth.TryGetValue((dt.Year, dt.Month), out var data);
+            monthItems.Add(new ExpenseMonthlySummaryDto
+            {
+                MonthDate = dt,
+                MonthLabel = dt.ToString("MMMM yyyy", ar),
+                MonthShort = dt.ToString("MMM", ar),
+                Count = has ? data.Count : 0,
+                Total = has ? data.Total : 0m
+            });
+        }
+
+        for (int i = 0; i < monthItems.Count; i++)
+        {
+            var item = monthItems[i];
+            if (i > 0)
+            {
+                var prev = monthItems[i - 1].Total;
+                item.HasPrevious = true;
+                item.PreviousTotal = prev;
+                item.ChangePercent = prev > 0
+                    ? Math.Round(((item.Total - prev) / prev) * 100, 1)
+                    : (item.Total > 0 ? 100m : 0m);
+            }
+
+            result.Months.Add(item);
+            result.TotalCount += item.Count;
+            result.GrandTotal += item.Total;
+        }
+
+        result.MonthlyAverage = result.Months.Count > 0
+            ? Math.Round(result.GrandTotal / result.Months.Count, 2)
+            : 0;
+
+        return result;
+    }
+
+    // ============================================================
+    //  🆕 تصدير التقرير الإجمالي الشهري لإكسيل
+    // ============================================================
+    public async Task<byte[]> ExportMonthlySummaryToExcelAsync(ExpenseFilterDto filter)
+    {
+        var data = await GetMonthlySummaryAsync(filter);
+
+        using var workbook = new XLWorkbook();
+        var ws = workbook.Worksheets.Add("ملخص المصروفات الشهري");
+        ws.RightToLeft = true;
+
+        var headerRow = ws.Row(1);
+        headerRow.Style.Font.Bold = true;
+        headerRow.Style.Font.FontColor = XLColor.White;
+        headerRow.Style.Fill.BackgroundColor = XLColor.MidnightBlue;
+        headerRow.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+
+        ws.Cell(1, 1).Value = "الشهر";
+        ws.Cell(1, 2).Value = "عدد العمليات";
+        ws.Cell(1, 3).Value = "الإجمالي";
+        ws.Cell(1, 4).Value = "التغير عن السابق %";
+
+        int row = 2;
+        foreach (var m in data.Months)
+        {
+            ws.Cell(row, 1).Value = m.MonthLabel;
+            ws.Cell(row, 2).Value = m.Count;
+            ws.Cell(row, 3).Value = m.Total;
+            ws.Cell(row, 3).Style.NumberFormat.Format = "#,##0.00";
+
+            if (m.HasPrevious)
+            {
+                ws.Cell(row, 4).Value = m.ChangePercent;
+                ws.Cell(row, 4).Style.NumberFormat.Format = "0.0";
+            }
+            else
+            {
+                ws.Cell(row, 4).Value = "—";
+            }
+
+            row++;
+        }
+
+        var totalRow = ws.Row(row);
+        totalRow.Style.Font.Bold = true;
+        totalRow.Style.Fill.BackgroundColor = XLColor.LightGray;
+
+        ws.Cell(row, 1).Value = "الإجمالي";
+        ws.Cell(row, 2).Value = data.TotalCount;
+        ws.Cell(row, 3).Value = data.GrandTotal;
+        ws.Cell(row, 3).Style.NumberFormat.Format = "#,##0.00";
+
+        ws.Cell(row + 1, 1).Value = "متوسط الشهر";
+        ws.Cell(row + 1, 3).Value = data.MonthlyAverage;
+        ws.Cell(row + 1, 3).Style.NumberFormat.Format = "#,##0.00";
+
+        ws.Columns().AdjustToContents();
+
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        return stream.ToArray();
+    }
 }

@@ -153,3 +153,27 @@ public class ExpenseDailyTrendDto
     public int Day { get; set; }
     public decimal Amount { get; set; }
 }
+// ============================================================
+//  🆕 تقرير إجمالي شهري للمصروفات (Summary by Month)
+// ============================================================
+public class ExpenseMonthlySummaryDto
+{
+    public DateTime MonthDate { get; set; }
+    public string MonthLabel { get; set; } = "";
+    public string MonthShort { get; set; } = "";
+    public int Count { get; set; }
+    public decimal Total { get; set; }
+
+    // مقارنة بالشهر السابق داخل الفلتر (أول شهر = بدون مقارنة)
+    public bool HasPrevious { get; set; }
+    public decimal PreviousTotal { get; set; }
+    public decimal ChangePercent { get; set; }
+}
+
+public class ExpenseSummaryReportDto
+{
+    public List<ExpenseMonthlySummaryDto> Months { get; set; } = new();
+    public int TotalCount { get; set; }
+    public decimal GrandTotal { get; set; }
+    public decimal MonthlyAverage { get; set; }
+}
