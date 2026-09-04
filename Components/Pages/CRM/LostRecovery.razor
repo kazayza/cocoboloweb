@@ -112,6 +112,8 @@
                 {
                     <button class="lr-search-clear" @onclick="ClearSearch" title="مسح البحث">×</button>
                 }
+                <button class="lr-search-go" @onclick="ApplyNow"
+                        title="تنفيذ البحث فوراً (أو اضغط Enter) — التنفيذ تلقائي أيضاً بعد 350ms">بحث</button>
             </div>
 
             <select class="lr-sort" value="@_sortBy" @onchange="OnSortChange" title="ترتيب القائمة">
@@ -134,6 +136,13 @@
                     <button class="lr-chip @(_mineOnly ? "lr-chip-on" : "")" @onclick="ToggleMine"
                             title="القضايا المسندة لي أنا فقط">👤 قضاياي</button>
                 }
+                @if (HasActiveFilters)
+                {
+                    <button class="lr-chip lr-chip-clearall" @onclick="ClearAllFilters"
+                            title="إلغاء كل الفلاتر والبحث والعودة للقائمة الكاملة بالترتيب الافتراضي">
+                        ✕ مسح الكل (@ActiveFilterCount)
+                    </button>
+                }
             </div>
         </div>
 
@@ -141,9 +150,18 @@
         {
             <div class="lr-empty">
                 <div class="lr-empty-ico"></div>
-                <h3>لا توجد فرص خاسرة مطابقة</h3>
-                <p>لو فيه فرصة اتقفلت بخسارة هتظهر هنا تلقائيًا وبيتواصل معاها فريق خدمة العملاء.</p>
-                <button class="lr-btn lr-btn-ghost" @onclick="ReloadAll">فحص الخسائر الجديدة</button>
+                @if (HasActiveFilters)
+                {
+                    <h3>لا توجد نتائج مطابقة للبحث أو الفلاتر الحالية</h3>
+                    <p>جرّب تعديل كلمات البحث أو إلغاء بعض الفلاتر لعرض قائمة أوسع.</p>
+                    <button class="lr-btn lr-btn-primary" @onclick="ClearAllFilters">✕ مسح الفلاتر والبحث</button>
+                }
+                else
+                {
+                    <h3>لا توجد فرص خاسرة مطابقة</h3>
+                    <p>لو فيه فرصة اتقفلت بخسارة هتظهر هنا تلقائيًا وبيتواصل معاها فريق خدمة العملاء.</p>
+                    <button class="lr-btn lr-btn-ghost" @onclick="ReloadAll">فحص الخسائر الجديدة</button>
+                }
             </div>
         }
         else
@@ -551,6 +569,16 @@
         border-radius: 100px; padding: 7px 12px; font-family: inherit; font-size: .82rem;
         font-weight: 700; outline: 0; cursor: pointer; }
     .lr-sort:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, .12); }
+    /* ⭐ زر تنفيذ البحث داخل خانة البحث */
+    .lr-search-go { border: 0; background: linear-gradient(135deg, #4f46e5, #6366f1); color: #fff;
+        border-radius: 9px; padding: 7px 16px; font-family: inherit; font-size: .8rem; font-weight: 800;
+        cursor: pointer; transition: all .15s ease; white-space: nowrap; }
+    .lr-search-go:hover { filter: brightness(1.08); box-shadow: 0 4px 12px rgba(79, 70, 229, .3); }
+    /* ⭐ زر مسح الكل — يظهر فقط عند وجود فلاتر مفعّلة */
+    .lr-chip-clearall { background: #fee2e2; color: #b91c1c; border: 1px dashed #fca5a5; }
+    .lr-chip-clearall:hover { background: #fecaca; border-color: #f87171; color: #7f1d1d; }
+    /* ⭐ شريط الفلاتر يبقى ظاهراً أثناء التمرير الطويل */
+    .lr-filters { position: sticky; top: 8px; z-index: 5; box-shadow: 0 6px 18px rgba(15, 23, 42, .06); }
 
     /* ───── QUEUE ───── */
     .lr-queue { display: flex; flex-direction: column; gap: 12px; }
@@ -1003,8 +1031,44 @@
     private void ClearSearch()
     {
         _q = "";
+        _cts?.Cancel();   // ⭐ إلغاء أي بحث مؤجل حتى لا يعيد التنفيذ بعد المسح
         _ = ApplyFilters();
     }
+
+    // ⭐ تنفيذ فوري (زر «بحث» / Enter) — يلغي التأجيل المعلق ثم يطبّق
+    private void ApplyNow()
+    {
+        _cts?.Cancel();
+        _ = ApplyFilters();
+    }
+
+    // ⭐ إلغاء كل الفلاتر والبحث والعودة للترتيب الافتراضي
+    private void ClearAllFilters()
+    {
+        _q = "";
+        _kind = "all";
+        _candidateOnly = false;
+        _lateOnly = false;
+        _mineOnly = false;
+        _sortBy = "value";
+        _cts?.Cancel();
+        _ = ApplyFilters();
+    }
+
+    // ⭐ هل هناك بحث/فلتر مفعّل؟ (لزر «مسح الكل» وتمييز القائمة الفارغة)
+    private bool HasActiveFilters =>
+        !string.IsNullOrWhiteSpace(_q)
+        || _kind != "all"
+        || _candidateOnly
+        || _lateOnly
+        || _mineOnly;
+
+    private int ActiveFilterCount =>
+        (string.IsNullOrWhiteSpace(_q) ? 0 : 1)
+        + (_kind != "all" ? 1 : 0)
+        + (_candidateOnly ? 1 : 0)
+        + (_lateOnly ? 1 : 0)
+        + (_mineOnly ? 1 : 0);
 
     private void SetKind(string k)
     {
