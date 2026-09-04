@@ -181,6 +181,80 @@
             charts[elementId].render();
         },
 
+        // 🏆 Score gauge (0-10) — نسخة أكبر من semi-gauge مخصصة لمؤشر الأداء التسويقي
+        renderScoreGauge: function (elementId, score, color) {
+            var el = document.getElementById(elementId);
+            if (!el) return;
+
+            if (charts[elementId]) {
+                charts[elementId].destroy();
+            }
+
+            var clampedScore = Math.max(0, Math.min(10, score || 0));
+            var pct = clampedScore * 10;
+
+            var options = {
+                series: [pct],
+                chart: {
+                    height: 250,
+                    type: 'gauge',
+                },
+                plotOptions: {
+                    radialBar: {
+                        startAngle: -90,
+                        endAngle: 90,
+                        track: {
+                            background: '#e7e7e7',
+                            strokeWidth: '95%',
+                            margin: 6,
+                        },
+                        dataLabels: {
+                            name: { show: false },
+                            value: {
+                                offsetY: -6,
+                                fontSize: '40px',
+                                fontFamily: 'Cairo, sans-serif',
+                                fontWeight: 900,
+                                color: '#17233a',
+                                formatter: function (val) {
+                                    return (val / 10).toFixed(1);
+                                },
+                            },
+                        },
+                    },
+                },
+                fill: {
+                    type: 'gradient',
+                    gradient: {
+                        shade: 'light',
+                        shadeIntensity: 0.35,
+                        inverseColors: false,
+                        opacityFrom: 1,
+                        opacityTo: 1,
+                        stops: [0, 50, 53, 91],
+                    },
+                },
+                colors: [color || '#15965e'],
+                labels: ['Score'],
+            };
+
+            charts[elementId] = new ApexCharts(el, options);
+            charts[elementId].render();
+        },
+
+        updateScoreGauge: function (elementId, score, color) {
+            var chart = charts[elementId];
+            if (!chart) {
+                window.cocoboloMarketing.renderScoreGauge(elementId, score, color);
+                return;
+            }
+            var clampedScore = Math.max(0, Math.min(10, score || 0));
+            chart.updateOptions({
+                colors: [color || '#15965e'],
+            });
+            chart.updateSeries([clampedScore * 10]);
+        },
+
         updateSemiGauge: function (elementId, value, color) {
             var chart = charts[elementId];
             if (!chart) {
