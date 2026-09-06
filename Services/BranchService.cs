@@ -188,4 +188,21 @@ public class BranchService : IBranchService
 
         return (true, isActive ? "تم تفعيل الفرع." : "تم تعطيل الفرع.");
     }
+
+    // ============================================================
+    //  ⭐ قائمة الفروع للفلترة (خفيفة — للقوائم المنسدلة)
+    // ============================================================
+    public async Task<List<BranchOptionDto>> GetBranchesForFilterAsync()
+    {
+        return await _db.Branches
+            .AsNoTracking()
+            .Where(x => x.IsActive)
+            .OrderBy(x => x.BranchNameAr)
+            .Select(x => new BranchOptionDto
+            {
+                BranchId = x.BranchId,
+                BranchNameAr = x.BranchNameAr
+            })
+            .ToListAsync();
+    }
 }

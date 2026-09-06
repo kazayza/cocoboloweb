@@ -28,8 +28,8 @@ public interface IAttendanceService
     Task<AttendanceStatisticsDto> GetMyStatisticsAsync(string userName, DateTime? month = null);
     
     // ═══════════════ Dashboard ═══════════════
-    Task<AttendanceDashboardDto> GetDashboardDataAsync(DateTime? dateFrom = null, DateTime? dateTo = null);
-    Task<AttendanceStatisticsDto> GetTodayStatisticsAsync();
+    Task<AttendanceDashboardDto> GetDashboardDataAsync(DateTime? dateFrom = null, DateTime? dateTo = null, int? branchId = null);
+    Task<AttendanceStatisticsDto> GetTodayStatisticsAsync(int? branchId = null);
 
     // ═══════════════ الاستثناءات ═══════════════
     Task<PagedResult<ExemptionListDto>> GetExemptionsAsync(ExemptionFilterDto filter);

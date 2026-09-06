@@ -345,6 +345,7 @@ public class OffPayrollPaymentFilterDto
     public string? PaymentType   { get; set; }
     public string? PaymentStatus { get; set; }
     public string? SearchText    { get; set; }
+    public int?    BranchId      { get; set; }
 }
 
 public static class PayrollPaymentStatuses
@@ -374,6 +375,9 @@ public class PayrollFilterDto
     public string? JobTitle       { get; set; }
     public string? PaymentStatus  { get; set; }
     public string? SearchText     { get; set; }
+
+    // ⭐ فلتر الفرع (اختياري — Null = كل الفروع) — عبر Employee.BranchId
+    public int?    BranchId       { get; set; }
 
     // فلاتر متقدمة
     public bool?   HasLoans         { get; set; }

@@ -279,4 +279,7 @@ public class FinancialDashboardFilterDto
     public DateTime FromDate { get; set; } = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
     public DateTime ToDate { get; set; } = DateTime.Today;
     public string PeriodType { get; set; } = "Month";
+
+    // ⭐ فلتر الفرع (اختياري — Null = كل الفروع) — يُمرَّر لقائمة الدخل والتدفقات النقدية
+    public int? BranchId { get; set; }
 }

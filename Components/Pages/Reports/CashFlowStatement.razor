@@ -10,6 +10,7 @@
 
 @inject ICashFlowService CashFlowService
 @inject ICashBoxService CashBoxService
+@inject IBranchService BranchService
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthProvider
 @inject ISnackbar Snackbar
@@ -53,6 +54,13 @@ else if (_report != null)
                         <p>
                             <MudIcon Icon="@Icons.Material.Filled.CalendarToday" Size="MudBlazor.Size.Small" Style="vertical-align:middle;" />
                             <strong>@_report.PeriodLabel</strong>
+                            @if (!string.IsNullOrWhiteSpace(GetSelectedBranchName()))
+                            {
+                                <span style="margin-inline-start:0.75rem;">
+                                    <MudIcon Icon="@Icons.Material.Filled.Store" Size="MudBlazor.Size.Small" Style="vertical-align:middle;" />
+                                    <strong>@GetSelectedBranchName()</strong>
+                                </span>
+                            }
                         </p>
                     </div>
                 </div>
@@ -102,9 +110,19 @@ else if (_report != null)
                 <MudSelect T="int?" @bind-Value="_filter.CashBoxId" @bind-Value:after="LoadReport"
                            Placeholder="كل الخزن" Variant="MudBlazor.Variant.Outlined" Margin="Margin.Dense"
                            Clearable="true" Class="cb-select">
-                    @foreach (var cb in _boxes)
+                    @foreach (var cb in FilteredBoxes)
                     {
                         <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName</MudSelectItem>
+                    }
+                </MudSelect>
+
+                <MudSelect T="int?" Value="_filter.BranchId"
+                           ValueChanged="@(async v => await OnBranchChangedAsync(v))"
+                           Placeholder="كل الفروع" Variant="MudBlazor.Variant.Outlined" Margin="Margin.Dense"
+                           Clearable="true" ClearText="كل الفروع" Class="cb-select" Style="min-width:180px;">
+                    @foreach (var b in _branches)
+                    {
+                        <MudSelectItem T="int?" Value="b.BranchId">@b.BranchNameAr</MudSelectItem>
                     }
                 </MudSelect>
             </div>
@@ -868,6 +886,13 @@ else if (_report != null)
     private ApexChartOptions<MonthlyFlowDto> _cashFlowTrendOptions = new();
     private CashFlowFilterDto _filter = new();
     private List<CashBoxListDto> _boxes = new();
+    private List<BranchOptionDto> _branches = new();
+
+    // ⭐ الخزائن تتسلسل حسب الفرع المختار (كل الخزن لو بلا فرع)
+    private IEnumerable<CashBoxListDto> FilteredBoxes =>
+        _filter.BranchId.HasValue
+            ? _boxes.Where(b => b.BranchId == _filter.BranchId.Value)
+            : _boxes;
 
     protected override async Task OnInitializedAsync()
     {
@@ -879,9 +904,38 @@ else if (_report != null)
         if (!canView) { Navigation.NavigateTo("/"); return; }
 
         _boxes = await CashBoxService.GetCashBoxesAsync();
+
+        // ⭐ قائمة الفروع للفلترة
+        try
+        {
+            _branches = await BranchService.GetBranchesForFilterAsync();
+        }
+        catch { _branches = new(); }
+
         InitCashFlowTrendOptions();
         await SetPeriod("Month");
         _isLoading = false;
+    }
+
+    private string GetSelectedBranchName()
+    {
+        if (!_filter.BranchId.HasValue) return string.Empty;
+        return _branches.FirstOrDefault(b => b.BranchId == _filter.BranchId.Value)?.BranchNameAr ?? string.Empty;
+    }
+
+    // ⭐ تغيير الفرع: يلغي اختيار الخزينة إن كانت من فرع آخر ثم يعيد التحميل
+    private async Task OnBranchChangedAsync(int? branchId)
+    {
+        _filter.BranchId = branchId;
+
+        if (branchId.HasValue && _filter.CashBoxId.HasValue)
+        {
+            var box = _boxes.FirstOrDefault(b => b.CashBoxId == _filter.CashBoxId.Value);
+            if (box == null || box.BranchId != branchId.Value)
+                _filter.CashBoxId = null;
+        }
+
+        await LoadReport();
     }
 
     private async Task LoadReport()

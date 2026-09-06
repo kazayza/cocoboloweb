@@ -65,6 +65,21 @@ public class CashFlowService : ICashFlowService
     }
 
     // ============================================================
+    //  ⭐ نطاق الفرع: الحركات تُنسب عبر فرع الخزينة (CashBox.BranchId)
+    // ============================================================
+    private IQueryable<CashboxTransaction> ApplyBranchScope(IQueryable<CashboxTransaction> query, CashFlowFilterDto filter)
+    {
+        if (!filter.BranchId.HasValue) return query;
+        return query.Where(t => t.CashBox.BranchId == filter.BranchId.Value);
+    }
+
+    private IQueryable<CashBox> ApplyBranchScope(IQueryable<CashBox> query, CashFlowFilterDto filter)
+    {
+        if (!filter.BranchId.HasValue) return query;
+        return query.Where(c => c.BranchId == filter.BranchId.Value);
+    }
+
+    // ============================================================
     //  1. الرصيد الافتتاحي
     // ============================================================
     private async Task CalculateOpeningBalanceAsync(CashFlowStatementDto dto, CashFlowFilterDto filter)
@@ -74,6 +89,8 @@ public class CashFlowService : ICashFlowService
 
         if (filter.CashBoxId.HasValue)
             query = query.Where(t => t.CashBoxId == filter.CashBoxId.Value);
+        else
+            query = ApplyBranchScope(query, filter);
 
         var inflows = await query.Where(t => t.TransactionType == "قبض" || t.TransactionType == "In")
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
@@ -82,7 +99,7 @@ public class CashFlowService : ICashFlowService
 
         // نستخدم الرصيد المحفوظ في CashBox فقط إذا لم توجد حركة OpeningBalance
         // لنفس الخزينة، حتى لا يتم احتسابه مرتين.
-        var boxesQuery = _db.CashBoxes.AsNoTracking().AsQueryable();
+        var boxesQuery = ApplyBranchScope(_db.CashBoxes.AsNoTracking().AsQueryable(), filter);
         if (filter.CashBoxId.HasValue)
             boxesQuery = boxesQuery.Where(c => c.CashBoxId == filter.CashBoxId.Value);
 
@@ -107,6 +124,8 @@ public class CashFlowService : ICashFlowService
 
         if (filter.CashBoxId.HasValue)
             query = query.Where(t => t.CashBoxId == filter.CashBoxId.Value);
+        else
+            query = ApplyBranchScope(query, filter);
 
         // جمع كل الحركات بالـ ReferenceType
         var grouped = await query
@@ -170,7 +189,7 @@ public class CashFlowService : ICashFlowService
     // ============================================================
     private async Task CalculateByCashBoxAsync(CashFlowStatementDto dto, CashFlowFilterDto filter)
     {
-        var boxesQuery = _db.CashBoxes.AsNoTracking().AsQueryable();
+        var boxesQuery = ApplyBranchScope(_db.CashBoxes.AsNoTracking().AsQueryable(), filter);
         if (filter.CashBoxId.HasValue)
             boxesQuery = boxesQuery.Where(c => c.CashBoxId == filter.CashBoxId.Value);
 
@@ -242,6 +261,8 @@ public class CashFlowService : ICashFlowService
 
         if (filter.CashBoxId.HasValue)
             query = query.Where(t => t.CashBoxId == filter.CashBoxId.Value);
+        else
+            query = ApplyBranchScope(query, filter);
 
         var dailyData = await query
             .GroupBy(t => t.TransactionDate.Date)
@@ -299,14 +320,16 @@ public class CashFlowService : ICashFlowService
                 .Where(t => (t.TransactionType == "قبض" || t.TransactionType == "In")
                     && t.TransactionDate >= current
                     && t.TransactionDate <= monthEnd
-                    && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
+                    && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value)
+                    && (!filter.BranchId.HasValue || t.CashBox.BranchId == filter.BranchId.Value))
                 .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
             var outflows = await _db.CashboxTransactions.AsNoTracking()
                 .Where(t => (t.TransactionType == "صرف" || t.TransactionType == "Out")
                     && t.TransactionDate >= current
                     && t.TransactionDate <= monthEnd
-                    && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
+                    && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value)
+                    && (!filter.BranchId.HasValue || t.CashBox.BranchId == filter.BranchId.Value))
                 .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
             months.Add(new MonthlyFlowDto
@@ -333,6 +356,8 @@ public class CashFlowService : ICashFlowService
 
         if (filter.CashBoxId.HasValue)
             query = query.Where(t => t.CashBoxId == filter.CashBoxId.Value);
+        else
+            query = ApplyBranchScope(query, filter);
 
         // أعلى 5 داخلة
         var topIn = await query
@@ -408,7 +433,8 @@ public class CashFlowService : ICashFlowService
         var totalOutflowsLast3 = await _db.CashboxTransactions.AsNoTracking()
             .Where(t => (t.TransactionType == "صرف" || t.TransactionType == "Out")
                 && t.TransactionDate >= threeMonthsAgo
-                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
+                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value)
+                && (!filter.BranchId.HasValue || t.CashBox.BranchId == filter.BranchId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         l.AverageMonthlyOutflow = Math.Round(totalOutflowsLast3 / 3m, 2);
@@ -467,14 +493,16 @@ public class CashFlowService : ICashFlowService
             .Where(t => (t.TransactionType == "قبض" || t.TransactionType == "In")
                 && t.TransactionDate >= threeMonthsAgo
                 && t.TransactionDate <= endLastMonth
-                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
+                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value)
+                && (!filter.BranchId.HasValue || t.CashBox.BranchId == filter.BranchId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         var totalOut3 = await _db.CashboxTransactions.AsNoTracking()
             .Where(t => (t.TransactionType == "صرف" || t.TransactionType == "Out")
                 && t.TransactionDate >= threeMonthsAgo
                 && t.TransactionDate <= endLastMonth
-                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
+                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value)
+                && (!filter.BranchId.HasValue || t.CashBox.BranchId == filter.BranchId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         f.AverageMonthlyInflow = Math.Round(totalIn3 / 3m, 2);
@@ -493,7 +521,8 @@ public class CashFlowService : ICashFlowService
             .Where(t => (t.TransactionType == "قبض" || t.TransactionType == "In")
                 && t.TransactionDate >= lastMonthStart
                 && t.TransactionDate <= endLastMonth.Date.AddDays(1).AddTicks(-1)
-                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
+                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value)
+                && (!filter.BranchId.HasValue || t.CashBox.BranchId == filter.BranchId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         var twoMonthsAgoStart = lastMonthStart.AddMonths(-1);
@@ -502,7 +531,8 @@ public class CashFlowService : ICashFlowService
             .Where(t => (t.TransactionType == "قبض" || t.TransactionType == "In")
                 && t.TransactionDate >= twoMonthsAgoStart
                 && t.TransactionDate <= twoMonthsAgoEnd.Date.AddDays(1).AddTicks(-1)
-                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value))
+                && (!filter.CashBoxId.HasValue || t.CashBoxId == filter.CashBoxId.Value)
+                && (!filter.BranchId.HasValue || t.CashBox.BranchId == filter.BranchId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         if (twoMonthsIn > 0)

@@ -30,6 +30,40 @@ public class FinancialDashboardService : IFinancialDashboardService
             : SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(db);
 
     // ============================================================
+    //  ⭐ نطاق الفرع: إسناد الفواتير (موظف المنشئ ← مخزن احتياطي)
+    // ============================================================
+    private sealed record DashBranchScope(int? BranchId, List<int> EmployeeIds, List<int> WarehouseIds)
+    {
+        public bool IsScoped => BranchId.HasValue;
+    }
+
+    private async Task<DashBranchScope> GetDashScopeAsync(db24804Context db, int? branchId)
+    {
+        if (!branchId.HasValue) return new DashBranchScope(null, new List<int>(), new List<int>());
+
+        var employeeIds = await db.Employees.AsNoTracking()
+            .Where(e => e.BranchId == branchId.Value)
+            .Select(e => e.EmployeeId)
+            .ToListAsync();
+
+        var warehouseIds = await db.Warehouses.AsNoTracking()
+            .Where(w => w.BranchId == branchId.Value)
+            .Select(w => w.WarehouseId)
+            .ToListAsync();
+
+        return new DashBranchScope(branchId, employeeIds, warehouseIds);
+    }
+
+    private IQueryable<Transaction> ApplyDashSaleScope(IQueryable<Transaction> query, DashBranchScope scope)
+    {
+        if (!scope.IsScoped) return query;
+
+        return query.Where(t =>
+            (t.EmpId != null && scope.EmployeeIds.Contains(t.EmpId.Value))
+            || (t.EmpId == null && scope.WarehouseIds.Contains(t.WarehouseId)));
+    }
+
+    // ============================================================
     //  ⭐ الـ Method الرئيسية
     // ============================================================
     public async Task<FinancialDashboardDto> GetDashboardAsync(FinancialDashboardFilterDto filter)
@@ -42,13 +76,17 @@ public class FinancialDashboardService : IFinancialDashboardService
             PeriodLabel = BuildPeriodLabel(filter)
         };
 
+        // ⭐ نطاق الفرع (يُحسب مرة واحدة ويُمرَّر لكل المصادر)
+        var scope = await GetDashScopeAsync(_db, filter.BranchId);
+
         // 1. جلب قائمة الدخل
         var income = await _income.GetIncomeStatementAsync(new IncomeStatementFilterDto
         {
             FromDate = dto.FromDate,
             ToDate = dto.ToDate,
             IncludeComparison = true,
-            IncludeMonthlyTrend = false
+            IncludeMonthlyTrend = false,
+            BranchId = filter.BranchId
         });
 
         // 2. جلب التدفقات النقدية
@@ -57,7 +95,8 @@ public class FinancialDashboardService : IFinancialDashboardService
             FromDate = dto.FromDate,
             ToDate = dto.ToDate,
             IncludeForecast = true,
-            IncludeMonthlyTrend = false
+            IncludeMonthlyTrend = false,
+            BranchId = filter.BranchId
         });
 
         // 3. ملخصات
@@ -77,19 +116,19 @@ public class FinancialDashboardService : IFinancialDashboardService
         BuildComparisons(dto, income);
 
         // 8. الترند الموحّد (12 شهر)
-        await BuildUnifiedMonthlyTrendAsync(dto);
+        await BuildUnifiedMonthlyTrendAsync(dto, scope);
 
         // 9. أعلى المنتجات
-        await GetTopProductsAsync(dto);
+        await GetTopProductsAsync(dto, scope);
 
         // 10. أعلى العملاء
-        await GetTopCustomersAsync(dto);
+        await GetTopCustomersAsync(dto, scope);
 
         // 11. تصنيفات المصروفات
         BuildExpenseCategories(dto, income);
 
         // 12. ملخص الذمم
-        await BuildReceivablesSummaryAsync(dto);
+        await BuildReceivablesSummaryAsync(dto, scope);
 
         // 13. توحيد التنبيهات من كل المصادر
         ConsolidateAlerts(dto, income, cashFlow);
@@ -497,7 +536,7 @@ public class FinancialDashboardService : IFinancialDashboardService
     // ============================================================
     //  الترند الموحّد (12 شهر)
     // ============================================================
-    private async Task BuildUnifiedMonthlyTrendAsync(FinancialDashboardDto dto)
+    private async Task BuildUnifiedMonthlyTrendAsync(FinancialDashboardDto dto, DashBranchScope scope)
     {
         using var _db = _factory.CreateDbContext();
         var endDate = DateTime.Today;
@@ -511,11 +550,13 @@ public class FinancialDashboardService : IFinancialDashboardService
         // Opening balance قبل البداية
         runningBalance = await _db.CashboxTransactions.AsNoTracking()
             .Where(t => t.TransactionDate < startDate
-                && (t.TransactionType == "قبض" || t.TransactionType == "In"))
+                && (t.TransactionType == "قبض" || t.TransactionType == "In")
+                && (!scope.IsScoped || t.CashBox.BranchId == scope.BranchId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
         runningBalance -= await _db.CashboxTransactions.AsNoTracking()
             .Where(t => t.TransactionDate < startDate
-                && (t.TransactionType == "صرف" || t.TransactionType == "Out"))
+                && (t.TransactionType == "صرف" || t.TransactionType == "Out")
+                && (!scope.IsScoped || t.CashBox.BranchId == scope.BranchId.Value))
             .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
         while (current <= endDate)
@@ -524,39 +565,61 @@ public class FinancialDashboardService : IFinancialDashboardService
             var protectedCreators = await GetProtectedCreatorsAsync(_db);
 
             // إيرادات
-            var revenue = await _db.Transactions.AsNoTracking()
+            var revenueQuery = _db.Transactions.AsNoTracking()
                 .Where(t => t.TransactionType == TransactionTypes.Sale
                     && t.InvoiceStatus != "Cancelled"
                     && t.TransactionDate >= current && t.TransactionDate <= monthEnd)
-                .ExcludeProtectedSales(protectedCreators)
+                .ExcludeProtectedSales(protectedCreators);
+
+            // ⭐ فلترة بنطاق الفرع
+            revenueQuery = ApplyDashSaleScope(revenueQuery, scope);
+
+            var revenue = await revenueQuery
                 .SumAsync(t => (decimal?)(t.NetTotalAmount ?? t.GrandTotal)) ?? 0;
 
             // COGS
-            var cogs = await (
-                from t in _db.Transactions.AsNoTracking()
-                join d in _db.TransactionDetails.AsNoTracking() on t.TransactionId equals d.TransactionId
-                join p in _db.Products.AsNoTracking() on d.ProductId equals p.ProductId
-                where t.TransactionType == TransactionTypes.Sale
-                    && t.InvoiceStatus != "Cancelled"
-                    && t.TransactionDate >= current && t.TransactionDate <= monthEnd
-                    && (t.TransactionType != TransactionTypes.Sale || !protectedCreators.Contains(t.CreatedBy))
-                select d.Quantity * (p.PurchasePrice ?? 0)
-            ).SumAsync(x => (decimal?)x) ?? 0;
+            var cogsQuery = from t in _db.Transactions.AsNoTracking()
+                            join d in _db.TransactionDetails.AsNoTracking() on t.TransactionId equals d.TransactionId
+                            join p in _db.Products.AsNoTracking() on d.ProductId equals p.ProductId
+                            where t.TransactionType == TransactionTypes.Sale
+                                && t.InvoiceStatus != "Cancelled"
+                                && t.TransactionDate >= current && t.TransactionDate <= monthEnd
+                                && (t.TransactionType != TransactionTypes.Sale || !protectedCreators.Contains(t.CreatedBy))
+                            select new { t, d, p };
+
+            // ⭐ فلترة بنطاق الفرع (COGS يتبع إسناد الفاتورة)
+            if (scope.IsScoped)
+            {
+                cogsQuery = cogsQuery.Where(x =>
+                    (x.t.EmpId != null && scope.EmployeeIds.Contains(x.t.EmpId.Value))
+                    || (x.t.EmpId == null && scope.WarehouseIds.Contains(x.t.WarehouseId)));
+            }
+
+            var cogs = await cogsQuery
+                .SumAsync(x => (decimal?)(x.d.Quantity * (x.p.PurchasePrice ?? 0))) ?? 0;
 
             // مصروفات
-            var expenses = await _db.Expenses.AsNoTracking()
+            var expensesQuery = _db.Expenses.AsNoTracking()
                 .Where(e => e.ExpenseDate >= current && e.ExpenseDate <= monthEnd
-                    && ((e.IsAdvance != true) || (e.AdvanceParentExpenseId.HasValue)))
+                    && ((e.IsAdvance != true) || (e.AdvanceParentExpenseId.HasValue)));
+
+            // ⭐ فلترة بالفرع
+            if (scope.IsScoped)
+                expensesQuery = expensesQuery.Where(e => e.BranchId == scope.BranchId.Value);
+
+            var expenses = await expensesQuery
                 .SumAsync(e => (decimal?)e.Amount) ?? 0;
 
             // تدفقات نقدية
             var cashIn = await _db.CashboxTransactions.AsNoTracking()
                 .Where(t => (t.TransactionType == "قبض" || t.TransactionType == "In")
-                    && t.TransactionDate >= current && t.TransactionDate <= monthEnd)
+                    && t.TransactionDate >= current && t.TransactionDate <= monthEnd
+                    && (!scope.IsScoped || t.CashBox.BranchId == scope.BranchId.Value))
                 .SumAsync(t => (decimal?)t.Amount) ?? 0;
             var cashOut = await _db.CashboxTransactions.AsNoTracking()
                 .Where(t => (t.TransactionType == "صرف" || t.TransactionType == "Out")
-                    && t.TransactionDate >= current && t.TransactionDate <= monthEnd)
+                    && t.TransactionDate >= current && t.TransactionDate <= monthEnd
+                    && (!scope.IsScoped || t.CashBox.BranchId == scope.BranchId.Value))
                 .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
             var netCashFlow = cashIn - cashOut;
@@ -587,11 +650,11 @@ public class FinancialDashboardService : IFinancialDashboardService
     // ============================================================
     //  أعلى المنتجات
     // ============================================================
-    private async Task GetTopProductsAsync(FinancialDashboardDto dto)
+    private async Task GetTopProductsAsync(FinancialDashboardDto dto, DashBranchScope scope)
     {
         using var _db = _factory.CreateDbContext();
         var protectedCreators = await GetProtectedCreatorsAsync(_db);
-        var data = await (
+        var dataQuery = (
             from t in _db.Transactions.AsNoTracking()
             join d in _db.TransactionDetails.AsNoTracking() on t.TransactionId equals d.TransactionId
             join p in _db.Products.AsNoTracking() on d.ProductId equals p.ProductId
@@ -600,8 +663,19 @@ public class FinancialDashboardService : IFinancialDashboardService
                 && t.TransactionDate >= dto.FromDate
                 && t.TransactionDate <= dto.ToDate
                 && (t.TransactionType != TransactionTypes.Sale || !protectedCreators.Contains(t.CreatedBy))
-            group new { d, p, t } by new { p.ProductId, p.ProductName } into g
-            select new
+            select new { t, d, p });
+
+        // ⭐ فلترة بنطاق الفرع
+        if (scope.IsScoped)
+        {
+            dataQuery = dataQuery.Where(x =>
+                (x.t.EmpId != null && scope.EmployeeIds.Contains(x.t.EmpId.Value))
+                || (x.t.EmpId == null && scope.WarehouseIds.Contains(x.t.WarehouseId)));
+        }
+
+        var data = await dataQuery
+            .GroupBy(x => new { x.p.ProductId, x.p.ProductName })
+            .Select(g => new
             {
                 ProductId = g.Key.ProductId,
                 ProductName = g.Key.ProductName,
@@ -609,8 +683,8 @@ public class FinancialDashboardService : IFinancialDashboardService
                 Revenue = g.Sum(x => x.d.Quantity * x.d.UnitPrice),
                 Cogs = g.Sum(x => x.d.Quantity * (x.p.PurchasePrice ?? 0)),
                 OrdersCount = g.Select(x => x.t.TransactionId).Distinct().Count()
-            }
-        ).OrderByDescending(x => x.Revenue).Take(10).ToListAsync();
+            })
+        .OrderByDescending(x => x.Revenue).Take(10).ToListAsync();
 
         dto.TopProducts = data.Select(d => new TopProductDto
         {
@@ -628,18 +702,29 @@ public class FinancialDashboardService : IFinancialDashboardService
     // ============================================================
     //  أعلى العملاء
     // ============================================================
-    private async Task GetTopCustomersAsync(FinancialDashboardDto dto)
+    private async Task GetTopCustomersAsync(FinancialDashboardDto dto, DashBranchScope scope)
     {
         using var _db = _factory.CreateDbContext();
-        var data = await (
+        var dataQuery = (
             from t in _db.Transactions.AsNoTracking()
             join p in _db.Parties.AsNoTracking() on t.PartyId equals p.PartyId
             where t.TransactionType == TransactionTypes.Sale
                 && t.InvoiceStatus != "Cancelled"
                 && t.TransactionDate >= dto.FromDate
                 && t.TransactionDate <= dto.ToDate
-            group new { t, p } by new { p.PartyId, p.PartyName, p.Phone } into g
-            select new
+            select new { t, p });
+
+        // ⭐ فلترة بنطاق الفرع
+        if (scope.IsScoped)
+        {
+            dataQuery = dataQuery.Where(x =>
+                (x.t.EmpId != null && scope.EmployeeIds.Contains(x.t.EmpId.Value))
+                || (x.t.EmpId == null && scope.WarehouseIds.Contains(x.t.WarehouseId)));
+        }
+
+        var data = await dataQuery
+            .GroupBy(x => new { x.p.PartyId, x.p.PartyName, x.p.Phone })
+            .Select(g => new
             {
                 PartyId = g.Key.PartyId,
                 CustomerName = g.Key.PartyName,
@@ -647,8 +732,8 @@ public class FinancialDashboardService : IFinancialDashboardService
                 InvoicesCount = g.Count(),
                 TotalRevenue = g.Sum(x => x.t.GrandTotal),
                 TotalPaid = g.Sum(x => x.t.PaidAmount)
-            }
-        ).OrderByDescending(x => x.TotalRevenue).Take(10).ToListAsync();
+            })
+        .OrderByDescending(x => x.TotalRevenue).Take(10).ToListAsync();
 
         dto.TopCustomers = data.Select(d => new TopCustomerDto
         {
@@ -683,16 +768,21 @@ public class FinancialDashboardService : IFinancialDashboardService
     // ============================================================
     //  ملخص الذمم
     // ============================================================
-    private async Task BuildReceivablesSummaryAsync(FinancialDashboardDto dto)
+    private async Task BuildReceivablesSummaryAsync(FinancialDashboardDto dto, DashBranchScope scope)
     {
         using var _db = _factory.CreateDbContext();
         var r = dto.Receivables;
 
         // مستحقات على العملاء (فواتير لم تُسدد)
-        var customerData = await _db.Transactions.AsNoTracking()
+        var customerQuery = _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Sale
                 && t.InvoiceStatus != "Cancelled"
-                && t.GrandTotal > t.PaidAmount)
+                && t.GrandTotal > t.PaidAmount);
+
+        // ⭐ فلترة بنطاق الفرع
+        customerQuery = ApplyDashSaleScope(customerQuery, scope);
+
+        var customerData = await customerQuery
             .Select(t => new { t.GrandTotal, t.PaidAmount, t.PartyId, t.DueDate })
             .ToListAsync();
 
@@ -702,14 +792,19 @@ public class FinancialDashboardService : IFinancialDashboardService
             .Count(c => c.DueDate.HasValue && c.DueDate.Value < DateTime.Today);
 
         // مستحقات للموردين (فواتير شراء لم تُسدد - باستثناء الـ Mirror)
-        r.SupplierPayables = await _db.Transactions.AsNoTracking()
+        var supplierQuery = _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Purchase
                 && t.InvoiceStatus != "Cancelled"
                 && t.PartyId != SystemConstants.DefaultSupplierId
-                && t.GrandTotal > t.PaidAmount)
+                && t.GrandTotal > t.PaidAmount);
+
+        // ⭐ فلترة بنطاق الفرع (نفس إسناد الفواتير للاتساق)
+        supplierQuery = ApplyDashSaleScope(supplierQuery, scope);
+
+        r.SupplierPayables = await supplierQuery
             .SumAsync(t => (decimal?)(t.GrandTotal - t.PaidAmount)) ?? 0;
 
-        // الذمم الشخصية
+        // الذمم الشخصية — القروض تُنسب عبر فرع الخزينة؛ الإفتتاحيات بيانات تاريخية للشخص
         var personalAccounts = await _db.PersonalAccounts.AsNoTracking().ToListAsync();
         decimal credit = 0, debit = 0;
 
@@ -718,12 +813,14 @@ public class FinancialDashboardService : IFinancialDashboardService
             var loansIn = await _db.CashboxTransactions.AsNoTracking()
                 .Where(t => t.ReferenceType == CashBoxRefTypes.Loan
                     && t.ReferenceId == acc.PersonalAccountId
-                    && (t.TransactionType == "قبض" || t.TransactionType == "In"))
+                    && (t.TransactionType == "قبض" || t.TransactionType == "In")
+                    && (!scope.IsScoped || t.CashBox.BranchId == scope.BranchId.Value))
                 .SumAsync(t => (decimal?)t.Amount) ?? 0;
             var loansOut = await _db.CashboxTransactions.AsNoTracking()
                 .Where(t => t.ReferenceType == CashBoxRefTypes.Loan
                     && t.ReferenceId == acc.PersonalAccountId
-                    && (t.TransactionType == "صرف" || t.TransactionType == "Out"))
+                    && (t.TransactionType == "صرف" || t.TransactionType == "Out")
+                    && (!scope.IsScoped || t.CashBox.BranchId == scope.BranchId.Value))
                 .SumAsync(t => (decimal?)t.Amount) ?? 0;
 
             var openingDebit = acc.OpeningType == "Debit" ? acc.OpeningBalance : 0;

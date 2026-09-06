@@ -54,6 +54,10 @@ public class PayrollService : IPayrollService
         if (filter.EmployeeID.HasValue)
             q = q.Where(x => x.p.EmployeeId == filter.EmployeeID.Value);
 
+        // ⭐ فلتر الفرع (اختياري — Null = كل الفروع) عبر فرع الموظف
+        if (filter.BranchId.HasValue)
+            q = q.Where(x => x.e.BranchId == filter.BranchId.Value);
+
         if (!string.IsNullOrWhiteSpace(filter.Department))
             q = q.Where(x => x.e.Department == filter.Department);
 
@@ -868,17 +872,25 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     // ============================================================
     // إحصائيات
     // ============================================================
-    public async Task<PayrollStatsDto> GetStatsAsync(string month)
+    public async Task<PayrollStatsDto> GetStatsAsync(string month, int? branchId = null)
     {
-        var list = await _db.Payrolls.AsNoTracking()
-            .Where(p => p.PayrollMonth == month && (p.Notes == null || !p.Notes.Contains(OffPayrollMarker)))
-            .Select(p => new
+        var query = from p in _db.Payrolls.AsNoTracking()
+                    join e in _db.Employees.AsNoTracking()
+                        on p.EmployeeId equals e.EmployeeId
+                    where p.PayrollMonth == month && (p.Notes == null || !p.Notes.Contains(OffPayrollMarker))
+                    select new { p, e };
+
+        if (branchId.HasValue)
+            query = query.Where(x => x.e.BranchId == branchId.Value);
+
+        var list = await query
+            .Select(x => new
             {
-                p.PayrollId,
-                p.NetSalary, p.LoanDeduction, p.PenaltyDeduction,
-                p.PaymentStatus, p.BonusInPayroll,
+                x.p.PayrollId,
+                x.p.NetSalary, x.p.LoanDeduction, x.p.PenaltyDeduction,
+                x.p.PaymentStatus, x.p.BonusInPayroll,
                 // ✅ Gross = BasicSalary + BonusInPayroll (لأن GrossSalary مش موجود في DB)
-                Gross = p.BasicSalary + (p.BonusInPayroll ?? 0)
+                Gross = x.p.BasicSalary + (x.p.BonusInPayroll ?? 0)
             })
             .ToListAsync();
 

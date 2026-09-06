@@ -14,6 +14,7 @@ public partial class AttendanceList : ComponentBase
     [Inject] private ISnackbar Snackbar { get; set; } = default!;
     [Inject] private AuthenticationStateProvider AuthState { get; set; } = default!;
     [Inject] private IJSRuntime JS { get; set; } = default!;
+    [Inject] private IBranchService BranchService { get; set; } = default!;
 
     // Permissions
     private bool _hasViewPermission;
@@ -27,6 +28,7 @@ public partial class AttendanceList : ComponentBase
     // Data
     private List<AttendanceListDto> _items = new();
     private AttendanceStatisticsDto _statistics = new();
+    private List<BranchOptionDto> _branches = new();
     private AttendanceFilterDto _filter = new()
     {
         DateFrom = DateTime.Today,
@@ -57,7 +59,8 @@ public partial class AttendanceList : ComponentBase
         (!string.IsNullOrWhiteSpace(_filter.SearchText) ? 1 : 0) +
         (!string.IsNullOrWhiteSpace(_filter.Status) ? 1 : 0) +
         (_filter.LateOnly == true ? 1 : 0) +
-        (_filter.AbsentOnly == true ? 1 : 0);
+        (_filter.AbsentOnly == true ? 1 : 0) +
+        (_filter.BranchId.HasValue ? 1 : 0);
 
     private int FromRecord => _totalCount == 0 ? 0 : ((_currentPage - 1) * _filter.PageSize) + 1;
     private int ToRecord => Math.Min(_currentPage * _filter.PageSize, _totalCount);
@@ -83,6 +86,13 @@ public partial class AttendanceList : ComponentBase
 
         if (_hasViewPermission)
         {
+            // ⭐ قائمة الفروع للفلترة
+            try
+            {
+                _branches = await BranchService.GetBranchesForFilterAsync();
+            }
+            catch { _branches = new(); }
+
             await LoadData();
             await LoadStatistics();
         }

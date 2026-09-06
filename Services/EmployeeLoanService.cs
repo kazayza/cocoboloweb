@@ -33,6 +33,10 @@ public class EmployeeLoanService : IEmployeeLoanService
         if (filter.EmployeeId.HasValue)
             query = query.Where(x => x.l.EmployeeId == filter.EmployeeId.Value);
 
+        // ⭐ فلتر الفرع (اختياري — Null = كل الفروع) عبر فرع الموظف
+        if (filter.BranchId.HasValue)
+            query = query.Where(x => x.e.BranchId == filter.BranchId.Value);
+
         if (!string.IsNullOrWhiteSpace(filter.Status))
             query = query.Where(x => x.l.Status == filter.Status);
 
@@ -657,13 +661,21 @@ public class EmployeeLoanService : IEmployeeLoanService
     // ============================================================
     // إحصائيات
     // ============================================================
-    public async Task<LoanStatsDto> GetStatsAsync()
+    public async Task<LoanStatsDto> GetStatsAsync(int? branchId = null)
     {
         var currentMonth = DateTime.Today.ToString("yyyy-MM");
 
-        var activeLoans = await _db.EmployeeLoans
+        var activeLoansQuery = _db.EmployeeLoans
             .AsNoTracking()
-            .Where(l => l.Status == "Active")
+            .Where(l => l.Status == "Active");
+
+        if (branchId.HasValue)
+        {
+            activeLoansQuery = activeLoansQuery
+                .Where(l => _db.Employees.Any(e => e.EmployeeId == l.EmployeeId && e.BranchId == branchId.Value));
+        }
+
+        var activeLoans = await activeLoansQuery
             .Select(l => new { l.RemainingAmount, l.EmployeeId })
             .ToListAsync();
 

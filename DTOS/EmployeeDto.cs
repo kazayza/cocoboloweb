@@ -41,6 +41,10 @@ namespace COCOBOLOERPNEW.DTOs
             "بالإجازة" => "BeachAccess",
             _ => "Person"
         };
+
+        // ⭐ الفرع
+        public int? BranchId { get; set; }
+        public string? BranchName { get; set; }
     }
 
     // ═══════════════════════════════════════════
@@ -70,6 +74,10 @@ namespace COCOBOLOERPNEW.DTOs
         public string? Notes { get; set; }
         public string? CreatedBy { get; set; }
         public DateTime? CreatedAt { get; set; }
+
+        // ⭐ الفرع
+        public int? BranchId { get; set; }
+
         // Salary change tracking
         public bool SalaryChanged { get; set; }
         public decimal? OldSalary { get; set; }
@@ -131,6 +139,10 @@ namespace COCOBOLOERPNEW.DTOs
         public string? Department { get; set; }
         public string? Status { get; set; }
         public string? Gender { get; set; }
+
+        // ⭐ فلتر الفرع (اختياري — Null = كل الفروع)
+        public int? BranchId { get; set; }
+
         public int PageNumber { get; set; } = 1;
         public int PageSize { get; set; } = 20;
     }

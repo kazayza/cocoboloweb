@@ -8,6 +8,7 @@
 @using Microsoft.AspNetCore.Authorization
 
 @inject IFinancialDashboardService DashboardService
+@inject IBranchService BranchService
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthProvider
 @inject ISnackbar Snackbar
@@ -72,6 +73,12 @@ else if (_dashboard != null)
                         <div class="header-title-row">
                             <MudText Typo="Typo.h4" Class="header-title">لوحة القيادة المالية</MudText>
                             <div class="header-badge">@_dashboard.PeriodLabel</div>
+                            @if (!string.IsNullOrWhiteSpace(GetSelectedBranchName()))
+                            {
+                                <div class="header-badge" style="background:rgba(59,130,246,0.15); color:#3b82f6;">
+                                    🏬 @GetSelectedBranchName()
+                                </div>
+                            }
                         </div>
                         <MudText Typo="Typo.body2" Class="header-subtitle">
                             تحليل شامل للأداء المالي للمؤسسة مع توصيات استراتيجية
@@ -80,6 +87,17 @@ else if (_dashboard != null)
                 </div>
 
                 <div class="header-actions">
+                    <MudSelect T="int?" Value="_selectedBranchId"
+                               ValueChanged="@(async v => { _selectedBranchId = v; await LoadDashboardAsync(); })"
+                               Placeholder="🏬 كل الفروع" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Clearable="true" ClearText="كل الفروع"
+                               Class="header-input" Style="min-width:170px;">
+                        <MudSelectItem T="int?" Value="null">كل الفروع</MudSelectItem>
+                        @foreach (var b in _branches)
+                        {
+                            <MudSelectItem T="int?" Value="b.BranchId">@b.BranchNameAr</MudSelectItem>
+                        }
+                    </MudSelect>
                     <MudDatePicker @bind-Date="_fromDate"
                                    @bind-Date:after="LoadDashboardAsync"
                                    Label="من"
@@ -1050,10 +1068,25 @@ else if (_dashboard != null)
     private FinancialDashboardDto? _dashboard;
     private DateTime? _fromDate = DateTime.Now.AddMonths(-1).Date;
     private DateTime? _toDate = DateTime.Now.Date;
+    private List<BranchOptionDto> _branches = new();
+    private int? _selectedBranchId;
 
     protected override async Task OnInitializedAsync()
     {
+        // ⭐ قائمة الفروع للفلترة
+        try
+        {
+            _branches = await BranchService.GetBranchesForFilterAsync();
+        }
+        catch { _branches = new(); }
+
         await LoadDashboardAsync();
+    }
+
+    private string GetSelectedBranchName()
+    {
+        if (!_selectedBranchId.HasValue) return string.Empty;
+        return _branches.FirstOrDefault(b => b.BranchId == _selectedBranchId.Value)?.BranchNameAr ?? string.Empty;
     }
 
     private async Task LoadDashboardAsync()
@@ -1064,7 +1097,8 @@ else if (_dashboard != null)
             var filter = new FinancialDashboardFilterDto
             {
                 FromDate = _fromDate ?? DateTime.Now.AddMonths(-1),
-                ToDate = _toDate ?? DateTime.Now
+                ToDate = _toDate ?? DateTime.Now,
+                BranchId = _selectedBranchId
             };
             _dashboard = await DashboardService.GetDashboardAsync(filter);
         }

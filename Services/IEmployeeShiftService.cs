@@ -19,5 +19,5 @@ public interface IEmployeeShiftService
     Task<byte[]> ExportToExcelAsync(EmployeeShiftFilterDto filter);
     Task<ShiftImportResultDto> ImportFromExcelAsync(Stream fileStream, string currentUserName);
     Task<byte[]> GetImportTemplateAsync();
-    Task<ShiftStatisticsDto> GetStatisticsAsync();
+    Task<ShiftStatisticsDto> GetStatisticsAsync(int? branchId = null);
 }

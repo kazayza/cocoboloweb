@@ -202,6 +202,10 @@ public class IncomeStatementFilterDto
     public string PeriodType { get; set; } = "Custom";   // Today / Week / Month / Quarter / Year / Custom
     public bool IncludeComparison { get; set; } = true;
     public bool IncludeMonthlyTrend { get; set; } = true;
+
+    // ⭐ فلتر الفرع (اختياري — Null = كل الفروع)
+    // إسناد الفواتير: فرع الموظف المنشئ أولاً ثم فرع المخزن احتياطياً؛ المستقلة = "غير محدد" (تظهر فقط مع كل الفروع)
+    public int? BranchId { get; set; }
 }
 
 // ============================

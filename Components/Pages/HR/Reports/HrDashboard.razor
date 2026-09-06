@@ -12,6 +12,7 @@
 @inject IPayrollService PayrollService
 @inject IEmployeeLoanService LoanService
 @inject IEmployeeShiftService ShiftService
+@inject IBranchService BranchService
 @inject AuthenticationStateProvider AuthProvider
 @inject NavigationManager Nav
 @inject ISnackbar Snackbar
@@ -464,11 +465,26 @@ else
                     <div class="d-flex gap-2 flex-wrap mt-3">
                         <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small" Class="hrd-hero-chip">تاريخ اليوم: @DateTime.Today.ToString("dd/MM/yyyy")</MudChip>
                         <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small" Class="hrd-hero-chip">شهر التشغيل: @CurrentMonthLabel</MudChip>
+                        @if (_branchId.HasValue)
+                        {
+                            <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small" Class="hrd-hero-chip">🏬 @_branches.FirstOrDefault(b => b.BranchId == _branchId)?.BranchNameAr</MudChip>
+                        }
                         <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small" Class="hrd-hero-chip">المستخدم الحالي: @_currentUserDisplay</MudChip>
                     </div>
                 </div>
 
-                <div class="d-flex gap-2 flex-wrap">
+                <div class="d-flex gap-2 flex-wrap align-center">
+                    <MudSelect T="int?"
+                               @bind-Value="_branchId"
+                               Placeholder="🏬 كل الفروع" Variant="Variant.Outlined" Margin="Margin.Dense"
+                               Clearable="true" ClearText="كل الفروع"
+                               Style="min-width:170px;background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.2);"
+                               @bind-Value:after="LoadAsync">
+                        @foreach (var b in _branches)
+                        {
+                            <MudSelectItem T="int?" Value="b.BranchId">@b.BranchNameAr</MudSelectItem>
+                        }
+                    </MudSelect>
                     <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.People" Class="hrd-hero-btn" OnClick='@(() => Nav.NavigateTo("/employees"))'>الموظفون</MudButton>
                     <MudButton Variant="Variant.Outlined" Color="Color.Info" StartIcon="@Icons.Material.Filled.Fingerprint" Class="hrd-hero-btn" OnClick='@(() => Nav.NavigateTo("/attendance"))'>الحضور</MudButton>
                     <MudButton Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.Payments" Class="hrd-hero-btn" OnClick='@(() => Nav.NavigateTo("/hr/payroll"))'>الرواتب</MudButton>
@@ -1106,6 +1122,8 @@ else
     private bool _loading = true;
     private int _activeTab;
     private string _currentUserDisplay = "system";
+    private int? _branchId;
+    private List<BranchOptionDto> _branches = new();
 
     private string CurrentMonthLabel => DateTime.Today.ToString("MMMM yyyy", new System.Globalization.CultureInfo("ar-EG"));
     private double LoanRemainingProgress => _loanStats is null || _loanStats.TotalLoanAmount <= 0 ? 0 : Math.Min((double)(_loanStats.TotalRemainingAmount / _loanStats.TotalLoanAmount * 100), 100);
@@ -1182,6 +1200,12 @@ else
             return;
         }
 
+        try
+        {
+            _branches = await BranchService.GetBranchesForFilterAsync();
+        }
+        catch { _branches = new(); }
+
         await LoadAsync();
     }
 
@@ -1201,26 +1225,29 @@ else
             var currentMonth = DateTime.Today.ToString("yyyy-MM");
             var today = DateTime.Today;
 
-            _employeeStats = await EmployeeService.GetStatsAsync();
-            _todayStats = await AttendanceService.GetTodayStatisticsAsync();
-            _attendanceDashboard = await AttendanceService.GetDashboardDataAsync();
-            _payrollStats = await PayrollService.GetStatsAsync(currentMonth);
+            _employeeStats = await EmployeeService.GetStatsAsync(_branchId);
+            _todayStats = await AttendanceService.GetTodayStatisticsAsync(_branchId);
+            _attendanceDashboard = await AttendanceService.GetDashboardDataAsync(_branchId);
+            _payrollStats = await PayrollService.GetStatsAsync(currentMonth, _branchId);
             _offPayrollStats = await PayrollService.GetOffPayrollPaymentStatsAsync(new OffPayrollPaymentFilterDto
             {
-                Month = currentMonth
+                Month = currentMonth,
+                BranchId = _branchId
             });
-            _loanStats = await LoanService.GetStatsAsync();
-            _shiftStats = await ShiftService.GetStatisticsAsync();
+            _loanStats = await LoanService.GetStatsAsync(_branchId);
+            _shiftStats = await ShiftService.GetStatisticsAsync(_branchId);
             _exemptionStats = await AttendanceService.GetExemptionStatsAsync(new ExemptionFilterDto
             {
                 DateFrom = new DateTime(today.Year, today.Month, 1),
-                DateTo = today
+                DateTo = today,
+                BranchId = _branchId
             });
 
             var pendingPayrollResult = await PayrollService.GetPayrollsAsync(new PayrollFilterDto
             {
                 PayrollMonth = currentMonth,
                 PaymentStatus = PayrollPaymentStatuses.PendingReview,
+                BranchId = _branchId,
                 PageNumber = 1,
                 PageSize = 8
             });
@@ -1230,6 +1257,7 @@ else
             {
                 PayrollMonth = currentMonth,
                 PaymentStatus = PayrollPaymentStatuses.Approved,
+                BranchId = _branchId,
                 PageNumber = 1,
                 PageSize = 8
             });
@@ -1238,13 +1266,15 @@ else
             _pendingOffPayrolls = (await PayrollService.GetOffPayrollPaymentsAsync(new OffPayrollPaymentFilterDto
             {
                 Month = currentMonth,
-                PaymentStatus = PayrollPaymentStatuses.PendingReview
+                PaymentStatus = PayrollPaymentStatuses.PendingReview,
+                BranchId = _branchId
             })).Take(8).ToList();
 
             _approvedOffPayrolls = (await PayrollService.GetOffPayrollPaymentsAsync(new OffPayrollPaymentFilterDto
             {
                 Month = currentMonth,
-                PaymentStatus = PayrollPaymentStatuses.Approved
+                PaymentStatus = PayrollPaymentStatuses.Approved,
+                BranchId = _branchId
             })).Take(8).ToList();
 
             _todayLateEmployees = (await AttendanceService.GetAttendanceAsync(new AttendanceFilterDto
@@ -1252,6 +1282,7 @@ else
                 DateFrom = today,
                 DateTo = today,
                 LateOnly = true,
+                BranchId = _branchId,
                 PageNumber = 1,
                 PageSize = 8
             })).Items;
@@ -1261,6 +1292,7 @@ else
                 DateFrom = today,
                 DateTo = today,
                 AbsentOnly = true,
+                BranchId = _branchId,
                 PageNumber = 1,
                 PageSize = 8
             })).Items;

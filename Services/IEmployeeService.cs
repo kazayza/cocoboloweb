@@ -24,7 +24,7 @@ namespace COCOBOLOERPNEW.Services
         Task<(bool Success, string Message)> ChangeStatusAsync(int employeeId, string newStatus, string reason, string userName);
 
         // الإحصائيات
-        Task<EmployeeStatsDto> GetStatsAsync();
+        Task<EmployeeStatsDto> GetStatsAsync(int? branchId = null);
 
         // تاريخ المرتبات
         Task<List<SalaryHistoryDto>> GetSalaryHistoryAsync(int employeeId);

@@ -255,6 +255,10 @@ public class AttendanceFilterDto
     public bool? LateOnly { get; set; }
     public bool? AbsentOnly { get; set; }
     public string? SearchText { get; set; }
+
+    // ⭐ فلتر الفرع (اختياري — Null = كل الفروع) — عبر Employee.BranchId
+    public int? BranchId { get; set; }
+
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 25;
     public string SortBy { get; set; } = "LogDate";
@@ -363,6 +367,9 @@ public class AttendanceReportFilterDto
     public string? Department { get; set; }
     public bool IncludeWeekends { get; set; } = false;
     public bool IncludeHolidays { get; set; } = true;
+
+    // ⭐ فلتر الفرع (اختياري — Null = كل الفروع)
+    public int? BranchId { get; set; }
 }
 
 // ═══════════════════════════════════════════════════════════

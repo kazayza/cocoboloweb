@@ -45,11 +45,12 @@ public class AttendanceService : IAttendanceService
             query = query.Where(a => a.Status == AttendanceStatus.Absent ||
                                      ((a.Status == null || a.Status == "") && a.TimeIn == null && a.TimeOut == null));
 
-        // === البحث بالاسم أو القسم ===
+        // === البحث بالاسم أو القسم أو الفرع ===
         List<int>? matchingBiometricCodes = null;
-        if (!string.IsNullOrWhiteSpace(filter.SearchText) || 
+        if (!string.IsNullOrWhiteSpace(filter.SearchText) ||
             !string.IsNullOrWhiteSpace(filter.Department) ||
-            filter.EmployeeId.HasValue)
+            filter.EmployeeId.HasValue ||
+            filter.BranchId.HasValue)
         {
             var employeesQuery = _db.Employees.AsNoTracking().Where(e => e.BioEmployeeId.HasValue);
 
@@ -67,6 +68,10 @@ public class AttendanceService : IAttendanceService
 
             if (filter.EmployeeId.HasValue)
                 employeesQuery = employeesQuery.Where(e => e.EmployeeId == filter.EmployeeId.Value);
+
+            // ⭐ فلتر الفرع (اختياري — Null = كل الفروع)
+            if (filter.BranchId.HasValue)
+                employeesQuery = employeesQuery.Where(e => e.BranchId == filter.BranchId.Value);
 
             matchingBiometricCodes = await employeesQuery
                 .Where(e => e.BioEmployeeId.HasValue)
@@ -162,6 +167,20 @@ public class AttendanceService : IAttendanceService
         if (filter.BiometricCode.HasValue)
             query = query.Where(a => a.BiometricCode == filter.BiometricCode.Value);
 
+        // ⭐ فلتر الفرع — تقييد السجلات بأكواد بصمة موظفي الفرع
+        if (filter.BranchId.HasValue)
+        {
+            var branchBiometricCodes = await _db.Employees.AsNoTracking()
+                .Where(e => e.BranchId == filter.BranchId.Value && e.BioEmployeeId.HasValue)
+                .Select(e => e.BioEmployeeId!.Value)
+                .ToListAsync();
+
+            if (!branchBiometricCodes.Any())
+                return new AttendanceStatisticsDto();
+
+            query = query.Where(a => branchBiometricCodes.Contains(a.BiometricCode));
+        }
+
         var records = await query.ToListAsync();
 
         if (!records.Any())
@@ -201,17 +220,23 @@ public class AttendanceService : IAttendanceService
             LateRate = presentCount > 0 ? Math.Round((decimal)lateCount / presentCount * 100, 1) : 0
         };
     }
-    public async Task<AttendanceStatisticsDto> GetTodayStatisticsAsync()
+    public async Task<AttendanceStatisticsDto> GetTodayStatisticsAsync(int? branchId = null)
     {
         var today = DateTime.Today;
-        
+
         var todayRecords = await _db.Attendances.AsNoTracking()
             .Where(a => a.LogDate == today)
             .ToListAsync();
 
         var workingToday = todayRecords.Where(IsWorkingAttendanceRecord).ToList();
-        var trackedEmployees = await _db.Employees.AsNoTracking()
-            .CountAsync(e => (e.Status == "نشط" || e.Status == "Active") && e.BioEmployeeId.HasValue);
+
+        var trackedEmployeesQuery = _db.Employees.AsNoTracking()
+            .Where(e => (e.Status == "نشط" || e.Status == "Active") && e.BioEmployeeId.HasValue);
+
+        if (branchId.HasValue)
+            trackedEmployeesQuery = trackedEmployeesQuery.Where(e => e.BranchId == branchId.Value);
+
+        var trackedEmployees = await trackedEmployeesQuery.CountAsync();
 
         var presentCount = workingToday.Count(IsPresentAttendanceRecord);
         var lateCount = workingToday.Count(a => a.Status == AttendanceStatus.Late || (a.LateMinutes ?? 0) > 0);
@@ -238,7 +263,7 @@ public class AttendanceService : IAttendanceService
     // ════════════════════════════════════════════════════════════
     //  Dashboard Data
     // ════════════════════════════════════════════════════════════
-    public async Task<AttendanceDashboardDto> GetDashboardDataAsync(DateTime? dateFrom = null, DateTime? dateTo = null)
+    public async Task<AttendanceDashboardDto> GetDashboardDataAsync(DateTime? dateFrom = null, DateTime? dateTo = null, int? branchId = null)
     {
         var fromDate = dateFrom ?? new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
         var toDate = dateTo ?? DateTime.Today;
@@ -249,11 +274,12 @@ public class AttendanceService : IAttendanceService
         dashboard.Statistics = await GetStatisticsAsync(new AttendanceFilterDto
         {
             DateFrom = fromDate,
-            DateTo = toDate
+            DateTo = toDate,
+            BranchId = branchId
         });
 
         // إضافة إحصائيات اليوم
-        var todayStats = await GetTodayStatisticsAsync();
+        var todayStats = await GetTodayStatisticsAsync(branchId);
         dashboard.Statistics.TodayPresent = todayStats.TodayPresent;
         dashboard.Statistics.TodayAbsent = todayStats.TodayAbsent;
         dashboard.Statistics.TodayLate = todayStats.TodayLate;
@@ -593,6 +619,10 @@ public class AttendanceService : IAttendanceService
         if (!string.IsNullOrWhiteSpace(filter.Department))
             employeesQuery = employeesQuery.Where(e => e.Department == filter.Department);
 
+        // ⭐ فلتر الفرع (اختياري — Null = كل الفروع)
+        if (filter.BranchId.HasValue)
+            employeesQuery = employeesQuery.Where(e => e.BranchId == filter.BranchId.Value);
+
         var employees = await employeesQuery
             .Select(e => new { e.EmployeeId, e.FullName, e.Department, e.BioEmployeeId })
             .ToListAsync();
@@ -660,6 +690,7 @@ public class AttendanceService : IAttendanceService
             Department = filter.Department,
             Status = filter.Status,
             SearchText = filter.SearchText,
+            BranchId = filter.BranchId,
             PageNumber = 1,
             PageSize = 100000
         };

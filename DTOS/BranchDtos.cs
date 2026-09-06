@@ -26,3 +26,10 @@ public class BranchFormDto
     public int? ManagerEmployeeId { get; set; }
     public bool IsActive { get; set; } = true;
 }
+
+// ⭐ خيار خفيف لقوائم الفلترة (قائمة الدخل/التدفقات/HR...)
+public class BranchOptionDto
+{
+    public int BranchId { get; set; }
+    public string BranchNameAr { get; set; } = "";
+}

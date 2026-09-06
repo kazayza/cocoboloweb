@@ -174,6 +174,9 @@ public class CashFlowFilterDto
     public int? CashBoxId { get; set; }            // فلترة بخزينة معينة (اختياري)
     public bool IncludeForecast { get; set; } = true;
     public bool IncludeMonthlyTrend { get; set; } = true;
+
+    // ⭐ فلتر الفرع (اختياري — Null = كل الفروع) — الحركات تُنسب عبر فرع الخزينة
+    public int? BranchId { get; set; }
 }
 
 // ============================

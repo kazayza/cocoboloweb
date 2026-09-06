@@ -628,11 +628,18 @@ public async Task<byte[]> GetImportTemplateAsync()
     workbook.SaveAs(stream);
     return stream.ToArray();
 }
-    public async Task<ShiftStatisticsDto> GetStatisticsAsync()
+    public async Task<ShiftStatisticsDto> GetStatisticsAsync(int? branchId = null)
 {
     var today = DateTime.Today;
-    
-    var stats = await _db.EmployeeShifts.AsNoTracking()
+
+    var query = _db.EmployeeShifts.AsNoTracking().AsQueryable();
+
+    if (branchId.HasValue)
+    {
+        query = query.Where(s => _db.Employees.Any(e => e.EmployeeId == s.EmployeeId && e.BranchId == branchId.Value));
+    }
+
+    var stats = await query
         .GroupBy(s => 1)
         .Select(g => new ShiftStatisticsDto
         {
@@ -643,7 +650,7 @@ public async Task<byte[]> GetImportTemplateAsync()
             DailyCount = g.Count(s => s.ShiftType == ShiftTypes.DailyWork)
         })
         .FirstOrDefaultAsync();
-    
+
     return stats ?? new ShiftStatisticsDto();
 }
 }

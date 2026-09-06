@@ -28,6 +28,12 @@ namespace COCOBOLOERPNEW.Services
         {
             var query = _db.Employees.AsQueryable();
 
+            // ⭐ فلتر الفرع (اختياري — Null = كل الفروع)
+            if (filter.BranchId.HasValue)
+            {
+                query = query.Where(e => e.BranchId == filter.BranchId.Value);
+            }
+
             // بحث بالاسم أو الرقم القومي أو الموبايل أو الوظيفة
             if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
             {
@@ -81,9 +87,26 @@ namespace COCOBOLOERPNEW.Services
                     BioEmployeeId = e.BioEmployeeId,
                     IsPermanentlyExempt = e.IsPermanentlyExempt,
                     CreatedBy = e.CreatedBy,
-                    CreatedAt = e.CreatedAt
+                    CreatedAt = e.CreatedAt,
+                    BranchId = e.BranchId
                 })
                 .ToListAsync();
+
+            // ⭐ ملء اسم الفرع عبر قاموس (نمط batch لتحاشي JOIN على كل صف)
+            if (items.Any(x => x.BranchId.HasValue))
+            {
+                var branchIds = items.Where(x => x.BranchId.HasValue).Select(x => x.BranchId!.Value).Distinct().ToList();
+                var names = await _db.Branches.AsNoTracking()
+                    .Where(b => branchIds.Contains(b.BranchId))
+                    .Select(b => new { b.BranchId, b.BranchNameAr })
+                    .ToDictionaryAsync(b => b.BranchId, b => b.BranchNameAr);
+
+                foreach (var item in items)
+                {
+                    if (item.BranchId.HasValue && names.TryGetValue(item.BranchId.Value, out var name))
+                        item.BranchName = name;
+                }
+            }
 
             return new PagedResult<EmployeeListDto>
             {
@@ -180,7 +203,8 @@ namespace COCOBOLOERPNEW.Services
                 Status = employee.Status,
                 Notes = employee.Notes,
                 CreatedBy = employee.CreatedBy,
-                OldSalary = employee.CurrentSalaryBase
+                OldSalary = employee.CurrentSalaryBase,
+                BranchId = employee.BranchId
             };
         }
 
@@ -229,7 +253,8 @@ namespace COCOBOLOERPNEW.Services
                     Status = dto.Status ?? EmployeeStatuses.Active,
                     Notes = dto.Notes?.Trim(),
                     CreatedBy = userName,
-                    CreatedAt = DateTime.Now
+                    CreatedAt = DateTime.Now,
+                    BranchId = dto.BranchId
                 };
 
                 _db.Employees.Add(employee);
@@ -347,7 +372,8 @@ namespace COCOBOLOERPNEW.Services
                     employee.IsPermanentlyExempt,
                     employee.CurrentSalaryBase,
                     employee.Status,
-                    employee.Notes
+                    employee.Notes,
+                    employee.BranchId
                 };
 
                 // تحديث البيانات
@@ -369,6 +395,7 @@ namespace COCOBOLOERPNEW.Services
                 employee.IsPermanentlyExempt = dto.IsPermanentlyExempt;
                 employee.Status = dto.Status;
                 employee.Notes = dto.Notes?.Trim();
+                employee.BranchId = dto.BranchId;
 
                 // تتبع تغيير المرتب
                 var newSalary = dto.CurrentSalaryBase ?? 0;
@@ -421,7 +448,8 @@ namespace COCOBOLOERPNEW.Services
                     employee.IsPermanentlyExempt,
                     employee.CurrentSalaryBase,
                     employee.Status,
-                    employee.Notes
+                    employee.Notes,
+                    employee.BranchId
                 };
 
                 await _audit.LogAsync(
@@ -526,9 +554,14 @@ namespace COCOBOLOERPNEW.Services
             }
         }
 
-        public async Task<EmployeeStatsDto> GetStatsAsync()
+        public async Task<EmployeeStatsDto> GetStatsAsync(int? branchId = null)
         {
-            var employees = await _db.Employees.ToListAsync();
+            var query = _db.Employees.AsQueryable();
+
+            if (branchId.HasValue)
+                query = query.Where(e => e.BranchId == branchId.Value);
+
+            var employees = await query.ToListAsync();
 
             return new EmployeeStatsDto
             {

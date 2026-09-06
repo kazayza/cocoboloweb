@@ -85,6 +85,9 @@ public class ExemptionFilterDto
     /// بيتم تحويلها لـ Status في الـ Service
     /// </summary>
     public bool?     IsApproved     { get; set; }
+
+    // ⭐ فلتر الفرع (اختياري — Null = كل الفروع)
+    public int?      BranchId       { get; set; }
 }
 
 // ── إحصائيات الاستثناءات ─────────────────────────────────

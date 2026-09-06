@@ -8,7 +8,7 @@ public interface IEmployeeLoanService
     Task<PagedResult<LoanListDto>>  GetLoansAsync(LoanFilterDto filter);
     Task<LoanDetailDto?>            GetLoanDetailAsync(int loanId);
     Task<LoanFormDto?>              GetLoanForEditAsync(int loanId);
-    Task<LoanStatsDto>              GetStatsAsync();
+    Task<LoanStatsDto>              GetStatsAsync(int? branchId = null);
 
     // ── إضافة وتعديل وإلغاء ────────────────────────────────
     Task<(bool Success, string Message, int? LoanId)> SaveLoanAsync(LoanFormDto dto, string userName);

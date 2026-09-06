@@ -33,14 +33,17 @@ public class FinancialReportsService : IFinancialReportsService
             PeriodLabel = BuildPeriodLabel(filter)
         };
 
+        // ⭐ نطاق الفرع (يُحسب مرة واحدة ويُمرَّر لكل الحسابات)
+        var scope = await GetBranchScopeAsync(filter.BranchId);
+
         // ────────────── 1. حساب الإيرادات ──────────────
-        await CalculateRevenueAsync(dto);
+        await CalculateRevenueAsync(dto, scope);
 
         // ────────────── 2. الإيرادات الأخرى المكتسبة من الرسوم المستقلة ──────────────
-        await CalculateOtherRevenueAsync(dto);
+        await CalculateOtherRevenueAsync(dto, scope);
 
         // ────────────── 3. حساب تكلفة المبيعات (COGS) ──────────────
-        await CalculateCogsAsync(dto);
+        await CalculateCogsAsync(dto, scope);
 
         // ────────────── 3. الربح الإجمالي ──────────────
         dto.GrossProfit = dto.NetRevenue - dto.CostOfGoodsSold;
@@ -48,10 +51,10 @@ public class FinancialReportsService : IFinancialReportsService
             : Math.Round((dto.GrossProfit / dto.NetRevenue) * 100, 2);
 
         // ────────────── 4. الأجور والرواتب وسلف الموظفين ──────────────
-        await CalculatePayrollAndLoansAsync(dto);
+        await CalculatePayrollAndLoansAsync(dto, scope);
 
         // ────────────── 5. المصروفات التشغيلية ──────────────
-        await CalculateExpensesAsync(dto);
+        await CalculateExpensesAsync(dto, scope);
 
         // ────────────── 6. صافي الربح ──────────────
         dto.NetProfit = dto.GrossProfit - dto.TotalOperatingExpenses;
@@ -68,18 +71,18 @@ public class FinancialReportsService : IFinancialReportsService
         CalculateProfitTarget(dto);
 
         // ────────────── 8. أعلى المصروفات ──────────────
-        await GetTopExpensesAsync(dto);
+        await GetTopExpensesAsync(dto, scope);
 
         // ────────────── 9. المقارنات (اختياري) ──────────────
         if (filter.IncludeComparison)
         {
-            await GetPreviousPeriodComparisonAsync(dto, filter);
+            await GetPreviousPeriodComparisonAsync(dto, filter, scope);
         }
 
         // ────────────── 10. الترند الشهري (اختياري) ──────────────
         if (filter.IncludeMonthlyTrend)
         {
-            await GetMonthlyTrendAsync(dto);
+            await GetMonthlyTrendAsync(dto, scope);
         }
 
         // ────────────── 11. التوصيات الذكية ──────────────
@@ -101,18 +104,62 @@ public class FinancialReportsService : IFinancialReportsService
     }
 
     // ============================================================
+    //  ⭐ نطاق الفرع (Branch Scope)
+    //  إسناد الفاتورة للفرع: فرع الموظف المنشئ (EmpId) أولاً،
+    //  ثم فرع المخزن (WarehouseId) احتياطياً؛ غير متاح = "غير محدد".
+    //  Null = كل الفروع (نفس السلوك القديم تماماً).
+    // ============================================================
+    private sealed record BranchScope(int? BranchId, List<int> EmployeeIds, List<int> WarehouseIds)
+    {
+        public static readonly BranchScope All = new(null, new List<int>(), new List<int>());
+        public bool IsScoped => BranchId.HasValue;
+    }
+
+    private async Task<BranchScope> GetBranchScopeAsync(int? branchId)
+    {
+        if (!branchId.HasValue) return BranchScope.All;
+
+        var employeeIds = await _db.Employees.AsNoTracking()
+            .Where(e => e.BranchId == branchId.Value)
+            .Select(e => e.EmployeeId)
+            .ToListAsync();
+
+        var warehouseIds = await _db.Warehouses.AsNoTracking()
+            .Where(w => w.BranchId == branchId.Value)
+            .Select(w => w.WarehouseId)
+            .ToListAsync();
+
+        return new BranchScope(branchId, employeeIds, warehouseIds);
+    }
+
+    // فلترة فواتير البيع بنطاق الفرع (تُطبَّق بعد فلاتر النوع/التاريخ/الحماية)
+    private IQueryable<Transaction> ApplySaleBranchScope(IQueryable<Transaction> query, BranchScope scope)
+    {
+        if (!scope.IsScoped) return query;
+
+        return query.Where(t =>
+            (t.EmpId != null && scope.EmployeeIds.Contains(t.EmpId.Value))
+            || (t.EmpId == null && scope.WarehouseIds.Contains(t.WarehouseId)));
+    }
+
+    // ============================================================
     //  حسابات الإيرادات
     // ============================================================
-    private async Task CalculateRevenueAsync(IncomeStatementDto dto)
+    private async Task CalculateRevenueAsync(IncomeStatementDto dto, BranchScope scope)
     {
         var protectedCreators = await GetProtectedCreatorsAsync();
 
-        var sales = await _db.Transactions.AsNoTracking()
+        var query = _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Sale
                 && t.InvoiceStatus != "Cancelled"
                 && t.TransactionDate >= dto.FromDate
                 && t.TransactionDate <= dto.ToDate)
-            .ExcludeProtectedSales(protectedCreators)
+            .ExcludeProtectedSales(protectedCreators);
+
+        // ⭐ فلترة بنطاق الفرع (موظف المنشئ ← مخزن احتياطي)
+        query = ApplySaleBranchScope(query, scope);
+
+        var sales = await query
             .Select(t => new
             {
                 t.GrandTotal,
@@ -131,19 +178,26 @@ public class FinancialReportsService : IFinancialReportsService
     // ============================================================
     //  الإيرادات الأخرى المكتسبة من الرسوم غير المرتبطة بفواتير
     // ============================================================
-    private async Task CalculateOtherRevenueAsync(IncomeStatementDto dto)
+    private async Task CalculateOtherRevenueAsync(IncomeStatementDto dto, BranchScope scope)
     {
         // الرسوم المرتبطة بفواتير لا تدخل هنا حتى لا يتم احتسابها مرتين؛
         // فهي موجودة بالفعل داخل GrandTotal/TotalChargesAmount للفواتير.
         // الدفعات المقدمة غير المكتسبة لا تدخل قائمة الدخل.
-        var charges = await _db.AdditionalCharges.AsNoTracking()
+        // ⭐ الرسوم المستقلة (بلا فاتورة) لا يمكن إسنادها لفرع محدد —
+        //    تُحسب فقط مع "كل الفروع" وتُستبعد عند اختيار فرع.
+        var query = _db.AdditionalCharges.AsNoTracking()
             .Where(c => c.TransactionId == null
                      && c.AppliedToTransactionId == null
                      && (c.Status == ChargeStatuses.Paid
                          || c.Status == ChargeStatuses.NonRefundable)
                      && c.CreatedAt.HasValue
                      && c.CreatedAt.Value >= dto.FromDate
-                     && c.CreatedAt.Value <= dto.ToDate)
+                     && c.CreatedAt.Value <= dto.ToDate);
+
+        if (scope.IsScoped)
+            query = query.Where(c => false);
+
+        var charges = await query
             .Select(c => new
             {
                 c.ChargeType,
@@ -177,11 +231,12 @@ public class FinancialReportsService : IFinancialReportsService
     // ============================================================
     //  حساب تكلفة المبيعات (COGS)
     // ============================================================
-    private async Task CalculateCogsAsync(IncomeStatementDto dto)
+    private async Task CalculateCogsAsync(IncomeStatementDto dto, BranchScope scope)
     {
         dto.CostOfGoodsSold = await GetCogsFromMirrorPurchasesAsync(
             dto.FromDate,
-            dto.ToDate);
+            dto.ToDate,
+            scope);
     }
 
     /// <summary>
@@ -191,16 +246,22 @@ public class FinancialReportsService : IFinancialReportsService
     /// </summary>
     private async Task<decimal> GetCogsFromMirrorPurchasesAsync(
         DateTime fromDate,
-        DateTime toDate)
+        DateTime toDate,
+        BranchScope scope)
     {
         var protectedCreators = await GetProtectedCreatorsAsync();
 
-        var saleIds = await _db.Transactions.AsNoTracking()
+        var salesQuery = _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Sale
                         && t.InvoiceStatus != InvoiceStatuses.Cancelled
                         && t.TransactionDate >= fromDate
                         && t.TransactionDate <= toDate)
-            .ExcludeProtectedSales(protectedCreators)
+            .ExcludeProtectedSales(protectedCreators);
+
+        // ⭐ فلترة بنطاق الفرع — COGS يتبع نفس إسناد الفاتورة (اتساق الهامش)
+        salesQuery = ApplySaleBranchScope(salesQuery, scope);
+
+        var saleIds = await salesQuery
             .Select(t => t.TransactionId)
             .ToListAsync();
 
@@ -226,7 +287,7 @@ public class FinancialReportsService : IFinancialReportsService
     // ============================================================
     //  الأجور والرواتب + ملخص سلف الموظفين
     // ============================================================
-    private async Task CalculatePayrollAndLoansAsync(IncomeStatementDto dto)
+    private async Task CalculatePayrollAndLoansAsync(IncomeStatementDto dto, BranchScope scope)
     {
         var monthFrom = new DateTime(dto.FromDate.Year, dto.FromDate.Month, 1)
             .ToString("yyyy-MM");
@@ -241,10 +302,16 @@ public class FinancialReportsService : IFinancialReportsService
             PayrollPaymentStatuses.Paid
         };
 
-        var payrolls = await _db.Payrolls.AsNoTracking()
+        var payrollsQuery = _db.Payrolls.AsNoTracking()
             .Where(p => string.Compare(p.PayrollMonth, monthFrom) >= 0
                      && string.Compare(p.PayrollMonth, monthTo) <= 0
-                     && recognizedStatuses.Contains(p.PaymentStatus))
+                     && recognizedStatuses.Contains(p.PaymentStatus));
+
+        // ⭐ فلترة بالفرع عبر فرع الموظف
+        if (scope.IsScoped)
+            payrollsQuery = payrollsQuery.Where(p => p.Employee.BranchId == scope.BranchId.Value);
+
+        var payrolls = await payrollsQuery
             .Select(p => new
             {
                 p.BasicSalary,
@@ -267,17 +334,34 @@ public class FinancialReportsService : IFinancialReportsService
             .Where(p => p.PaymentStatus != PayrollPaymentStatuses.Paid)
             .Sum(p => p.NetSalary ?? p.BasicSalary);
 
-        var loans = await _db.EmployeeLoans.AsNoTracking()
-            .Where(l => l.LoanDate >= dto.FromDate && l.LoanDate <= dto.ToDate)
+        var loansQuery = _db.EmployeeLoans.AsNoTracking()
+            .Where(l => l.LoanDate >= dto.FromDate && l.LoanDate <= dto.ToDate);
+
+        // ⭐ فلترة بالفرع عبر فرع الموظف
+        if (scope.IsScoped)
+            loansQuery = loansQuery.Where(l => l.Employee.BranchId == scope.BranchId.Value);
+
+        var loans = await loansQuery
             .Select(l => new { l.LoanAmount })
             .ToListAsync();
 
-        var installmentRows = await _db.LoanInstallments.AsNoTracking()
+        var installmentsQuery = _db.LoanInstallments.AsNoTracking()
             .Where(i => string.Compare(i.DeductionMonth, monthFrom) >= 0
                      && string.Compare(i.DeductionMonth, monthTo) <= 0
-                     && i.Status != "Skipped")
+                     && i.Status != "Skipped");
+
+        // ⭐ فلترة بالفرع عبر فرع الموظف
+        if (scope.IsScoped)
+            installmentsQuery = installmentsQuery.Where(i => i.Employee.BranchId == scope.BranchId.Value);
+
+        var installmentRows = await installmentsQuery
             .Select(i => new { i.Amount, i.Status })
             .ToListAsync();
+
+        // ⭐ القروض النشطة والرصيد القائم — فلترة بالفرع
+        var activeLoansQuery = _db.EmployeeLoans.AsNoTracking().Where(l => l.Status == "Active");
+        if (scope.IsScoped)
+            activeLoansQuery = activeLoansQuery.Where(l => l.Employee.BranchId == scope.BranchId.Value);
 
         dto.EmployeeLoans = new EmployeeLoansSummaryDto
         {
@@ -286,13 +370,10 @@ public class FinancialReportsService : IFinancialReportsService
             InstallmentsDeducted = installmentRows
                 .Where(x => x.Status == "Deducted")
                 .Sum(x => x.Amount),
-            OutstandingBalance = await _db.EmployeeLoans.AsNoTracking()
-                .Where(l => l.Status == "Active")
+            OutstandingBalance = await activeLoansQuery
                 .SumAsync(l => (decimal?)l.RemainingAmount) ?? 0m,
-            ActiveLoansCount = await _db.EmployeeLoans.AsNoTracking()
-                .CountAsync(l => l.Status == "Active"),
-            EmployeesWithLoansCount = await _db.EmployeeLoans.AsNoTracking()
-                .Where(l => l.Status == "Active")
+            ActiveLoansCount = await activeLoansQuery.CountAsync(),
+            EmployeesWithLoansCount = await activeLoansQuery
                 .Select(l => l.EmployeeId)
                 .Distinct()
                 .CountAsync()
@@ -302,12 +383,12 @@ public class FinancialReportsService : IFinancialReportsService
     // ============================================================
     //  حساب المصروفات التشغيلية
     // ============================================================
-    private async Task CalculateExpensesAsync(IncomeStatementDto dto)
+    private async Task CalculateExpensesAsync(IncomeStatementDto dto, BranchScope scope)
     {
         // ⭐ ملاحظة مهمة: للمصروفات المقدمة، نحسب كل شهر فرعي على حدة
         // (الأشهر الفرعية تمثل المصروف الشهري الفعلي)
 
-        var expenses = await _db.Expenses.AsNoTracking()
+        var expensesQuery = _db.Expenses.AsNoTracking()
             .Where(e => e.ExpenseDate >= dto.FromDate
                 && e.ExpenseDate <= dto.ToDate
                 // نأخذ:
@@ -316,7 +397,13 @@ public class FinancialReportsService : IFinancialReportsService
                 && (
                     (e.IsAdvance != true)
                     || (e.AdvanceParentExpenseId.HasValue) // الأشهر الفرعية
-                ))
+                ));
+
+        // ⭐ فلترة بالفرع (العمود موجود مباشرة على المصروف)
+        if (scope.IsScoped)
+            expensesQuery = expensesQuery.Where(e => e.BranchId == scope.BranchId.Value);
+
+        var expenses = await expensesQuery
             .Select(e => new
             {
                 e.ExpenseId,
@@ -377,16 +464,21 @@ public class FinancialReportsService : IFinancialReportsService
     // ============================================================
     //  أعلى المصروفات
     // ============================================================
-    private async Task GetTopExpensesAsync(IncomeStatementDto dto)
+    private async Task GetTopExpensesAsync(IncomeStatementDto dto, BranchScope scope)
     {
-        var topExpenses = await (
+        var topQuery = (
             from e in _db.Expenses.AsNoTracking()
             where e.ExpenseDate >= dto.FromDate
                 && e.ExpenseDate <= dto.ToDate
                 && ((e.IsAdvance != true) || (e.AdvanceParentExpenseId.HasValue))
             orderby e.Amount descending
-            select new { e.ExpenseId, e.ExpenseName, e.Amount, e.ExpenseDate, e.ExpenseGroupId }
-        ).Take(10).ToListAsync();
+            select new { e.ExpenseId, e.ExpenseName, e.Amount, e.ExpenseDate, e.ExpenseGroupId, e.BranchId });
+
+        // ⭐ فلترة بالفرع
+        if (scope.IsScoped)
+            topQuery = topQuery.Where(x => x.BranchId == scope.BranchId.Value);
+
+        var topExpenses = await topQuery.Take(10).ToListAsync();
 
         var groupIds = topExpenses.Select(e => e.ExpenseGroupId).Distinct().ToList();
         var groups = await _db.ExpenseGroups.AsNoTracking()
@@ -543,7 +635,7 @@ public class FinancialReportsService : IFinancialReportsService
     // ============================================================
     //  المقارنات (الفترة السابقة + السنة السابقة)
     // ============================================================
-    private async Task GetPreviousPeriodComparisonAsync(IncomeStatementDto dto, IncomeStatementFilterDto filter)
+    private async Task GetPreviousPeriodComparisonAsync(IncomeStatementDto dto, IncomeStatementFilterDto filter, BranchScope scope)
     {
         var periodLength = (dto.ToDate.Date - dto.FromDate.Date).Days + 1;
 
@@ -551,7 +643,7 @@ public class FinancialReportsService : IFinancialReportsService
         var prevFrom = dto.FromDate.AddDays(-periodLength);
         var prevTo = dto.FromDate.AddDays(-1).AddDays(1).AddTicks(-1);
 
-        var prev = await GetSummaryAsync(prevFrom, prevTo);
+        var prev = await GetSummaryAsync(prevFrom, prevTo, scope);
         if (prev != null)
         {
             dto.PreviousPeriod = BuildComparison("الفترة السابقة", dto, prev);
@@ -560,42 +652,56 @@ public class FinancialReportsService : IFinancialReportsService
         // نفس الفترة من السنة السابقة
         var prevYearFrom = dto.FromDate.AddYears(-1);
         var prevYearTo = dto.ToDate.AddYears(-1);
-        var prevYear = await GetSummaryAsync(prevYearFrom, prevYearTo);
-if (prevYear.HasValue && prevYear.Value.Revenue > 0)
-{
-    dto.PreviousYear = BuildComparison("نفس الفترة العام السابق", dto, prevYear);
-}
+        var prevYear = await GetSummaryAsync(prevYearFrom, prevYearTo, scope);
+    if (prevYear.HasValue && prevYear.Value.Revenue > 0)
+    {
+        dto.PreviousYear = BuildComparison("نفس الفترة العام السابق", dto, prevYear);
+    }
     }
 
     private async Task<(decimal Revenue, decimal Cogs, decimal Expenses, decimal Payroll, decimal OtherRevenue)?> GetSummaryAsync(
-    DateTime fromDate, DateTime toDate)
+    DateTime fromDate, DateTime toDate, BranchScope scope)
 {
     // إيرادات
-    var rev = await _db.Transactions.AsNoTracking()
+    var revQuery = _db.Transactions.AsNoTracking()
         .Where(t => t.TransactionType == TransactionTypes.Sale
             && t.InvoiceStatus != "Cancelled"
             && t.TransactionDate >= fromDate
             && t.TransactionDate <= toDate)
-        .ExcludeProtectedSales(await GetProtectedCreatorsAsync())
+        .ExcludeProtectedSales(await GetProtectedCreatorsAsync());
+
+    // ⭐ فلترة بنطاق الفرع
+    revQuery = ApplySaleBranchScope(revQuery, scope);
+
+    var rev = await revQuery
         .SumAsync(t => (decimal?)(t.NetTotalAmount ?? t.GrandTotal)) ?? 0;
 
     // COGS من إجمالي فواتير الشراء المرآة المرتبطة بفواتير البيع
-    var cogs = await GetCogsFromMirrorPurchasesAsync(fromDate, toDate);
+    var cogs = await GetCogsFromMirrorPurchasesAsync(fromDate, toDate, scope);
 
     // المصروفات
-    var exp = await _db.Expenses.AsNoTracking()
+    var expQuery = _db.Expenses.AsNoTracking()
         .Where(e => e.ExpenseDate >= fromDate
             && e.ExpenseDate <= toDate
-            && ((e.IsAdvance != true) || (e.AdvanceParentExpenseId.HasValue)))
+            && ((e.IsAdvance != true) || (e.AdvanceParentExpenseId.HasValue)));
+
+    // ⭐ فلترة بالفرع
+    if (scope.IsScoped)
+        expQuery = expQuery.Where(e => e.BranchId == scope.BranchId.Value);
+
+    var exp = await expQuery
         .SumAsync(e => (decimal?)e.Amount) ?? 0;
 
-    var payroll = await GetPayrollExpenseForRangeAsync(fromDate, toDate);
-    var otherRevenue = await GetOtherRevenueForRangeAsync(fromDate, toDate);
+    var payroll = await GetPayrollExpenseForRangeAsync(fromDate, toDate, scope);
+    var otherRevenue = await GetOtherRevenueForRangeAsync(fromDate, toDate, scope);
     return (rev + otherRevenue, cogs, exp, payroll, otherRevenue);
 }
 
-    private async Task<decimal> GetOtherRevenueForRangeAsync(DateTime fromDate, DateTime toDate)
+    private async Task<decimal> GetOtherRevenueForRangeAsync(DateTime fromDate, DateTime toDate, BranchScope scope)
     {
+        // ⭐ الرسوم المستقلة بلا فرع — تُستبعد عند اختيار فرع محدد
+        if (scope.IsScoped) return 0m;
+
         return await _db.AdditionalCharges.AsNoTracking()
             .Where(c => c.TransactionId == null
                      && c.AppliedToTransactionId == null
@@ -607,7 +713,7 @@ if (prevYear.HasValue && prevYear.Value.Revenue > 0)
             .SumAsync(c => (decimal?)(c.ChargeAmount ?? 0m)) ?? 0m;
     }
 
-    private async Task<decimal> GetPayrollExpenseForRangeAsync(DateTime fromDate, DateTime toDate)
+    private async Task<decimal> GetPayrollExpenseForRangeAsync(DateTime fromDate, DateTime toDate, BranchScope scope)
     {
         var monthFrom = new DateTime(fromDate.Year, fromDate.Month, 1).ToString("yyyy-MM");
         var monthTo = new DateTime(toDate.Year, toDate.Month, 1).ToString("yyyy-MM");
@@ -619,10 +725,16 @@ if (prevYear.HasValue && prevYear.Value.Revenue > 0)
             PayrollPaymentStatuses.Paid
         };
 
-        return await _db.Payrolls.AsNoTracking()
+        var payrollQuery = _db.Payrolls.AsNoTracking()
             .Where(p => string.Compare(p.PayrollMonth, monthFrom) >= 0
                      && string.Compare(p.PayrollMonth, monthTo) <= 0
-                     && statuses.Contains(p.PaymentStatus))
+                     && statuses.Contains(p.PaymentStatus));
+
+        // ⭐ فلترة بالفرع عبر فرع الموظف
+        if (scope.IsScoped)
+            payrollQuery = payrollQuery.Where(p => p.Employee.BranchId == scope.BranchId.Value);
+
+        return await payrollQuery
             .SumAsync(p => (decimal?)p.BasicSalary
                 + (p.Allowances ?? p.BonusInPayroll ?? 0m)) ?? 0m;
     }
@@ -664,7 +776,7 @@ if (prevYear.HasValue && prevYear.Value.Revenue > 0)
     // ============================================================
     //  الترند الشهري (آخر 12 شهر)
     // ============================================================
-    private async Task GetMonthlyTrendAsync(IncomeStatementDto dto)
+    private async Task GetMonthlyTrendAsync(IncomeStatementDto dto, BranchScope scope)
     {
         var endDate = DateTime.Today;
         var startDate = endDate.AddMonths(-11);
@@ -677,7 +789,7 @@ if (prevYear.HasValue && prevYear.Value.Revenue > 0)
         {
             var monthEnd = current.AddMonths(1).AddDays(-1);
 
-            var summary = await GetSummaryAsync(current, monthEnd.Date.AddDays(1).AddTicks(-1));
+            var summary = await GetSummaryAsync(current, monthEnd.Date.AddDays(1).AddTicks(-1), scope);
             if (summary != null)
             {
                 var totalExpenses = summary.Value.Expenses + summary.Value.Payroll;

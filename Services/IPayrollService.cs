@@ -7,7 +7,7 @@ public interface IPayrollService
     // ── عرض ─────────────────────────────────────────────────
     Task<PagedResult<PayrollListDto>>   GetPayrollsAsync(PayrollFilterDto filter);
     Task<PayslipDto?>                   GetPayslipAsync(int payrollId);
-    Task<PayrollStatsDto>               GetStatsAsync(string month);
+    Task<PayrollStatsDto>               GetStatsAsync(string month, int? branchId = null);
     Task<List<PayrollMonthSummaryDto>>  GetMonthSummariesAsync(int take = 36, bool offPayrollOnly = false);
     Task<List<PayrollRunDto>>           GetRunsAsync(string? month = null);
 

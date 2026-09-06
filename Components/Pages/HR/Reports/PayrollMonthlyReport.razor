@@ -18,6 +18,7 @@
 
 @inject IPayrollService PayrollService
 @inject IEmployeeService EmployeeService
+@inject IBranchService   BranchService
 @inject IJSRuntime      JS
 @inject ISnackbar       Snackbar
 
@@ -596,6 +597,22 @@
             </MudItem>
 
             <MudItem xs="12" sm="6" md="3">
+                <MudSelect T="int?"
+                           @bind-Value="_branchId"
+                           Label="الفرع"
+                           Variant="@MudVariant.Outlined"
+                           Margin="Margin.Dense"
+                           Clearable FullWidth
+                           AdornmentIcon="@Icons.Material.Filled.Store"
+                           Adornment="Adornment.Start">
+                    @foreach (var b in _branches)
+                    {
+                        <MudSelectItem T="int?" Value="b.BranchId">@b.BranchNameAr</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" sm="6" md="3">
                 <MudTextField T="string"
                               @bind-Value="_searchText"
                               Label="بحث نصي"
@@ -900,7 +917,7 @@
            ══════════════════════════════════════════════════════════ *@
         <div class="print-only print-header">
             <h2>كشف الرواتب</h2>
-            <p>الفترة: @CurrentPeriodLabel | عدد السجلات: @_cachedFiltered.Count | طُبع: @DateTime.Now.ToString("yyyy-MM-dd HH:mm")</p>
+            <p>الفترة: @CurrentPeriodLabel | عدد السجلات: @_cachedFiltered.Count@(GetSelectedBranchName() != null ? $" | الفرع: {GetSelectedBranchName()}" : "") | طُبع: @DateTime.Now.ToString("yyyy-MM-dd HH:mm")</p>
         </div>
 
         @* ══════════════════════════════════════════════════════════
@@ -1112,6 +1129,8 @@
     private decimal? _minDeductions;
     private decimal? _maxDeductions;
     private EmployeeListDto? _selectedEmployee;
+    private int?    _branchId;
+    private List<BranchOptionDto> _branches = new();
     private bool    _loading;
     private bool    _searched;
     private bool    _exporting;
@@ -1137,6 +1156,12 @@
     private string CurrentPeriodLabel => _reportMode == "single"
         ? (_month ?? "—")
         : $"{_monthFrom ?? "—"} → {_monthTo ?? "—"}";
+
+    private string? GetSelectedBranchName()
+    {
+        if (!_branchId.HasValue) return null;
+        return _branches.FirstOrDefault(b => b.BranchId == _branchId)?.BranchNameAr;
+    }
 
     private string ModeLabel => _reportMode switch
     {
@@ -1189,6 +1214,8 @@
                 chips.Add($"الخصومات: {_minDeductions?.ToString("N0") ?? "0"} → {_maxDeductions?.ToString("N0") ?? "∞"}");
             if (_reportMode == "employee" && _selectedEmployee is not null)
                 chips.Add($"الموظف: {_selectedEmployee.FullName}");
+            if (_branchId.HasValue)
+                chips.Add($"الفرع: {_branches.FirstOrDefault(b => b.BranchId == _branchId)?.BranchNameAr ?? _branchId.ToString()}");
             if (_enableComparison)
                 chips.Add(_reportMode == "single"
                     ? $"مقارنة مع: {_compareMonth}"
@@ -1210,7 +1237,15 @@
         _ => "لا توجد رواتب مطابقة للشهر أو للفلاتر المحددة."
     };
 
-    protected override void OnInitialized() => InitChartOptions();
+    protected override async Task OnInitializedAsync()
+    {
+        InitChartOptions();
+        try
+        {
+            _branches = await BranchService.GetBranchesForFilterAsync();
+        }
+        catch { _branches = new(); }
+    }
 
     private void InitChartOptions()
     {
@@ -1329,6 +1364,7 @@
             Department = _reportMode == "employee" ? null : _departmentFilter,
             JobTitle = _jobTitleFilter,
             EmployeeID = _reportMode == "employee" ? _selectedEmployee?.EmployeeId : null,
+            BranchId = _branchId,
             HasLoans = _hasLoansFilter,
             HasAbsence = _hasAbsenceFilter,
             HasLate = _hasLateFilter,
@@ -1539,6 +1575,7 @@
         _minDeductions = null;
         _maxDeductions = null;
         _selectedEmployee = null;
+        _branchId = null;
         _enableComparison = false;
         _compareMonth = DateTime.Today.AddMonths(-1).ToString("yyyy-MM");
         _compareMonthFrom = _compareMonth;
