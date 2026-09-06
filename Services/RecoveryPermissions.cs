@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 
 namespace COCOBOLOERPNEW.Services;
 
@@ -15,8 +15,9 @@ public static class RecoveryPermissions
     private const string RoleSalesManager   = "SalesManager";
 
     // ─── أسماء الـ Claims ────────────────────────────
-    public const string PermView  = "frm_LostRecovery:View";
-    public const string PermRevive = "frm_LostRecovery:Revive";
+    public const string PermView        = "frm_LostRecovery:View";
+    public const string PermRevive      = "frm_LostRecovery:Revive";
+    public const string PermLogContact  = "frm_LostRecovery:LogContact";
 
     // ═══════════════════════════════════════════════
     //                    السماحيات
@@ -39,4 +40,16 @@ public static class RecoveryPermissions
         || user.IsInRole(RoleGeneralManager)
         || user.IsInRole(RoleSalesManager)
         || user.HasClaim(c => c.Type == "Permission" && c.Value == PermRevive);
+
+    /// <summary>
+    /// هل يقدر يسجّل محاولات تواصل مع العميل؟
+    /// ⭐ صلاحية LogContact مستقلة عن Revive: تُمنح لخدمة العملاء لتسجيل التواصلات
+    /// (لا يكفي امتلاك frm_LostRecovery:View). الإجراء موثق بالـ Audit.
+    /// </summary>
+    public static bool CanLogContact(ClaimsPrincipal user) =>
+        user.IsInRole(RoleAdmin)
+        || user.IsInRole(RoleGeneralManager)
+        || user.IsInRole(RoleSalesManager)
+        || user.IsInRole("CustomerService")
+        || user.HasClaim(c => c.Type == "Permission" && c.Value == PermLogContact);
 }
