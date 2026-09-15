@@ -1,5 +1,6 @@
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services;
@@ -7,10 +8,20 @@ namespace COCOBOLOERPNEW.Services;
 public class PartyService
 {
     private readonly db24804Context _db;
+    private readonly IHttpContextAccessor _http;
 
-    public PartyService(db24804Context db)
+    public PartyService(db24804Context db, IHttpContextAccessor http)
     {
         _db = db;
+        _http = http;
+    }
+
+    /// <summary>🏢 هل المستخدم الحالي له صلاحية رؤية مصادر B2B؟ (B2bCrmPermissions.CanView)</summary>
+    private bool CurrentUserCanSeeB2bSources()
+    {
+        var user = _http?.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return true;   // نداءات داخلية/خلفية
+        return B2bCrmPermissions.CanView(user);
     }
 
     // ============================
@@ -498,10 +509,15 @@ StageColor = p.Stage != null ? p.Stage.StageColor : null,
 
     public async Task<List<ContactSource>> GetContactSourcesAsync()
     {
-        return await _db.ContactSources
+        var query = _db.ContactSources
             .AsNoTracking()
             .Where(s => s.IsActive)
-            .ToListAsync();
+            .AsQueryable();
+
+        // 🏢 إخفاء مصادر B2B عن غير المصرح لهم
+        if (!CurrentUserCanSeeB2bSources()) query = query.Where(s => !s.IsB2B);
+
+        return await query.ToListAsync();
     }
 
     public async Task<List<PartyListDto>> GetParentPartiesAsync()

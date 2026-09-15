@@ -142,6 +142,8 @@ builder.Services.AddSingleton<ShareTokenService>();
 builder.Services.AddScoped<IQuotationExportService, QuotationExportService>();
 builder.Services.AddScoped<ISalesDeliveryStatusService, SalesDeliveryStatusService>();
 builder.Services.AddScoped<IComplaintService, ComplaintService>();
+builder.Services.AddScoped<ICustomerCareService, CustomerCareService>(); // 🎧 خدمة العملاء (فيدباك ما بعد البيع)
+builder.Services.AddScoped<B2bCrmService>(); // 🏢 B2B CRM (شاشات /crm/b2b/* المنفصلة)
 builder.Services.AddScoped<IPasswordService, PasswordService>();
 builder.Services.AddScoped<ICompanyInfoService, CompanyInfoService>();
 builder.Services.AddScoped<IBranchService, BranchService>();
@@ -150,6 +152,7 @@ builder.Services.AddScoped<IStockService, StockService>();
 builder.Services.AddScoped<GlobalSearchService>();
 builder.Services.AddScoped<ICrmDashboardService, CrmDashboardService>();
 builder.Services.AddScoped<IMarketingDashboardService, MarketingDashboardService>();
+builder.Services.AddScoped<ISalesAnalyticsService, SalesAnalyticsService>();
 builder.Services.AddScoped<IOpportunityService, OpportunityService>();
 builder.Services.AddScoped<IInteractionService, InteractionService>();
 builder.Services.AddScoped<ITaskService, TaskService>();

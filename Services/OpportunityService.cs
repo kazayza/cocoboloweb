@@ -3,6 +3,7 @@ using COCOBOLOERPNEW.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using System.Security.Claims;
 
 namespace COCOBOLOERPNEW.Services;
 
@@ -20,12 +21,101 @@ public class OpportunityService : IOpportunityService
     public OpportunityService(db24804Context db, IHttpContextAccessor http, ILogger<OpportunityService> logger, NotificationService notify, RecoveryService recovery)
     { _db = db; _http = http; _logger = logger; _notify = notify; _recovery = recovery; }
 
+    // ═══════════════════════════════════════════════════════════════
+    // 🏢 B2B Scope — نطاق عزل موديول B2B داخل خدمة الفرص المشتركة.
+    //   All        = المدراء (Admin/GeneralManager/AccountManager) → كل الفرص (عادي + B2B) كما كان.
+    //   ExcludeB2B = أي مستخدم عادي/مبيعات → يرى شغله كالمعتاد لكن B2B مخفي نهائياً.
+    //   AllB2B     = حامل صلاحية frm_B2BCrm:View فقط → فرص B2B قراءة (بلا إدخال).
+    //   OwnB2B     = موظف B2B (الدور B2B) → فرص B2B المسندة له فقط (غير مربوط = لا يرى شيئاً).
+    // مصدر الحقيقة: Parties.IsB2B (العميل شركة/مؤسسة). الفرص تُحفظ عليها IsB2B تلقائياً.
+    // الفلاتر تُضاف آخراً (AND) فلا تغيّر سلوك غير المدراء/غير B2B إلا بإخفاء B2B فقط.
+    // ═══════════════════════════════════════════════════════════════
+    private enum B2bScopeKind { All, ExcludeB2B, AllB2B, OwnB2B }
+
+    private B2bScopeKind CurrentB2bKind()
+    {
+        var user = _http?.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return B2bScopeKind.All;      // خدمات داخلية/خلفية
+        if (B2bCrmPermissions.CanViewAll(user)) return B2bScopeKind.All;            // Admin/GM/AccountManager
+        if (B2bCrmPermissions.IsB2bSpecialist(user)) return B2bScopeKind.OwnB2B;    // دور B2B
+        if (user.HasClaim(c => c.Type == "Permission" && c.Value == B2bCrmPermissions.PermView)) return B2bScopeKind.AllB2B;
+        return B2bScopeKind.ExcludeB2B;                                             // الباقي
+    }
+
+    private async Task<int> ResolveOwnEmployeeIdAsync(string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return 0;
+        return await _db.Users.AsNoTracking()
+            .Where(u => u.Username == username && u.EmployeeId.HasValue)
+            .Select(u => u.EmployeeId!.Value)
+            .FirstOrDefaultAsync();
+    }
+
+    /// <summary>معرّفات عملاء B2B (دائماً مجموعة صغيرة — الشركات فقط).</summary>
+    private async Task<List<int>> ResolveB2bPartyIdsAsync()
+        => await _db.Parties.AsNoTracking().Where(p => p.IsB2B).Select(p => p.PartyId).ToListAsync();
+
+    private static IQueryable<VwSalesOpportunity> ApplyB2bVwScope(IQueryable<VwSalesOpportunity> q, B2bScopeKind kind, int employeeId, List<int> b2bIds)
+    {
+        switch (kind)
+        {
+            case B2bScopeKind.All: return q;
+            case B2bScopeKind.AllB2B: return q.Where(o => b2bIds.Contains(o.PartyId));
+            case B2bScopeKind.OwnB2B:
+                return employeeId <= 0
+                    ? q.Where(o => false)
+                    : q.Where(o => o.EmployeeId == employeeId && b2bIds.Contains(o.PartyId));
+            default: return q.Where(o => !b2bIds.Contains(o.PartyId));
+        }
+    }
+
+    private static IQueryable<SalesOpportunity> ApplyB2bOppScope(IQueryable<SalesOpportunity> q, B2bScopeKind kind, int employeeId, List<int> b2bIds)
+    {
+        switch (kind)
+        {
+            case B2bScopeKind.All: return q;
+            case B2bScopeKind.AllB2B: return q.Where(o => b2bIds.Contains(o.PartyId));
+            case B2bScopeKind.OwnB2B:
+                return employeeId <= 0
+                    ? q.Where(o => false)
+                    : q.Where(o => o.EmployeeId == employeeId && b2bIds.Contains(o.PartyId));
+            default: return q.Where(o => !b2bIds.Contains(o.PartyId));
+        }
+    }
+
+    /// <summary>حارس فتح فرصة منفردة (تفاصيل/تعديل) حسب نطاق B2B — يرجع false إن غير مسموح.</summary>
+    private async Task<bool> CanAccessOpportunityAsync(int partyId, int? employeeId)
+    {
+        var user = _http?.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return true;
+        if (B2bCrmPermissions.CanViewAll(user)) return true;
+
+        var isB2b = await _db.Parties.AsNoTracking().AnyAsync(p => p.PartyId == partyId && p.IsB2B);
+        if (B2bCrmPermissions.IsB2bSpecialist(user))
+        {
+            if (!isB2b) return false;
+            var eid = await ResolveOwnEmployeeIdAsync(user.Identity?.Name);
+            return eid > 0 && employeeId == eid;
+        }
+        if (user.HasClaim(c => c.Type == "Permission" && c.Value == B2bCrmPermissions.PermView))
+            return isB2b;
+        return !isB2b;
+    }
+
+
     // ════════════════════ LIST ════════════════════
     public async Task<PagedResult<OpportunityListDto>> GetOpportunitiesAsync(OpportunityFilterDto filter)
     {
         var crmAccess = _http.GetCrmAccessFrom();
         var query = _db.VwSalesOpportunities.AsNoTracking().AsQueryable();
         if (crmAccess.HasValue) query = query.Where(o => o.CreatedAt >= crmAccess.Value);
+        var b2bKind = CurrentB2bKind();
+        if (b2bKind != B2bScopeKind.All)
+        {
+            var b2bIds = await ResolveB2bPartyIdsAsync();
+            var b2bEmp = b2bKind == B2bScopeKind.OwnB2B ? await ResolveOwnEmployeeIdAsync(_http.HttpContext?.User.Identity?.Name) : 0;
+            query = ApplyB2bVwScope(query, b2bKind, b2bEmp, b2bIds);
+        }
         query = ApplyVwFilters(query, filter);
         var totalCount = await query.CountAsync();
         query = ApplySorting(query, filter);
@@ -44,6 +134,13 @@ public class OpportunityService : IOpportunityService
         var query = _db.SalesOpportunities.AsNoTracking().Where(o => o.IsActive);
         if (crmAccess.HasValue) query = query.Where(o => o.CreatedAt >= crmAccess.Value);
         query = ApplyOppFilters(query, filter);
+        var kanbanB2bKind = CurrentB2bKind();
+        if (kanbanB2bKind != B2bScopeKind.All)
+        {
+            var kanbanB2bIds = await ResolveB2bPartyIdsAsync();
+            var kanbanB2bEmp = kanbanB2bKind == B2bScopeKind.OwnB2B ? await ResolveOwnEmployeeIdAsync(_http.HttpContext?.User.Identity?.Name) : 0;
+            query = ApplyB2bOppScope(query, kanbanB2bKind, kanbanB2bEmp, kanbanB2bIds);
+        }
         var opps = await query.Select(o => new { o.OpportunityId, o.PartyId, o.StageId, o.ExpectedValue, o.EmployeeId, o.NextFollowUpDate, o.InterestedProduct, o.SourceId, o.CreatedAt, o.ClosedAt }).ToListAsync();
         var partyIds = opps.Select(o => o.PartyId).Distinct().ToList();
         var parties = partyIds.Any() ? (await _db.Parties.AsNoTracking().Where(p => partyIds.Contains(p.PartyId)).Select(p => new { p.PartyId, p.PartyName, p.Phone }).ToListAsync()).ToDictionary(p => p.PartyId, p => (p.PartyName, p.Phone)) : new();
@@ -116,7 +213,10 @@ public class OpportunityService : IOpportunityService
 {
     var opp = await _db.SalesOpportunities.AsNoTracking().FirstOrDefaultAsync(o => o.OpportunityId == opportunityId);
     if (opp == null) return null;
-    
+
+    // ⛔ حارس نطاق B2B: غير المصرح له لا يفتح/يعدّل فرص B2B.
+    if (!await CanAccessOpportunityAsync(opp.PartyId, opp.EmployeeId)) return null;
+
     var partyInfo = await _db.Parties.AsNoTracking()
         .Where(p => p.PartyId == opp.PartyId)
         .Select(p => new { p.PartyName, p.Phone })
@@ -157,6 +257,9 @@ public class OpportunityService : IOpportunityService
         .FirstOrDefaultAsync(o => o.OpportunityId == opportunityId);
 
     if (opp == null) return null;
+
+    // ⛔ حارس نطاق B2B: غير المصرح له لا يفتح فرص B2B.
+    if (!await CanAccessOpportunityAsync(opp.PartyId, opp.EmployeeId)) return null;
 
     var dto = MapToListDto(opp);
     await EnrichLifecycleDataAsync(new List<OpportunityListDto> { dto });
@@ -236,6 +339,14 @@ public async Task<OpportunityStatsDto> GetStatsAsync(OpportunityFilterDto filter
         // ⭐ كل الفلاتر المتقدمة
         q = ApplyStatsFilters(q, filter);
 
+        var statsB2bKind = CurrentB2bKind();
+        if (statsB2bKind != B2bScopeKind.All)
+        {
+            var statsB2bIds = await ResolveB2bPartyIdsAsync();
+            var statsB2bEmp = statsB2bKind == B2bScopeKind.OwnB2B ? await ResolveOwnEmployeeIdAsync(_http.HttpContext?.User.Identity?.Name) : 0;
+            q = ApplyB2bOppScope(q, statsB2bKind, statsB2bEmp, statsB2bIds);
+        }
+
         var opps = await q
             .Select(o => new 
             { 
@@ -293,6 +404,7 @@ private static IQueryable<SalesOpportunity> ApplyStatsFilters(
         q = q.Where(o => o.SourceId == f.SourceId.Value);
     if (f.CategoryId.HasValue)
         q = q.Where(o => o.CategoryId == f.CategoryId.Value);
+    if (f.PartyIds is { Count: > 0 }) q = q.Where(o => f.PartyIds.Contains(o.PartyId));
     if (f.MinValue.HasValue)
         q = q.Where(o => o.ExpectedValue >= f.MinValue.Value);
     if (f.MaxValue.HasValue)
@@ -322,6 +434,23 @@ if (f.DateTo.HasValue)
     {
         try
         {
+            // ⛔ حماية B2B قبل أي حفظ:
+            //   - حامل صلاحية مشاهدة فقط (frm_B2BCrm:View بدون دور إدارة) لا يحفظ.
+            //   - المستخدم العادي (غير B2B وغير مدير) لا ينشئ/يعدّل فرصة على عميل B2B.
+            var saveUser = _http.HttpContext?.User;
+            if (saveUser?.Identity?.IsAuthenticated == true)
+            {
+                var saveCanView = B2bCrmPermissions.CanView(saveUser);
+                var saveCanManage = B2bCrmPermissions.CanManage(saveUser);
+                if (saveCanView && !saveCanManage)
+                    return (false, "حسابك بصلاحية مشاهدة فقط — لا يمكنك الحفظ.", 0);
+
+                var saveIsB2bParty = await _db.Parties.AsNoTracking()
+                    .AnyAsync(p => p.PartyId == dto.PartyId && p.IsB2B);
+                if (saveIsB2bParty && CurrentB2bKind() == B2bScopeKind.ExcludeB2B)
+                    return (false, "هذه الفرصة من ملفات B2B ولا يمكنك إنشاؤها/تعديلها.", 0);
+            }
+
             if (!dto.SourceId.HasValue)
                 return (false, "برجاء تحديد طريقة / مصدر التواصل أولاً", 0);
 
@@ -372,6 +501,10 @@ if (f.DateTo.HasValue)
             int oldStageId = 0;
             var now = DateTime.Now;
 
+            // 🏢 علامة B2B تُحفظ تلقائياً من العميل (مصدر الحقيقة)
+            var oppPartyIsB2B = await _db.Parties.AsNoTracking()
+                .AnyAsync(p => p.PartyId == dto.PartyId && p.IsB2B);
+
             if (isNew)
             {
                 opp = new SalesOpportunity
@@ -411,6 +544,7 @@ if (f.DateTo.HasValue)
             opp.Notes = dto.Notes;
             opp.Guidance = dto.Guidance;
             opp.IsActive = dto.IsActive;
+            opp.IsB2B = oppPartyIsB2B;
             ApplyClosureState(opp, isNew ? 0 : oldStageId, dto.StageId, userName, now);
 
             var stages = await _db.SalesStages.AsNoTracking().ToListAsync();
@@ -485,7 +619,14 @@ if (f.DateTo.HasValue)
 
     // ════════════════════ LOOKUPS ════════════════════
     public async Task<List<SalesStage>> GetStagesAsync() => await _db.SalesStages.AsNoTracking().Where(s => s.IsActive).OrderBy(s => s.StageOrder).ToListAsync();
-    public async Task<List<ContactSource>> GetSourcesAsync() => await _db.ContactSources.AsNoTracking().Where(s => s.IsActive).ToListAsync();
+    public async Task<List<ContactSource>> GetSourcesAsync()
+    {
+        // 🏢 قوائم المصادر: يظهر مصدر B2B فقط لمن له صلاحية B2B (B2bCrmPermissions.CanView)
+        var user = _http?.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true || B2bCrmPermissions.CanView(user))
+            return await _db.ContactSources.AsNoTracking().Where(s => s.IsActive).ToListAsync();
+        return await _db.ContactSources.AsNoTracking().Where(s => s.IsActive && !s.IsB2B).ToListAsync();
+    }
     public async Task<List<InterestCategory>> GetCategoriesAsync() => await _db.InterestCategories.AsNoTracking().Where(c => c.IsActive).ToListAsync();
     public async Task<List<LostReason>> GetLostReasonsAsync() => await _db.LostReasons.AsNoTracking().Where(r => r.IsActive).ToListAsync();
     public async Task<List<AdType>> GetAdTypesAsync() => await _db.AdTypes.AsNoTracking().ToListAsync();
@@ -712,6 +853,7 @@ if (f.DateTo.HasValue)
         if (f.EmployeeId.HasValue) q = q.Where(o => o.EmployeeId == f.EmployeeId.Value);
         if (f.SourceId.HasValue) q = q.Where(o => o.SourceId == f.SourceId.Value);
         if (f.CategoryId.HasValue) q = q.Where(o => o.CategoryId == f.CategoryId.Value);
+        if (f.PartyIds is { Count: > 0 }) q = q.Where(o => f.PartyIds.Contains(o.PartyId));
         if (f.IsActive.HasValue) q = q.Where(o => o.IsActive == f.IsActive.Value);
         if (f.MinValue.HasValue) q = q.Where(o => o.ExpectedValue >= f.MinValue.Value);
         if (f.MaxValue.HasValue) q = q.Where(o => o.ExpectedValue <= f.MaxValue.Value);
@@ -737,6 +879,7 @@ if (f.DateTo.HasValue)
         if (f.EmployeeId.HasValue) q = q.Where(o => o.EmployeeId == f.EmployeeId.Value);
         if (f.SourceId.HasValue) q = q.Where(o => o.SourceId == f.SourceId.Value);
         if (f.CategoryId.HasValue) q = q.Where(o => o.CategoryId == f.CategoryId.Value);
+        if (f.PartyIds is { Count: > 0 }) q = q.Where(o => f.PartyIds.Contains(o.PartyId));
         if (f.MinValue.HasValue) q = q.Where(o => o.ExpectedValue >= f.MinValue);
         if (f.MaxValue.HasValue) q = q.Where(o => o.ExpectedValue <= f.MaxValue);
         if (f.DateFrom.HasValue)
@@ -866,6 +1009,8 @@ if (f.DateTo.HasValue)
     {
         if (partyId <= 0) return null;
 
+        var user = _http?.HttpContext?.User;
+
         var party = await _db.Parties
             .AsNoTracking()
             .Where(p => p.PartyId == partyId && p.IsActive == true)
@@ -874,11 +1019,16 @@ if (f.DateTo.HasValue)
                 PartyId = p.PartyId,
                 PartyName = p.PartyName ?? "",
                 Phone = p.Phone,
-                Phone2 = p.Phone2
+                Phone2 = p.Phone2,
+                IsB2B = p.IsB2B
             })
             .FirstOrDefaultAsync();
 
         if (party == null) return null;
+
+        // 🏢 عميل B2B لا يُفتح/يُختار إلا لمن له صلاحية B2B
+        if (party.IsB2B && (user?.Identity?.IsAuthenticated != true || !B2bCrmPermissions.CanView(user)))
+            return null;
 
         var lastOpp = await _db.SalesOpportunities
             .AsNoTracking()
@@ -903,10 +1053,14 @@ if (f.DateTo.HasValue)
 
         var search = searchText.Trim();
 
+        // 🏢 عملاء B2B لا يظهرون في البحث إلا لمن له صلاحية B2B (باقي المستخدمين يرون الباقي فقط)
+        var user = _http?.HttpContext?.User;
+        var canSeeB2B = user?.Identity?.IsAuthenticated == true && B2bCrmPermissions.CanView(user);
+
         // Step 1: Basic DB search (name OR phone contains)
         var candidates = await _db.Parties
             .AsNoTracking()
-            .Where(p => p.IsActive == true)
+            .Where(p => p.IsActive == true && (canSeeB2B || !p.IsB2B))
             .Where(p =>
                 (p.PartyName != null && p.PartyName.Contains(search)) ||
                 (p.Phone != null && p.Phone.Contains(search)) ||
@@ -998,12 +1152,51 @@ if (f.DateTo.HasValue)
                 if (string.IsNullOrWhiteSpace(dto.NewPhone))
                     return (false, "برجاء إدخال رقم الهاتف", 0);
 
+                var actor = _http?.HttpContext?.User;
+                var actorEmployeeId = await ResolveOwnEmployeeIdAsync(userName);
+                var companyTypeId = 0;
+
+                // 🏢 نمط «شركة B2B جديدة» (إنشاء عميل شركة معلَّم B2B من شاشة CRM الموحدة)
+                if (dto.IsCompanyB2B)
+                {
+                    // ⛔ صلاحية: لا يُنشئ شركة B2B إلا من له صلاحية إدارة B2B (المختص/المدراء)
+                    if (actor?.Identity?.IsAuthenticated != true || !B2bCrmPermissions.CanManage(actor))
+                        return (false, "لا يمكنك إضافة شركة B2B — تحتاج صلاحية B2B.", 0);
+
+                    // نوع «الشركة» الأقرب من جدول الأنواع (كلمة شركة/مؤسسة) — ليظهر أيضاً لموديول B2B الموازي
+                    companyTypeId = await _db.PartyTypes.AsNoTracking()
+                        .Where(t => B2bCrmService.CompanyTypeTokens.Any(tok => t.PartyTypeName.Contains(tok)))
+                        .OrderBy(t => t.PartyTypeName.Length)
+                        .Select(t => t.PartyTypeId)
+                        .FirstOrDefaultAsync();
+
+                    if (B2bCrmPermissions.IsB2bSpecialist(actor))
+                    {
+                        // المختص: الفرصة على شغله فقط → الإسناد للموظف نفسه إجبارياً
+                        dto.EmployeeId = actorEmployeeId > 0 ? actorEmployeeId : null;
+                    }
+                    else if (dto.EmployeeId.HasValue)
+                    {
+                        // المدراء: الموظف المسنَد إليه يجب أن يكون من فريق B2B (أو مدراء) — وإلا يختفي الملف عن الجميع
+                        var targetIsB2bPerson = await _db.Users.AsNoTracking().AnyAsync(u =>
+                            u.EmployeeId == dto.EmployeeId.Value && u.IsActive == true &&
+                            (B2bCrmPermissions.SpecialistRoles.Contains(u.Role ?? string.Empty)
+                             || u.Role == B2bCrmPermissions.RoleAdmin
+                             || u.Role == B2bCrmPermissions.RoleAccountManager
+                             || u.Role == B2bCrmPermissions.RoleGeneralManager));
+
+                        if (!targetIsB2bPerson)
+                            return (false, "اختر موظفاً من فريق B2B لإسناد فرصة الشركة (أو اتركها بدون إسناد يراها المدراء).", 0);
+                    }
+                }
+
                 var newParty = new Party
                 {
                     PartyName = dto.NewClientName.Trim(),
                     Phone = dto.NewPhone.Trim(),
                     Address = dto.NewAddress?.Trim(),
-                    PartyType = 1,
+                    PartyType = dto.IsCompanyB2B && companyTypeId > 0 ? companyTypeId : 1,
+                    IsB2B = dto.IsCompanyB2B,            // 🏢 شركة B2B — مصدر الحقيقة للعزل
                     IsActive = true,
                     ReferralSourceId = 2,
                     CreatedBy = userName,
@@ -1018,6 +1211,46 @@ if (f.DateTo.HasValue)
                 if (!dto.ExistingPartyId.HasValue)
                     return (false, "برجاء اختيار العميل", 0);
                 partyId = dto.ExistingPartyId.Value;
+            }
+
+            // 🏢 علامة B2B تُحفظ تلقائياً من العميل (مصدر الحقيقة)
+            var workflowPartyIsB2B = await _db.Parties.AsNoTracking()
+                .AnyAsync(p => p.PartyId == partyId && p.IsB2B);
+
+            // ⛔ لا يُضيف/يعدّل أي مستخدم على ملف B2B إلا من له صلاحية إدارة B2B (المختص/المدراء)
+            if (workflowPartyIsB2B
+                && (_http?.HttpContext?.User?.Identity?.IsAuthenticated != true || !B2bCrmPermissions.CanManage(_http.HttpContext.User)))
+                return (false, "لا يمكنك إضافة/تعديل فرص B2B — تحتاج صلاحية B2B.", 0);
+
+            // ⛔ المختص B2B يتعامل فقط مع فرصه (إنشاءً أو تعديلاً) — وشغله دائماً على اسمه
+            if (workflowPartyIsB2B && B2bCrmPermissions.IsB2bSpecialist(_http?.HttpContext?.User))
+            {
+                var actorEmployeeId = await ResolveOwnEmployeeIdAsync(userName);
+                if (actorEmployeeId <= 0)
+                    return (false, "حسابك غير مرتبط بموظف — لا يمكنك إدارة ملفات B2B.", 0);
+
+                var targetOppId = dto.OpportunityId.GetValueOrDefault();
+                if (targetOppId == 0)
+                {
+                    // إضافة فرصة جديدة
+                    if (!dto.IsCompanyB2B)
+                    {
+                        var mine = await _db.SalesOpportunities.AsNoTracking()
+                            .AnyAsync(o => o.PartyId == partyId && o.EmployeeId == actorEmployeeId && o.IsActive);
+                        if (!mine)
+                            return (false, "هذه الشركة ليست ضمن ملفاتك — لا يمكنك إضافة فرصة عليها.", 0);
+                    }
+                }
+                else
+                {
+                    // تعديل فرصة موجودة — لابد أنها مسندة إليه
+                    var owned = await _db.SalesOpportunities.AsNoTracking()
+                        .AnyAsync(o => o.OpportunityId == targetOppId && o.EmployeeId == actorEmployeeId);
+                    if (!owned)
+                        return (false, "هذه الفرصة ليست ضمن ملفاتك — لا يمكنك تعديلها.", 0);
+                }
+
+                dto.EmployeeId = actorEmployeeId;   // شغل المختص دائماً على اسمه
             }
 
             // ═══ 2. إنشاء أو تحديث فرصة البيع ═══
@@ -1045,6 +1278,7 @@ if (f.DateTo.HasValue)
                     LostNotes = requiresClosureApproval ? null : dto.LostNotes,
                     Notes = dto.Summary,
                     Guidance = dto.Guidance,
+                    IsB2B = workflowPartyIsB2B,
                     IsActive = true,
                     CreatedBy = userName,
                     CreatedAt = now
@@ -1081,6 +1315,7 @@ if (f.DateTo.HasValue)
                 opp.LastUpdatedBy = userName;
                 opp.LastUpdatedAt = now;
                 opp.EmployeeId = dto.EmployeeId ?? opp.EmployeeId;
+                opp.IsB2B = workflowPartyIsB2B;
                 ApplyClosureState(opp, stageBefore, opp.StageId, userName, now);
 
                 await _db.SaveChangesAsync();

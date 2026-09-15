@@ -15,6 +15,9 @@ public partial class ContactSource
 
     public bool IsActive { get; set; }
 
+    /// <summary>🏢 هل هذا المصدر خاص بملفات B2B (شركات/مؤسسات)؟ يظهر ويُختار فقط لمن له صلاحية B2B.</summary>
+    public bool IsB2B { get; set; }
+
     public string? CreatedBy { get; set; }
 
     public DateTime? CreatedAt { get; set; }

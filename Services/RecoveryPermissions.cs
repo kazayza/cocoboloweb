@@ -4,8 +4,8 @@ namespace COCOBOLOERPNEW.Services;
 
 /// <summary>
 /// مرجع موحّد لصلاحيات استرداد الفرص الخاسرة (Single Source of Truth).
-/// الأدوار المصرّح بها أصلاً: Admin / GeneralManager / SalesManager.
-/// أي موظف (خصوصًا خدمة العملاء) يحصل على الصلاحية عبر شاشة الصلاحيات.
+/// الأدوار المصرّح بها: Admin / GeneralManager / SalesManager / CustomerService (موظف الاسترداد).
+/// أي موظف إضافي يحصل على الصلاحية عبر شاشة الصلاحيات.
 /// </summary>
 public static class RecoveryPermissions
 {
@@ -13,6 +13,7 @@ public static class RecoveryPermissions
     private const string RoleAdmin          = "Admin";
     private const string RoleGeneralManager = "GeneralManager";
     private const string RoleSalesManager   = "SalesManager";
+    private const string RoleCustomerService = "CustomerService"; // موظف خدمة العملاء المتابع للاسترداد
 
     // ─── أسماء الـ Claims ────────────────────────────
     public const string PermView        = "frm_LostRecovery:View";
@@ -28,6 +29,7 @@ public static class RecoveryPermissions
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleGeneralManager)
         || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleCustomerService)
         || user.HasClaim(c => c.Type == "Permission" && c.Value == PermView);
 
     /// <summary>
@@ -39,6 +41,7 @@ public static class RecoveryPermissions
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleGeneralManager)
         || user.IsInRole(RoleSalesManager)
+        || user.IsInRole(RoleCustomerService)
         || user.HasClaim(c => c.Type == "Permission" && c.Value == PermRevive);
 
     /// <summary>

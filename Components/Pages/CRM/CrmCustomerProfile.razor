@@ -1446,6 +1446,10 @@ else
     private bool _canViewComplaints;
     private DateTime? _crmAccessFromDate;
 
+    // 🏢 B2B scoping (مصدر الحقيقة: Parties.IsB2B)
+    private bool _b2bCanView;      // يستطيع رؤية ملفات B2B
+    private bool _b2bOwnScope;     // موظف B2B المختص → شغله فقط
+
     // Search (shared between both modes)
     private bool _showSearch;
     private string _searchQuery = "";
@@ -1477,6 +1481,10 @@ else
             _canViewQuotations = user.IsInRole("Admin") || user.HasClaim("Permission", "frmQuotationsList:View");
             _canViewComplaints = user.IsInRole("Admin") || user.HasClaim("Permission", "frm_Complaints_Main:View");
 
+            // 🏢 B2B scoping
+            _b2bCanView = B2bCrmPermissions.CanView(user);
+            _b2bOwnScope = B2bCrmPermissions.IsB2bSpecialist(user);
+
             // ── 🛡️ 3. Load CRM Data Scoping (CrmAccessFrom) ──
             var crmAccessClaim = user.FindFirst("CrmAccessFrom")?.Value;
             if (DateTime.TryParse(crmAccessClaim, out var accessDate))
@@ -1496,6 +1504,37 @@ else
     private async Task LoadProfileData()
     {
         using var db = await DbFactory.CreateDbContextAsync();
+
+        // 🏢 حارس فتح ملف شركة B2B: غير المصرح لهم ممنوعون نهائياً
+        var partyIsB2B = await db.Parties.AsNoTracking()
+            .Where(p => p.PartyId == PartyId.Value)
+            .Select(p => p.IsB2B)
+            .FirstOrDefaultAsync();
+
+        if (partyIsB2B)
+        {
+            if (!_b2bCanView)
+            {
+                Snackbar.Add("لا يمكنك فتح ملف شركة B2B — تحتاج صلاحية B2B.", Severity.Error);
+                Nav.NavigateTo("/crm/customers");
+                return;
+            }
+            if (_b2bOwnScope)
+            {
+                // المختص: لا يفتح ملف شركة ليس من شغله
+                var authState = await AuthProvider.GetAuthenticationStateAsync();
+                var emp = await B2bViewScope.ResolveEmployeeIdAsync(db, authState.User);
+                var mine = emp > 0 && await db.SalesOpportunities.AsNoTracking()
+                    .AnyAsync(o => o.PartyId == PartyId.Value && o.EmployeeId == emp && o.IsActive);
+                if (!mine)
+                {
+                    Snackbar.Add("هذه الشركة ليست ضمن ملفاتك.", Severity.Error);
+                    Nav.NavigateTo("/crm/customers");
+                    return;
+                }
+            }
+        }
+
         _party = await db.Parties.AsNoTracking()
             .Where(p => p.PartyId == PartyId.Value)
             .Select(p => new PartyListDto
@@ -1852,7 +1891,8 @@ else
             var q = _searchQuery.Trim().ToLower();
             using var db = await DbFactory.CreateDbContextAsync();
             _searchResults = await db.Parties.AsNoTracking()
-                .Where(p => p.PartyName != null &&
+                .Where(p => (_b2bCanView || !p.IsB2B) &&   // 🏢 عملاء B2B لذوي الصلاحية فقط
+                            p.PartyName != null &&
                             (p.PartyName.ToLower().Contains(q) ||
                              (p.Phone != null && p.Phone.Contains(q))))
                 .OrderBy(p => p.PartyName)

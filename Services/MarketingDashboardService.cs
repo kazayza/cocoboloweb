@@ -60,6 +60,11 @@ public class MarketingDashboardService : IMarketingDashboardService
         dateTo = dateTo.Date;
         var days = (int)(dateTo - dateFrom).TotalDays + 1;
 
+        // ⭐ عدد الشهور المغطاة بالفترة المختارة — تُضرب فيه التارجيتات الشهرية
+        var months = (dateTo.Year - dateFrom.Year) * 12 + (dateTo.Month - dateFrom.Month) + 1;
+        if (months < 1) months = 1;
+        var periodRevenueTarget = MonthlyTarget * months;
+
         var prevFrom = dateFrom.AddDays(-days);
         var prevTo = dateFrom.AddDays(-1);
 
@@ -193,7 +198,30 @@ public class MarketingDashboardService : IMarketingDashboardService
 
         // ── 🎯 إنجاز تارجيت الموظفين ──
         // إيراد كل موظف = الفواتير المرتبطة بفرص تم البيع اللي هو مسؤول عنها (EmployeeID في الفرصة)
-        var employeeTargets = await BuildEmployeeTargetsAsync(db, dateFrom, dateTo, filteredOpps, sales, channelFilter);
+        var employeeTargets = await BuildEmployeeTargetsAsync(db, dateFrom, dateTo, filteredOpps, sales, channelFilter, months);
+
+        // ── 🧾 قائمة Tooltip كارت «الصفقات المغلقة» (حسب الفترة المعروضة) ──
+        //    الفواتير المرتبطة بفرص تم بيعها = نفس مصدر الإيرادات/العملاء
+        var linkedSales = sales.Where(s => linkedInvoiceIds.Contains(s.TransactionId)).ToList();
+
+        var tooltipPartyIds = linkedSales.Select(s => s.PartyId).Distinct().ToList();
+        var tooltipPartyNames = new Dictionary<int, string>();
+        if (tooltipPartyIds.Any())
+        {
+            tooltipPartyNames = await db.Parties.AsNoTracking()
+                .Where(p => tooltipPartyIds.Contains(p.PartyId))
+                .ToDictionaryAsync(p => p.PartyId, p => p.PartyName ?? $"عميل #{p.PartyId}");
+        }
+
+        // كارت «الصفقات المغلقة»: سطر لكل فاتورة مرتبطة بفرصة تم بيعها (اسم العميل + مبلغ الفاتورة)
+        var dealTooltipRows = linkedSales
+            .OrderByDescending(s => s.NetTotalAmount)
+            .Select(s => new MarketingKpiTooltipRowDto
+            {
+                Name = tooltipPartyNames.TryGetValue(s.PartyId, out var dn) ? dn : $"عميل #{s.PartyId}",
+                Amount = s.NetTotalAmount
+            })
+            .ToList();
 
         // ── DTO ──
         var result = new MarketingDashboardDto
@@ -203,12 +231,12 @@ public class MarketingDashboardService : IMarketingDashboardService
             Channel = channel,
             ChannelName = ChannelName(channel),
             RevenueIsOverall = channel != "all",
-            MonthlySalesTarget = MonthlyTarget,
+            MonthlySalesTarget = periodRevenueTarget,   // تارجيت الفترة = الشهري × عدد الشهور
             SalesEmployeeCount = salesEmployees,
-            PerEmployeeMonthlyTarget = Math.Round(MonthlyTarget / salesEmployeeCount),
+            PerEmployeeMonthlyTarget = Math.Max(1, (int)Math.Round(periodRevenueTarget / salesEmployeeCount)),
             CompanyActualRevenue = revenue,
-            CompanyTargetPercent = MonthlyTarget > 0 ? (double)(revenue / MonthlyTarget * 100m) : 0,
-            CompanyGaugeStyle = BuildGaugeStyle(MonthlyTarget > 0 ? (double)(revenue / MonthlyTarget * 100m) : 0),
+            CompanyTargetPercent = periodRevenueTarget > 0 ? (double)(revenue / periodRevenueTarget * 100m) : 0,
+            CompanyGaugeStyle = BuildGaugeStyle(periodRevenueTarget > 0 ? (double)(revenue / periodRevenueTarget * 100m) : 0),
             EmployeeTargets = employeeTargets,
         };
 
@@ -216,6 +244,12 @@ public class MarketingDashboardService : IMarketingDashboardService
             contacted, prevContacted, qualified, prevQualified, inProgress, prevInProgress,
             deals, prevDeals, customers, prevCustomers, cac, prevCac, revenue, prevRevenue, roas, prevRoas,
             convRate, prevConvRate);
+
+        // ⭐ ربط قائمة الـ Tooltip بكارت «الصفقات المغلقة» فقط (كارت «العملاء» أُزيل التولتيب منه)
+        foreach (var k in result.Kpis)
+        {
+            if (k.Key == "deals") k.TooltipRows = dealTooltipRows;
+        }
 
         result.OverallDelta = result.Kpis.Where(k => k.Delta.HasValue).Select(k => k.Delta!.Value).DefaultIfEmpty(0).Average();
 
@@ -231,7 +265,7 @@ public class MarketingDashboardService : IMarketingDashboardService
         result.Channels = BuildChannels(sources, filteredLeads, filteredOpps, expenses, channel);
 
         // ── المستهدف ──
-        result.Targets = BuildTargets(leadsCount, contacted, qualified, deals, revenue);
+        result.Targets = BuildTargets(months, leadsCount, contacted, qualified, deals, revenue);
 
         // ── التسويق مقابل المبيعات (بتسربات فعلية) ──
         double VsDrop(int from, int to) => from > 0 ? Math.Round(100 - (double)to / from * 100, 1) : 0;
@@ -261,7 +295,7 @@ public class MarketingDashboardService : IMarketingDashboardService
         var custConvRate = leadsCount > 0 ? (double)customers / leadsCount * 100 : 0;
         result.Alerts = BuildAlerts(roas, custConvRate, contactRate, cac, leadsCount, customers);
         (result.PerformanceScore, result.ScoreLabel, result.ScoreClass, result.ScoreCapped, result.ScoreComponents) =
-            BuildScore(roas, custConvRate, cac, contactRate, convRate, leadsCount, customers, revenue);
+            BuildScore(roas, custConvRate, cac, contactRate, convRate, leadsCount, customers, revenue, periodRevenueTarget);
 
         // ── الاتجاهات ──
         (result.LeadsTrend, result.ConversionTrend, result.CplTrend, result.RoasTrend) =
@@ -455,7 +489,7 @@ public class MarketingDashboardService : IMarketingDashboardService
     // 🎯 المستهدف
     // ═══════════════════════════════════════════
     private static List<MarketingTargetDto> BuildTargets(
-        int leads, int contacted, int qualified, int deals, decimal revenue)
+        int months, int leads, int contacted, int qualified, int deals, decimal revenue)
     {
         var actuals = new Dictionary<string, double>
         {
@@ -470,11 +504,32 @@ public class MarketingDashboardService : IMarketingDashboardService
         foreach (var (metric, target) in DefaultTargets)
         {
             var actual = actuals.GetValueOrDefault(metric, 0);
-            var percent = target > 0 ? actual / target * 100 : 0;
+
+            double goal;
+            string targetText;
+            if (metric == "عملاء مؤهلين")
+            {
+                // ⭐ العميل المؤهل = 60% من إجمالي المحتملين (وليس رقماً ثابتاً 150)
+                //    وطبيعتها شهرية: شهرياً الهدف = 60% من محتملي الشهر، وللفترة =
+                //    60% من محتملي الفترة (لأن المحتملين يتجمعون بعدد الشهور تلقائياً).
+                goal = Math.Round(leads * 0.60);
+                targetText = $"60% ({((int)goal):N0})";
+            }
+            else
+            {
+                // بقية التارجيتات شهرية → تُضرب في عدد الشهور المختارة
+                var scaled = metric == "إيرادات"
+                    ? (double)(MonthlyTarget * months)
+                    : target * months;
+                goal = scaled;
+                targetText = metric == "إيرادات" ? FmtMoney((decimal)scaled) : ((int)scaled).ToString("N0");
+            }
+
+            var percent = goal > 0 ? actual / goal * 100 : 0;
             list.Add(new MarketingTargetDto
             {
                 Metric = metric,
-                Target = metric == "إيرادات" ? FmtMoney((decimal)target) : ((int)target).ToString("N0"),
+                Target = targetText,
                 Actual = metric == "إيرادات" ? FmtMoney((decimal)actual) : ((int)actual).ToString("N0"),
                 Percent = percent,
                 Achieved = percent >= 100,
@@ -534,7 +589,7 @@ public class MarketingDashboardService : IMarketingDashboardService
     // ═══════════════════════════════════════════
     private static (double Score, string Label, string Class, bool Capped, List<MarketingV2ScoreComponentDto> Components) BuildScore(
         decimal roas, double custConvRate, decimal cac, double contactRate, double leadConvRate,
-        int leads, int customers, decimal revenue)
+        int leads, int customers, decimal revenue, decimal periodRevenueTarget)
     {
         const double TargetCustConv = 6.0;    // %
         const decimal TargetCac = 15_000m;    // ج
@@ -576,16 +631,16 @@ public class MarketingDashboardService : IMarketingDashboardService
             Detail = $"{roas:0.0}x من مستهدف {TargetRoas:0.0}x",
         });
 
-        // 4) 🎯 إنجاز تارجت الإيراد (3 مليون) — 20 نقطة
-        var revenueTargetScore = MonthlyTarget > 0
-            ? Math.Min(10, (double)(revenue / MonthlyTarget * 10m))
+        // 4) 🎯 إنجاز تارجت الإيراد (3 مليون شهرياً × عدد الشهور) — 20 نقطة
+        var revenueTargetScore = periodRevenueTarget > 0
+            ? Math.Min(10, (double)(revenue / periodRevenueTarget * 10m))
             : 0;
         components.Add(new MarketingV2ScoreComponentDto
         {
             Label = "إنجاز تارجت الإيراد",
             Earned = Math.Round(revenueTargetScore, 1),
             Weight = 20,
-            Detail = $"{FmtMoney(revenue)} من {FmtMoney(MonthlyTarget)} ({(double)(revenue / MonthlyTarget * 100m):0.0}%)",
+            Detail = $"{FmtMoney(revenue)} من {FmtMoney(periodRevenueTarget)} ({(double)(revenue / periodRevenueTarget * 100m):0.0}%)",
         });
 
         // 5) نسبة التواصل — 10 نقاط
@@ -801,7 +856,8 @@ public class MarketingDashboardService : IMarketingDashboardService
         DateTime dateFrom, DateTime dateTo,
         List<OppRow> filteredOpps,
         List<SaleRow> sales,
-        Func<int?, bool> channelFilter)
+        Func<int?, bool> channelFilter,
+        int months)
     {
         var result = new List<EmployeeTargetDto>();
 
@@ -823,7 +879,8 @@ public class MarketingDashboardService : IMarketingDashboardService
                 .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName);
         }
 
-        var perEmployeeTarget = Math.Round(MonthlyTarget / salesUsers.Count);
+        // ⭐ تارجيت الموظف للفترة = (الشهري ÷ عدد الموظفين) × عدد الشهور المختارة
+        var perEmployeeTarget = Math.Max(1, (int)Math.Round(MonthlyTarget / salesUsers.Count * months));
 
         // 2) لكل موظف: فرص تم البيع اللي EmployeeID بتاعه (من جدول الفرص)
         //    الفرص المرتبطة بفواتير → الإيراد بتاعه

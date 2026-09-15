@@ -77,6 +77,7 @@ public class OpportunityFilterDto
     public string? SearchText { get; set; }
     public int? StageId { get; set; }
     public int? EmployeeId { get; set; }
+    public List<int>? PartyIds { get; set; }  // 🏢 B2B: حصر الفرص بمعرّفات العملاء (الشركات) — خيار إضافي اختياري لا يؤثر على غير المستخدمين
     public int? SourceId { get; set; }
     public int? CategoryId { get; set; }
     public bool? IsActive { get; set; } = true;

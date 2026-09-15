@@ -260,6 +260,56 @@ public class QuotationService : IQuotationService
                 foreach (var c in counts)
                     itemsCountDict[c.Id] = c.Cnt;
             }
+
+            // ⭐ حساب أعلى مدة تصنيع (أيام) لكل عرض من القائمة —
+            //    القاعدة نفس قاعدة فتح العرض: المواصفة البديلة المختارة أولاً ثم المنتج الأصلي.
+            step = "Step 6e2: Fetch max manufacturing days";
+            var maxMfgDict = new Dictionary<int, int>();
+            if (quoteIds.Any())
+            {
+                var mfgDetailRows = await db.QuotationDetails.AsNoTracking()
+                    .Where(d => quoteIds.Contains(d.QuotationId))
+                    .Select(d => new { d.QuotationId, d.ProductId, d.SelectedAlternativeId })
+                    .ToListAsync();
+
+                var mfgProdIds = mfgDetailRows.Select(d => d.ProductId).Distinct().ToList();
+                var mfgAltIds = mfgDetailRows
+                    .Where(d => d.SelectedAlternativeId.HasValue)
+                    .Select(d => d.SelectedAlternativeId!.Value)
+                    .Distinct()
+                    .ToList();
+
+                var mfgProdPeriods = mfgProdIds.Any()
+                    ? await db.Products.AsNoTracking()
+                        .Where(p => mfgProdIds.Contains(p.ProductId))
+                        .Select(p => new { p.ProductId, p.Period })
+                        .ToDictionaryAsync(p => p.ProductId, p => p.Period)
+                    : new Dictionary<int, int?>();
+
+                var mfgAltPeriods = mfgAltIds.Any()
+                    ? await db.ProductFactoryAlternatives.AsNoTracking()
+                        .Where(a => mfgAltIds.Contains(a.AlternativeId))
+                        .Select(a => new { a.AlternativeId, a.Period })
+                        .ToDictionaryAsync(a => a.AlternativeId, a => a.Period)
+                    : new Dictionary<int, int?>();
+
+                foreach (var g in mfgDetailRows.GroupBy(d => d.QuotationId))
+                {
+                    var maxDays = g
+                        .Select(d =>
+                        {
+                            if (d.SelectedAlternativeId.HasValue
+                                && mfgAltPeriods.TryGetValue(d.SelectedAlternativeId.Value, out var altP))
+                                return altP ?? (mfgProdPeriods.TryGetValue(d.ProductId, out var pp) ? pp : null);
+                            return mfgProdPeriods.TryGetValue(d.ProductId, out var pPer) ? pPer : null;
+                        })
+                        .Where(v => v.HasValue && v.Value > 0)
+                        .Select(v => v!.Value)
+                        .DefaultIfEmpty(0)
+                        .Max();
+                    maxMfgDict[g.Key] = maxDays;
+                }
+            }
             // ✅ Step 6f: حساب تكلفة عروض الأسعار حسب صلاحية المستخدم
 step = "Step 6f: Calculate quotation costs";
 
@@ -368,6 +418,7 @@ if (canViewCost && quoteIds.Any())
                     GrandTotal = r.Grand ?? total,
                     TotalCost = canViewCost && costDict.TryGetValue(qid, out var qCost) ? qCost : null,
                     ItemsCount = icnt,
+                    MaxManufacturingDays = maxMfgDict.TryGetValue(qid, out var md) && md > 0 ? md : null,
                     Status = string.IsNullOrWhiteSpace(r.Stat) ? QuotationStatuses.Draft : r.Stat,
                     InvoiceId = r.InvId,
                     InvoiceReference = invRef,

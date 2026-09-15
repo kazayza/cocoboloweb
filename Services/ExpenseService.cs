@@ -47,7 +47,7 @@ public class ExpenseService : IExpenseService
     // ⭐ تطبيق كل فلاتر المصروفات (مشترك بين اللسته والإحصائيات والتقارير)
     //    لأي تعديل جوه الفلاتر هنا يتأثر في كل الأماكن تلقائيًا
     private async Task<IQueryable<Expense>> ApplyExpenseFiltersAsync(
-        IQueryable<Expense> query, ExpenseFilterDto filter)
+        IQueryable<Expense> query, ExpenseFilterDto filter, bool includeDateFilter = true)
     {
         if (filter.BranchId.HasValue)
             query = query.Where(e => e.BranchId == filter.BranchId.Value);
@@ -90,10 +90,16 @@ public class ExpenseService : IExpenseService
 
         if (filter.CashBoxId.HasValue)
             query = query.Where(e => e.CashBoxId == filter.CashBoxId.Value);
-        if (filter.DateFrom.HasValue)
-            query = query.Where(e => e.ExpenseDate >= filter.DateFrom.Value.Date);
-        if (filter.DateTo.HasValue)
-            query = query.Where(e => e.ExpenseDate < filter.DateTo.Value.Date.AddDays(1)); // ⭐ حل مشكلة التاريخ هنا
+
+        // فلترة المدة تُطبَّق فقط عند طلبها — كروت اليوم/السنة/الإجمالي لا تتأثر
+        // بمدة العرض حتى لا تتحول لأصفار أو أرقام مكررة عند عرض فترة قديمة.
+        if (includeDateFilter)
+        {
+            if (filter.DateFrom.HasValue)
+                query = query.Where(e => e.ExpenseDate >= filter.DateFrom.Value.Date);
+            if (filter.DateTo.HasValue)
+                query = query.Where(e => e.ExpenseDate < filter.DateTo.Value.Date.AddDays(1)); // ⭐ حل مشكلة التاريخ هنا
+        }
         if (filter.AmountFrom.HasValue)
             query = query.Where(e => e.Amount >= filter.AmountFrom.Value);
         if (filter.AmountTo.HasValue)
@@ -286,12 +292,23 @@ public class ExpenseService : IExpenseService
         return children;
     }
 
-    // ⭐ الإحصائيات بتحترم الفلتر بالكامل (نفس فلتر الجدول)
-    //    الكروت: (اليوم / الشهر / السنة / الإجمالي) بتتحسب جوه نطاق الفلتر الحالي
+    // ⭐ سلوك الكروت (قائمة المصروفات):
+    //    - كارت «هذا الشهر / الفترة المحددة» يسمع في كل الفلاتر:
+    //        * بلا فلترة مدة → مصروفات الشهر الحالي ضمن نطاق الاختيار (فرع/مجموعة/خزنة/بحث...).
+    //        * مع فلترة مدة (من/إلى) → مجموع الفترة المختارة ضمن نفس نطاق الاختيار.
+    //    - كارتات «اليوم / هذه السنة / الإجمالي» بتتبع فلاتر الاختيار (الفرع/المجموعة/الخزنة/البحث...)
+    //      لكنها لا تتأثر بفلترة «المدة»: بتحافظ على أرقامها الحقيقية
+    //      (النهارده / السنة الحالية / كل التواريخ) حتى لو المستخدم بيستعرض فترة قديمة،
+    //      عشان مفيش أصفار ولا تكرار للأرقام.
+    //    - قسم «تفصيل حسب المجموعة» تحت الجدول يتبع الفلتر الكامل (يعكس الصفوف الظاهرة).
     public async Task<ExpenseStatsDto> GetStatsAsync(ExpenseFilterDto filter)
     {
-        var query = await ApplyExpenseFiltersAsync(
-            _db.Expenses.AsNoTracking().AsQueryable(), filter);
+        var all = _db.Expenses.AsNoTracking().AsQueryable();
+
+        // نطاق الاختيار الحالي (كل الفلاتر ما عدا المدة) — عليه كروت اليوم/السنة/الإجمالي
+        var scopeQuery = await ApplyExpenseFiltersAsync(all, filter, includeDateFilter: false);
+        // الفلتر الكامل (مع المدة) — عليه قسم تفصيل المجموعات تحت الجدول
+        var fullQuery = await ApplyExpenseFiltersAsync(all, filter);
 
         var today = DateTime.Today;
         var monthStart = new DateTime(today.Year, today.Month, 1);
@@ -299,22 +316,40 @@ public class ExpenseService : IExpenseService
         var yearStart = new DateTime(today.Year, 1, 1);
         var yearEnd = yearStart.AddYears(1);             // أول السنة الجاية (نهاية مفتوحة)
 
-        // ⚠️ النوافذ لازم تكون مقفولة من الجهتين (بداية + نهاية مفتوحة) عشان سطور
-        //    "المصروف المقدم" لشهور قادمة (تواريخها في المستقبل) ماتتسحبش في
-        //    كارت الشهر/السنة الحاليين — الشهر = من أول يوم لآخر يوم بس.
+        // ⚠️ النوافذ مقفولة من الجهتين (بداية + نهاية مفتوحة) عشان سطور "المصروف
+        //    المقدم" لشهور قادمة ماتتسحبش في كارت الشهر/السنة الحاليين.
+        var hasDateRange = filter.DateFrom.HasValue || filter.DateTo.HasValue;
+
         var stats = new ExpenseStatsDto
         {
-            TotalCount = await query.CountAsync(),
-            TotalAmount = await query.SumAsync(e => (decimal?)e.Amount) ?? 0,
-            TodayAmount = await query.Where(e => e.ExpenseDate >= today && e.ExpenseDate < today.AddDays(1))
+            // الإجمالي = كل مصروفات نطاق الاختيار (مش بيتقيد بمدة العرض)
+            TotalCount = await scopeQuery.CountAsync(),
+            TotalAmount = await scopeQuery.SumAsync(e => (decimal?)e.Amount) ?? 0,
+
+            // مصروفات اليوم = مصروفات النهارده ضمن نطاق الاختيار (ثابتة ضد المدة)
+            TodayAmount = await scopeQuery.Where(e => e.ExpenseDate >= today && e.ExpenseDate < today.AddDays(1))
                 .SumAsync(e => (decimal?)e.Amount) ?? 0,
-            MonthAmount = await query.Where(e => e.ExpenseDate >= monthStart && e.ExpenseDate < monthEnd)
-                .SumAsync(e => (decimal?)e.Amount) ?? 0,
-            YearAmount = await query.Where(e => e.ExpenseDate >= yearStart && e.ExpenseDate < yearEnd)
+
+            // ⭐ كارت الشهر/الفترة:
+            //    - بلا فلترة مدة → الشهر الحالي ضمن نطاق الاختيار.
+            //    - مع فلترة مدة (من/إلى) → مجموع الفترة المختارة (بنفس منطق تاريخ
+            //      الجدول: اليوم الأول شامل واليوم الأخير شامل، واليوم الأول/الأخير كاملين).
+            MonthAmount = hasDateRange
+                ? await scopeQuery.Where(e =>
+                        (!filter.DateFrom.HasValue || e.ExpenseDate >= filter.DateFrom.Value.Date)
+                        && (!filter.DateTo.HasValue || e.ExpenseDate < filter.DateTo.Value.Date.AddDays(1)))
+                    .SumAsync(e => (decimal?)e.Amount) ?? 0
+                : await scopeQuery.Where(e => e.ExpenseDate >= monthStart && e.ExpenseDate < monthEnd)
+                    .SumAsync(e => (decimal?)e.Amount) ?? 0,
+
+            // هذه السنة = مصروفات السنة الحالية ضمن نطاق الاختيار (ثابتة ضد المدة)
+            YearAmount = await scopeQuery.Where(e => e.ExpenseDate >= yearStart && e.ExpenseDate < yearEnd)
                 .SumAsync(e => (decimal?)e.Amount) ?? 0
         };
 
-        var groupData = await query
+        // ─── تفصيل المصروفات حسب المجموعة (القسم تحت الجدول): يتبع الفلتر الكامل
+        //     (مع المدة) ليعكس توزيع الصفوف الظاهرة فعلياً.
+        var groupData = await fullQuery
             .GroupBy(e => e.ExpenseGroupId)
             .Select(g => new
             {
@@ -327,7 +362,8 @@ public class ExpenseService : IExpenseService
         var groups = await _db.ExpenseGroups.AsNoTracking()
             .ToDictionaryAsync(g => g.ExpenseGroupId, g => g.ExpenseGroupName);
 
-        var totalForPct = stats.TotalAmount == 0 ? 1 : stats.TotalAmount;
+        var groupTotal = groupData.Sum(x => x.Total);
+        var totalForPct = groupTotal == 0 ? 1 : groupTotal;
         stats.GroupBreakdown = groupData.Select(x => new ExpenseGroupStatsDto
         {
             ExpenseGroupId = x.GroupId,

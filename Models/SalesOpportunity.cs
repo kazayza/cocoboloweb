@@ -48,6 +48,10 @@ public partial class SalesOpportunity
     // ملاحظة: bool? لتحمّل صفوف قديمة قيمتها NULL في قاعدة البيانات
     public bool? IsRecoveryRejected { get; set; }
 
+    // 🏢 B2B: علامة أن هذه الفرصة تخص ملفات B2B (الشركات) — تُحفظ تلقائياً من عميل B2B.
+    // موديول B2B المعتمد يعتمد على العميل كمصدر حقيقة، وهذه نسخة مُنزّلة للفرز السريع.
+    public bool IsB2B { get; set; }
+
     public string? Notes { get; set; }
 
     public string? Guidance { get; set; }

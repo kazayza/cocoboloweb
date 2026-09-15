@@ -14,6 +14,13 @@ public class OpportunityWorkflowDto
     public string? NewPhone { get; set; }
     public string? NewAddress { get; set; }
 
+    /// <summary>
+    /// 🏢 نمط «شركة B2B جديدة» — إنشاء عميل شركة معلَّم B2B من شاشة CRM الموحدة.
+    /// يظهر فقط لمن له صلاحية إدارة B2B (موظف B2B المختص / المدراء).
+    /// يستخدم نفس حقول NewClientName/NewPhone/NewAddress أعلاه كاسم الشركة/هاتفها/عنوانها.
+    /// </summary>
+    public bool IsCompanyB2B { get; set; } = false;
+
     // الفرصة
     public int? OpportunityId { get; set; }
     public int? EmployeeId { get; set; }

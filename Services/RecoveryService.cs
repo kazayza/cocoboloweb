@@ -44,7 +44,7 @@ public class RecoveryService
     // ═══════════════════════════════════════════════════════════
     //  لوحة الإحصائيات
     // ═══════════════════════════════════════════════════════════
-    public async Task<RecoveryStatsDto> GetStatsAsync()
+    public async Task<RecoveryStatsDto> GetStatsAsync(ClaimsPrincipal? user = null)
     {
         await using var db = await _dbFactory.CreateDbContextAsync();
         var now = DateTime.Now;
@@ -103,13 +103,28 @@ public class RecoveryService
                 && !contactedSet.Contains(o.OpportunityId));
         }
 
+        // ⭐ تواصلاتي اليوم (موظف خدمة العملاء الحالي): مكالمات الاسترداد المسجّلة اليوم باسمي
+        var myTodayCalls = 0;
+        if (user?.Identity?.IsAuthenticated == true && !string.IsNullOrWhiteSpace(user.Identity.Name))
+        {
+            var uname = user.Identity.Name;
+            var myEmp = await ResolveEmployeeByUsernameAsync(uname);
+            var lostOnly = new[] { LostStageId, NotInterestedStageId };
+            myTodayCalls = await db.CustomerInteractions.AsNoTracking()
+                .Where(i => i.InteractionDate >= DateTime.Today
+                    && (i.CreatedBy == uname || (myEmp > 0 && i.EmployeeId == myEmp))
+                    && i.StageBeforeId.HasValue && lostOnly.Contains(i.StageBeforeId.Value))
+                .CountAsync();
+        }
+
         return new RecoveryStatsDto
         {
             LostCount = lost.Count,
             LostValue = lost.Sum(o => o.ExpectedValue ?? 0),
             UnassignedCount = lost.Count(o => !assignedIds.Contains(o.OpportunityId)),
             RevivedThisMonth = revived,
-            UncontactedCount = uncontacted
+            UncontactedCount = uncontacted,
+            MyTodayCalls = myTodayCalls
         };
     }
 
@@ -318,7 +333,7 @@ public class RecoveryService
         {
             if (!viewMap.TryGetValue(r.OpportunityId, out var v)) continue;
             var task = taskByOpp.TryGetValue(r.OpportunityId, out var tk) ? tk : null;
-            (DateTime Date, string? ByName, string? Summary)? lc = null;
+            (DateTime Date, string? ByName, string? Summary, string? Outcome)? lc = null;
             if (lastCs.TryGetValue(r.OpportunityId, out var lcVal)) lc = lcVal;
 
             result.Items.Add(new LostRecoveryItemDto
@@ -347,6 +362,7 @@ public class RecoveryService
                 LastCsDate = lc?.Date,
                 LastCsBy = lc?.ByName,
                 LastCsSummary = lc?.Summary,
+                LastCsOutcome = lc?.Outcome,
                 IsFollowUpOverdue = task != null && r.NextFollowUpDate.HasValue
                     && r.NextFollowUpDate.Value.Date < DateTime.Today
             });
@@ -356,10 +372,10 @@ public class RecoveryService
     }
 
     // آخر تواصل مسجل لخدمة العملاء لكل فرصة (بينما هي في مرحلة الخسارة)
-    private async Task<Dictionary<int, (DateTime Date, string? ByName, string? Summary)>>
+    private async Task<Dictionary<int, (DateTime Date, string? ByName, string? Summary, string? Outcome)>>
         GetLastCsContactsAsync(db24804Context db, List<int> opportunityIds)
     {
-        var result = new Dictionary<int, (DateTime, string?, string?)>();
+        var result = new Dictionary<int, (DateTime, string?, string?, string?)>();
         var closedStages = new[] { LostStageId, NotInterestedStageId };
 
         var ints = await db.CustomerInteractions.AsNoTracking()
@@ -391,7 +407,7 @@ public class RecoveryService
             var by = !string.IsNullOrWhiteSpace(rec.CreatedBy)
                      && userNames.TryGetValue(rec.CreatedBy, out var fn)
                 ? fn : rec.CreatedBy;
-            result[kv.Key] = (rec.InteractionDate, by, StripChannelPrefix(rec.Summary));
+            result[kv.Key] = (rec.InteractionDate, by, StripChannelPrefix(rec.Summary), ExtractOutcomeTag(rec.Summary));
         }
         return result;
     }
@@ -401,9 +417,22 @@ public class RecoveryService
     {
         if (string.IsNullOrWhiteSpace(summary)) return summary;
         var t = summary.Trim();
-        if (t.StartsWith("[") && t.Contains(']'))
+        // نزيل كل الوسوم البادئة المتتالية: [قناة] [نتيجة]
+        while (t.StartsWith("[") && t.Contains(']'))
             t = t[(t.IndexOf(']') + 1)..].Trim();
         return string.IsNullOrWhiteSpace(t) ? summary : t;
+    }
+
+    // يستخرج وسم النتيجة من بداية الملخص — الصيغة [قناة] [نتيجة] ثم الملخص
+    private static string? ExtractOutcomeTag(string? summary)
+    {
+        if (string.IsNullOrWhiteSpace(summary)) return null;
+        var t = summary.Trim();
+        if (t.StartsWith("[") && t.Contains(']'))
+            t = t[(t.IndexOf(']') + 1)..].Trim();
+        if (t.StartsWith("[") && t.Contains(']'))
+            return t[1..t.IndexOf(']')].Trim();
+        return null;
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -586,10 +615,13 @@ public class RecoveryService
                     o.ExpectedValue,
                     o.LostReasonId,
                     o.IsRecoveryRejected,
-                    o.IsActive
+                    o.IsActive,
+                    // 🏢 هل العميل شركة B2B؟ (مصدر الحقيقة) — B2B لا يدخل الاسترداد نهائياً
+                    PartyIsB2B = db.Parties.Any(p => p.PartyId == o.PartyId && p.IsB2B)
                 })
                 .FirstOrDefaultAsync();
             if (opp == null) return;
+            if (opp.PartyIsB2B) return; // 🏢 ملفات B2B لا تمر على خدمة العملاء/الاسترداد تحت أي مسار
             if (opp.IsActive != true) return;
             if (opp.StageId != LostStageId && opp.StageId != NotInterestedStageId) return;
             if (opp.IsRecoveryRejected == true) return; // رفض نهائي — لا إزعاج إطلاقًا
@@ -1259,7 +1291,7 @@ public class RecoveryService
             PartyId = dto.PartyId,
             EmployeeId = actorEmpId != 0 ? actorEmpId : opp.EmployeeId,
             InteractionDate = now,
-            Summary = $"[{dto.Channel}] {dto.Summary}",
+            Summary = $"[{dto.Channel}] [{dto.Outcome}] {dto.Summary}",
             StageBeforeId = opp.StageId,
             StageAfterId = opp.StageId,
             NextFollowUpDate = isDefinitive ? null : dto.NextFollowUpDate,
@@ -1601,13 +1633,20 @@ public class RecoveryService
                 : (userNames.TryGetValue(r.CreatedBy, out var un) ? un : r.CreatedBy);
             var summary = r.Summary ?? "";
 
-            // استخرج القناة من البادئة [قناة]
+            // استخرج القناة والنتيجة من البادئات [قناة] [نتيجة]
             string? channel = null;
-            if (summary.StartsWith("[") && summary.Contains("]"))
+            string? outcome = null;
+            if (summary.StartsWith("[") && summary.Contains(']'))
             {
                 var close = summary.IndexOf(']');
                 channel = summary[1..close];
                 summary = summary[(close + 1)..].Trim();
+            }
+            if (summary.StartsWith("[") && summary.Contains(']'))
+            {
+                var close2 = summary.IndexOf(']');
+                outcome = summary[1..close2];
+                summary = summary[(close2 + 1)..].Trim();
             }
 
             return new RecoveryHistoryDto
@@ -1616,7 +1655,8 @@ public class RecoveryService
                 Summary = summary,
                 CreatedBy = name,
                 EmployeeName = name,
-                Channel = channel
+                Channel = channel,
+                Outcome = outcome
             };
         }).ToList();
     }

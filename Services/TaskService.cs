@@ -33,6 +33,42 @@ public class TaskService : ITaskService
 
         if (crmAccess.HasValue)
             query = query.Where(t => t.CreatedAt >= crmAccess.Value);
+
+        // 🏢 نطاق B2B (مصدر الحقيقة: Parties.IsB2B)
+        var kind = B2bViewScope.KindOf(_http?.HttpContext?.User);
+        if (kind != B2bViewScope.Kind.All)
+        {
+            var b2b = await B2bViewScope.ResolveB2bAsync(_db);
+            switch (kind)
+            {
+                case B2bViewScope.Kind.ExcludeB2B:
+                    query = query.Where(t =>
+                        !(t.PartyId.HasValue && b2b.PartyIds.Contains(t.PartyId.Value))
+                        && !(t.OpportunityId.HasValue && b2b.OpportunityIds.Contains(t.OpportunityId.Value)));
+                    break;
+                case B2bViewScope.Kind.AllB2B:
+                    query = query.Where(t =>
+                        (t.PartyId.HasValue && b2b.PartyIds.Contains(t.PartyId.Value))
+                        || (t.OpportunityId.HasValue && b2b.OpportunityIds.Contains(t.OpportunityId.Value)));
+                    break;
+                case B2bViewScope.Kind.OwnB2B:
+                    var emp = await B2bViewScope.ResolveEmployeeIdAsync(_db, _http?.HttpContext?.User);
+                    if (emp <= 0)
+                    {
+                        query = query.Where(t => false);
+                    }
+                    else
+                    {
+                        var ownOpps = await B2bViewScope.ResolveOwnB2bOpportunitiesAsync(_db, b2b.PartyIds, emp);
+                        query = query.Where(t =>
+                            (t.OpportunityId.HasValue && ownOpps.Contains(t.OpportunityId.Value))
+                            || (!t.OpportunityId.HasValue && t.PartyId.HasValue
+                                && b2b.PartyIds.Contains(t.PartyId.Value) && t.AssignedTo == emp));
+                    }
+                    break;
+            }
+        }
+
         if (filter.OpportunityId.HasValue)
             query = query.Where(t => t.OpportunityId == filter.OpportunityId.Value);
         if (filter.AssignedTo.HasValue)
@@ -415,10 +451,34 @@ public class TaskService : ITaskService
             .ToListAsync();
     }
 
+    /// <summary>🏢 هل يمكن للمستخدم الحالي إضافة صفوف على فرصة/عميل B2B؟</summary>
+    private async Task<bool> CanWriteOnB2bOpportunityAsync(int opportunityId)
+    {
+        var user = _http?.HttpContext?.User;
+        var isB2bParty = await _db.SalesOpportunities.AsNoTracking()
+            .Where(o => o.OpportunityId == opportunityId)
+            .AnyAsync(o => _db.Parties.Any(p => p.PartyId == o.PartyId && p.IsB2B));
+        if (!isB2bParty) return true;
+
+        if (B2bCrmPermissions.CanManage(user)) return true;                 // المدراء/المختص
+        if (B2bCrmPermissions.IsB2bSpecialist(user))                          // المختص: فرصه فقط
+        {
+            var emp = await B2bViewScope.ResolveEmployeeIdAsync(_db, user);
+            if (emp <= 0) return false;
+            var owned = await _db.SalesOpportunities.AsNoTracking()
+                .AnyAsync(o => o.OpportunityId == opportunityId && o.EmployeeId == emp);
+            return owned;
+        }
+        return false;
+    }
+
     public async Task<(bool Success, string Message)> AddQuickAsync(QuickTaskDto dto, string userName)
     {
         try
         {
+            if (dto.OpportunityId.HasValue && !await CanWriteOnB2bOpportunityAsync(dto.OpportunityId.Value))
+                return (false, "لا يمكنك إضافة مهمة على ملف B2B — تحتاج صلاحية B2B.");
+
             var task = new CrmTask
             {
                 OpportunityId = dto.OpportunityId,

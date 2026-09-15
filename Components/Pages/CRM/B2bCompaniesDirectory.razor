@@ -1,0 +1,364 @@
+@page "/crm/b2b-companies"
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<db24804Context> DbFactory
+@inject AuthenticationStateProvider Auth
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+
+<PageTitle>شركات B2B — CRM</PageTitle>
+
+<div dir="rtl" class="bd-wrap">
+    @if (_loading)
+    {
+        <div class="bd-center"><div class="bd-spinner"></div><span>جاري تحميل الشركات...</span></div>
+    }
+    else if (_denied)
+    {
+        <MudContainer MaxWidth="MaxWidth.Small" Class="mt-16">
+            <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="rounded-xl">
+                <MudText Style="font-weight:700;">عذراً، لا تملك صلاحية الوصول لملفات شركات B2B.</MudText>
+                <MudButton Variant="Variant.Text" Color="Color.Info" OnClick='() => Nav.NavigateTo("/crm/opportunities")' Class="mt-2">العودة لمراحل البيع</MudButton>
+            </MudAlert>
+        </MudContainer>
+    }
+    else
+    {
+        @* ── Header ─────────────────────────────── *@
+        <MudCard Elevation="0" Class="bd-card bd-hero mb-4">
+            <MudCardContent Class="pa-4">
+                <MudStack Row Justify="Justify.SpaceBetween" Align="AlignItems.Center">
+                    <MudStack Row Spacing="2" Align="AlignItems.Center">
+                        <div class="bd-hero-icon">
+                            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-4h6v4"/><path d="M10 10h.01"/><path d="M14 10h.01"/></svg>
+                        </div>
+                        <div>
+                            <MudText Typo="Typo.h5" Style="font-weight:800; color:#0f172a;">شركات B2B</MudText>
+                            <MudText Typo="Typo.body2" Style="color:#64748b;">
+                                @(_isManager ? "كل ملفات الشركات (B2B)" : _isSpecialist ? "ملفات الشركات المسندة إليك" : "ملفات شركات B2B (قراءة)")
+                            </MudText>
+                        </div>
+                    </MudStack>
+                    <MudStack Row Spacing="2">
+                        @if (_canManageB2b)
+                        {
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Rounded.AddCircleOutline" OnClick='() => Nav.NavigateTo("/crm/opportunities/new")' Style="border-radius:10px; font-weight:700;">
+                                شركة / فرصة جديدة
+                            </MudButton>
+                        }
+                    </MudStack>
+                </MudStack>
+            </MudCardContent>
+        </MudCard>
+
+        @* ── KPI ────────────────────────────────── *@
+        <MudGrid Class="mb-4">
+            <MudItem xs="12" sm="4">
+                <MudCard Elevation="0" Class="bd-kpi" Style="border-right:4px solid #4f46e5;">
+                    <MudCardContent>
+                        <MudText Typo="Typo.caption" Style="color:#64748b;">عدد الشركات</MudText>
+                        <MudText Typo="Typo.h4" Style="font-weight:800; color:#4f46e5;">@_kpiCompanies.ToString("N0")</MudText>
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudCard Elevation="0" Class="bd-kpi" Style="border-right:4px solid #0ea5e9;">
+                    <MudCardContent>
+                        <MudText Typo="Typo.caption" Style="color:#64748b;">فرص مفتوحة</MudText>
+                        <MudText Typo="Typo.h4" Style="font-weight:800; color:#0ea5e9;">@_kpiOpps.ToString("N0")</MudText>
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudCard Elevation="0" Class="bd-kpi" Style="border-right:4px solid #059669;">
+                    <MudCardContent>
+                        <MudText Typo="Typo.caption" Style="color:#64748b;">إجمالي القيمة المتوقعة</MudText>
+                        <MudText Typo="Typo.h4" Style="font-weight:800; color:#059669;">@_kpiValue.ToString("N0")</MudText>
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+        </MudGrid>
+
+        @* ── Search bar ─────────────────────────── *@
+        <MudPaper Elevation="0" Class="pa-3 mb-4 bd-toolbar">
+            <MudGrid AlignItems="AlignItems.Center">
+                <MudItem xs="12" md="8">
+                    <MudTextField T="string" @bind-Value="_q" Label="ابحث باسم الشركة أو الهاتف" Variant="Variant.Outlined" Dense="true"
+                                  OnKeyDown="OnSearchKey" AdornmentIcon="@Icons.Material.Rounded.Search" AdornmentColor="Color.Primary" Adornment="Adornment.Start" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudStack Row Spacing="1">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LoadAsync" StartIcon="@Icons.Material.Rounded.Search" Style="border-radius:10px;">بحث</MudButton>
+                        <MudButton Variant="Variant.Text" Color="Color.Secondary" OnClick="ClearSearch" StartIcon="@Icons.Material.Rounded.Clear" Style="border-radius:10px;">مسح</MudButton>
+                    </MudStack>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        @* ── Companies grid ─────────────────────── *@
+        @if (!_rows.Any())
+        {
+            <MudPaper Elevation="0" Class="pa-10 text-center">
+                <MudText Style="font-size:2.5rem;">🏢</MudText>
+                <MudText Typo="Typo.h6" Style="font-weight:700; color:#475569;">لا توجد شركات B2B @(!string.IsNullOrWhiteSpace(_q) ? "مطابقة للبحث" : "")</MudText>
+                <MudText Typo="Typo.body2" Style="color:#94a3b8;">
+                    تظهر هنا الشركات المعلمة B2B (تُنشأ تلقائياً من «فرصة جديدة ← شركة B2B»).
+                </MudText>
+            </MudPaper>
+        }
+        else
+        {
+            <div class="bd-list">
+                @foreach (var r in _rows)
+                {
+                    <div class="bd-row" role="button" tabindex="0" @onclick="() => OpenCompany(r.PartyId)">
+                        <div class="bd-row-av">@(string.IsNullOrEmpty(r.PartyName) ? "؟" : r.PartyName[0].ToString())</div>
+                        <div class="bd-row-main">
+                            <div class="bd-row-name">@r.PartyName</div>
+                            <div class="bd-row-sub">
+                                @if (!string.IsNullOrWhiteSpace(r.Phone)) { <span>📞 @r.Phone</span> }
+                                @if (!string.IsNullOrWhiteSpace(r.City)) { <span>📍 @r.City</span> }
+                                @if (r.LastContact.HasValue) { <span>🕒 آخر تواصل: @r.LastContact.Value.ToString("yyyy-MM-dd")</span> }
+                                else { <span style="color:#94a3b8;">لا يوجد تواصل بعد</span> }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(r.Owners)) { <div class="bd-row-owners">👤 @r.Owners</div> }
+                        </div>
+                        <div class="bd-row-stats">
+                            <div class="bd-stat"><b>@r.Contacts.ToString("N0")</b><span>جهة اتصال</span></div>
+                            <div class="bd-stat"><b>@r.OpenOpps.ToString("N0")</b><span>فرصة مفتوحة</span></div>
+                            <div class="bd-stat"><b>@r.OpenValue.ToString("N0")</b><span>قيمة متوقعة</span></div>
+                        </div>
+                        <div class="bd-row-go">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <div class="bd-pager">
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Disabled="@(_page <= 1)" OnClick="() => ChangePage(-1)" StartIcon="@Icons.Material.Rounded.ChevronRight" Style="border-radius:10px;">السابق</MudButton>
+                <MudText Typo="Typo.body2" Style="color:#475569;">صفحة @_page من @(_totalPages)</MudText>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Disabled="@(_page >= _totalPages)" OnClick="() => ChangePage(1)" EndIcon="@Icons.Material.Rounded.ChevronLeft" Style="border-radius:10px;">التالي</MudButton>
+            </div>
+        }
+    }
+</div>
+
+<style>
+    .bd-wrap { font-family: Arial, Helvetica, sans-serif; }
+    .bd-hero { border-radius:18px; border:1px solid #e2e8f0; background:linear-gradient(135deg,#ffffff,#f8fafc); }
+    .bd-hero-icon { width:52px; height:52px; border-radius:14px; display:flex; align-items:center; justify-content:center; color:#fff; background:linear-gradient(135deg,#4f46e5,#7c3aed); }
+    .bd-kpi { border-radius:14px; border:1px solid #e2e8f0; }
+    .bd-toolbar { border-radius:14px; border:1px solid #e2e8f0; }
+    .bd-list { display:flex; flex-direction:column; gap:10px; }
+    .bd-row { display:flex; align-items:center; gap:14px; padding:14px 16px; background:#fff; border:1px solid #e2e8f0; border-radius:14px; cursor:pointer; transition:all .15s; }
+    .bd-row:hover { border-color:#c7d2fe; box-shadow:0 4px 14px rgba(79,70,229,.08); transform:translateY(-1px); }
+    .bd-row-av { width:44px; height:44px; min-width:44px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:1.15rem; color:#4f46e5; background:#eef2ff; }
+    .bd-row-main { flex:1; min-width:0; }
+    .bd-row-name { font-weight:700; color:#0f172a; }
+    .bd-row-sub { display:flex; flex-wrap:wrap; gap:10px; font-size:.8rem; color:#64748b; }
+    .bd-row-owners { margin-top:4px; font-size:.78rem; color:#9333ea; font-weight:600; }
+    .bd-row-stats { display:flex; gap:18px; }
+    .bd-stat { display:flex; flex-direction:column; align-items:center; min-width:56px; }
+    .bd-stat b { font-size:1rem; color:#0f172a; }
+    .bd-stat span { font-size:.68rem; color:#94a3b8; }
+    .bd-row-go { color:#cbd5e1; }
+    .bd-row:hover .bd-row-go { color:#4f46e5; }
+    .bd-pager { display:flex; align-items:center; justify-content:center; gap:16px; margin-top:18px; }
+    .bd-center { text-align:center; padding:80px 0; color:#64748b; }
+    .bd-spinner { width:34px; height:34px; margin:0 auto 12px; border:4px solid #e2e8f0; border-top-color:#4f46e5; border-radius:50%; animation:bdspin .8s linear infinite; }
+    @@keyframes bdspin { to { transform: rotate(360deg); } }
+</style>
+
+@code {
+    private sealed class Row
+    {
+        public int PartyId { get; set; }
+        public string? PartyName { get; set; }
+        public string? Phone { get; set; }
+        public string? City { get; set; }
+        public DateTime? LastContact { get; set; }
+        public int Contacts { get; set; }
+        public int OpenOpps { get; set; }
+        public decimal OpenValue { get; set; }
+        public string? Owners { get; set; }
+    }
+
+    private const int PageSize = 10;
+
+    private bool _loading = true, _denied;
+    private bool _canView, _canManageB2b, _isManager, _isSpecialist;
+    private int _ownEmp;                     // موظف المختص (0 = غير مرتبط)
+    private int _page = 1, _total;
+    private string _q = "";
+    private List<Row> _rows = new();
+    private int _kpiCompanies, _kpiOpps;
+    private decimal _kpiValue;
+    private int _totalPages => Math.Max(1, (int)Math.Ceiling(_total / (double)PageSize));
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var a = await Auth.GetAuthenticationStateAsync();
+            var u = a.User;
+
+            _canView = B2bCrmPermissions.CanView(u);
+            _canManageB2b = B2bCrmPermissions.CanManage(u);
+            _isManager = B2bCrmPermissions.CanViewAll(u);
+            _isSpecialist = B2bCrmPermissions.IsB2bSpecialist(u);
+            if (!_canView)
+            {
+                _denied = true;
+                return;
+            }
+
+            if (_isSpecialist)
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                var name = u.Identity?.Name;
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    _ownEmp = await db.Users.AsNoTracking()
+                        .Where(x => x.Username == name && x.EmployeeId.HasValue)
+                        .Select(x => x.EmployeeId!.Value)
+                        .FirstOrDefaultAsync();
+                }
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await LoadAsync();
+    }
+
+    private async Task ClearSearch()
+    {
+        _q = ""; _page = 1; await LoadAsync();
+    }
+
+    private async Task ChangePage(int delta)
+    {
+        _page += delta;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            // ── نطاق الملفات (المصدر: Parties.IsB2B) ──
+            IQueryable<Party> baseQ = db.Parties.AsNoTracking().Where(p => p.IsB2B && p.IsActive != false);
+
+            if (_isSpecialist)
+            {
+                if (_ownEmp <= 0)
+                    baseQ = baseQ.Where(p => false);
+                else
+                    baseQ = baseQ.Where(p => db.SalesOpportunities.Any(o => o.PartyId == p.PartyId && o.EmployeeId == _ownEmp && o.IsActive));
+            }
+
+            // إحصائيات KPI (دون بحث)
+            var kpiQ = baseQ;   // queryable reuse
+            _kpiCompanies = await kpiQ.CountAsync();
+
+            var oppScope = db.SalesOpportunities.AsNoTracking()
+                .Where(o => o.IsActive && db.Parties.Any(p => p.PartyId == o.PartyId && p.IsB2B && p.IsActive != false));
+            if (_isSpecialist && _ownEmp > 0)
+                oppScope = oppScope.Where(o => o.EmployeeId == _ownEmp);
+
+            _kpiOpps = await oppScope.CountAsync();
+            _kpiValue = await oppScope.SumAsync(o => o.ExpectedValue ?? 0);
+
+            // ── بحث ──
+            var search = _q?.Trim();
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var s = search;
+                baseQ = baseQ.Where(p =>
+                    (p.PartyName != null && p.PartyName.Contains(s)) ||
+                    (p.Phone != null && p.Phone.Contains(s)));
+            }
+
+            _total = await baseQ.CountAsync();
+            if (_total <= 0) { _rows = new(); return; }
+            if (_page > _totalPages) _page = 1;
+
+            var pageParties = await baseQ
+                .OrderByDescending(p => p.LastContactDate).ThenBy(p => p.PartyName)
+                .Skip((_page - 1) * PageSize).Take(PageSize)
+                .Select(p => new { p.PartyId, p.PartyName, p.Phone, p.City, p.LastContactDate })
+                .ToListAsync();
+
+            var ids = pageParties.Select(p => p.PartyId).ToList();
+            var rows = pageParties.Select(p => new Row
+            {
+                PartyId = p.PartyId,
+                PartyName = p.PartyName,
+                Phone = p.Phone,
+                City = p.City,
+                LastContact = p.LastContactDate
+            }).ToList();
+
+            // ── جهات الاتصال ──
+            var contactDict = await db.PartyContacts.AsNoTracking()
+                .Where(c => c.IsActive && ids.Contains(c.PartyId))
+                .GroupBy(c => c.PartyId)
+                .Select(g => new { g.Key, Count = g.Count() })
+                .ToDictionaryAsync(g => g.Key, g => g.Count);
+            foreach (var r in rows)
+                r.Contacts = contactDict.TryGetValue(r.PartyId, out var c) ? c : 0;
+
+            // ── الفرص (مفتوحة) + الإسناد ──
+            var oppAgg = await db.SalesOpportunities.AsNoTracking()
+                .Where(o => o.IsActive && ids.Contains(o.PartyId))
+                .GroupBy(o => o.PartyId)
+                .Select(g => new
+                {
+                    g.Key,
+                    Count = g.Count(),
+                    Value = g.Sum(o => o.ExpectedValue ?? 0),
+                    EmpIds = g.Where(o => o.EmployeeId.HasValue).Select(o => o.EmployeeId!.Value).Distinct().ToList()
+                })
+                .ToListAsync();
+
+            var empIds = oppAgg.SelectMany(g => g.EmpIds).Distinct().ToList();
+            var empNames = empIds.Count == 0
+                ? new Dictionary<int, string>()
+                : await db.Employees.AsNoTracking()
+                    .Where(e => empIds.Contains(e.EmployeeId))
+                    .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName ?? "غير محدد");
+
+            foreach (var r in rows)
+            {
+                if (oppAgg.FirstOrDefault(g => g.Key == r.PartyId) is { } a)
+                {
+                    r.OpenOpps = a.Count;
+                    r.OpenValue = a.Value;
+                    r.Owners = string.Join("، ", a.EmpIds
+                        .Select(id => empNames.TryGetValue(id, out var n) ? n : id.ToString())
+                        .Distinct());
+                }
+            }
+
+            _rows = rows;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void OpenCompany(int partyId) => Nav.NavigateTo($"/crm/customers/{partyId}");
+}

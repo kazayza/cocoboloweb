@@ -1,4 +1,5 @@
 using COCOBOLOERPNEW.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services;
@@ -6,20 +7,37 @@ namespace COCOBOLOERPNEW.Services;
 public class CrmSettingsService : ICrmSettingsService
 {
     private readonly IDbContextFactory<db24804Context> _dbFactory;
+    private readonly IHttpContextAccessor _http;
 
-    public CrmSettingsService(IDbContextFactory<db24804Context> dbFactory)
+    public CrmSettingsService(IDbContextFactory<db24804Context> dbFactory, IHttpContextAccessor http)
     {
         _dbFactory = dbFactory;
+        _http = http;
     }
 
     // ═══════════════════════════════════════════
     // SOURCES
     // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// 🏢 هل المستخدم الحالي له صلاحية رؤية مصادر B2B؟
+    /// (المدراء + موظف B2B + حامل frm_B2BCrm:View — عبر B2bCrmPermissions.CanView)
+    /// أي مستخدم آخر يرى المصادر العادية فقط.
+    /// </summary>
+    private bool CurrentUserCanSeeB2bSources()
+    {
+        var user = _http?.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return true;   // نداءات داخلية/خلفية
+        return B2bCrmPermissions.CanView(user);
+    }
+
     public async Task<List<ContactSource>> GetSourcesAsync(bool includeInactive = false)
     {
         using var db = await _dbFactory.CreateDbContextAsync();
         var query = db.ContactSources.AsQueryable();
         if (!includeInactive) query = query.Where(s => s.IsActive);
+        // إخفاء مصادر B2B عن غير المصرح لهم
+        if (!CurrentUserCanSeeB2bSources()) query = query.Where(s => !s.IsB2B);
         return await query.OrderBy(s => s.SourceNameAr).ToListAsync();
     }
 
@@ -34,7 +52,21 @@ public class CrmSettingsService : ICrmSettingsService
         try
         {
             using var db = await _dbFactory.CreateDbContextAsync();
-            
+            var canB2b = CurrentUserCanSeeB2bSources();
+
+            // 🏢 حماية B2B: لا يمكن جعل/تحرير مصدر B2B إلا لمن له صلاحية B2B
+            if (!canB2b)
+            {
+                if (source.SourceId != 0)
+                {
+                    var chk = await db.ContactSources.FindAsync(source.SourceId);
+                    if (chk?.IsB2B == true)
+                        return (false, "هذا مصدر خاص بملفات B2B — تحتاج صلاحية B2B لإدارته");
+                }
+                if (source.IsB2B)
+                    return (false, "لا يمكن إنشاء مصدر B2B — تحتاج صلاحية B2B");
+            }
+
             if (source.SourceId == 0)
             {
                 source.CreatedBy = userName;
@@ -50,6 +82,7 @@ public class CrmSettingsService : ICrmSettingsService
                 existing.SourceName = source.SourceName;
                 existing.SourceNameAr = source.SourceNameAr;
                 existing.SourceIcon = source.SourceIcon;
+                existing.IsB2B = source.IsB2B;
                 existing.LastUpdatedBy = userName;
                 existing.LastUpdatedAt = DateTime.Now;
             }

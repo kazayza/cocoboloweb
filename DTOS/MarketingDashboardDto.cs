@@ -27,13 +27,13 @@ public class MarketingDashboardDto
 
     // 🎯 المستهدف مقابل الفعلي
     public List<MarketingTargetDto> Targets { get; set; } = new();
-    public decimal MonthlySalesTarget { get; set; } = 3_000_000m;
+    public decimal MonthlySalesTarget { get; set; } = 3_000_000m;   // تارجيت الفريق للفترة = الشهري (3M) × عدد الشهور المختارة
     public int SalesEmployeeCount { get; set; }
-    public decimal PerEmployeeMonthlyTarget { get; set; }
+    public decimal PerEmployeeMonthlyTarget { get; set; }           // تارجيت الموظف للفترة = (3M ÷ الموظفين) × عدد الشهور
 
     // 🎯 إنجاز تارجيت الفريق
     public decimal CompanyActualRevenue { get; set; }   // الإيراد الفعلي (فواتير مرتبطة بفرص تم بيع)
-    public double CompanyTargetPercent { get; set; }    // نسبة إنجاز الشركة من 3 مليون
+    public double CompanyTargetPercent { get; set; }    // نسبة إنجاز الشركة من تارجيت الفترة (3M × الشهور)
     public string CompanyGaugeStyle { get; set; } = ""; // conic-gradient للـ Gauge
 
     // 🎯 إنجاز كل موظف (Gauge لكل موظف)
@@ -88,6 +88,19 @@ public class MarketingKpiDto
     public bool IsMoney { get; set; }
     public string Color { get; set; } = "#3b82f6";
     public string Icon { get; set; } = "trending_up";
+
+    // ⭐ تفاصيل الـ Tooltip (اسم العميل + المبلغ) — تُملأ لكارتي «الصفقات المغلقة» و«العملاء»
+    public List<MarketingKpiTooltipRowDto> TooltipRows { get; set; } = new();
+}
+
+// ─────────────────────────────────────────────
+// 🧾 سطر واحد داخل Tooltip كارت KPI (اسم العميل + المبلغ)
+// ─────────────────────────────────────────────
+public class MarketingKpiTooltipRowDto
+{
+    public string Name { get; set; } = "";
+    public decimal Amount { get; set; }
+    public string? InvoiceReference { get; set; }   // رقم الفاتورة (اختياري — يُعرض إن وُجد)
 }
 
 // ─────────────────────────────────────────────
@@ -202,7 +215,7 @@ public class EmployeeTargetDto
 {
     public int EmployeeId { get; set; }
     public string EmployeeName { get; set; } = "";
-    public decimal TargetAmount { get; set; }       // تارجيت الموظف (3M ÷ عدد الموظفين)
+    public decimal TargetAmount { get; set; }       // تارجيت الموظف للفترة = (3M ÷ عدد الموظفين) × عدد الشهور
     public decimal ActualAmount { get; set; }       // إيراد الموظف الفعلي (فواتير مرتبطة بفرص تم بيع)
     public double Percent { get; set; }             // نسبة الإنجاز
     public string GaugeStyle { get; set; } = "";    // conic-gradient style للـ Gauge

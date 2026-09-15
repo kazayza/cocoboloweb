@@ -47,6 +47,9 @@ public class LostRecoveryItemDto
 
     // موعد المتابعة القادم فات تاريخه (تنبيه "متأخرة")
     public bool IsFollowUpOverdue { get; set; }
+
+    // آخر نتيجة تواصل (تم التواصل / لم يرد / طلب مهلة / رفض نهائي) — يُستخرج من آخر سجل
+    public string? LastCsOutcome { get; set; }
 }
 
 /// <summary>صفحة واحدة من طابور الاسترداد (تحميل تدريجي).</summary>
@@ -91,6 +94,7 @@ public class RecoveryStatsDto
     public int UnassignedCount { get; set; }
     public int RevivedThisMonth { get; set; }
     public int UncontactedCount { get; set; }
+    public int MyTodayCalls { get; set; }   // تواصلاتي اليوم (موظف خدمة العملاء الحالي)
 }
 
 /// <summary>تسجيل محاولة تواصل مع عميل فرصة خاسرة.</summary>
@@ -116,6 +120,7 @@ public class RecoveryHistoryDto
     public string CreatedBy { get; set; } = "";
     public string? EmployeeName { get; set; }
     public string? Channel { get; set; }
+    public string? Outcome { get; set; }    // نتيجة التواصل إن وُجدت
 }
 
 /// <summary>تنفيذ "العميل راجع" - نفس الفرصة أو فرصة جديدة.</summary>

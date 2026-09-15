@@ -23,6 +23,9 @@ public class QuotationListDto
     public int ItemsCount { get; set; }
     public decimal? TotalCost { get; set; }
 
+    // ⭐ أعلى مدة تصنيع (أيام) بين أصناف العرض — تُعرض في عمود الباقة مع Tooltip
+    public int? MaxManufacturingDays { get; set; }
+
     // ⭐ قناع الأسعار: ProductionManager / factory يرون التكلفة فقط (يُضبط من الخدمة)
     public bool PricesMasked { get; set; }
 

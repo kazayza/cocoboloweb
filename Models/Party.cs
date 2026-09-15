@@ -31,6 +31,9 @@ public partial class Party
 
     public bool? IsActive { get; set; }
 
+    // 🏢 B2B: العميل «شركة/مؤسسة» يُدار في ملفات B2B — مصدر الحقيقة لعزل موديول B2B عن CRM العادي.
+    public bool IsB2B { get; set; }
+
     public string? CreatedBy { get; set; }
 
     public DateTime? CreatedAt { get; set; }

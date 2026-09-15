@@ -86,7 +86,8 @@ public static class ComplaintPermissions
         || user.IsInRole(RoleSalesManager)
         || user.IsInRole(RoleGeneralManager)
         || user.IsInRole(RoleSales)
-        || user.IsInRole(RoleAccount);
+        || user.IsInRole(RoleAccount)
+        || user.HasClaim("Permission", PermAdd);
 
     /// <summary>هل يقدر يدير الأنواع (التصنيفات)؟</summary>
     public static bool CanManageTypes(ClaimsPrincipal user) =>

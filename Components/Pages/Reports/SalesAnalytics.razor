@@ -1,0 +1,1241 @@
+@page "/reports/sales-analytics"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Models
+@using System.Globalization
+@using Microsoft.AspNetCore.Authorization
+
+@attribute [Authorize]
+
+@inject ISalesAnalyticsService AnalyticsService
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<PageTitle>تحليلات المبيعات | Sales Analytics</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="sa-loading">
+        <div class="sa-spinner"></div>
+        <div class="sa-loading-title">جاري تحميل تحليلات المبيعات</div>
+        <div class="sa-loading-sub">يتم تجميع الفواتير والفرص بعد السكوب...</div>
+    </div>
+}
+else if (_noAccess)
+{
+    <div class="sa-center-state">
+        <div class="sa-state-icon">!</div>
+        <h3>ليس لديك صلاحية للدخول لهذه اللوحة</h3>
+        <p>تحتاج صلاحية «تحليلات المبيعات» (rpt_SalesAnalytics) من إدارة النظام</p>
+    </div>
+}
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="sa-center-state">
+        <div class="sa-state-icon error">!</div>
+        <h3>حدث خطأ أثناء تحميل البيانات</h3>
+        <p>@_loadError</p>
+        <button class="sa-btn sa-btn-primary" @onclick="() => LoadData()">إعادة المحاولة</button>
+    </div>
+}
+else if (_data is not null)
+{
+    <div class="sa" dir="rtl">
+
+        @if (_isRefreshing)
+        {
+            <div class="sa-refresh-pill"><span class="sa-spin"></span> جارٍ التحديث...</div>
+        }
+
+        <!-- ═══════════ HEADER ═══════════ -->
+        <header class="sa-header">
+            <div class="sa-header-bg"></div>
+            <div class="sa-header-content">
+                <div class="sa-header-title-area">
+                    <div class="sa-title-ico">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                            <path d="M3 3v18h18" stroke-linecap="round" />
+                            <rect x="7" y="12" width="2.6" height="5" rx="0.6" fill="currentColor" stroke="none" />
+                            <rect x="11" y="8" width="2.6" height="9" rx="0.6" fill="currentColor" stroke="none" />
+                            <rect x="15" y="5" width="2.6" height="12" rx="0.6" fill="currentColor" stroke="none" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h1>تحليلات المبيعات</h1>
+                        <div class="sa-header-sub">
+                            <span>Sales Analytics Dashboard</span>
+                            <span class="sa-dot">•</span>
+                            <span>الفترة: @_data.DateFrom.ToString("dd/MM/yyyy") ← @_data.DateTo.ToString("dd/MM/yyyy")</span>
+                            @if (_employeeId.HasValue && _selectedEmployeeName is not null)
+                            {
+                                <span class="sa-dot">•</span>
+                                <span class="sa-emp-chip">@_selectedEmployeeName</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sa-header-actions">
+                    <button class="sa-btn sa-btn-ghost" @onclick="ExportExcel" disabled="@_isExporting">
+                        @if (_isExporting)
+                        {
+                            <span class="sa-spin"></span><text> جارِ التصدير...</text>
+                        }
+                        else
+                        {
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round"/></svg><text> تصدير Excel</text>
+                        }
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- ═══════════ FILTERS ═══════════ -->
+        <section class="sa-filters">
+            <div class="sa-filter-group">
+                <span class="sa-flabel">الفترة</span>
+                <div class="sa-pills">
+                    @foreach (var p in _periods)
+                    {
+                        <button class="sa-pill @(_periodPreset == p.Days ? "active" : "")"
+                                @onclick="() => SetPeriod(p.Days)">@p.Label</button>
+                    }
+                </div>
+                <div class="sa-datepair">
+                    <input type="date" class="sa-input sa-date" value="@_dateFrom.ToString("yyyy-MM-dd")"
+                           @onchange="(e) => OnDateFromChanged(e)" />
+                    <span class="sa-date-sep">إلى</span>
+                    <input type="date" class="sa-input sa-date" value="@_dateTo.ToString("yyyy-MM-dd")"
+                           @onchange="(e) => OnDateToChanged(e)" />
+                </div>
+            </div>
+
+            <div class="sa-filter-group">
+                <span class="sa-flabel">الفرع</span>
+                <select class="sa-input sa-select" value="@(_branchId?.ToString() ?? "")"
+                        @onchange="(e) => OnBranchChanged(e)">
+                    <option value="">كل الفروع</option>
+                    @foreach (var b in _branches)
+                    {
+                        <option value="@b.Id">@b.Name</option>
+                    }
+                </select>
+            </div>
+
+            <div class="sa-filter-group">
+                <span class="sa-flabel">الموظف</span>
+                <select class="sa-input sa-select" value="@(_employeeId?.ToString() ?? "")"
+                        @onchange="(e) => OnEmployeeChanged(e)">
+                    <option value="">كل الموظفين</option>
+                    @foreach (var emp in _employees)
+                    {
+                        <option value="@emp.Id">@emp.Name</option>
+                    }
+                </select>
+            </div>
+
+            <div class="sa-filter-group">
+                <span class="sa-flabel">حالة الفاتورة</span>
+                <select class="sa-input sa-select" value="@(_invoiceStatus ?? "")"
+                        @onchange="(e) => OnStatusChanged(e)">
+                    <option value="">الكل (عدا الملغي)</option>
+                    @foreach (var st in _invoiceStatuses)
+                    {
+                        <option value="@st">@StatusLabel(st)</option>
+                    }
+                </select>
+            </div>
+
+            <button class="sa-btn sa-btn-icon" title="تحديث البيانات" @onclick="() => LoadData(true)" disabled="@_isRefreshing">
+                @if (_isRefreshing)
+                {
+                    <span class="sa-spin dark"></span>
+                }
+                else
+                {
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                }
+            </button>
+        </section>
+
+        <!-- ═══════════ SMART INSIGHTS ═══════════ -->
+        @if (_data.Insights.Count > 0)
+        {
+            <section class="sa-insights">
+                <div class="sa-insights-head">
+                    <span class="sa-insights-ico">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18h6M10 21h4M12 3a6 6 0 013.6 10.8c-.6.5-1.6 1.4-1.6 2.2h-4c0-.8-1-1.7-1.6-2.2A6 6 0 0112 3z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="sa-insights-title">قراءات ذكية</span>
+                </div>
+                <div class="sa-insights-list">
+                    @foreach (var ins in _data.Insights)
+                    {
+                        <div class="sa-insight-item">
+                            <span class="sa-insight-dot"></span>
+                            @ins
+                        </div>
+                    }
+                </div>
+            </section>
+        }
+
+        <!-- ═══════════ KPI CARDS ═══════════ -->
+        <section class="sa-cards">
+            <div class="sa-card">
+                <div class="sa-card-top">
+                    <span class="sa-card-ico grad-indigo">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="sa-card-title">إجمالي المبيعات</span>
+                </div>
+                <div class="sa-card-value">@FmtMoney(_data.TotalAmount)</div>
+                <div class="sa-card-foot">
+                    @DeltaChip(_data.TotalGrowthPct)
+                    <span class="sa-compare">الفترة السابقة: @FmtMoney(_data.PrevTotalAmount)</span>
+                </div>
+            </div>
+
+            <div class="sa-card">
+                <div class="sa-card-top">
+                    <span class="sa-card-ico grad-sky">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 2v4M15 2v4M3 10h18M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="sa-card-title">عدد الفواتير</span>
+                </div>
+                <div class="sa-card-value">@_data.InvoiceCount.ToString("N0", CultureInfo.InvariantCulture)</div>
+                <div class="sa-card-foot">
+                    @DeltaChip(_data.CountGrowthPct)
+                    <span class="sa-compare">السابقة: @_data.PrevInvoiceCount.ToString("N0", CultureInfo.InvariantCulture)</span>
+                </div>
+            </div>
+
+            <div class="sa-card">
+                <div class="sa-card-top">
+                    <span class="sa-card-ico grad-emerald">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M8.5 9.5h4a2 2 0 100-4h-1M15.5 14.5h-4a2 2 0 000 4h1" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="sa-card-title">متوسط الفاتورة</span>
+                </div>
+                <div class="sa-card-value">@FmtMoney(_data.AvgInvoice)</div>
+                <div class="sa-card-foot">
+                    @DeltaChip(_data.AvgGrowthPct)
+                    <span class="sa-compare">السابقة: @FmtMoney(_data.PrevAvgInvoice)</span>
+                </div>
+            </div>
+
+            <div class="sa-card">
+                <div class="sa-card-top">
+                    <span class="sa-card-ico grad-amber">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M22 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="sa-card-title">العملاء</span>
+                </div>
+                <div class="sa-card-value">@_data.Customers.ToString("N0", CultureInfo.InvariantCulture)</div>
+                <div class="sa-card-foot">
+                    @DeltaChip(_data.CustomersGrowthPct)
+                    <span class="sa-compare">السابقة: @_data.PrevCustomers.ToString("N0", CultureInfo.InvariantCulture)</span>
+                </div>
+            </div>
+
+            <div class="sa-card">
+                <div class="sa-card-top">
+                    <span class="sa-card-ico grad-violet">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20a6.5 6.5 0 0113 0"/><path d="M18 9l1.7 1.7L23 7.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="sa-card-title">عملاء جدد</span>
+                </div>
+                <div class="sa-card-value">@_data.NewCustomers.ToString("N0", CultureInfo.InvariantCulture)</div>
+                <div class="sa-card-foot">
+                    <span class="sa-compare"><b class="sa-good">جدد</b> اشتروا أول مرة</span>
+                    <span class="sa-compare">| عائدون: @_data.ReturningCustomers.ToString("N0", CultureInfo.InvariantCulture)</span>
+                </div>
+            </div>
+
+            <div class="sa-card">
+                <div class="sa-card-top">
+                    <span class="sa-card-ico grad-teal">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="sa-card-title">نسبة التحصيل</span>
+                </div>
+                <div class="sa-card-value">
+                    <span class="@(_data.CollectionRate >= 80 ? "txt-good" : _data.CollectionRate >= 50 ? "txt-mid" : "txt-bad")">@_data.CollectionRate.ToString("0.#", CultureInfo.InvariantCulture)%</span>
+                </div>
+                <div class="sa-card-foot">
+                    <span class="sa-compare">محصّل @FmtMoney(_data.CollectedAmount) من إجمالي @FmtMoney(_data.TotalAmount)</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════ CONVERSION BAND ═══════════ -->
+        <section class="sa-conv">
+            <div class="sa-conv-head">
+                <div>
+                    <div class="sa-conv-title">معدل التحويل البيعي</div>
+                    <div class="sa-conv-sub">
+                        @if (_employeeId.HasValue)
+                        {
+                            <text>فرص الموظف المُختار داخل النطاق</text>
+                        }
+                        else
+                        {
+                            <text>من إجمالي الفرص البيعية للفريق داخل النطاق</text>
+                        }
+                        <span class="sa-compare">| الفترة السابقة: @_data.PrevTeamConversionRate.ToString("0.#", CultureInfo.InvariantCulture)%</span>
+                    </div>
+                </div>
+                <div class="sa-conv-big">
+                    <span class="sa-conv-num">@_data.TeamConversionRate.ToString("0.#", CultureInfo.InvariantCulture)%</span>
+                </div>
+            </div>
+
+            <div class="sa-conv-bar">
+                <div class="sa-conv-fill" style="width:@(Math.Min(_data.TeamConversionRate, 100).ToString("0.##", CultureInfo.InvariantCulture))%"></div>
+            </div>
+
+            <div class="sa-conv-stats">
+                <div class="sa-conv-stat">
+                    <span class="sa-stat-num">@_data.TeamOpportunities.ToString("N0", CultureInfo.InvariantCulture)</span>
+                    <span class="sa-stat-lbl">إجمالي الفرص</span>
+                </div>
+                <div class="sa-conv-stat">
+                    <span class="sa-stat-num">@_data.TeamWonDeals.ToString("N0", CultureInfo.InvariantCulture)</span>
+                    <span class="sa-stat-lbl">صفقات مغلقة (تم البيع)</span>
+                </div>
+                <div class="sa-conv-stat sa-tip-wrap">
+                    <span class="sa-stat-num dim">@_data.PrevTeamWonDeals.ToString("N0", CultureInfo.InvariantCulture)</span>
+                    <span class="sa-stat-lbl tip-lbl">
+                        مغلقة في الفترة السابقة
+                        <svg class="sa-tip-q" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01" stroke-linecap="round"/></svg>
+                    </span>
+                    <div class="sa-tip-pop sa-tip-pop-conv">
+                        <div class="sa-tip-title">الفترة السابقة (مقارنة)</div>
+                        <div class="sa-tip-line">من: @_data.PrevFrom.ToString("dd/MM/yyyy") حتى @_data.PrevTo.ToString("dd/MM/yyyy")</div>
+                        <div class="sa-tip-line">إجمالي الفرص: @_data.PrevTeamOpportunities.ToString("N0", CultureInfo.InvariantCulture)</div>
+                        <div class="sa-tip-line strong">المغلقة (تم البيع): @_data.PrevTeamWonDeals.ToString("N0", CultureInfo.InvariantCulture)</div>
+                        <div class="sa-tip-line">نسبة التحويل: @_data.PrevTeamConversionRate.ToString("0.#", CultureInfo.InvariantCulture)%</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════ OPPORTUNITY STATUS + LOST REASONS ═══════════ -->
+        <section class="sa-oppstatus">
+            <div class="sa-chart-head">
+                <div class="sa-chart-title">حالة فرص الفريق</div>
+                <div class="sa-emp-note">ضمن الفرص النشطة التي أُنشئت في الفترة المحددة</div>
+            </div>
+            <div class="sa-opp-chips">
+                <div class="sa-opp-chip run">
+                    <span class="sa-opp-num">@_data.TeamInProgress.ToString("N0", CultureInfo.InvariantCulture)</span>
+                    <span class="sa-opp-lbl">متاحه (لم تُغلق)</span>
+                </div>
+                <div class="sa-opp-chip won">
+                    <span class="sa-opp-num">@_data.TeamWonDeals.ToString("N0", CultureInfo.InvariantCulture)</span>
+                    <span class="sa-opp-lbl">مغلقة (تم البيع)</span>
+                </div>
+                <div class="sa-opp-chip lost">
+                    <span class="sa-opp-num">@_data.TeamLostOpportunities.ToString("N0", CultureInfo.InvariantCulture)</span>
+                    <span class="sa-opp-lbl">خاسرة / غير مهتم</span>
+                </div>
+            </div>
+
+            @if (_data.LostReasons.Count > 0)
+            {
+                <div class="sa-lost-wrap">
+                    <span class="sa-lost-title">أسباب الخسارة الأكثر تكراراً</span>
+                    <div class="sa-lost-chips">
+                        @foreach (var r in _data.LostReasons)
+                        {
+                            <span class="sa-lost-chip" title="فرص خسرت بهذا السبب">
+                                @r.Label <b>× @r.Value.ToString("N0", CultureInfo.InvariantCulture)</b>
+                            </span>
+                        }
+                    </div>
+                </div>
+            }
+        </section>
+
+        <!-- ═══════════ CHARTS ═══════════ -->
+        <section class="sa-charts">
+            <div class="sa-chart-card sa-chart-wide">
+                <div class="sa-chart-head">
+                    <div class="sa-chart-title">تطور المبيعات خلال الفترة</div>
+                    <div class="sa-legend-mini">
+                        <span><i class="sw cur"></i> هذه الفترة</span>
+                        <span><i class="sw prev"></i> الفترة السابقة</span>
+                    </div>
+                </div>
+                <div id="saTrendChart" class="sa-chart-box"></div>
+            </div>
+
+            <div class="sa-chart-card">
+                <div class="sa-chart-head">
+                    <div class="sa-chart-title">المبيعات حسب الفرع</div>
+                </div>
+                @if (_data.Branches.Count > 0)
+                {
+                    <div id="saBranchChart" class="sa-chart-box"></div>
+                }
+                else
+                {
+                    <div class="sa-empty">لا توجد فواتير داخل النطاق لعرضها</div>
+                }
+            </div>
+
+            <div class="sa-chart-card">
+                <div class="sa-chart-head">
+                    <div class="sa-chart-title">مساهمة الموظفين في قيمة الفواتير</div>
+                    <span class="sa-emp-note">أعلى @(_data.Share.Count) موظف</span>
+                </div>
+                @if (_data.Share.Count > 0)
+                {
+                    <div id="saShareChart" class="sa-chart-box"></div>
+                }
+                else
+                {
+                    <div class="sa-empty">لا توجد فواتير داخل النطاق لعرضها</div>
+                }
+            </div>
+
+            <div class="sa-chart-card">
+                <div class="sa-chart-head">
+                    <div class="sa-chart-title">توزيع طرق الدفع</div>
+                </div>
+                @if (_data.PaymentMethods.Count > 0)
+                {
+                    <div id="saPayChart" class="sa-chart-box"></div>
+                }
+                else
+                {
+                    <div class="sa-empty">لا توجد بيانات دفع داخل النطاق</div>
+                }
+            </div>
+        </section>
+
+        <!-- ═══════════ TOP CUSTOMERS ═══════════ -->
+        @if (_data.TopCustomers.Count > 0)
+        {
+            <section class="sa-emp">
+                <div class="sa-chart-head">
+                    <div class="sa-chart-title">أهم العملاء في الفترة</div>
+                    <div class="sa-emp-note">اضغط على أي عميل لعرض كل فواتيره وتفاصيلها</div>
+                </div>
+                <div class="sa-table-wrap">
+                    <table class="sa-table sa-topcust-table">
+                        <thead>
+                            <tr>
+                                <th>العميل</th>
+                                <th class="num">عدد الفواتير</th>
+                                <th class="num">القيمة</th>
+                                <th style="width:18%;">الحصة من الإجمالي</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var c in _data.TopCustomers)
+                            {
+                                <tr @onclick="() => OpenCustomerDialog(c)">
+                                    <td>
+                                        <div class="sa-emp-name">
+                                            <span class="sa-ava cust">@Initials(c.Name)</span>
+                                            @c.Name
+                                        </div>
+                                    </td>
+                                    <td class="num">@c.InvoiceCount.ToString("N0", CultureInfo.InvariantCulture)</td>
+                                    <td class="num strong">@FmtMoney(c.Amount)</td>
+                                    <td>
+                                        <div class="sa-pct-cell">
+                                            <div class="sa-pct-track"><div class="sa-pct-fill" style="width:@(c.Pct.ToString("0.#", CultureInfo.InvariantCulture))%"></div></div>
+                                            <span class="sa-pct-txt">@c.Pct.ToString("0.#", CultureInfo.InvariantCulture)%</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="sa-arrow">←</span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
+
+        <!-- ═══════════ EMPLOYEES TABLE ═══════════ -->
+        <section class="sa-emp">
+            <div class="sa-chart-head">
+                <div class="sa-chart-title">أداء موظفي المبيعات</div>
+                <div class="sa-emp-note">ذوو النشاط فقط (فرصة أو فاتورة داخل النطاق) — اضغط على موظف لتصفية اللوحة عليه</div>
+            </div>
+
+            @if (_data.Employees.Count == 0)
+            {
+                <div class="sa-empty">لا يوجد نشاط مبيعات ضمن الفلاتر المحددة</div>
+            }
+            else
+            {
+                <div class="sa-table-wrap">
+                    <table class="sa-table">
+                        <thead>
+                            <tr>
+                                <th>الموظف</th>
+                                <th class="num">الفرص</th>
+                                <th class="num">صفقات مغلقة</th>
+                                <th class="num">نسبة التحويل</th>
+                                <th class="num">عدد الفواتير</th>
+                                <th class="num">قيمة الفواتير</th>
+                                <th class="num">متوسط الفاتورة</th>
+                                <th class="num">
+                                    <span class="th-tip sa-tip-wrap">
+                                        متوسط الدورة
+                                        <svg class="sa-tip-q" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01" stroke-linecap="round"/></svg>
+                                        <div class="sa-tip-pop">
+                                            <div class="sa-tip-title">متوسط دورة البيع</div>
+                                            <div class="sa-tip-line">متوسط عدد الأيام من إنشاء فرصة «تم بيعها» حتى تاريخ فاتورتها — لكل موظف ضمن النطاق.</div>
+                                        </div>
+                                    </span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var emp in _data.Employees)
+                            {
+                                <tr class="@(emp.Name == _selectedEmployeeName && _employeeId.HasValue ? "row-self" : "")" @onclick="() => FocusEmployee(emp.Name)">
+                                    <td>
+                                        <div class="sa-name-cell sa-tip-wrap">
+                                            <div class="sa-emp-name">
+                                                <span class="sa-ava">@Initials(emp.Name)</span>
+                                                <span class="sa-name-txt">@emp.Name</span>
+                                            </div>
+                                            <button type="button" class="sa-ico-btn" title="فواتير الموظف — التفاصيل الكاملة"
+                                                    @onclick="() => OpenInvoicesDialog(emp)"
+                                                    @onclick:stopPropagation="true">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01" stroke-linecap="round"/></svg>
+                                            </button>
+                                            <div class="sa-tip-pop sa-tip-pop-emp">
+                                                <div class="sa-tip-title">فواتير @emp.Name <span class="sa-tip-count">(@emp.InvoiceCount.ToString("N0", CultureInfo.InvariantCulture))</span></div>
+                                                @if (emp.Invoices.Count == 0)
+                                                {
+                                                    <div class="sa-tip-empty">لا توجد فواتير ضمن النطاق الحالي</div>
+                                                }
+                                                else
+                                                {
+                                                    @foreach (var inv in emp.Invoices.Take(8))
+                                                    {
+                                                        <div class="sa-tip-row">
+                                                            <span class="sa-tip-cust">@inv.Customer</span>
+                                                            <span class="sa-tip-ref">@(string.IsNullOrWhiteSpace(inv.Reference) ? "بدون رقم" : "#" + inv.Reference)</span>
+                                                            <span class="sa-tip-amt">@FmtMoney(inv.Net)</span>
+                                                        </div>
+                                                    }
+                                                    @if (emp.Invoices.Count > 8)
+                                                    {
+                                                        <div class="sa-tip-more">… و @((emp.Invoices.Count - 8).ToString("N0", CultureInfo.InvariantCulture)) فاتورة أخرى — اضغط الأيقونة للتفاصيل</div>
+                                                    }
+                                                }
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="num">@emp.Opportunities.ToString("N0", CultureInfo.InvariantCulture)</td>
+                                    <td class="num">@emp.WonDeals.ToString("N0", CultureInfo.InvariantCulture)</td>
+                                    <td class="num">
+                                        @if (emp.Opportunities > 0)
+                                        {
+                                            <span class="sa-cta-badge @RateClass(emp.ConversionRate)">@emp.ConversionRate.ToString("0.#", CultureInfo.InvariantCulture)%</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="sa-muted">—</span>
+                                        }
+                                    </td>
+                                    <td class="num">
+                                        <button type="button" class="sa-count-btn"
+                                                title="اضغط لعرض فواتير الموظف"
+                                                @onclick="() => OpenInvoicesDialog(emp)"
+                                                @onclick:stopPropagation="true">
+                                            @emp.InvoiceCount.ToString("N0", CultureInfo.InvariantCulture)
+                                        </button>
+                                    </td>
+                                    <td class="num strong">@FmtMoney(emp.SalesAmount)</td>
+                                    <td class="num">@FmtMoney(emp.AvgInvoice)</td>
+                                    <td class="num">
+                                        @if (emp.AvgCycleDays > 0)
+                                        {
+                                            <span class="sa-cycle">@emp.AvgCycleDays.ToString("0.#", CultureInfo.InvariantCulture) <small>يوم</small></span>
+                                        }
+                                        else
+                                        {
+                                            <span class="sa-muted">—</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            @if (_employeeId.HasValue)
+            {
+                <div class="sa-clear-row">
+                    <span class="sa-hint">اللوحة حالياً تُظهر أرقام الموظف: <b>@_selectedEmployeeName</b></span>
+                    <button class="sa-btn sa-btn-soft" @onclick="ClearEmployee">إظهار كل الموظفين</button>
+                </div>
+            }
+        </section>
+
+        <!-- ═══════════ DETAILS DIALOG ═══════════ -->
+        @if (_showInvoices)
+        {
+            <div class="sa-backdrop" @onclick="CloseInvoices">
+                <div class="sa-dialog" @onclick:stopPropagation="true">
+                    <div class="sa-dialog-head">
+                        <div class="sa-dialog-title">
+                            <span class="sa-ava lg">@Initials(_dialogTitle ?? "")</span>
+                            <div>
+                                <div class="sa-dialog-name">@_dialogTitle</div>
+                                <div class="sa-dialog-sub">@_dialogCount.ToString("N0", CultureInfo.InvariantCulture) فاتورة — بإجمالي @FmtMoney(_dialogTotal)</div>
+                            </div>
+                        </div>
+                        <button type="button" class="sa-dialog-x" @onclick="CloseInvoices" title="إغلاق">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
+                        </button>
+                    </div>
+
+                    <div class="sa-dialog-body">
+                        @if (_dialogInvoices.Count == 0)
+                        {
+                            <div class="sa-empty">لا توجد فواتير لهذا الموظف ضمن الفلاتر الحالية</div>
+                        }
+                        else
+                        {
+                            <div class="sa-table-wrap">
+                                <table class="sa-table sa-dtable">
+                                    <thead>
+                                        <tr>
+                                            <th>العميل</th>
+                                            <th>رقم الفاتورة</th>
+                                            <th class="num">تاريخ الفاتورة</th>
+                                            <th class="num">تاريخ الفرصة</th>
+                                            <th class="num">المبلغ</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var inv in _dialogInvoices.Take(200))
+                                        {
+                                            <tr>
+                                                <td class="d-cust">@inv.Customer</td>
+                                                <td class="d-ref">@(string.IsNullOrWhiteSpace(inv.Reference) ? "—" : "#" + inv.Reference)</td>
+                                                <td class="num d-date">@inv.Date.ToString("dd/MM/yyyy")</td>
+                                                <td class="num d-date">@(inv.OpportunityDate?.ToString("dd/MM/yyyy") ?? "—")</td>
+                                                <td class="num d-amt">@FmtMoney(inv.Net)</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                            @if (_dialogInvoices.Count > 200)
+                            {
+                                <div class="sa-dialog-note">يعرض أول 200 فاتورة — استخدم «تصدير Excel» للقائمة الكاملة</div>
+                            }
+                        }
+                    </div>
+
+                    <div class="sa-dialog-foot">
+                        <div class="sa-dialog-sum">
+                            @if (_dialogInvoices.Count > 0)
+                            {
+                                <span>آخر فاتورة بتاريخ <b>@_dialogInvoices.Max(i => i.Date).ToString("dd/MM/yyyy")</b></span>
+                            }
+                        </div>
+                        <button class="sa-btn sa-btn-soft" @onclick="CloseInvoices">إغلاق</button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<style>
+    /* ═══════════ Sales Analytics — styles ═══════════ */
+    .sa, .sa-loading, .sa-center-state { font-family: 'Tajawal', 'Segoe UI', Tahoma, sans-serif; }
+
+    .sa { padding: 18px; max-width: 1400px; margin: 0 auto; }
+    .sa-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; color: #334155; }
+    .sa-spinner { width: 46px; height: 46px; border: 4px solid #e2e8f0; border-top-color: #4f46e5; border-radius: 50%; animation: sa-spin .8s linear infinite; }
+    .sa-loading-title { margin-top: 14px; font-weight: 700; font-size: 17px; }
+    .sa-loading-sub { color: #94a3b8; margin-top: 4px; font-size: 13px; }
+    @@keyframes sa-spin { to { transform: rotate(360deg); } }
+    .sa-spin { display:inline-block; width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: sa-spin .7s linear infinite; vertical-align: -2px; }
+
+    .sa-center-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; color: #334155; text-align: center; }
+    .sa-state-icon { width: 58px; height: 58px; border-radius: 50%; background: #eef2ff; color: #4f46e5; font-size: 28px; font-weight: 800; display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
+    .sa-state-icon.error { background: #fef2f2; color: #dc2626; }
+
+    /* ── header ── */
+    .sa-header { position: relative; border-radius: 18px; overflow: hidden; color: #fff; margin-bottom: 16px;
+        background: linear-gradient(120deg, #1e1b4b 0%, #312e81 55%, #4338ca 100%); }
+    .sa-header-bg { position: absolute; inset: 0; opacity: .35;
+        background: radial-gradient(circle at 85% 20%, rgba(129,140,248,.55), transparent 45%),
+                   radial-gradient(circle at 10% 110%, rgba(56,189,248,.35), transparent 45%); }
+    .sa-header-content { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; flex-wrap: wrap; }
+    .sa-header-title-area { display: flex; align-items: center; gap: 14px; }
+    .sa-title-ico { width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+        background: rgba(255,255,255,.14); backdrop-filter: blur(4px); }
+    .sa-title-ico svg { width: 28px; height: 28px; }
+    .sa-header h1 { margin: 0; font-size: 23px; font-weight: 800; letter-spacing: .2px; }
+    .sa-header-sub { display: flex; align-items: center; gap: 8px; color: #c7d2fe; font-size: 12.5px; margin-top: 4px; flex-wrap: wrap; }
+    .sa-dot { opacity: .6; }
+    .sa-emp-chip { background: rgba(255,255,255,.18); border-radius: 20px; padding: 2px 10px; font-weight: 700; }
+    .sa-header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+    /* badges */
+    .sa-scope-wrap { display: flex; gap: 8px; flex-wrap: wrap; }
+    .sa-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 20px; }
+    .sa-badge svg { width: 14px; height: 14px; }
+    .sa-badge.scope { background: rgba(253,224,71,.16); color: #fef9c3; border: 1px solid rgba(253,224,71,.4); }
+    .sa-badge.hidden-am { background: rgba(248,113,113,.16); color: #fecaca; border: 1px solid rgba(248,113,113,.4); }
+    .sa-badge.full { background: rgba(74,222,128,.15); color: #bbf7d0; border: 1px solid rgba(74,222,128,.4); }
+
+    /* buttons */
+    .sa-btn { display: inline-flex; align-items: center; gap: 7px; border: none; cursor: pointer; font-family: inherit;
+        border-radius: 10px; padding: 9px 16px; font-size: 13.5px; font-weight: 700; transition: all .15s ease; }
+    .sa-btn svg { width: 17px; height: 17px; }
+    .sa-btn:disabled { opacity: .6; cursor: default; }
+    .sa-btn-ghost { background: rgba(255,255,255,.14); color: #fff; backdrop-filter: blur(4px); }
+    .sa-btn-ghost:hover:not(:disabled) { background: rgba(255,255,255,.24); }
+    .sa-btn-primary { background: #4f46e5; color: #fff; }
+    .sa-btn-primary:hover { background: #4338ca; }
+    .sa-btn-soft { background: #eef2ff; color: #4338ca; }
+    .sa-btn-soft:hover { background: #e0e7ff; }
+    .sa-btn-icon { background: #fff; color: #4f46e5; box-shadow: 0 2px 8px rgba(30,27,75,.12); padding: 10px 12px; align-self: flex-end; }
+    .sa-btn-icon:hover { background: #eef2ff; }
+
+    /* ── filters ── */
+    .sa-filters { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; background: #fff; border: 1px solid #e2e8f0;
+        border-radius: 16px; padding: 14px 18px; margin-bottom: 16px; box-shadow: 0 2px 10px rgba(15,23,42,.04); }
+    .sa-filter-group { display: flex; flex-direction: column; gap: 6px; }
+    .sa-flabel { font-size: 11.5px; font-weight: 700; color: #64748b; }
+    .sa-input { font-family: inherit; border: 1.5px solid #e2e8f0; border-radius: 10px; padding: 8px 11px; font-size: 13.5px; color: #1e293b; background: #f8fafc; outline: none; transition: border .15s; }
+    .sa-input:focus { border-color: #818cf8; background: #fff; }
+    .sa-date { width: 138px; }
+    .sa-select { min-width: 155px; }
+    .sa-datepair { display: flex; align-items: center; gap: 6px; }
+    .sa-date-sep { font-size: 12px; color: #94a3b8; }
+    .sa-pills { display: flex; gap: 4px; flex-wrap: wrap; }
+    .sa-pill { border: 1px solid #e2e8f0; background: #fff; color: #475569; border-radius: 20px; padding: 5px 13px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit; transition: all .15s; }
+    .sa-pill:hover { border-color: #c7d2fe; color: #4338ca; }
+    .sa-pill.active { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+
+    /* ── cards ── */
+    .sa-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 14px; margin-bottom: 16px; }
+    .sa-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px 18px;
+        box-shadow: 0 2px 10px rgba(15,23,42,.04); position: relative; overflow: hidden; }
+    .sa-card::before { content: ""; position: absolute; top: 0; right: 0; left: 0; height: 4px;
+        background: linear-gradient(90deg, #6366f1, #22d3ee); opacity: .9; }
+    .sa-card-top { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+    .sa-card-ico { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #fff; }
+    .sa-card-ico svg { width: 18px; height: 18px; }
+    .grad-indigo { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+    .grad-sky { background: linear-gradient(135deg, #0ea5e9, #38bdf8); }
+    .grad-emerald { background: linear-gradient(135deg, #10b981, #34d399); }
+    .grad-amber { background: linear-gradient(135deg, #f59e0b, #fbbf24); }
+    .sa-card-title { font-size: 13px; font-weight: 700; color: #64748b; }
+    .sa-card-value { font-size: 25px; font-weight: 800; color: #0f172a; line-height: 1.2; direction: ltr; text-align: right; font-variant-numeric: tabular-nums; }
+    .sa-card-foot { display: flex; align-items: center; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+    .sa-compare { font-size: 11.5px; color: #94a3b8; }
+    .sa-delta { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 800; border-radius: 14px; padding: 2px 8px; direction: ltr; }
+    .sa-delta.up { background: #ecfdf5; color: #059669; }
+    .sa-delta.down { background: #fef2f2; color: #dc2626; }
+    .sa-delta.flat { background: #f1f5f9; color: #64748b; }
+
+    /* ── conversion band ── */
+    .sa-conv { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px 20px; margin-bottom: 16px;
+        box-shadow: 0 2px 10px rgba(15,23,42,.04); }
+    .sa-conv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .sa-conv-title { font-weight: 800; font-size: 16px; color: #0f172a; }
+    .sa-conv-sub { font-size: 12px; color: #94a3b8; margin-top: 3px; display:flex; gap:6px; flex-wrap: wrap; }
+    .sa-conv-big { text-align: left; }
+    .sa-conv-num { font-size: 30px; font-weight: 800; color: #4f46e5; }
+    .sa-conv-bar { height: 12px; background: #eef2ff; border-radius: 10px; margin: 14px 0 12px; overflow: hidden; }
+    .sa-conv-fill { height: 100%; border-radius: 10px; background: linear-gradient(90deg, #6366f1, #22d3ee); transition: width .5s ease; }
+    .sa-conv-stats { display: flex; gap: 26px; flex-wrap: wrap; }
+    .sa-conv-stat { display: flex; flex-direction: column; }
+    .sa-stat-num { font-weight: 800; font-size: 19px; color: #0f172a; font-variant-numeric: tabular-nums; }
+    .sa-stat-num.dim { color: #94a3b8; }
+    .sa-stat-lbl { font-size: 11.5px; color: #94a3b8; margin-top: 2px; }
+
+    /* ── charts ── */
+    .sa-charts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 16px; }
+    .sa-chart-wide { grid-column: 1 / -1; }
+    @@media (max-width: 1200px) { .sa-charts { grid-template-columns: 1fr 1fr; } }
+    @@media (max-width: 800px) { .sa-charts { grid-template-columns: 1fr; } }
+    .sa-chart-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px 16px;
+        box-shadow: 0 2px 10px rgba(15,23,42,.04); }
+    .sa-chart-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .sa-chart-title { font-weight: 800; font-size: 15px; color: #0f172a; }
+    .sa-legend-mini { display: flex; gap: 14px; font-size: 12px; color: #64748b; }
+    .sa-legend-mini span { display: inline-flex; align-items: center; gap: 6px; }
+    .sw { width: 12px; height: 4px; border-radius: 3px; display: inline-block; }
+    .sw.cur { background: #4f46e5; }
+    .sw.prev { background: #a5b4fc; }
+    .sa-chart-box { min-height: 280px; }
+    .sa-chart-box.small { min-height: 240px; }
+
+    /* ── table ── */
+    .sa-emp { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px 18px;
+        box-shadow: 0 2px 10px rgba(15,23,42,.04); }
+    .sa-emp-note { font-size: 11.5px; color: #94a3b8; }
+    .sa-table-wrap { overflow-x: auto; border-radius: 12px; border: 1px solid #eef2f7; }
+    .sa-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 760px; }
+    .sa-table th { background: #f8fafc; color: #64748b; font-size: 12px; font-weight: 800; padding: 11px 14px; text-align: right; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+    .sa-table td { padding: 11px 14px; border-bottom: 1px solid #f1f5f9; color: #1e293b; }
+    .sa-table tbody tr { cursor: pointer; transition: background .12s; }
+    .sa-table tbody tr:hover { background: #f5f7ff; }
+    .sa-table tbody tr.row-self { background: #eef2ff; }
+    .sa-table .num { text-align: center; font-variant-numeric: tabular-nums; direction: ltr; }
+    .sa-table .strong { font-weight: 800; color: #0f172a; }
+    .sa-muted { color: #cbd5e1; }
+    .sa-emp-name { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; }
+    .sa-ava { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #22d3ee); color: #fff;
+        display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; flex-shrink: 0; }
+    .sa-cta-badge { font-weight: 800; padding: 3px 10px; border-radius: 14px; font-size: 12.5px; direction: ltr; display: inline-block; min-width: 52px; }
+    .sa-cta-badge.good { background: #ecfdf5; color: #059669; }
+    .sa-cta-badge.mid { background: #fffbeb; color: #d97706; }
+    .sa-cta-badge.low { background: #fef2f2; color: #dc2626; }
+
+    .sa-empty { padding: 40px 10px; text-align: center; color: #94a3b8; font-size: 13.5px; }
+    .sa-clear-row { display: flex; align-items: center; gap: 14px; justify-content: space-between; margin-top: 12px; flex-wrap: wrap; }
+    .sa-hint { font-size: 13px; color: #475569; }
+    .sa-hint b { color: #4338ca; }
+    .sa-spin.dark { border-color: #c7d2fe; border-top-color: #4f46e5; }
+    .sa-good { color: #059669; }
+    .txt-good { color: #059669; } .txt-mid { color: #d97706; } .txt-bad { color: #dc2626; }
+
+    /* ── grad extra ── */
+    .grad-violet { background: linear-gradient(135deg, #8b5cf6, #a78bfa); }
+    .grad-teal { background: linear-gradient(135deg, #14b8a6, #2dd4bf); }
+
+    /* ── smart insights ── */
+    .sa-insights { background: linear-gradient(120deg, #0f172a, #1e293b); border-radius: 16px; padding: 14px 18px; margin-bottom: 16px;
+        color: #e2e8f0; display: flex; gap: 14px; align-items: flex-start; box-shadow: 0 4px 18px rgba(15,23,42,.14); }
+    .sa-insights-head { display: flex; align-items: center; gap: 8px; white-space: nowrap; padding-top: 3px; }
+    .sa-insights-ico { width: 30px; height: 30px; border-radius: 9px; background: rgba(129,140,248,.2); color: #a5b4fc; display: flex; align-items: center; justify-content: center; }
+    .sa-insights-ico svg { width: 17px; height: 17px; }
+    .sa-insights-title { font-weight: 800; color: #fff; font-size: 13px; }
+    .sa-insights-list { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+    .sa-insight-item { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.6; color: #cbd5e1; }
+    .sa-insight-dot { width: 6px; height: 6px; border-radius: 50%; background: #22d3ee; margin-top: 7px; flex-shrink: 0; }
+
+    /* ── opportunity status + lost ── */
+    .sa-oppstatus { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px 18px; margin-bottom: 16px;
+        box-shadow: 0 2px 10px rgba(15,23,42,.04); }
+    .sa-opp-chips { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+    .sa-opp-chip { flex: 1; min-width: 150px; border-radius: 14px; padding: 12px 16px; display: flex; flex-direction: column; gap: 3px; border: 1px solid; }
+    .sa-opp-num { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .sa-opp-lbl { font-size: 12px; opacity: .85; }
+    .sa-opp-chip.run { background: #f0f9ff; border-color: #bae6fd; color: #0369a1; }
+    .sa-opp-chip.won { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
+    .sa-opp-chip.lost { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+    .sa-lost-wrap { margin-top: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .sa-lost-title { font-size: 12px; font-weight: 800; color: #64748b; }
+    .sa-lost-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .sa-lost-chip { background: #fef2f2; border: 1px solid #fee2e2; color: #b91c1c; border-radius: 18px; padding: 4px 12px; font-size: 12px; font-weight: 700; }
+    .sa-lost-chip b { color: #dc2626; }
+
+    /* ── top customers table ── */
+    .sa-ava.cust { background: linear-gradient(135deg, #f59e0b, #f472b6); }
+    .sa-topcust-table td { cursor: pointer; }
+    .sa-pct-cell { display: flex; align-items: center; gap: 9px; }
+    .sa-pct-track { flex: 1; height: 7px; background: #eef2f7; border-radius: 6px; overflow: hidden; }
+    .sa-pct-fill { height: 100%; border-radius: 6px; background: linear-gradient(90deg, #f59e0b, #f472b6); }
+    .sa-pct-txt { font-size: 12px; font-weight: 800; color: #64748b; min-width: 44px; text-align: left; direction: ltr; }
+    .sa-arrow { color: #cbd5e1; font-size: 16px; }
+
+    /* ── cycle chip ── */
+    .sa-cycle { display: inline-flex; align-items: baseline; gap: 3px; font-weight: 800; color: #4338ca; background: #eef2ff; padding: 3px 10px; border-radius: 14px; font-size: 12.5px; direction: ltr; }
+    .sa-cycle small { font-size: 10.5px; color: #818cf8; font-weight: 700; }
+    .th-tip { display: inline-flex; align-items: center; gap: 4px; color: inherit; cursor: help; }
+
+    /* ── refresh pill ── */
+    .sa-refresh-pill { position: fixed; top: 14px; left: 14px; z-index: 300; display: inline-flex; align-items: center; gap: 8px;
+        background: #fff; color: #4338ca; font-size: 12.5px; font-weight: 700; border: 1px solid #e0e7ff; border-radius: 24px;
+        padding: 7px 14px; box-shadow: 0 6px 20px rgba(30,27,75,.14); }
+
+    /* ── name cell + info button + count button ── */
+    .sa-name-cell { position: relative; display: flex; align-items: center; gap: 4px; }
+    .sa-name-txt { font-weight: 700; white-space: nowrap; }
+    .sa-ico-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; border-radius: 7px;
+        background: #eef2ff; color: #6366f1; cursor: pointer; transition: all .15s; flex-shrink: 0; }
+    .sa-ico-btn svg { width: 14px; height: 14px; }
+    .sa-ico-btn:hover { background: #4f46e5; color: #fff; }
+    .sa-count-btn { display: inline-block; min-width: 46px; text-align: center; font-weight: 800; color: #4338ca; background: #eef2ff;
+        border: 1px solid #e0e7ff; border-radius: 14px; padding: 3px 10px; font-size: 13px; cursor: pointer; transition: all .15s; font-family: inherit; }
+    .sa-count-btn:hover { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+
+    /* ── floating tooltips (sa-tip-wrap → sa-tip-pop تُنسخ لـ .sa-float-tip) ── */
+    .sa-tip-wrap { position: relative; }
+    .sa-tip-pop { display: none; }
+    .tip-lbl { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
+    .sa-tip-q { width: 14px; height: 14px; color: #a5b4fc; flex-shrink: 0; }
+    .sa-float-tip { position: fixed; z-index: 1200; pointer-events: none; direction: rtl; text-align: right;
+        background: #0f172a; color: #e2e8f0; border-radius: 12px; padding: 10px 12px; font-size: 12px; font-weight: 500;
+        box-shadow: 0 12px 32px rgba(15,23,42,.32); min-width: 230px; max-width: 380px; font-family: 'Tajawal', 'Segoe UI', Tahoma, sans-serif; }
+    .sa-float-tip .sa-tip-title { font-weight: 800; font-size: 12.5px; color: #fff; margin-bottom: 7px; display: flex; align-items: center; justify-content: space-between; }
+    .sa-float-tip .sa-tip-count { color: #a5b4fc; font-weight: 700; }
+    .sa-float-tip .sa-tip-empty { color: #94a3b8; padding: 6px 2px; }
+    .sa-float-tip .sa-tip-row { display: flex; align-items: center; gap: 8px; padding: 5px 2px; border-bottom: 1px dashed rgba(148,163,184,.18); }
+    .sa-float-tip .sa-tip-row:last-child { border-bottom: none; }
+    .sa-float-tip .sa-tip-cust { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: #f8fafc; }
+    .sa-float-tip .sa-tip-ref { font-size: 11px; color: #a5b4fc; direction: ltr; }
+    .sa-float-tip .sa-tip-amt { font-weight: 800; color: #34d399; direction: ltr; font-variant-numeric: tabular-nums; }
+    .sa-float-tip .sa-tip-more { margin-top: 7px; color: #94a3b8; font-size: 11px; }
+    .sa-float-tip .sa-tip-line { padding: 3px 2px; color: #cbd5e1; }
+    .sa-float-tip .sa-tip-line.strong { font-weight: 800; color: #34d399; }
+
+    /* ── dialog ── */
+    .sa-backdrop { position: fixed; inset: 0; z-index: 1000; background: rgba(15,23,42,.55); backdrop-filter: blur(3px);
+        display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .sa-dialog { background: #fff; border-radius: 18px; width: min(860px, 96vw); max-height: 86vh; display: flex; flex-direction: column;
+        box-shadow: 0 24px 70px rgba(15,23,42,.4); animation: sa-pop .18s ease; overflow: hidden; }
+    @@keyframes sa-pop { from { opacity: 0; transform: scale(.96) translateY(8px); } to { opacity: 1; transform: none; } }
+    .sa-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        padding: 16px 20px; background: linear-gradient(120deg, #1e1b4b, #4338ca); color: #fff; }
+    .sa-dialog-title { display: flex; align-items: center; gap: 12px; }
+    .sa-ava.lg { width: 42px; height: 42px; font-size: 15px; }
+    .sa-dialog-name { font-size: 16px; font-weight: 800; }
+    .sa-dialog-sub { font-size: 12.5px; color: #c7d2fe; margin-top: 2px; }
+    .sa-dialog-x { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: none;
+        border-radius: 9px; background: rgba(255,255,255,.14); color: #fff; cursor: pointer; transition: all .15s; flex-shrink: 0; }
+    .sa-dialog-x svg { width: 16px; height: 16px; }
+    .sa-dialog-x:hover { background: rgba(255,255,255,.3); }
+    .sa-dialog-body { padding: 14px 18px; overflow-y: auto; min-height: 120px; }
+    .sa-dialog-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px;
+        border-top: 1px solid #eef2f7; background: #f8fafc; }
+    .sa-dialog-sum { font-size: 12.5px; color: #64748b; }
+    .sa-dialog-sum b { color: #0f172a; }
+    .sa-dialog-note { padding: 8px 2px 0; font-size: 11.5px; color: #94a3b8; }
+    .sa-dtable td { font-size: 13px; }
+    .sa-dtable .d-cust { font-weight: 700; }
+    .sa-dtable .d-ref { color: #6366f1; direction: ltr; text-align: right; font-weight: 700; }
+    .sa-dtable .d-date { color: #64748b; }
+    .sa-dtable .d-amt { font-weight: 800; color: #0f172a; }
+</style>
+
+@code {
+    /* ═══════════ state ═══════════ */
+    private SalesAnalyticsDashboardDto? _data;
+    private bool _isLoading = true;
+    private bool _isRefreshing;
+    private bool _noAccess;
+    private bool _isExporting;
+    private bool _chartsPending;
+    private string? _loadError;
+
+    // ── دايلوج تفاصيل الفواتير (موظف أو عميل) ──
+    private bool _showInvoices;
+    private string? _dialogTitle;
+    private List<SalesAnalyticsInvoiceItemDto> _dialogInvoices = new();
+    private int _dialogCount;
+    private decimal _dialogTotal;
+
+    private DateTime _dateFrom = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime _dateTo = DateTime.Today;
+    private int? _periodPreset = null;
+    private int? _branchId;
+    private int? _employeeId;
+    private string? _selectedEmployeeName;
+    private string? _invoiceStatus;
+
+    private List<SalesAnalyticsOptionDto> _branches = new();
+    private List<SalesAnalyticsOptionDto> _employees = new();
+    private List<string> _invoiceStatuses = new();
+
+    private static readonly (int Days, string Label)[] _periods =
+    {
+        (1, "اليوم"), (7, "7 أيام"), (30, "30 يوم"), (90, "3 شهور"), (180, "6 شهور"), (365, "12 شهر")
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        var canView = user.IsInRole(SystemRoles.Admin)
+                      || user.IsInRole(SystemRoles.GeneralManager)
+                      || user.IsInRole(SystemRoles.SalesManager)
+                      || user.IsInRole(SystemRoles.AccountManager)
+                      || user.HasClaim("Permission", "rpt_SalesAnalytics:View");
+
+        if (!canView)
+        {
+            _noAccess = true;
+            _isLoading = false;
+            return;
+        }
+
+        try
+        {
+            var filterData = await AnalyticsService.GetFilterDataAsync();
+            _branches = filterData.Branches;
+            _employees = filterData.SalesEmployees;
+            _invoiceStatuses = filterData.InvoiceStatuses;
+        }
+        catch
+        {
+            // خيارات الفلاتر غير جوهرية — نكمل
+        }
+
+        _periodPreset = 30;
+        _dateFrom = DateTime.Today.AddDays(-29);
+        await LoadData();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_chartsPending && _data is not null)
+        {
+            _chartsPending = false;
+            await RenderCharts();
+        }
+    }
+
+    /* ═══════════ actions ═══════════ */
+    private SalesAnalyticsFilterDto BuildFilter()
+        => new()
+        {
+            DateFrom = _dateFrom,
+            DateTo = _dateTo,
+            BranchId = _branchId,
+            EmployeeId = _employeeId,
+            InvoiceStatus = string.IsNullOrWhiteSpace(_invoiceStatus) ? null : _invoiceStatus
+        };
+
+    /// <summary>
+    /// تحميل البيانات.
+    /// silent = التحديث الناتج عن تغيير فلتر (دون ريفريش الصفحة): يبقى المحتوى ظاهراً
+    /// مع مؤشر خفيف «جارٍ التحديث» وتتحدث الأرقام والرسوم في مكانها.
+    /// </summary>
+    private async Task LoadData(bool silent = false)
+    {
+        if (_dateFrom > _dateTo)
+        {
+            Snackbar.Add("تاريخ البداية أكبر من تاريخ النهاية", MudBlazor.Severity.Warning);
+            return;
+        }
+
+        if (silent && _data is not null)
+        {
+            _isRefreshing = true;
+        }
+        else
+        {
+            _isLoading = true;
+            _loadError = null;
+        }
+        StateHasChanged();
+
+        try
+        {
+            _data = await AnalyticsService.GetDashboardAsync(BuildFilter());
+            _chartsPending = true;
+        }
+        catch (Exception ex)
+        {
+            var msg = ex.InnerException?.Message ?? ex.Message;
+            if (silent && _data is not null)
+                Snackbar.Add("تعذّر تحديث البيانات: " + msg, MudBlazor.Severity.Error);
+            else
+                _loadError = msg;
+        }
+        finally
+        {
+            _isLoading = false;
+            _isRefreshing = false;
+        }
+        StateHasChanged();
+    }
+
+    private async Task RenderCharts()
+    {
+        if (_data is null) return;
+        try
+        {
+            await JS.InvokeVoidAsync("cocoboloSales.destroyAll");
+            await JS.InvokeVoidAsync("cocoboloSales.renderTrend",
+                "saTrendChart", _data.TrendLabels, _data.TrendCurrent, _data.TrendPrev);
+
+            if (_data.Branches.Count > 0)
+            {
+                await JS.InvokeVoidAsync("cocoboloSales.renderBranches",
+                    "saBranchChart",
+                    _data.Branches.Select(b => b.Label).ToList(),
+                    _data.Branches.Select(b => b.Value).ToList());
+            }
+
+            if (_data.Share.Count > 0)
+            {
+                await JS.InvokeVoidAsync("cocoboloSales.renderShare",
+                    "saShareChart",
+                    _data.Share.Select(s => s.Label).ToList(),
+                    _data.Share.Select(s => (double)s.Value).ToList());
+            }
+
+            if (_data.PaymentMethods.Count > 0)
+            {
+                await JS.InvokeVoidAsync("cocoboloSales.renderPayments",
+                    "saPayChart",
+                    _data.PaymentMethods.Select(p => p.Label).ToList(),
+                    _data.PaymentMethods.Select(p => (double)p.Value).ToList());
+            }
+        }
+        catch { /* اللوحة تعمل بدون رسوم لو فشل التحميل */ }
+    }
+
+    private async Task SetPeriod(int days)
+    {
+        _periodPreset = days;
+        _dateTo = DateTime.Today;
+        _dateFrom = days == 1 ? DateTime.Today : DateTime.Today.AddDays(-(days - 1));
+        await LoadData(true);
+    }
+
+    private async Task OnDateFromChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var d)) { _dateFrom = d; _periodPreset = null; await LoadData(true); }
+    }
+
+    private async Task OnDateToChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var d)) { _dateTo = d; _periodPreset = null; await LoadData(true); }
+    }
+
+    private async Task OnBranchChanged(ChangeEventArgs e)
+    {
+        _branchId = ParseIntOrNull(e.Value?.ToString());
+        await LoadData(true);
+    }
+
+    private async Task OnEmployeeChanged(ChangeEventArgs e)
+    {
+        var val = ParseIntOrNull(e.Value?.ToString());
+        if (val == _employeeId) return;
+        _employeeId = val;
+        _selectedEmployeeName = _employees.FirstOrDefault(x => x.Id == val)?.Name;
+        await LoadData(true);
+    }
+
+    private async Task OnStatusChanged(ChangeEventArgs e)
+    {
+        _invoiceStatus = string.IsNullOrWhiteSpace(e.Value?.ToString()) ? null : e.Value!.ToString();
+        await LoadData(true);
+    }
+
+    private async Task FocusEmployee(string name)
+    {
+        var emp = _employees.FirstOrDefault(x => x.Name == name);
+        if (emp is null) return;
+        _employeeId = emp.Id;
+        _selectedEmployeeName = emp.Name;
+        await LoadData(true);
+    }
+
+    private async Task ClearEmployee()
+    {
+        _employeeId = null;
+        _selectedEmployeeName = null;
+        await LoadData(true);
+    }
+
+    /* ═══════════ دايلوج تفاصيل الفواتير (موظف/عميل) ═══════════ */
+    private void OpenInvoicesDialog(SalesAnalyticsEmployeeDto emp)
+    {
+        _dialogTitle = $"فواتير: {emp.Name}";
+        _dialogInvoices = emp.Invoices;
+        _dialogCount = emp.InvoiceCount;
+        _dialogTotal = emp.SalesAmount;
+        _showInvoices = true;
+        StateHasChanged();
+    }
+
+    private void OpenCustomerDialog(SalesAnalyticsCustomerDto cust)
+    {
+        _dialogTitle = $"عميل: {cust.Name}";
+        _dialogInvoices = cust.Invoices;
+        _dialogCount = cust.InvoiceCount;
+        _dialogTotal = cust.Amount;
+        _showInvoices = true;
+        StateHasChanged();
+    }
+
+    private void CloseInvoices()
+    {
+        _showInvoices = false;
+        StateHasChanged();
+    }
+
+    private async Task ExportExcel()
+    {
+        if (_isExporting) return;
+        _isExporting = true;
+        StateHasChanged();
+        try
+        {
+            var (content, mime, fileName) = await AnalyticsService.ExportAsync(BuildFilter());
+            await JS.InvokeVoidAsync("downloadFile", fileName, mime, Convert.ToBase64String(content));
+            Snackbar.Add("تم تصدير ملف Excel بنجاح", MudBlazor.Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("فشل التصدير: " + (ex.InnerException?.Message ?? ex.Message), MudBlazor.Severity.Error);
+        }
+        finally
+        {
+            _isExporting = false;
+            StateHasChanged();
+        }
+    }
+
+    /* ═══════════ helpers ═══════════ */
+    private static int? ParseIntOrNull(string? s)
+        => int.TryParse(s, out var v) ? v : null;
+
+    private static string FmtMoney(decimal v)
+        => v.ToString("N0", CultureInfo.InvariantCulture) + " ج";
+
+    private static string Initials(string name)
+    {
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "؟";
+        var s = parts[0][..1];
+        if (parts.Length > 1) s += parts[^1][..1];
+        return s;
+    }
+
+    private static string RateClass(double rate)
+        => rate >= 40 ? "good" : rate >= 15 ? "mid" : "low";
+
+    private static string StatusLabel(string status)
+        => status switch
+        {
+            InvoiceStatuses.Open => "غير مسددة",
+            InvoiceStatuses.PartiallyPaid => "مدفوعة جزئياً",
+            InvoiceStatuses.Paid => "مدفوعة",
+            _ => status
+        };
+
+    private static string DeltaText(double? pct)
+        => pct.HasValue
+            ? (pct.Value >= 0 ? "▲ " : "▼ ") + (pct.Value >= 0 ? pct.Value : -pct.Value).ToString("0.#", CultureInfo.InvariantCulture) + "%"
+            : "—";
+
+    private MarkupString DeltaChip(double? pct)
+    {
+        var css = !pct.HasValue ? "flat" : pct.Value > 0 ? "up" : pct.Value < 0 ? "down" : "flat";
+        return (MarkupString)$"<span class=\"sa-delta {css}\">{DeltaText(pct)}</span>";
+    }
+}

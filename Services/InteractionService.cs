@@ -21,6 +21,37 @@ public class InteractionService : IInteractionService
 
         if (crmAccess.HasValue)
             query = query.Where(i => i.InteractionDate >= crmAccess.Value);
+
+        // 🏢 نطاق B2B (مصدر الحقيقة: Parties.IsB2B)
+        var kind = B2bViewScope.KindOf(_http?.HttpContext?.User);
+        if (kind != B2bViewScope.Kind.All)
+        {
+            var b2b = await B2bViewScope.ResolveB2bAsync(_db);
+            switch (kind)
+            {
+                case B2bViewScope.Kind.ExcludeB2B:
+                    query = query.Where(i => !b2b.PartyIds.Contains(i.PartyId) && !b2b.OpportunityIds.Contains(i.OpportunityId));
+                    break;
+                case B2bViewScope.Kind.AllB2B:
+                    query = query.Where(i => b2b.PartyIds.Contains(i.PartyId) || b2b.OpportunityIds.Contains(i.OpportunityId));
+                    break;
+                case B2bViewScope.Kind.OwnB2B:
+                    var emp = await B2bViewScope.ResolveEmployeeIdAsync(_db, _http?.HttpContext?.User);
+                    if (emp <= 0)
+                    {
+                        query = query.Where(i => false);
+                    }
+                    else
+                    {
+                        var ownOpps = await B2bViewScope.ResolveOwnB2bOpportunitiesAsync(_db, b2b.PartyIds, emp);
+                        query = query.Where(i =>
+                            ownOpps.Contains(i.OpportunityId)
+                            || (b2b.PartyIds.Contains(i.PartyId) && i.EmployeeId == emp));
+                    }
+                    break;
+            }
+        }
+
         if (filter.OpportunityId.HasValue)
             query = query.Where(i => i.OpportunityId == filter.OpportunityId.Value);
         if (filter.EmployeeId.HasValue)
@@ -104,12 +135,32 @@ public class InteractionService : IInteractionService
             }).ToListAsync();
     }
 
+    /// <summary>🏢 هل يمكن للمستخدم الحالي تسجيل/تغيير صفوف على فرصة/عميل B2B؟</summary>
+    private async Task<bool> CanWriteOnB2bOpportunityAsync(SalesOpportunity opp)
+    {
+        var isB2bParty = await _db.Parties.AsNoTracking()
+            .AnyAsync(p => p.PartyId == opp.PartyId && p.IsB2B);
+        if (!isB2bParty) return true;
+
+        var user = _http?.HttpContext?.User;
+        if (B2bCrmPermissions.CanManage(user)) return true;                 // المدراء/المختص
+        if (B2bCrmPermissions.IsB2bSpecialist(user))                          // المختص: فرصه فقط
+        {
+            var emp = await B2bViewScope.ResolveEmployeeIdAsync(_db, user);
+            return emp > 0 && opp.EmployeeId == emp;
+        }
+        return false;
+    }
+
     public async Task<(bool Success, string Message)> AddQuickAsync(QuickInteractionDto dto, string userName)
     {
         try
         {
             var opp = await _db.SalesOpportunities.FindAsync(dto.OpportunityId);
             if (opp == null) return (false, "الفرصة غير موجودة");
+
+            if (!await CanWriteOnB2bOpportunityAsync(opp))
+                return (false, "لا يمكنك تسجيل تواصل على ملف B2B — تحتاج صلاحية B2B.");
 
             if (!dto.SourceId.HasValue)
                 return (false, "برجاء تحديد طريقة / مصدر التواصل أولاً");

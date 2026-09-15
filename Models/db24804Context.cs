@@ -2442,6 +2442,24 @@ modelBuilder.Entity<LeadInteraction>(entity =>
         .HasConstraintName("FK_LeadInteractions_Employees");
 });
 
+        modelBuilder.Entity<CustomerFeedback>(entity =>
+        {
+            entity.HasKey(e => e.FeedbackId);
+            entity.ToTable("CustomerFeedback");
+
+            entity.Property(e => e.FeedbackType).HasMaxLength(20);
+            entity.Property(e => e.ClientName).HasMaxLength(200);
+            entity.Property(e => e.Phone).HasMaxLength(50);
+            entity.Property(e => e.Channel).HasMaxLength(30);
+            entity.Property(e => e.Status).HasMaxLength(20);
+            entity.Property(e => e.Outcome).HasMaxLength(30);
+            entity.Property(e => e.Notes).HasColumnType("nvarchar(max)");
+            entity.Property(e => e.EmployeeNotes).HasColumnType("nvarchar(max)");
+            entity.Property(e => e.CreatedBy).HasMaxLength(100);
+            entity.Property(e => e.CompletedBy).HasMaxLength(100);
+            entity.Property(e => e.UpdatedBy).HasMaxLength(100);
+        });
+
         OnModelCreatingPartial(modelBuilder);
     }
 
