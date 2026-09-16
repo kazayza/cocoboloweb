@@ -12,6 +12,7 @@ public static class CustomerCareKind
 {
     public const string Visit              = "Visit";               // بعد زيارة المعرض
     public const string Delivery           = "Delivery";            // بعد تسليم الفاتورة
+    public const string SalesInvoice       = "SalesInvoice";         // فاتورة مبيعات لم تُسلَّم بعد (طابور رابع — 2026-09-17)
     public const string ComplaintFollowUp  = "ComplaintFollowUp";    // عند وجود شكوى / بعد حلها
 }
 
@@ -49,6 +50,7 @@ public static class CustomerCareKindText
     {
         CustomerCareKind.Visit             => "بعد زيارة المعرض",
         CustomerCareKind.Delivery          => "بعد تسليم الفاتورة",
+        CustomerCareKind.SalesInvoice      => "فاتورة مبيعات بانتظار التسليم",
         CustomerCareKind.ComplaintFollowUp => "متابعة شكوى",
         _ => k ?? "—",
     };
@@ -81,6 +83,7 @@ public class CustomerCareKpiDto
 {
     public int OpenVisits { get; set; }
     public int OpenDeliveries { get; set; }
+    public int OpenSalesInvoices { get; set; }
     public int OpenComplaints { get; set; }
     public int DoneToday { get; set; }
     public int DoneTotal { get; set; }
@@ -93,6 +96,7 @@ public class CustomerCareDashboardDto
     public CustomerCareKpiDto Kpis { get; set; } = new();
     public List<CustomerCareQueueItemDto> Visits { get; set; } = new();
     public List<CustomerCareQueueItemDto> Deliveries { get; set; } = new();
+    public List<CustomerCareQueueItemDto> SalesInvoices { get; set; } = new(); // 🧾 فواتير مبيعات لم تُسلَّم بعد
     public List<CustomerCareQueueItemDto> Complaints { get; set; } = new();
     public List<CustomerCareQueueItemDto> Callbacks { get; set; } = new(); // «يتصل لاحقاً»
 }

@@ -150,6 +150,53 @@ public class CustomerCareService : ICustomerCareService
             }).Where(OkToShow(filter)).ToList();
         }
 
+        // ── فواتير المبيعات الجديدة: لم تُسلَّم بعد (طابور رابع — 2026-09-17)
+        //    فاتورة Sale حديثة (جارى/متأخر) — لسه محتاجة متابعة خدمة عملاء قبل وصول طابور «بعد التسليم».
+        var salesInvoices = await (from t in db.VwSalesDeliveryStatuses.AsNoTracking()
+                                   where t.TransactionType == TransactionTypes.Sale
+                                         && t.DeliveryStatus != "تم التسليم"
+                                         && t.DeliveryStatus != "مرتجع"
+                                         && t.TransactionDate >= fromDate
+                                         && (!hasTo || t.TransactionDate < toEx)
+                                         && !excludedB2bPartyIds.Contains(t.PartyId)
+                                   orderby t.TransactionDate descending
+                                   select new
+                                   {
+                                       t.TransactionId,
+                                       t.PartyId,
+                                       t.PartyName,
+                                       t.TransactionDate,
+                                       t.DeliveryStatus
+                                   }).Take(400).ToListAsync();
+
+        if (salesInvoices.Any())
+        {
+            var phonesSi = await PartyPhonesAsync(db, salesInvoices.Select(x => x.PartyId).Distinct().ToList());
+            var existingSi = await ExistingByKeyAsync(db, CustomerCareKind.SalesInvoice, "Transaction", salesInvoices.Select(x => (int?)x.TransactionId).ToList());
+
+            result.SalesInvoices = salesInvoices.Select(x =>
+            {
+                existingSi.TryGetValue(x.TransactionId, out var fb);
+                phonesSi.TryGetValue(x.PartyId, out var ph);
+                return new CustomerCareQueueItemDto
+                {
+                    Kind = CustomerCareKind.SalesInvoice,
+                    PartyId = x.PartyId,
+                    TransactionId = x.TransactionId,
+                    ClientName = x.PartyName ?? "عميل",
+                    Phone = ph,
+                    SourceDate = x.TransactionDate,
+                    Title = $"فاتورة #{x.TransactionId} — لم تُسلَّم ({x.DeliveryStatus})",
+                    ExistingFeedbackId = fb?.FeedbackId,
+                    Satisfaction = fb?.Satisfaction,
+                    Channel = fb?.Channel,
+                    FeedbackStatus = fb?.Status,
+                    FeedbackOutcome = fb?.Outcome,
+                    NextCallDate = fb?.NextCallDate
+                };
+            }).Where(OkToShow(filter)).ToList();
+        }
+
         // ── الشكاوى: مفتوحة + مَغلقة حديثاً بلا تقييم رضا
         var openComplaints = OpenComplaintStatuses();
         var complaints = await (from c in db.VwComplaintsLists.AsNoTracking()
@@ -261,6 +308,7 @@ public class CustomerCareService : ICustomerCareService
         {
             OpenVisits = result.Visits.Count,
             OpenDeliveries = result.Deliveries.Count,
+            OpenSalesInvoices = result.SalesInvoices.Count,
             OpenComplaints = result.Complaints.Count,
             DoneToday = doneToday,
             DoneTotal = doneTotal,
