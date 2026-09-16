@@ -6,10 +6,13 @@ public interface IInvoiceService
 {
     // قراءة
     Task<PagedResult<InvoiceListDto>> GetInvoicesAsync(InvoiceFilterDto filter);
+    Task<List<InvoiceEmployeeDto>> GetInvoiceEmployeesAsync(string transactionType);
     Task<InvoiceDetailsDto?> GetInvoiceDetailsAsync(int transactionId);
     Task<InvoiceFormDto?> GetInvoiceForEditAsync(int transactionId);
     Task<InvoicePrintDto?> GetInvoiceForPrintAsync(int transactionId);
     Task<InvoiceStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null, string transactionType = "Sale");
+    // ⭐ إحصائيات تحترم كل فلاتر القائمة (الكروت تتبع الفلاتر)
+    Task<InvoiceStatsDto> GetStatsAsync(InvoiceFilterDto filter);
     Task<string> GenerateNextInvoiceNumberAsync(string transactionType = "Sale");
 
     // كتابة
@@ -18,6 +21,13 @@ public interface IInvoiceService
 
     Task<(bool Success, string Message)> UpdateInvoiceAsync(
         InvoiceFormDto dto, string currentUserName);
+
+    // ⭐ التعديل الكامل للفاتورة — Admin/AccountManager فقط
+    Task<(bool Success, string Message)> UpdateInvoiceFullyAsync(InvoiceFormDto dto, string currentUserName);
+    // ⭐ سجل تعديلات الفاتورة (بيانات الشاشة الجانبية)
+    Task<InvoiceEditHistoryDto?> GetInvoiceEditHistoryAsync(int transactionId);
+    // ⭐ استرجاع نسخة من سجل التعديلات — Admin/AccountManager فقط
+    Task<(bool Success, string Message)> RestoreInvoiceSnapshotAsync(int transactionId, long auditId, string currentUserName, string? reason = null);
 
     Task<(bool Success, string Message)> RequestInvoiceEditAsync(
         int transactionId, string reason, string currentUserName);

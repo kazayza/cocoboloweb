@@ -1,4 +1,5 @@
 using COCOBOLOERPNEW.DTOs;
+using System.Text.Json;
 using COCOBOLOERPNEW.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -42,73 +43,8 @@ public class InvoiceService : IInvoiceService
 
         query = query.ExcludeProtectedSales(protectedCreators);
 
-                 if (!string.IsNullOrWhiteSpace(filter.SearchText))
-        {
-            var s = filter.SearchText.Trim();
-
-            // ⭐ جلب كل العملاء وبعدين فلترة بالعربي
-            var allParties = await _db.Parties
-                .AsNoTracking()
-                .Select(p => new { p.PartyId, p.PartyName, p.Phone })
-                .ToListAsync();
-
-            var matchingPartyIds = allParties
-                .Where(p => (p.PartyName ?? "").ContainsArabic(s) ||
-                            (p.Phone ?? "").ContainsArabic(s))
-                .Select(p => p.PartyId)
-                .ToList();
-
-            if (filter.TransactionType == TransactionTypes.Purchase)
-            {
-                query = query.Where(t =>
-                    (t.ReferenceNumber != null && t.ReferenceNumber.Contains(s)) ||
-                    matchingPartyIds.Contains(t.EmpId ?? 0));
-            }
-            else
-            {
-                query = query.Where(t =>
-                    (t.ReferenceNumber != null && t.ReferenceNumber.Contains(s)) ||
-                    matchingPartyIds.Contains(t.PartyId));
-            }
-        }
-
-        if (filter.PartyId.HasValue)
-            query = query.Where(t => t.PartyId == filter.PartyId.Value);
-
-        if (filter.WarehouseId.HasValue)
-            query = query.Where(t => t.WarehouseId == filter.WarehouseId.Value);
-
-        if (filter.DateFrom.HasValue)
-            query = query.Where(t => t.TransactionDate >= filter.DateFrom.Value.Date);
-
-        if (filter.DateTo.HasValue)
-            // ⚠️ نهاية حصرية (< اليوم التالي) — لازم تكون كذلك: النمط القديم (<= اليوم+1 ناقص تيك)
-            //    لما بيترجم لعمود datetime في SQL (دقة 1/300 ثانية) بيتقرّب للأعلى فيشمّل
-            //    فاتورة اليوم الأول من الشهر التالي عند منتصف الليل بالظبط.
-            query = query.Where(t => t.TransactionDate < filter.DateTo.Value.Date.AddDays(1));
-
-        if (!string.IsNullOrWhiteSpace(filter.InvoiceStatus))
-            query = query.Where(t => t.InvoiceStatus == filter.InvoiceStatus);
-
-        if (!string.IsNullOrWhiteSpace(filter.PaymentMethod))
-            query = query.Where(t => t.PaymentMethod == filter.PaymentMethod);
-
-        if (filter.IsDelivered.HasValue)
-            query = query.Where(t => t.IsDelivered == filter.IsDelivered.Value);
-
-        if (filter.HasRemaining.HasValue)
-        {
-            if (filter.HasRemaining.Value)
-                query = query.Where(t => t.GrandTotal > t.PaidAmount);
-            else
-                query = query.Where(t => t.GrandTotal <= t.PaidAmount);
-        }
-
-        if (filter.IsOverdue.HasValue && filter.IsOverdue.Value)
-        {
-            var todayDate = DateTime.Today;
-            query = query.Where(t => t.GrandTotal > t.PaidAmount && t.DueDate.HasValue && t.DueDate.Value < todayDate);
-        }
+        // ⭐ مصدر وحيد للفلاتر — نفس الفلاتر تُطبَّق على الجدول والكروت الإحصائية معاً
+        query = await ApplyInvoiceFiltersAsync(query, filter);
 
         var totalCount = await query.CountAsync();
 
@@ -177,6 +113,24 @@ public class InvoiceService : IInvoiceService
             })
             .ToListAsync();
 
+        // ⭐ ربح فاتورة البيع — يُحسب فقط لـ Admin/AccountManager (بدون الرسوم: صافي الأصناف − التكلفة)
+        // نفس منهجية عروض الأسعار: التكلفة = Σ(الكمية × سعر الشراء حسب tier الصنف)
+        var canViewProfit = CanViewInvoiceProfit();
+        if (canViewProfit && filter.TransactionType == TransactionTypes.Sale && items.Count > 0)
+        {
+            var txIds = items.Select(i => i.TransactionId).ToList();
+            var costs = await ComputeSalesCostByTransactionAsync(txIds);
+            foreach (var it in items)
+            {
+                if (!costs.TryGetValue(it.TransactionId, out var cost) || cost <= 0) continue;
+                it.TotalCost = cost;
+                var net = it.NetTotalAmount ?? it.TotalAmount;
+                var gross = net - cost;
+                it.GrossProfit = Math.Round(gross, 2);
+                it.ProfitMarginPercentage = Math.Round(gross / cost * 100m, 2);
+            }
+        }
+
         return new PagedResult<InvoiceListDto>
         {
             Items = items,
@@ -184,6 +138,129 @@ public class InvoiceService : IInvoiceService
             PageNumber = filter.PageNumber,
             PageSize = filter.PageSize
         };
+    }
+
+    // ============================================================
+    //  ⭐ ربح فاتورة البيع — Admin/AccountManager فقط
+    //  التكلفة = Σ(الكمية × سعر الشراء حسب tier الصنف) — نفس منهجية عروض الأسعار
+    //  الربح = صافي الأصناف بعد الخصم − التكلفة (بدون الرسوم الإضافية)
+    // ============================================================
+    private bool CanViewInvoiceProfit()
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+        return user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
+    }
+
+    private static string ExtractTierFromNotes(string? notes)
+    {
+        if (string.IsNullOrWhiteSpace(notes)) return PricingTiers.Premium;
+        if (notes.StartsWith($"[{PricingTiers.CClass}]", StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.CClass;
+        if (notes.StartsWith($"[{PricingTiers.Elite}]", StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.Elite;
+        return PricingTiers.Premium;
+    }
+
+    // ⭐ مصدر التكلفة = نفس منطق GetPurchasePriceByTier المستخدم في فاتورة الشراء المرآتية بالحرف:
+    // صنف عليه بديل مصنعي → أسعار البديل (CClass/Elite→Premium) / عادي → أسعار المنتج
+    private async Task<Dictionary<int, decimal>> ComputeSalesCostByTransactionAsync(List<int> transactionIds)
+    {
+        var rows = await (from d in _db.TransactionDetails.AsNoTracking()
+                          join p in _db.Products.AsNoTracking() on d.ProductId equals p.ProductId
+                          where transactionIds.Contains(d.TransactionId)
+                          select new
+                          {
+                              d.TransactionId,
+                              d.Quantity,
+                              d.PricingTier,
+                              d.Notes,
+                              d.SelectedAlternativeId,
+                              p.PurchasePrice,
+                              p.PurchasePriceCClass,
+                              p.PurchasePriceElite,
+                              AltPurchasePriceCClass = d.SelectedAlternativeId != null
+                                  ? _db.ProductFactoryAlternatives
+                                      .Where(a => a.AlternativeId == d.SelectedAlternativeId)
+                                      .Select(a => a.PurchasePriceCClass).FirstOrDefault()
+                                  : (decimal?)null,
+                              AltPurchasePricePremium = d.SelectedAlternativeId != null
+                                  ? _db.ProductFactoryAlternatives
+                                      .Where(a => a.AlternativeId == d.SelectedAlternativeId)
+                                      .Select(a => a.PurchasePricePremium).FirstOrDefault()
+                                  : (decimal?)null,
+                              AltPurchasePriceElite = d.SelectedAlternativeId != null
+                                  ? _db.ProductFactoryAlternatives
+                                      .Where(a => a.AlternativeId == d.SelectedAlternativeId)
+                                      .Select(a => a.PurchasePriceElite).FirstOrDefault()
+                                  : (decimal?)null
+                          }).ToListAsync();
+
+        var result = new Dictionary<int, decimal>();
+        foreach (var g in rows.GroupBy(r => r.TransactionId))
+        {
+            decimal sum = 0m;
+            foreach (var r in g)
+            {
+                var tier = string.IsNullOrWhiteSpace(r.PricingTier)
+                    ? ExtractTierFromNotes(r.Notes)
+                    : r.PricingTier;
+
+                // ⭐ نفس ترتيب GetPurchasePriceByTier: البديل المصنعي أولاً ثم المنتج
+                decimal unitCost;
+                if (r.SelectedAlternativeId.HasValue)
+                {
+                    unitCost = tier switch
+                    {
+                        var t when t == PricingTiers.CClass => r.AltPurchasePriceCClass ?? 0m,
+                        var t when t == PricingTiers.Elite => r.AltPurchasePriceElite ?? r.AltPurchasePricePremium ?? 0m,
+                        _ => r.AltPurchasePricePremium ?? 0m
+                    };
+                }
+                else
+                {
+                    unitCost = tier switch
+                    {
+                        var t when t == PricingTiers.CClass => r.PurchasePriceCClass ?? 0m,
+                        var t when t == PricingTiers.Elite => r.PurchasePriceElite ?? r.PurchasePrice ?? 0m,
+                        _ => r.PurchasePrice ?? 0m
+                    };
+                }
+
+                sum += Math.Round(r.Quantity * unitCost, 2);
+            }
+            result[g.Key] = sum;
+        }
+        return result;
+    }
+
+    // ⭐ قائمة فلتر الموظف — موظفو قسم «المبيعات» النشطون فقط (بدورهم في النظام أي شيء)
+    // المعيار: Employee.Department == «المبيعات» (مطابقة تامة) + Employee.Status == «نشط»
+    // وبينهم من لهم فواتير من النوع المطلوب (حتى لا يظهر موظف بلا فواتير في القايمة)
+    public async Task<List<InvoiceEmployeeDto>> GetInvoiceEmployeesAsync(string transactionType)
+    {
+        var salesEmpIds = await _db.Employees.AsNoTracking()
+            .Where(e => e.Department == EmployeeDepartments.Sales
+                     && (e.Status == EmployeeStatuses.Active || e.Status == "Active"))
+            .Select(e => e.EmployeeId)
+            .ToListAsync();
+
+        if (!salesEmpIds.Any())
+            return new List<InvoiceEmployeeDto>();
+
+        return await _db.Transactions.AsNoTracking()
+            .Where(t => t.TransactionType == transactionType
+                     && t.EmpId != null
+                     && salesEmpIds.Contains(t.EmpId.Value))
+            .Join(_db.Employees.AsNoTracking(),
+                  t => t.EmpId!.Value,
+                  e => e.EmployeeId,
+                  (t, e) => new { e.EmployeeId, e.FullName })
+            .Distinct()
+            .OrderBy(x => x.FullName)
+            .Select(x => new InvoiceEmployeeDto { EmployeeId = x.EmployeeId, FullName = x.FullName })
+            .ToListAsync();
     }
 
     // ============================================================
@@ -217,7 +294,22 @@ public class InvoiceService : IInvoiceService
         foreach (var p in payments)
             p.Percentage = grandTotal == 0 ? 0 : Math.Round((p.Amount / grandTotal) * 100, 1);
 
-        return new InvoiceDetailsDto { Invoice = form, Payments = payments };
+        var detailsDto = new InvoiceDetailsDto { Invoice = form, Payments = payments };
+
+        // ⭐ الربح في التفاصيل — نفس القيود: فواتير البيع + Admin/AccountManager فقط (بدون الرسوم)
+        if (CanViewInvoiceProfit() && form.TransactionType == TransactionTypes.Sale)
+        {
+            var costs = await ComputeSalesCostByTransactionAsync(new List<int> { transactionId });
+            if (costs.TryGetValue(transactionId, out var invCost) && invCost > 0)
+            {
+                detailsDto.TotalCost = invCost;
+                var net = form.NetTotalAmount ?? form.TotalAmount;
+                detailsDto.GrossProfit = Math.Round(net - invCost, 2);
+                detailsDto.ProfitMarginPercentage = Math.Round((net - invCost) / invCost * 100m, 2);
+            }
+        }
+
+        return detailsDto;
     }
 
     public async Task<InvoiceFormDto?> GetInvoiceForEditAsync(int transactionId)
@@ -331,6 +423,7 @@ public class InvoiceService : IInvoiceService
                 ChargeId = c.ChargeId,
                 ChargeDescription = c.ChargeDescription,
                 ChargeAmount = c.ChargeAmount ?? 0,
+                ChargeType = c.ChargeType,
                 Notes = c.Notes
             })
             .ToListAsync();
@@ -457,41 +550,123 @@ public class InvoiceService : IInvoiceService
     // ============================================================
     //  الإحصائيات
     // ============================================================
+        // ⭐ النسخة القديمة (تواريخ فقط) — للاستدعاءات الخارجية (FactoryPurchases) — تندمج في النسخة الكاملة
         public async Task<InvoiceStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null, string transactionType = "Sale")
-    {
-        // ⭐ نفس قيود القائمة: سكوب التاريخ + حماية فواتير مديري الحسابات
-        var accessFrom = _http.GetCrmAccessFrom();
-        var protectedCreators = SalesInvoiceAccess.CanViewAccountManagerInvoices(_http.HttpContext?.User)
-            ? new List<string>()
-            : await SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(_db);
+        => await GetStatsAsync(new InvoiceFilterDto { DateFrom = from, DateTo = to, TransactionType = transactionType });
 
-        var query = _db.Transactions
-            .AsNoTracking()
-            .Where(t => t.TransactionType == transactionType && t.InvoiceStatus != "Cancelled");
-
-        if (accessFrom.HasValue) query = query.Where(t => t.TransactionDate >= accessFrom.Value);
-        if (from.HasValue) query = query.Where(t => t.TransactionDate >= from.Value.Date);
-        if (to.HasValue) query = query.Where(t => t.TransactionDate < to.Value.Date.AddDays(1)); // ⚠️ حصرية — نفس سبب GetInvoicesAsync
-        query = query.ExcludeProtectedSales(protectedCreators);
-
-        var today = DateTime.Today;
-        var stats = new InvoiceStatsDto
+        // ⭐ الكروت الإحصائية تتبع كل فلاتر القائمة (نفس مصدر الفلترة بالضبط)
+        public async Task<InvoiceStatsDto> GetStatsAsync(InvoiceFilterDto filter)
         {
-            TotalCount = await query.CountAsync(),
-            TotalSales = await query.SumAsync(t => (decimal?)t.GrandTotal) ?? 0,
-            TotalPaid = await query.SumAsync(t => (decimal?)t.PaidAmount) ?? 0,
-            TodayCount = await query.CountAsync(t => t.TransactionDate.Date == today),
-            TodaySales = await query.Where(t => t.TransactionDate.Date == today)
-                .SumAsync(t => (decimal?)t.GrandTotal) ?? 0,
-            OpenCount = await query.CountAsync(t => t.GrandTotal > t.PaidAmount),
-            OverdueCount = await query.CountAsync(t =>
-                t.GrandTotal > t.PaidAmount &&
-                t.DueDate.HasValue && t.DueDate.Value < today)
-        };
+            // ⭐ نفس قيود القائمة: سكوب التاريخ + حماية فواتير مديري الحسابات
+            var accessFrom = _http.GetCrmAccessFrom();
+            var protectedCreators = SalesInvoiceAccess.CanViewAccountManagerInvoices(_http.HttpContext?.User)
+                ? new List<string>()
+                : await SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(_db);
 
-        stats.TotalRemaining = stats.TotalSales - stats.TotalPaid;
-        return stats;
-    }
+            var query = _db.Transactions
+                .AsNoTracking()
+                .Where(t => t.TransactionType == filter.TransactionType && t.InvoiceStatus != "Cancelled");
+
+            if (accessFrom.HasValue) query = query.Where(t => t.TransactionDate >= accessFrom.Value);
+            query = query.ExcludeProtectedSales(protectedCreators);
+
+            // ⭐ نفس فلاتر الجدول بالظبط — تطابق كامل بين الكروت والقائمة
+            query = await ApplyInvoiceFiltersAsync(query, filter);
+
+            var today = DateTime.Today;
+            var stats = new InvoiceStatsDto
+            {
+                TotalCount = await query.CountAsync(),
+                TotalSales = await query.SumAsync(t => (decimal?)t.GrandTotal) ?? 0,
+                TotalPaid = await query.SumAsync(t => (decimal?)t.PaidAmount) ?? 0,
+                TodayCount = await query.CountAsync(t => t.TransactionDate.Date == today),
+                TodaySales = await query.Where(t => t.TransactionDate.Date == today)
+                    .SumAsync(t => (decimal?)t.GrandTotal) ?? 0,
+                OpenCount = await query.CountAsync(t => t.GrandTotal > t.PaidAmount),
+                OverdueCount = await query.CountAsync(t =>
+                    t.GrandTotal > t.PaidAmount &&
+                    t.DueDate.HasValue && t.DueDate.Value < today)
+            };
+
+            stats.TotalRemaining = stats.TotalSales - stats.TotalPaid;
+            return stats;
+        }
+
+        // ⭐ مصدر وحيد لفلاتر قائمة الفواتير — تستخدمه القائمة والإحصائيات معاً (تطابق كامل)
+        private async Task<IQueryable<Transaction>> ApplyInvoiceFiltersAsync(IQueryable<Transaction> query, InvoiceFilterDto filter)
+        {
+            if (!string.IsNullOrWhiteSpace(filter.SearchText))
+            {
+                var sv = filter.SearchText.Trim();
+
+                // ⭐ جلب كل العملاء ثم فلترة بالعربي
+                var allParties = await _db.Parties
+                    .AsNoTracking()
+                    .Select(p => new { p.PartyId, p.PartyName, p.Phone })
+                    .ToListAsync();
+
+                var matchingPartyIds = allParties
+                    .Where(p => (p.PartyName ?? "").ContainsArabic(sv) ||
+                                (p.Phone ?? "").ContainsArabic(sv))
+                    .Select(p => p.PartyId)
+                    .ToList();
+
+                if (filter.TransactionType == TransactionTypes.Purchase)
+                {
+                    query = query.Where(t =>
+                        (t.ReferenceNumber != null && t.ReferenceNumber.Contains(sv)) ||
+                        matchingPartyIds.Contains(t.EmpId ?? 0));
+                }
+                else
+                {
+                    query = query.Where(t =>
+                        (t.ReferenceNumber != null && t.ReferenceNumber.Contains(sv)) ||
+                        matchingPartyIds.Contains(t.PartyId));
+                }
+            }
+
+            if (filter.PartyId.HasValue)
+                query = query.Where(t => t.PartyId == filter.PartyId.Value);
+
+            if (filter.WarehouseId.HasValue)
+                query = query.Where(t => t.WarehouseId == filter.WarehouseId.Value);
+
+            // ⭐ فلتر الموظف (البائع) — فواتير البيع فقط (في الشراء EmpId = المورد)
+            if (filter.TransactionType == TransactionTypes.Sale && filter.EmployeeId.HasValue)
+                query = query.Where(t => t.EmpId == filter.EmployeeId.Value);
+
+            if (filter.DateFrom.HasValue)
+                query = query.Where(t => t.TransactionDate >= filter.DateFrom.Value.Date);
+
+            if (filter.DateTo.HasValue)
+                // ⚠️ نهاية حصرية (< اليوم التالي) — نفس نمط القائمة
+                query = query.Where(t => t.TransactionDate < filter.DateTo.Value.Date.AddDays(1));
+
+            if (!string.IsNullOrWhiteSpace(filter.InvoiceStatus))
+                query = query.Where(t => t.InvoiceStatus == filter.InvoiceStatus);
+
+            if (!string.IsNullOrWhiteSpace(filter.PaymentMethod))
+                query = query.Where(t => t.PaymentMethod == filter.PaymentMethod);
+
+            if (filter.IsDelivered.HasValue)
+                query = query.Where(t => t.IsDelivered == filter.IsDelivered.Value);
+
+            if (filter.HasRemaining.HasValue)
+            {
+                if (filter.HasRemaining.Value)
+                    query = query.Where(t => t.GrandTotal > t.PaidAmount);
+                else
+                    query = query.Where(t => t.GrandTotal <= t.PaidAmount);
+            }
+
+            if (filter.IsOverdue.HasValue && filter.IsOverdue.Value)
+            {
+                var todayDate = DateTime.Today;
+                query = query.Where(t => t.GrandTotal > t.PaidAmount && t.DueDate.HasValue && t.DueDate.Value < todayDate);
+            }
+
+            return query;
+        }
 
     // ============================================================
     //  توليد رقم فاتورة
@@ -1077,6 +1252,401 @@ public class InvoiceService : IInvoiceService
 }
 
     // ============================================================
+    //  ⭐ التعديل الكامل — Admin/AccountManager فقط
+    //  الأصناف (كمية/سعر/استبدال صنف) + الخصم + المخزن + التواريخ + الدفع + التسليم
+    //  مع تصحيح المخزون تلقائياً — فاتورة المرآة مستقلة تماماً (لا تُلمس)
+    // ============================================================
+    public async Task<(bool Success, string Message)> UpdateInvoiceFullyAsync(
+        InvoiceFormDto dto, string currentUserName)
+    {
+        // 🔒 صلاحية الخدمة (مصدر الحقيقة): Admin/AccountManager فقط
+        var httpUser = _http.HttpContext?.User;
+        if (httpUser?.Identity?.IsAuthenticated != true)
+            return (false, "غير مصرح.");
+        var isPrivileged = httpUser.IsInRole("Admin") || httpUser.IsInRole(SystemRoles.Admin)
+            || httpUser.IsInRole("AccountManager") || httpUser.IsInRole(SystemRoles.AccountManager);
+        if (!isPrivileged)
+            return (false, "التعديل الكامل متاح للمدير ومدير الحسابات فقط.");
+
+        if (string.IsNullOrWhiteSpace(dto.FullEditReason))
+            return (false, "سبب التعديل إلزامي.");
+
+        var transaction = await _db.Transactions
+            .FirstOrDefaultAsync(t => t.TransactionId == dto.TransactionId);
+        if (transaction == null) return (false, "الفاتورة غير موجودة.");
+        if (transaction.InvoiceStatus == InvoiceStatuses.Cancelled)
+            return (false, "لا يمكن تعديل فاتورة ملغية.");
+        if (transaction.InvoiceStatus == InvoiceStatuses.Paid)
+            return (false, "لا يمكن تعديل فاتورة مسددة بالكامل.");
+
+        // 🚫 العميل/المورد ثابت — لا يتغير في التعديل الكامل
+        dto.PartyId = transaction.PartyId;
+
+        var oldDetails = await _db.TransactionDetails
+            .Where(d => d.TransactionId == dto.TransactionId)
+            .OrderBy(d => d.DetailId)
+            .ToListAsync();
+
+        // 🔒 نفس الصفوف: ممنوع إضافة أو حذف — تعديل كمية/سعر أو استبدال صنف فقط
+        if (dto.Items == null || dto.Items.Count == 0 || dto.Items.Count != oldDetails.Count)
+            return (false, "لا يمكن إضافة أو حذف أصناف — عدّل الكمية/السعر أو استبدل الصنف.");
+        var oldIds = oldDetails.Select(d => d.DetailId).OrderBy(x => x).ToList();
+        var newIds = dto.Items.Select(i => i.DetailId).OrderBy(x => x).ToList();
+        if (!oldIds.SequenceEqual(newIds))
+            return (false, "بيانات الأصناف غير مطابقة للفاتورة الأصلية.");
+
+        // 💰 إعادة حساب المجاميع — الرسوم القديمة تبقى كما هي + رسوم جديدة اختيارية (فوق القيمة فقط)
+        // TotalAmount لكل صنف محسوبة تلقائياً (كمية × سعر)
+        CalculateTotals(dto);
+
+        // ⭐ رسوم إضافية جديدة من داخل الفاتورة — بدون معاينة/مقدم (لهما مسار خاص في شاشة الرسوم)
+        decimal newChargesTotal = 0m;
+        var newCharges = (dto.NewCharges ?? new List<InvoiceChargeDto>())
+            .Where(c => c.ChargeAmount > 0).ToList();
+        foreach (var c in newCharges)
+        {
+            if (string.IsNullOrWhiteSpace(c.ChargeDescription))
+                return (false, "وصف الرسم الإضافي الجديد إلزامي.");
+            if (c.ChargeType == ChargeTypes.Inspection || c.ChargeType == ChargeTypes.Advance)
+                return (false, "رسوم المعاينة ودفعة المقدمة تُدار من شاشة الرسوم فقط.");
+            newChargesTotal += c.ChargeAmount;
+        }
+
+        dto.TotalChargesAmount = transaction.TotalChargesAmount + newChargesTotal;
+        dto.GrandTotal = Math.Round((dto.NetTotalAmount ?? 0) + dto.TotalChargesAmount, 2);
+
+        if (dto.GrandTotal < transaction.PaidAmount)
+            return (false, $"لا يمكن الحفظ: الإجمالي الجديد ({dto.GrandTotal:N2} ج) أقل من المدفوع ({transaction.PaidAmount:N2} ج).");
+
+        var oldWarehouse = transaction.WarehouseId;
+        var newWarehouse = dto.WarehouseId ?? transaction.WarehouseId;
+
+        string? oldSnapshotReason = null; // تطابق النوع مع newSnapshot.Reason
+
+        // أسماء المنتجات للنسختين (القديمة والجديدة)
+        var allSnapshotProductIds = oldDetails.Select(d => d.ProductId)
+            .Union(dto.Items.Select(i => i.ProductId)).Distinct().ToList();
+        var snapshotProductNames = await _db.Products.AsNoTracking()
+            .Where(pr => allSnapshotProductIds.Contains(pr.ProductId))
+            .Select(pr => new { pr.ProductId, pr.ProductName })
+            .ToDictionaryAsync(pr => pr.ProductId, pr => pr.ProductName);
+        string ProdName(int pid) => snapshotProductNames.TryGetValue(pid, out var pn) ? pn : $"#{pid}";
+
+        var oldSnapshot = new
+        {
+            transaction.TotalAmount,
+            transaction.DiscountAmount,
+            transaction.DiscountPercentage,
+            transaction.NetTotalAmount,
+            transaction.GrandTotal,
+            transaction.TotalChargesAmount,
+            transaction.WarehouseId,
+            transaction.TransactionDate,
+            transaction.DueDate,
+            transaction.PaymentMethod,
+            transaction.IsDelivered,
+            transaction.Notes,
+            transaction.OpportunityId,
+            Reason = oldSnapshotReason,
+            Items = oldDetails.Select(d => new { d.DetailId, d.ProductId, ProductName = ProdName(d.ProductId), d.Quantity, d.UnitPrice, d.PricingTier, d.SelectedAlternativeId }).ToList()
+        };
+
+        using var tx = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            // 📦 تصحيح المخزون تلقائياً (عكس القديم ثم تطبيق الجديد)
+            if (transaction.TransactionType == TransactionTypes.Sale)
+            {
+                foreach (var d in oldDetails)
+                {
+                    var match = dto.Items.FirstOrDefault(i => i.DetailId == d.DetailId);
+                    bool unchanged = match != null && match.ProductId == d.ProductId
+                        && newWarehouse == oldWarehouse
+                        && (int)Math.Round(match.Quantity) == (int)Math.Round(d.Quantity);
+                    if (unchanged) continue;
+                    await UpdateStockAsync(d.ProductId, oldWarehouse,
+                        +(int)Math.Round(d.Quantity), transaction.TransactionId,
+                        d.UnitPrice, currentUserName, "SaleInvoiceEdit");
+                }
+
+                // التحقق من التوفر (بعد إرجاع القديم)
+                var needed = dto.Items
+                    .GroupBy(i => new { i.ProductId, newWarehouse })
+                    .ToDictionary(g => g.Key, g => (int)Math.Round(g.Sum(x => x.Quantity)));
+                var productIds = needed.Keys.Select(k => k.ProductId).Distinct().ToList();
+                var levels = await _db.StockLevels
+                    .Where(sl => sl.WarehouseId == newWarehouse && productIds.Contains(sl.ProductId))
+                    .ToDictionaryAsync(sl => sl.ProductId, sl => sl.Quantity);
+                foreach (var kv in needed)
+                {
+                    levels.TryGetValue(kv.Key.ProductId, out var available);
+                    if (available < kv.Value)
+                    {
+                        var prodName = await _db.Products.Where(pr => pr.ProductId == kv.Key.ProductId)
+                            .Select(pr => pr.ProductName).FirstOrDefaultAsync() ?? ("#" + kv.Key.ProductId);
+                        return (false, $"رصيد الصنف '{prodName}' غير كافٍ في المخزن. المتاح {available} والمطلوب {kv.Value}.");
+                    }
+                }
+
+                foreach (var i in dto.Items)
+                {
+                    var d = oldDetails.First(x => x.DetailId == i.DetailId);
+                    bool unchanged = i.ProductId == d.ProductId && newWarehouse == oldWarehouse
+                        && (int)Math.Round(i.Quantity) == (int)Math.Round(d.Quantity);
+                    if (unchanged) continue;
+                    await UpdateStockAsync(i.ProductId, newWarehouse,
+                        -(int)Math.Round(i.Quantity), transaction.TransactionId,
+                        i.UnitPrice, currentUserName, "SaleInvoiceEdit");
+                }
+            }
+            else // Purchase — المخزون يدخل عند الاستلام فقط
+            {
+                if (transaction.IsDelivered == true)
+                {
+                    foreach (var d in oldDetails)
+                    {
+                        var match = dto.Items.FirstOrDefault(i => i.DetailId == d.DetailId);
+                        bool unchanged = match != null && match.ProductId == d.ProductId
+                            && newWarehouse == oldWarehouse
+                            && (int)Math.Round(match.Quantity) == (int)Math.Round(d.Quantity);
+                        if (unchanged) continue;
+                        await UpdateStockAsync(d.ProductId, oldWarehouse,
+                            -(int)Math.Round(d.Quantity), transaction.TransactionId,
+                            d.UnitPrice, currentUserName, "PurchaseInvoiceEdit");
+                    }
+                    foreach (var i in dto.Items)
+                    {
+                        var d = oldDetails.First(x => x.DetailId == i.DetailId);
+                        bool unchanged = i.ProductId == d.ProductId && newWarehouse == oldWarehouse
+                            && (int)Math.Round(i.Quantity) == (int)Math.Round(d.Quantity);
+                        if (unchanged) continue;
+                        await UpdateStockAsync(i.ProductId, newWarehouse,
+                            +(int)Math.Round(i.Quantity), transaction.TransactionId,
+                            i.UnitPrice, currentUserName, "PurchaseInvoiceEdit");
+                    }
+                }
+            }
+
+            // ⭐ إدراج الرسوم الإضافية الجديدة (تظهر في التفاصيل والطباعة تلقائياً)
+            foreach (var c in newCharges)
+            {
+                _db.AdditionalCharges.Add(new AdditionalCharge
+                {
+                    TransactionId = transaction.TransactionId,
+                    PartyId = transaction.PartyId,
+                    ChargeType = string.IsNullOrWhiteSpace(c.ChargeType) ? ChargeTypes.Other : c.ChargeType,
+                    ChargeDescription = c.ChargeDescription.Trim(),
+                    ChargeAmount = c.ChargeAmount,
+                    Status = ChargeStatuses.Applied,
+                    AppliedToTransactionId = transaction.TransactionId,
+                    CreatedBy = currentUserName,
+                    CreatedAt = DateTime.Now
+                });
+            }
+
+            // 🧾 تحديث تفاصيل الأصناف (بنفس الصفوف — استبدال الصنف مسموح)
+            var detailMap = oldDetails.ToDictionary(d => d.DetailId);
+            foreach (var i in dto.Items)
+            {
+                var d = detailMap[i.DetailId];
+                var tier = NormalizePricingTier(string.IsNullOrWhiteSpace(i.PricingTier) ? PricingTiers.Premium : i.PricingTier);
+                d.ProductId = i.ProductId;
+                d.Quantity = i.Quantity;
+                d.UnitPrice = i.UnitPrice;
+                d.TotalAmount = i.TotalAmount;
+                d.SelectedAlternativeId = i.SelectedAlternativeId;
+                d.PricingTier = tier;
+                d.Notes = string.IsNullOrWhiteSpace(i.Notes) ? $"[{tier}]" : $"[{tier}] {i.Notes}";
+            }
+
+            // 🧾 الهيدر
+            transaction.TotalAmount = dto.TotalAmount;
+            transaction.DiscountPercentage = dto.DiscountPercentage;
+            transaction.DiscountAmount = dto.DiscountAmount;
+            transaction.NetTotalAmount = dto.NetTotalAmount;
+            transaction.TotalChargesAmount = dto.TotalChargesAmount;
+            transaction.GrandTotal = dto.GrandTotal;
+            transaction.WarehouseId = newWarehouse;
+            transaction.TransactionDate = dto.TransactionDate;
+            transaction.DueDate = dto.DueDate;
+            transaction.PaymentMethod = dto.PaymentMethod;
+            transaction.IsDelivered = dto.IsDelivered;
+            transaction.Notes = dto.Notes;
+            if (transaction.TransactionType == TransactionTypes.Sale)
+                transaction.OpportunityId = dto.OpportunityId;
+
+            transaction.EditBy = currentUserName;
+            transaction.EditAt = DateTime.Now;
+            transaction.EditReason = dto.FullEditReason.Trim();
+            if (transaction.EditStatus == InvoiceEditStatuses.Approved || transaction.EditStatus == InvoiceEditStatuses.Pending)
+            {
+                transaction.EditStatus = InvoiceEditStatuses.Edited;
+                transaction.EditDone = $"تم التعديل الكامل بواسطة {currentUserName} بتاريخ {DateTime.Now:yyyy/MM/dd HH:mm}";
+            }
+
+            transaction.InvoiceStatus = ComputeStatus(transaction.GrandTotal, transaction.PaidAmount);
+
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            var newSnapshot = new
+            {
+                transaction.TotalAmount,
+                transaction.DiscountAmount,
+                transaction.DiscountPercentage,
+                transaction.NetTotalAmount,
+                transaction.GrandTotal,
+                transaction.TotalChargesAmount,
+                transaction.WarehouseId,
+                transaction.TransactionDate,
+                transaction.DueDate,
+                transaction.PaymentMethod,
+                transaction.IsDelivered,
+                transaction.Notes,
+                transaction.OpportunityId,
+                Reason = dto.FullEditReason,
+                Items = dto.Items.Select(i => new { i.DetailId, i.ProductId, ProductName = string.IsNullOrWhiteSpace(i.ProductName) ? ProdName(i.ProductId) : i.ProductName, i.Quantity, i.UnitPrice, i.PricingTier, i.SelectedAlternativeId }).ToList()
+            };
+
+            await _audit.LogAsync<object>("Transactions", "FullEdit",
+                transaction.TransactionId.ToString(), oldSnapshot, newSnapshot, currentUserName);
+
+            await SendInvoiceNotificationsAsync(transaction, currentUserName, "تم تعديل فاتورة بالكامل");
+
+            return (true, $"تم حفظ التعديل الكامل للفاتورة {transaction.ReferenceNumber} بنجاح.");
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return (false, $"حدث خطأ أثناء الحفظ: {ex.Message}");
+        }
+    }
+
+    // ============================================================
+    //  ⭐ سجل تعديلات الفاتورة (الشاشة الجانبية) + الاسترجاع
+    // ============================================================
+    public async Task<InvoiceEditHistoryDto?> GetInvoiceEditHistoryAsync(int transactionId)
+    {
+        var t = await _db.Transactions.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.TransactionId == transactionId);
+        if (t == null) return null;
+
+        var dto = new InvoiceEditHistoryDto
+        {
+            TransactionId = transactionId,
+            ReferenceNumber = t.ReferenceNumber,
+            CreatedBy = t.CreatedBy,
+            CreatedAt = t.CreatedAt,
+            EditStatus = t.EditStatus,
+            EditReason = t.EditReason,
+            EditBy = t.EditBy,
+            EditAt = t.EditAt,
+            EditDone = t.EditDone
+        };
+
+        var audits = await _db.AuditLogs.AsNoTracking()
+            .Where(a => a.TableName == "Transactions" && a.PrimaryKeyValue == transactionId.ToString())
+            .OrderByDescending(a => a.AuditId)
+            .Take(60)
+            .ToListAsync();
+
+        dto.Entries = audits.Select(a => new InvoiceAuditEntryDto
+        {
+            AuditId = a.AuditId,
+            ActionType = a.ActionType ?? "",
+            ActionDate = a.ActionDate,
+            LoginName = string.IsNullOrWhiteSpace(a.LoginName) ? a.AccessUserName : a.LoginName,
+            OldData = a.OldData,
+            NewData = a.NewData,
+            CanRestore = a.ActionType == "FullEdit" && !string.IsNullOrWhiteSpace(a.OldData)
+        }).ToList();
+
+        // ⭐ استخراج سبب كل حركة تعديل كامل من النسخة الجديدة
+        foreach (var en in dto.Entries.Where(x => x.ActionType == "FullEdit" && !string.IsNullOrWhiteSpace(x.NewData)))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(en.NewData!);
+                if (doc.RootElement.TryGetProperty("Reason", out var r) && r.ValueKind == JsonValueKind.String)
+                    en.Reason = r.GetString();
+            }
+            catch { }
+        }
+
+        return dto;
+    }
+
+    public async Task<(bool Success, string Message)> RestoreInvoiceSnapshotAsync(
+        int transactionId, long auditId, string currentUserName, string? reason = null)
+    {
+        // 🔒 صلاحية الخدمة: Admin/AccountManager فقط
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true)
+            return (false, "غير مصرح.");
+        var isPrivileged = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
+        if (!isPrivileged)
+            return (false, "الاسترجاع متاح للمدير ومدير الحسابات فقط.");
+
+        var entry = await _db.AuditLogs.AsNoTracking()
+            .FirstOrDefaultAsync(a => a.AuditId == auditId
+                && a.TableName == "Transactions"
+                && a.PrimaryKeyValue == transactionId.ToString()
+                && a.ActionType == "FullEdit");
+        if (entry == null || string.IsNullOrWhiteSpace(entry.OldData))
+            return (false, "لا توجد نسخة قابلة للاسترجاع في هذا السجل.");
+
+        InvoiceSnapshotDto? snap;
+        try
+        {
+            snap = System.Text.Json.JsonSerializer.Deserialize<InvoiceSnapshotDto>(entry.OldData,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch
+        {
+            return (false, "تعذر قراءة النسخة المحفوظة.");
+        }
+        if (snap?.Items == null || !snap.Items.Any())
+            return (false, "النسخة المحفوظة لا تحتوي أصنافًا.");
+
+        var t = await _db.Transactions.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.TransactionId == transactionId);
+        if (t == null) return (false, "الفاتورة غير موجودة.");
+        if (t.InvoiceStatus == InvoiceStatuses.Cancelled)
+            return (false, "لا يمكن الاسترجاع لفاتورة ملغية.");
+        if (t.InvoiceStatus == InvoiceStatuses.Paid)
+            return (false, "لا يمكن الاسترجاع لفاتورة مسددة بالكامل.");
+
+        var dto = new InvoiceFormDto
+        {
+            TransactionId = transactionId,
+            TransactionType = t.TransactionType,
+            PartyId = t.PartyId,
+            WarehouseId = snap.WarehouseId ?? t.WarehouseId,
+            TransactionDate = snap.TransactionDate ?? t.TransactionDate,
+            DueDate = snap.DueDate ?? t.DueDate,
+            PaymentMethod = snap.PaymentMethod ?? t.PaymentMethod,
+            IsDelivered = snap.IsDelivered ?? t.IsDelivered,
+            Notes = string.IsNullOrWhiteSpace(snap.Notes) ? t.Notes : snap.Notes,
+            DiscountAmount = snap.DiscountAmount,
+            DiscountPercentage = snap.DiscountPercentage,
+            OpportunityId = t.OpportunityId,
+            Items = snap.Items.Select(i => new InvoiceItemDto
+            {
+                DetailId = i.DetailId,
+                ProductId = i.ProductId,
+                Quantity = i.Quantity,
+                UnitPrice = i.UnitPrice,
+                PricingTier = string.IsNullOrWhiteSpace(i.PricingTier) ? PricingTiers.Premium : i.PricingTier,
+                SelectedAlternativeId = i.SelectedAlternativeId
+            }).ToList(),
+            FullEditReason = $"استرجاع نسخة من سجل التعديلات ({entry.ActionDate:yyyy/MM/dd HH:mm}) — {reason} — بواسطة {currentUserName}"
+        };
+
+        return await UpdateInvoiceFullyAsync(dto, currentUserName);
+    }
+
+    // ============================================================
     //  طلب تعديل الفاتورة وإدارته (Workflow)
     // ============================================================
     public async Task<(bool Success, string Message)> RequestInvoiceEditAsync(
@@ -1606,12 +2176,14 @@ public class InvoiceService : IInvoiceService
             })
             .ToListAsync();
 
-        // ⭐ تطبيق البحث بالعربي في الذاكرة
+        // ⭐ البحث بالعربي + بالكود (رقم المنتج)
         if (!string.IsNullOrWhiteSpace(search))
         {
+            var numeric = int.TryParse(search.Trim(), out var searchId);
             products = products
                 .Where(p => (p.ProductName ?? "").ContainsArabic(search) ||
-                            (p.ProductDescription ?? "").ContainsArabic(search))
+                            (p.ProductDescription ?? "").ContainsArabic(search) ||
+                            (numeric && p.ProductId == searchId))
                 .ToList();
         }
 
@@ -1695,11 +2267,14 @@ public class InvoiceService : IInvoiceService
             })
             .ToListAsync();
 
+        // ⭐ البحث بالعربي + بالكود (رقم المنتج)
         if (!string.IsNullOrWhiteSpace(search))
         {
+            var numeric = int.TryParse(search.Trim(), out var searchId);
             products = products
                 .Where(p => (p.ProductName ?? "").ContainsArabic(search) ||
-                            (p.ProductDescription ?? "").ContainsArabic(search))
+                            (p.ProductDescription ?? "").ContainsArabic(search) ||
+                            (numeric && p.ProductId == searchId))
                 .ToList();
         }
 
@@ -2131,10 +2706,14 @@ public class InvoiceService : IInvoiceService
 
         // ✅ الأولوية لقيمة الخصم الفعلية لو موجودة
         // لأن إعادة اشتقاق الخصم من نسبة مقربة قد يغيّر الرقم الأصلي.
+        // ⭐ قاعدة العمل: الخصم (نسبة أو مبلغ) يُقرَّب لأقرب 100 جنيه
         if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
         {
-            if (dto.DiscountAmount.Value > dto.TotalAmount)
-                dto.DiscountAmount = dto.TotalAmount;
+            var amt = Math.Min(dto.DiscountAmount.Value, dto.TotalAmount);
+            amt = Math.Round(amt / 100m, MidpointRounding.AwayFromZero) * 100m;
+            if (amt < 0) amt = 0;
+            if (amt > dto.TotalAmount) amt = dto.TotalAmount;
+            dto.DiscountAmount = amt;
 
             dto.DiscountPercentage = dto.TotalAmount > 0
                 ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100m, 2)
@@ -2142,8 +2721,14 @@ public class InvoiceService : IInvoiceService
         }
         else if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0)
         {
-            dto.DiscountAmount = Math.Round(
-                dto.TotalAmount * (dto.DiscountPercentage.Value / 100m), 2);
+            var amt = Math.Round(dto.TotalAmount * (dto.DiscountPercentage.Value / 100m), 2);
+            amt = Math.Round(amt / 100m, MidpointRounding.AwayFromZero) * 100m;
+            if (amt < 0) amt = 0;
+            if (amt > dto.TotalAmount) amt = dto.TotalAmount;
+            dto.DiscountAmount = amt;
+            dto.DiscountPercentage = dto.TotalAmount > 0
+                ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100m, 2)
+                : 0;
         }
         else
         {

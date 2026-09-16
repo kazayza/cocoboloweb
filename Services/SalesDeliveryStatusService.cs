@@ -6,21 +6,27 @@ namespace COCOBOLOERPNEW.Services;
 
 public class SalesDeliveryStatusService : ISalesDeliveryStatusService
 {
+    private const string ActionDeliveryPermissionRequest = "DeliveryPermissionRequest";
+    private const string ActionDeliveryPermissionGranted = "DeliveryPermissionGranted";
+
     private readonly IDbContextFactory<db24804Context> _factory;
     private readonly IAuditService _audit;
     private readonly NotificationService _notify;
     private readonly ILogger<SalesDeliveryStatusService> _logger;
+    private readonly IHttpContextAccessor _http;
 
     public SalesDeliveryStatusService(
         IDbContextFactory<db24804Context> factory,
         IAuditService audit,
         NotificationService notify,
-        ILogger<SalesDeliveryStatusService> logger)
+        ILogger<SalesDeliveryStatusService> logger,
+        IHttpContextAccessor http)
     {
         _factory = factory;
         _audit = audit;
         _notify = notify;
         _logger = logger;
+        _http = http;
     }
 
     public async Task<List<VwSalesDeliveryStatus>> GetAllAsync()
@@ -164,6 +170,41 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
         if (transaction == null)
             return (false, "الفاتورة غير موجودة");
 
+        // 🚫 لا تسليم لفاتورة ملغية
+        if (transaction.InvoiceStatus == InvoiceStatuses.Cancelled)
+            return (false, "لا يمكن تسليم فاتورة ملغية.");
+
+        // 🔒 منع التسليم وجود مبالغ متبقية — إلا بموافقة المدير/مدير الحسابات أو بإذن ممنوح
+        string? approvalNote = null;
+        if (dto.Status == "تم التسليم")
+        {
+            var remaining = transaction.GrandTotal - transaction.PaidAmount;
+            if (remaining > 0)
+            {
+                var httpUser = _http.HttpContext?.User;
+                var isApprover = httpUser != null && DeliveryPermissions.CanOverrideRemaining(httpUser);
+
+                if (isApprover)
+                {
+                    approvalNote = $" — تم التسليم بموافقة {dto.UserName} رغم وجود مبالغ متبقية";
+                }
+                else
+                {
+                    var grant = await db.AuditLogs.AsNoTracking()
+                        .Where(a => a.TableName == "Transactions"
+                                 && a.ActionType == ActionDeliveryPermissionGranted
+                                 && a.PrimaryKeyValue == dto.TransactionId.ToString())
+                        .OrderByDescending(a => a.AuditId)
+                        .FirstOrDefaultAsync();
+
+                    if (grant == null)
+                        return (false, "لا يمكن التسليم — يوجد مبالغ متبقية على هذه الفاتورة. برجاء مراجعة مدير الحسابات أو مسئول الحسابات أو المدير.");
+
+                    approvalNote = $" — تم التسليم بموافقة {grant.LoginName} رغم وجود مبالغ متبقية";
+                }
+            }
+        }
+
         var oldSnapshot = new
         {
             transaction.DeliveryEmployeeId,
@@ -190,6 +231,8 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
             }
 
             transaction.DeliveredNotes = dto.Notes;
+            if (approvalNote != null)
+                transaction.DeliveredNotes = ((transaction.DeliveredNotes ?? "").TrimEnd() + approvalNote).Trim();
 
             await db.SaveChangesAsync();
 
@@ -215,6 +258,178 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
             _logger.LogError(ex, "UpdateDeliveryStatusAsync failed for transaction {Id}", dto.TransactionId);
             return (false, $"حدث خطأ: {ex.Message}");
         }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //        إذن التسليم لفواتير عليها مبالغ متبقية
+    // ════════════════════════════════════════════════════════
+
+    public async Task<(bool Success, string Message)> RequestDeliveryPermissionAsync(
+        int transactionId, string requestedBy)
+    {
+        using var db = await _factory.CreateDbContextAsync();
+
+        var t = await db.Transactions.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.TransactionId == transactionId);
+        if (t == null) return (false, "الفاتورة غير موجودة.");
+        if (t.InvoiceStatus == InvoiceStatuses.Cancelled)
+            return (false, "لا يمكن طلب إذن تسليم لفاتورة ملغية.");
+        if (t.IsDelivered == true)
+            return (false, "الفاتورة مسلَّمة بالفعل — لا حاجة لإذن.");
+        if (t.GrandTotal - t.PaidAmount <= 0)
+            return (false, "لا توجد مبالغ متبقية على هذه الفاتورة — يمكنك التسليم مباشرة.");
+
+        // منع تكرار الطلب المعلق
+        var rows = await db.AuditLogs.AsNoTracking()
+            .Where(a => a.TableName == "Transactions"
+                     && a.PrimaryKeyValue == transactionId.ToString()
+                     && (a.ActionType == ActionDeliveryPermissionRequest
+                      || a.ActionType == ActionDeliveryPermissionGranted))
+            .OrderBy(a => a.AuditId)
+            .Select(a => new { a.AuditId, a.ActionType })
+            .ToListAsync();
+
+        var last = rows.LastOrDefault();
+        if (last != null && last.ActionType == ActionDeliveryPermissionRequest)
+            return (false, "يوجد طلب إذن معلق بالفعل لهذه الفاتورة — بانتظار موافقة الإدارة.");
+
+        await _audit.LogAsync<object>("Transactions", ActionDeliveryPermissionRequest,
+            transactionId.ToString(), null,
+            new { Note = "طلب إذن تسليم فاتورة عليها مبالغ متبقية" }, requestedBy);
+
+        var v = await db.VwSalesDeliveryStatuses.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.TransactionId == transactionId);
+        var partyName = v?.PartyName ?? $"#{transactionId}";
+
+        var msg = $"الفاتورة رقم {transactionId} — العميل {partyName} — عليها مبالغ متبقية. " +
+                  $"طلب إذن تسليم من: {requestedBy}";
+
+        await _notify.NotifyRoleAsync("طلب إذن تسليم", msg, "Admin",
+            requestedBy, formName: "sales-delivery-status", relatedTable: "Transactions", relatedId: transactionId);
+        await _notify.NotifyRoleAsync("طلب إذن تسليم", msg, "AccountManager",
+            requestedBy, formName: "sales-delivery-status", relatedTable: "Transactions", relatedId: transactionId);
+
+        _logger.LogInformation("Delivery permission requested for {TxId} by {User}", transactionId, requestedBy);
+        return (true, "تم إرسال طلب إذن التسليم للمدير ومدير الحسابات — سيصلك إشعار عند الموافقة.");
+    }
+
+    public async Task<(bool Success, string Message)> GrantDeliveryPermissionAsync(
+        int transactionId, string grantedBy)
+    {
+        // 🔒 الخدمة هي مصدر الحقيقة: المدير ومدير الحسابات فقط
+        var httpUser = _http.HttpContext?.User;
+        if (httpUser == null || !DeliveryPermissions.CanOverrideRemaining(httpUser))
+            return (false, "منح إذن التسليم متاح للمدير ومدير الحسابات فقط.");
+
+        using var db = await _factory.CreateDbContextAsync();
+
+        var t = await db.Transactions.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.TransactionId == transactionId);
+        if (t == null) return (false, "الفاتورة غير موجودة.");
+        if (t.IsDelivered == true) return (false, "الفاتورة مسلَّمة بالفعل.");
+        if (t.GrandTotal - t.PaidAmount <= 0)
+            return (false, "لا توجد مبالغ متبقية — يمكن التسليم مباشرة بدون إذن.");
+
+        await _audit.LogAsync<object>("Transactions", ActionDeliveryPermissionGranted,
+            transactionId.ToString(), null, new { Granted = true }, grantedBy);
+
+        // إشعار آخر طالب إذن
+        var lastRequest = await db.AuditLogs.AsNoTracking()
+            .Where(a => a.TableName == "Transactions"
+                     && a.ActionType == ActionDeliveryPermissionRequest
+                     && a.PrimaryKeyValue == transactionId.ToString())
+            .OrderByDescending(a => a.AuditId)
+            .FirstOrDefaultAsync();
+
+        var message = $"تم منح إذن التسليم للفاتورة رقم {transactionId}.";
+        if (!string.IsNullOrWhiteSpace(lastRequest?.LoginName))
+        {
+            await _notify.AddAsync("تم منح إذن تسليم",
+                $"تم منحك إذن تسليم الفاتورة رقم {transactionId} بواسطة {grantedBy}. يمكنك التسليم الآن.",
+                lastRequest.LoginName, grantedBy,
+                formName: "sales-delivery-status", relatedTable: "Transactions", relatedId: transactionId);
+            message += $" وتم إشعار {lastRequest.LoginName}.";
+        }
+
+        _logger.LogInformation("Delivery permission granted for {TxId} by {User}", transactionId, grantedBy);
+        return (true, message);
+    }
+
+    public async Task<Dictionary<int, DeliveryPermissionStateDto>> GetDeliveryPermissionStatesAsync(
+        List<int> transactionIds)
+    {
+        var result = new Dictionary<int, DeliveryPermissionStateDto>();
+        if (transactionIds == null || transactionIds.Count == 0) return result;
+
+        var ids = transactionIds.Select(x => x.ToString()).ToList();
+        using var db = await _factory.CreateDbContextAsync();
+
+        var rows = await db.AuditLogs.AsNoTracking()
+            .Where(a => a.TableName == "Transactions"
+                     && a.PrimaryKeyValue != null
+                     && ids.Contains(a.PrimaryKeyValue)
+                     && (a.ActionType == ActionDeliveryPermissionRequest
+                      || a.ActionType == ActionDeliveryPermissionGranted))
+            .OrderBy(a => a.AuditId)
+            .Select(a => new { a.AuditId, a.ActionType, a.PrimaryKeyValue, a.LoginName, a.ActionDate })
+            .ToListAsync();
+
+        foreach (var grp in rows.GroupBy(r => r.PrimaryKeyValue!))
+        {
+            if (!int.TryParse(grp.Key, out var txId)) continue;
+
+            var lastReq = grp.LastOrDefault(r => r.ActionType == ActionDeliveryPermissionRequest);
+            var lastGrant = grp.LastOrDefault(r => r.ActionType == ActionDeliveryPermissionGranted);
+            if (lastReq == null && lastGrant == null) continue;
+
+            var st = new DeliveryPermissionStateDto { TransactionId = txId };
+            if (lastReq != null) { st.RequestedBy = lastReq.LoginName; st.RequestedAt = lastReq.ActionDate; }
+            if (lastGrant != null) { st.GrantedBy = lastGrant.LoginName; st.GrantedAt = lastGrant.ActionDate; }
+            st.HasPendingRequest = lastReq != null && (lastGrant == null || lastReq.AuditId > lastGrant.AuditId);
+            result[txId] = st;
+        }
+
+        return result;
+    }
+
+    public async Task<List<DailyDeliverySheetRowDto>> GetDailyDeliverySheetAsync(DateTime? from, DateTime? to)
+    {
+        using var db = await _factory.CreateDbContextAsync();
+
+        var q = db.VwSalesDeliveryStatuses.AsNoTracking()
+            .Where(x => x.DeliveryStatus != "تم التسليم");
+
+        if (from.HasValue) q = q.Where(x => x.DueDate >= from.Value);
+        if (to.HasValue)   q = q.Where(x => x.DueDate < to.Value.AddDays(1));
+
+        var rows = await q
+            .OrderBy(x => x.DueDate ?? DateTime.MaxValue)
+            .ThenBy(x => x.TransactionId)
+            .Take(200)
+            .Select(x => new
+            {
+                x.TransactionId, x.PartyId, x.PartyName, x.DueDate,
+                x.DaysRemaining, x.DeliveryStatus, x.DeliveryEmployeeName
+            })
+            .ToListAsync();
+
+        var partyIds = rows.Select(r => r.PartyId).Distinct().ToList();
+        var parties = await db.Parties.AsNoTracking()
+            .Where(p => partyIds.Contains(p.PartyId))
+            .Select(p => new { p.PartyId, p.Phone, p.Address })
+            .ToDictionaryAsync(p => p.PartyId);
+
+        return rows.Select(r => new DailyDeliverySheetRowDto
+        {
+            TransactionId = r.TransactionId,
+            PartyName = r.PartyName,
+            Phone = parties.TryGetValue(r.PartyId, out var pt) ? pt.Phone : null,
+            Address = parties.TryGetValue(r.PartyId, out var pa) ? pa.Address : null,
+            DueDate = r.DueDate,
+            DaysRemaining = r.DaysRemaining,
+            DeliveryStatus = r.DeliveryStatus,
+            DeliveryEmployeeName = r.DeliveryEmployeeName
+        }).ToList();
     }
 
     public async Task<List<EmployeeLookupDto>> GetDeliveryEmployeesAsync()

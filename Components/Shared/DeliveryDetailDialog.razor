@@ -8,6 +8,7 @@
 @inject ISnackbar Snackbar
 @inject ILogger<DeliveryDetailDialog> Logger
 @inject AuthenticationStateProvider AuthProvider
+@inject IDialogService DialogService
 
 <MudDialog Style="min-width: 600px;">
     <TitleContent>
@@ -40,7 +41,7 @@
 
                 @* ── Header Strip ─────────────────────────── *@
                 <MudPaper Class="pa-4 mb-3 rounded-lg"
-                          Style="background:linear-gradient(135deg,#1a237e,#283593); color:white;"
+                          Style="background:linear-gradient(135deg,#060C18 0%,#0D1B30 60%,#132A47 100%); color:white; border-bottom:2px solid var(--gold);"
                           Elevation="0">
                     <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
                         <div>
@@ -63,6 +64,51 @@
                     </MudStack>
                 </MudPaper>
 
+                @* ── قاعدة المبالغ المتبقية: لا تسليم إلا بموافقة ── *@
+                @if (_detail.DeliveryStatus != "تم التسليم" && _remaining > 0)
+                {
+                    @if (_canOverride)
+                    {
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+                                <span>⚠️ يوجد مبلغ متبقٍ @(_remaining.ToString("N2")) ج — تسليمك يتم بموافقتك ويتوثق في السجل.</span>
+                                @if (_permState is { HasPendingRequest: true })
+                                {
+                                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Verified"
+                                               OnClick="GrantPermissionAsync">منح إذن التسليم (طلب @(_permState.RequestedBy))</MudButton>
+                                }
+                            </MudStack>
+                        </MudAlert>
+                    }
+                    else if (_permState is { HasPendingRequest: true })
+                    {
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-3">
+                            ⏳ تم إرسال طلب إذن التسليم بواسطة @(_permState.RequestedBy) — بانتظار موافقة الإدارة أو مدير الحسابات.
+                        </MudAlert>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(_permState?.GrantedBy))
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-3">
+                            ✅ الإذن ممنوح بواسطة @(_permState.GrantedBy) — يمكنك التسليم الآن.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+                                <span>🚫 لا يمكن التسليم — يوجد مبالغ متبقية على هذه الفاتورة. برجاء مراجعة مدير الحسابات أو مسئول الحسابات أو المدير.</span>
+                                @if (_canConfirm)
+                                {
+                                    <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
+                                               StartIcon="@Icons.Material.Filled.Send"
+                                               OnClick="RequestPermissionAsync">إرسال طلب إذن تسليم</MudButton>
+                                }
+                            </MudStack>
+                        </MudAlert>
+                    }
+                }
+
                 @* ── Customer & Salesman ─────────────────── *@
                 <MudGrid Spacing="2" Class="mb-2">
                     <MudItem xs="12" md="6">
@@ -74,9 +120,15 @@
                                     <MudText Typo="Typo.body1"><b>@_detail.PartyName</b></MudText>
                                     @if (!string.IsNullOrWhiteSpace(_detail.PartyPhone))
                                     {
-                                        <MudText Typo="Typo.body2">
-                                            <MudIcon Icon="@Icons.Material.Filled.Phone" Size="Size.Small" /> @_detail.PartyPhone
-                                        </MudText>
+                                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                                            <MudText Typo="Typo.body2" Style="align-self:center;">
+                                                <MudIcon Icon="@Icons.Material.Filled.Phone" Size="Size.Small" /> @_detail.PartyPhone
+                                            </MudText>
+                                            <MudIconButton Icon="@Icons.Material.Filled.Call"
+                                                           Size="Size.Small" Color="Color.Success"
+                                                           Href="@($"tel:{_detail.PartyPhone}")"
+                                                           Title="اتصال بالعميل" />
+                                        </MudStack>
                                     }
                                     @if (!string.IsNullOrWhiteSpace(_detail.PartyAddress))
                                     {
@@ -119,28 +171,36 @@
                         <tr>
                             <th>المنتج</th>
                             <th style="text-align:end;">الكمية</th>
-                            <th style="text-align:end;">السعر</th>
-                            <th style="text-align:end;">الإجمالي</th>
+                            @if (_canSeeAmounts)
+                            {
+                                <th style="text-align:end;">السعر</th>
+                                <th style="text-align:end;">الإجمالي</th>
+                            }
                         </tr>
                     </thead>
                     <tbody>
                         @if (_detail.Products.Count == 0)
                         {
-                            <tr><td colspan="4" style="text-align:center; color:#999;">لا توجد منتجات</td></tr>
+                            <tr><td colspan="@(_canSeeAmounts ? 4 : 2)" style="text-align:center; color:#999;">لا توجد منتجات</td></tr>
                         }
                         @foreach (var p in _detail.Products)
                         {
                             <tr>
                                 <td>@p.ProductName</td>
                                 <td style="text-align:end;">@p.Quantity.ToString("N2") @p.UnitName</td>
-                                <td style="text-align:end;">@(p.UnitPrice?.ToString("N2") ?? "—")</td>
-                                <td style="text-align:end;"><b>@p.TotalAmount.ToString("N2")</b></td>
+                                @if (_canSeeAmounts)
+                                {
+                                    <td style="text-align:end;">@(p.UnitPrice?.ToString("N2") ?? "—")</td>
+                                    <td style="text-align:end;"><b>@p.TotalAmount.ToString("N2")</b></td>
+                                }
                             </tr>
                         }
                     </tbody>
                 </MudSimpleTable>
 
-                @* ── Financial Summary ───────────────────── *@
+                @* ── Financial Summary (للمصرح لهم مالياً فقط) *@
+                @if (_canSeeAmounts)
+                {
                 <MudPaper Class="pa-3 mt-3" Elevation="0" Style="background:var(--mud-palette-background-grey);">
                     <MudGrid>
                         <MudItem xs="4">
@@ -160,6 +220,7 @@
                         </MudItem>
                     </MudGrid>
                 </MudPaper>
+                }
 
                 <MudDivider Class="my-4" />
 
@@ -275,6 +336,13 @@
     private bool                   _loading = true;
     private bool                   _saving  = false;
 
+    // ─── الصلاحيات وقاعدة المبالغ المتبقية ────────
+    private bool _canSeeAmounts;
+    private bool _canOverride;
+    private bool _canConfirm;
+    private decimal _remaining;
+    private DeliveryPermissionStateDto? _permState;
+
     private List<EmployeeLookupDto> _employees = new();
     private EmployeeLookupDto?      _selectedEmployee;
 
@@ -287,12 +355,65 @@
         var employeesTask = SafeLoadEmployeesAsync();
         await Task.WhenAll(detailTask, employeesTask);
 
+        await LoadPermissionsAsync();
+        await LoadPermissionStateAsync();
+
         if (_detail is not null)
         {
             BindFromDetail();
         }
 
         _loading = false;
+    }
+
+    private async Task LoadPermissionsAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            _canSeeAmounts = DeliveryPermissions.CanSeeAmounts(user);
+            _canOverride   = DeliveryPermissions.CanOverrideRemaining(user);
+            _canConfirm    = DeliveryPermissions.CanConfirmDelivery(user);
+        }
+        catch { }
+    }
+
+    private async Task LoadPermissionStateAsync()
+    {
+        try
+        {
+            var states = await DeliveryService.GetDeliveryPermissionStatesAsync(new List<int> { TransactionId });
+            states.TryGetValue(TransactionId, out _permState);
+        }
+        catch (Exception ex) { Logger.LogWarning(ex, "Load permission state failed"); }
+        if (_detail is not null) _remaining = _detail.RemainingAmount;
+    }
+
+    private async Task RequestPermissionAsync()
+    {
+        try
+        {
+            var userName = await GetCurrentUserNameAsync();
+            var (ok, msg) = await DeliveryService.RequestDeliveryPermissionAsync(TransactionId, userName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+            await LoadPermissionStateAsync();
+        }
+        catch (Exception ex) { Logger.LogError(ex, "Request permission failed {Id}", TransactionId); }
+        StateHasChanged();
+    }
+
+    private async Task GrantPermissionAsync()
+    {
+        try
+        {
+            var userName = await GetCurrentUserNameAsync();
+            var (ok, msg) = await DeliveryService.GrantDeliveryPermissionAsync(TransactionId, userName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+            await LoadPermissionStateAsync();
+        }
+        catch (Exception ex) { Logger.LogError(ex, "Grant permission failed {Id}", TransactionId); }
+        StateHasChanged();
     }
 
     private async Task SafeLoadDetailAsync()
@@ -359,6 +480,27 @@
 
         await _form.ValidateAsync();
         if (!_form.IsValid) return;
+
+        // 🔒 قاعدة المبالغ المتبقية (نفس قفل الخدمة)
+        if (_model.Status == "تم التسليم" && _remaining > 0 && !_canOverride && _permState?.GrantedBy == null)
+        {
+            Snackbar.Add("لا يمكن التسليم — يوجد مبالغ متبقية على هذه الفاتورة. برجاء مراجعة مدير الحسابات أو مسئول الحسابات أو المدير.", Severity.Warning);
+            return;
+        }
+        if (_model.Status == "تم التسليم" && _remaining > 0 && _canOverride && _permState?.GrantedBy == null)
+        {
+            var ap = new DialogParameters<MudMessageBox>
+            {
+                { x => x.Title,      "موافقة على التسليم" },
+                { x => x.Message,    $"يوجد مبلغ متبقٍ {_remaining:N2} ج على هذه الفاتورة. هل توافق على التسليم؟" },
+                { x => x.YesText,    "نعم، موافقة والتسليم" },
+                { x => x.CancelText, "إلغاء" }
+            };
+            var ad = await DialogService.ShowAsync<MudMessageBox>("موافقة على التسليم", ap,
+                new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+            var ar = await ad.Result;
+            if (ar is null || ar.Canceled) return;
+        }
 
         _saving = true;
         try

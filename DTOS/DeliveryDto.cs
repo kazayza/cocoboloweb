@@ -116,3 +116,27 @@ public static class DeliveryDateFilterTypes
 }
 
 #endregion
+
+/// <summary>حالة إذن التسليم لفاتورة عليها مبالغ متبقية (طلب/منح)</summary>
+public class DeliveryPermissionStateDto
+{
+    public int TransactionId { get; set; }
+    public bool HasPendingRequest { get; set; }
+    public string? RequestedBy { get; set; }
+    public DateTime? RequestedAt { get; set; }
+    public string? GrantedBy { get; set; }
+    public DateTime? GrantedAt { get; set; }
+}
+
+/// <summary>صف في كشف التسليمات غير المسلَّمة (للطباعة — بدون مبالغ)</summary>
+public class DailyDeliverySheetRowDto
+{
+    public int TransactionId { get; set; }
+    public string PartyName { get; set; } = null!;
+    public string? Phone { get; set; }
+    public string? Address { get; set; }
+    public DateTime? DueDate { get; set; }
+    public int? DaysRemaining { get; set; }
+    public string? DeliveryStatus { get; set; }
+    public string? DeliveryEmployeeName { get; set; }
+}

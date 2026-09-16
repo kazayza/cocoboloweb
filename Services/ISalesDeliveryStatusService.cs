@@ -40,6 +40,21 @@ public interface ISalesDeliveryStatusService
     
     Task<List<EmployeeLookupDto>> GetDeliveryEmployeesAsync();
     
+    // ─── كشف التسليمات غير المسلَّمة (طباعة) ────────
+    
+    Task<List<DailyDeliverySheetRowDto>> GetDailyDeliverySheetAsync(DateTime? from, DateTime? to);
+    
+    // ─── إذن التسليم لفواتير عليها مبالغ متبقية ────
+    
+    /// <summary>المندوب يطلب إذن تسليم فاتورة عليها مبالغ متبقية (إشعار للأدارة ومدير الحسابات)</summary>
+    Task<(bool Success, string Message)> RequestDeliveryPermissionAsync(int transactionId, string requestedBy);
+    
+    /// <summary>المدير/مدير الحسابات يمنح إذن التسليم (إشعار لطالب الإذن)</summary>
+    Task<(bool Success, string Message)> GrantDeliveryPermissionAsync(int transactionId, string grantedBy);
+    
+    /// <summary>حالة إذن التسليم لدفعة فواتير (للعرض في القوائم)</summary>
+    Task<Dictionary<int, DeliveryPermissionStateDto>> GetDeliveryPermissionStatesAsync(List<int> transactionIds);
+    
     // ─── PDF ────────────────────────────────────────
     
     Task<byte[]> GenerateDeliveryPdfAsync(int transactionId);

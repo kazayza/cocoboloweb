@@ -25,7 +25,7 @@
     @* ── Header ────────────────────────────────────────────── *@
     <MudPaper Elevation="0"
               Class="pa-4 mb-4 rounded-lg"
-              Style="background:linear-gradient(135deg,#1a237e,#283593); color:white;">
+              Style="background:linear-gradient(135deg,#060C18 0%,#0D1B30 60%,#132A47 100%); color:white; border-bottom:2px solid var(--gold);">
         <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
                 <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Style="color:#ffd700; font-size:2rem;" />
@@ -57,6 +57,12 @@
                         استلامات الشراء
                     </MudButton>
                 }
+                <MudTooltip Text="كشف التسليمات غير المسلَّمة (طباعة)">
+                    <MudIconButton Icon="@Icons.Material.Filled.Print"
+                                   Color="Color.Inherit"
+                                   Disabled="_loading"
+                                   OnClick="PrintDailySheetAsync" />
+                </MudTooltip>
                 <MudTooltip Text="تحديث">
                     <MudIconButton Icon="@Icons.Material.Filled.Refresh"
                                    Color="Color.Inherit"
@@ -74,14 +80,14 @@
             <MudItem xs="6" md="3">
                 <MudPaper Elevation="@(card.IsActive ? 6 : 1)"
                           Class="@($"pa-4 rounded-lg cursor-pointer status-card {(card.IsActive ? "status-card--active" : "")}")"
-                          Style="@($"background:{card.Color}; color:white; transition:all .2s;")"
+                          Style="@($"background:var(--mud-palette-surface); border-right:4px solid var(--mud-palette-{card.ColorKey}); transition:all .2s;")"
                           @onclick="(() => SetStatusAsync(card.Status))">
                     <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
                         <div>
-                            <MudText Typo="Typo.body2" Style="opacity:.9;">@card.Label</MudText>
-                            <MudText Typo="Typo.h4">@card.Count</MudText>
+                            <MudText Typo="Typo.body2" Style="opacity:.75;">@card.Label</MudText>
+                            <MudText Typo="Typo.h4" Style="@($"color:var(--mud-palette-{card.ColorKey}); font-weight:800;")">@card.Count</MudText>
                         </div>
-                        <MudIcon Icon="@card.Icon" Style="font-size:2.5rem; opacity:.4;" />
+                        <MudIcon Icon="@card.Icon" Style="@($"font-size:2.2rem; color:var(--mud-palette-{card.ColorKey}); opacity:.45;")" />
                     </MudStack>
                 </MudPaper>
             </MudItem>
@@ -198,7 +204,10 @@
                     }
                     else { <span>—</span> }
                 </MudTd>
-                <MudTd DataLabel="العميل">@context.PartyName</MudTd>
+                <MudTd DataLabel="العميل">
+                    <MudLink Href="@($"/sales-delivery-status/{context.TransactionId}")"
+                             Style="text-decoration:none; color:inherit;">@context.PartyName</MudLink>
+                </MudTd>
                 <MudTd DataLabel="المندوب">@(string.IsNullOrWhiteSpace(context.DeliveryEmployeeName) ? "—" : context.DeliveryEmployeeName)</MudTd>
 
                 @if (_canSeeAmounts)
@@ -213,13 +222,32 @@
                 }
 
                 <MudTd DataLabel="الحالة">
-                    <MudChip T="string"
-                             Size="Size.Small"
-                             Variant="Variant.Filled"
-                             Icon="@GetStatusIcon(context.DeliveryStatus)"
-                             Color="@GetStatusColor(context.DeliveryStatus)">
-                        @context.DeliveryStatus
-                    </MudChip>
+                    <MudStack Column="true" Spacing="0" AlignItems="AlignItems.Start">
+                        <MudChip T="string"
+                                 Size="Size.Small"
+                                 Variant="Variant.Filled"
+                                 Icon="@GetStatusIcon(context.DeliveryStatus)"
+                                 Color="@GetStatusColor(context.DeliveryStatus)">
+                            @context.DeliveryStatus
+                        </MudChip>
+                        @if (_permStates.TryGetValue(context.TransactionId, out var pst))
+                        {
+                            @if (pst.HasPendingRequest)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                         Color="Color.Warning" Icon="@Icons.Material.Filled.HourglassTop">
+                                    طلب إذن معلق
+                                </MudChip>
+                            }
+                            else if (!string.IsNullOrWhiteSpace(pst.GrantedBy) && context.DeliveryStatus != StatusDelivered)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                         Color="Color.Success" Icon="@Icons.Material.Filled.Verified">
+                                    إذن ممنوح: @pst.GrantedBy
+                                </MudChip>
+                            }
+                        }
+                    </MudStack>
                 </MudTd>
                 <MudTd DataLabel="إجراءات" Style="text-align:center;">
                     <MudStack Row="true" Spacing="0" Justify="Justify.Center">
@@ -258,13 +286,80 @@
         </MudTable>
     </MudPaper>
 
+    @* ── ورقة طباعة كشف التسليم (تظهر في الطباعة فقط — بدون مبالغ) ── *@
+    @if (_sheetRows.Count > 0)
+    {
+        <div class="dds-print-sheet">
+            <div class="dds-title">كشف التسليمات غير المسلَّمة</div>
+            <div class="dds-meta">
+                الفترة: @((_from ?? _to ?? DateTime.Today).ToString("yyyy/MM/dd")) — @((_to ?? DateTime.Today).ToString("yyyy/MM/dd"))
+                &nbsp;|&nbsp; عدد الفواتير: @_sheetRows.Count
+                &nbsp;|&nbsp; طُبع في: @_sheetPrintedAt?.ToString("yyyy/MM/dd HH:mm")
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:34px;">م</th>
+                        <th style="width:64px;">رقم</th>
+                        <th>العميل</th>
+                        <th style="width:110px;">التليفون</th>
+                        <th>العنوان</th>
+                        <th style="width:88px;">الاستحقاق</th>
+                        <th style="width:64px;">الحالة</th>
+                        <th style="width:110px;">مندوب التسليم</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ int sn = 0; }
+                    @foreach (var r in _sheetRows)
+                    {
+                        sn++;
+                        <tr>
+                            <td style="text-align:center;">@sn</td>
+                            <td style="text-align:center;">@r.TransactionId</td>
+                            <td>@r.PartyName</td>
+                            <td>@(r.Phone ?? "—")</td>
+                            <td>@(string.IsNullOrWhiteSpace(r.Address) ? "—" : r.Address)</td>
+                            <td style="text-align:center;">@(r.DueDate?.ToString("yyyy/MM/dd") ?? "—")</td>
+                            <td style="text-align:center;">@r.DeliveryStatus</td>
+                            <td>@(r.DeliveryEmployeeName ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <div class="dds-sign">توقيع مسئول التسليم: ............................</div>
+        </div>
+    }
+
 </MudContainer>
 
 <style>
     .status-card { user-select:none; }
     .status-card:hover { transform: translateY(-2px); }
-    .status-card--active { outline: 3px solid rgba(255,255,255,.9); outline-offset: -3px; }
+    .status-card--active { outline: 3px solid var(--gold); outline-offset: -3px; }
     .cursor-pointer { cursor: pointer; }
+
+    /* ── ورقة كشف التسليم (طباعة فقط) ── */
+    .dds-print-sheet { display: none; }
+
+    @@media print {
+        @@page { size: A4 landscape; margin: 10mm; }
+        body * { visibility: hidden !important; }
+        .dds-print-sheet, .dds-print-sheet * { visibility: visible !important; }
+        .dds-print-sheet {
+            display: block !important;
+            position: absolute; top: 0; right: 0; left: 0;
+            background: #fff; color: #000;
+            font-family: 'Tajawal', 'Segoe UI', sans-serif;
+        }
+        .dds-print-sheet .dds-title { font-size: 22px; font-weight: 800; text-align: center;
+            border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 6px; }
+        .dds-print-sheet .dds-meta { font-size: 12px; margin-bottom: 8px; }
+        .dds-print-sheet table { width: 100%; border-collapse: collapse; }
+        .dds-print-sheet th, .dds-print-sheet td { border: 1px solid #333; padding: 5px 7px; font-size: 12px; text-align: right; }
+        .dds-print-sheet th { background: #eee; }
+        .dds-print-sheet .dds-sign { margin-top: 26px; font-size: 13px; }
+    }
 </style>
 
 @code {
@@ -289,7 +384,11 @@
     private bool _canEditFull;
     private bool _canConfirmDelivery;
     private bool _canViewPurchaseReceipts;
+    private bool _canOverride;
     private string _currentUserName = "system";
+    private Dictionary<int, DeliveryPermissionStateDto> _permStates = new();
+    private List<DailyDeliverySheetRowDto> _sheetRows = new();
+    private DateTime? _sheetPrintedAt;
 
     private CancellationTokenSource? _cts;
 
@@ -316,6 +415,7 @@
         _canSeeAmounts      = DeliveryPermissions.CanSeeAmounts(user);
         _canEditFull        = DeliveryPermissions.CanEditFull(user);
         _canConfirmDelivery = DeliveryPermissions.CanConfirmDelivery(user);
+        _canOverride        = DeliveryPermissions.CanOverrideRemaining(user);
         _canViewPurchaseReceipts = user.IsInRole("Admin")
             || user.IsInRole(SystemRoles.Admin)
             || user.IsInRole("AccountManager")
@@ -353,6 +453,15 @@
 
             _items   = await itemsTask;
             _summary = await summaryTask;
+
+            // حالات إذن التسليم (طلبات معلقة / أذون ممنوحة)
+            try
+            {
+                _permStates = await DeliveryService.GetDeliveryPermissionStatesAsync(
+                    _items.Select(i => i.TransactionId).ToList());
+            }
+            catch { _permStates = new(); }
+
             await SaveFilterStateAsync();
         }
         catch (OperationCanceledException) { /* normal */ }
@@ -429,6 +538,28 @@
     }
 
     // ─── Actions ───────────────────────────────────────────
+    private async Task PrintDailySheetAsync()
+    {
+        try
+        {
+            _sheetRows = await DeliveryService.GetDailyDeliverySheetAsync(_from, _to);
+            if (_sheetRows.Count == 0)
+            {
+                Snackbar.Add("لا توجد فواتير غير مسلَّمة في الفترة المحددة", Severity.Info);
+                return;
+            }
+            _sheetPrintedAt = DateTime.Now;
+            StateHasChanged();
+            await Task.Delay(250);
+            await JS.InvokeVoidAsync("window.print");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Print daily delivery sheet failed");
+            Snackbar.Add("تعذّر تجهيز كشف التسليم: " + ex.Message, Severity.Error);
+        }
+    }
+
     private void OpenFullPage(int transactionId)
         => Nav.NavigateTo($"/sales-delivery-status/{transactionId}");
 
@@ -459,11 +590,45 @@
 
     private async Task QuickConfirmDeliveryAsync(VwSalesDeliveryStatus item)
     {
+        // 🔒 قاعدة المبالغ المتبقية: لا تسليم إلا بموافقة المدير/مدير الحسابات أو بإذن ممنوح
+        var remaining = item.GrandTotal - item.PaidAmount;
+        var permState = _permStates.TryGetValue(item.TransactionId, out var ps) ? ps : null;
+
+        if (remaining > 0 && !_canOverride && permState?.GrantedBy == null)
+        {
+            var reqParams = new DialogParameters<MudMessageBox>
+            {
+                { x => x.Title,      "لا يمكن التسليم" },
+                { x => x.Message,    $"الفاتورة رقم {item.TransactionId} — يوجد مبالغ متبقية على هذه الفاتورة. برجاء مراجعة مدير الحسابات أو مسئول الحسابات أو المدير." },
+                { x => x.YesText,    "إرسال طلب إذن تسليم" },
+                { x => x.CancelText, "إغلاق" }
+            };
+            var reqDlg = await DialogService.ShowAsync<MudMessageBox>("لا يمكن التسليم", reqParams,
+                new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+            var reqRes = await reqDlg.Result;
+            if (reqRes is null || reqRes.Canceled) return;
+
+            try
+            {
+                var (ok, msg) = await DeliveryService.RequestDeliveryPermissionAsync(item.TransactionId, _currentUserName);
+                Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+                if (ok) await RefreshAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Request delivery permission failed for {Id}", item.TransactionId);
+                Snackbar.Add("حدث خطأ أثناء إرسال الطلب: " + ex.Message, Severity.Error);
+            }
+            return;
+        }
+
         var parameters = new DialogParameters<MudMessageBox>
         {
             { x => x.Title,      "تأكيد التسليم" },
-            { x => x.Message,    $"هل تريد تأكيد تسليم الفاتورة رقم {item.TransactionId} للعميل {item.PartyName}؟" },
-            { x => x.YesText,    "نعم، تم التسليم" },
+            { x => x.Message,    remaining > 0
+                                 ? $"⚠️ يوجد مبلغ متبقٍ {remaining:N2} ج على الفاتورة رقم {item.TransactionId} (العميل {item.PartyName}). هل توافق على التسليم؟"
+                                 : $"هل تريد تأكيد تسليم الفاتورة رقم {item.TransactionId} للعميل {item.PartyName}؟" },
+            { x => x.YesText,    remaining > 0 ? "نعم، موافقة والتسليم" : "نعم، تم التسليم" },
             { x => x.CancelText, "إلغاء" }
         };
 
@@ -508,14 +673,14 @@
     }
 
     // ─── UI Helpers ────────────────────────────────────────
-    private record CardModel(string Label, string? Status, int Count, string Color, string Icon, bool IsActive);
+    private record CardModel(string Label, string? Status, int Count, string ColorKey, string Icon, bool IsActive);
 
     private IEnumerable<CardModel> BuildCards() => new[]
     {
-        new CardModel("الكل",           null,             _summary.TotalCount,     "#667eea", Icons.Material.Filled.ListAlt,    _status is null),
-        new CardModel(StatusPending,    StatusPending,    _summary.PendingCount,   "#f5576c", Icons.Material.Filled.Pending,    _status == StatusPending),
-        new CardModel(StatusDelivered,  StatusDelivered,  _summary.DeliveredCount, "#43e97b", Icons.Material.Filled.CheckCircle,_status == StatusDelivered),
-        new CardModel(StatusOverdue,    StatusOverdue,    _summary.OverdueCount,   "#ff9800", Icons.Material.Filled.Warning,    _status == StatusOverdue),
+        new CardModel("الكل",           null,             _summary.TotalCount,     "primary", Icons.Material.Filled.ListAlt,    _status is null),
+        new CardModel(StatusPending,    StatusPending,    _summary.PendingCount,   "warning", Icons.Material.Filled.Pending,    _status == StatusPending),
+        new CardModel(StatusDelivered,  StatusDelivered,  _summary.DeliveredCount, "success", Icons.Material.Filled.CheckCircle,_status == StatusDelivered),
+        new CardModel(StatusOverdue,    StatusOverdue,    _summary.OverdueCount,   "error",   Icons.Material.Filled.Warning,    _status == StatusOverdue),
     };
 
     private static Color GetStatusColor(string? status) => status switch

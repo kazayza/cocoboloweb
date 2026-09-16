@@ -58,4 +58,10 @@ public static class DeliveryPermissions
     /// <summary>هل يقدر يطبع إذن التسليم؟</summary>
     public static bool CanPrint(ClaimsPrincipal user) =>
         CanView(user);
+
+    /// <summary>
+    /// الموافقة على تسليم فاتورة عليها مبالغ متبقية (أو منح إذن التسليم للمندوب) — المدير ومدير الحسابات فقط.
+    /// </summary>
+    public static bool CanOverrideRemaining(ClaimsPrincipal user) =>
+        user.IsInRole(RoleAdmin) || user.IsInRole(RoleAccountManager);
 }

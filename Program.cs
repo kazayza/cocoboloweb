@@ -147,6 +147,7 @@ builder.Services.AddScoped<B2bCrmService>(); // 🏢 B2B CRM (شاشات /crm/b2
 builder.Services.AddScoped<IPasswordService, PasswordService>();
 builder.Services.AddScoped<ICompanyInfoService, CompanyInfoService>();
 builder.Services.AddScoped<IBranchService, BranchService>();
+builder.Services.AddScoped<IPriceListService,        PriceListService>();
 builder.Services.AddScoped<IWarehouseService, WarehouseService>();
 builder.Services.AddScoped<IStockService, StockService>();
 builder.Services.AddScoped<GlobalSearchService>();

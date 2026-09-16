@@ -2,6 +2,7 @@
 
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Components.Shared
 
 @inject IInvoiceService InvoiceService
 @inject NavigationManager Navigation
@@ -82,7 +83,11 @@ else
                                        StartIcon="@Icons.Material.Filled.EditNote"
                                        OnClick="OpenEditRequestDialog">طلب تعديل</MudButton>
                         }
-                        @if (!isPurchase && (inv.EditStatus == InvoiceEditStatuses.Approved || (_canApproveEdit && inv.EditStatus != InvoiceEditStatuses.Pending)) && inv.InvoiceStatus != InvoiceStatuses.Cancelled)
+                        @* 🔒 فواتير البيع: زر التعديل للإدارة ومدير الحسابات فقط — المشتريات على القاعدة القديمة *@
+                        @if (inv.InvoiceStatus != InvoiceStatuses.Cancelled && inv.InvoiceStatus != InvoiceStatuses.Paid
+                            && (isPurchase
+                                ? _canEdit
+                                : (_canApproveEdit && inv.EditStatus != InvoiceEditStatuses.Pending)))
                         {
                             <MudButton Variant="Variant.Filled" Color="Color.Warning"
                                        StartIcon="@Icons.Material.Filled.Edit"
@@ -92,7 +97,13 @@ else
                         {
                             <MudButton Variant="Variant.Filled" Color="Color.Success"
                                        StartIcon="@Icons.Material.Filled.Payment"
-                                       OnClick="OpenAddPaymentDialog">إضافة دفعة</MudButton>
+                                       OnClick="GoToAddPayment">إضافة دفعة</MudButton>
+                        }
+                        @if (_canViewHistory)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                                       StartIcon="@Icons.Material.Filled.History"
+                                       OnClick="OpenEditHistory">سجل التعديلات</MudButton>
                         }
                     }
                 </div>
@@ -418,15 +429,20 @@ else
                     </MudTable>
                 </MudPaper>
 
-                <!-- ================ الرسوم الإضافية ================ -->
-                @if (inv.Charges.Any())
+                <!-- ================ الرسوم الإضافية (فوق قيمة الفاتورة فقط — معاينة/مقدم محسوبة ضمن السداد ولا تُعرض) ================ -->
+                @{
+                    var additionalCharges = inv.Charges
+                        .Where(c => !ChargeTypes.AddsToPaid(c.ChargeType))
+                        .ToList();
+                }
+                @if (additionalCharges.Any())
                 {
                     <MudPaper Class="info-section" Elevation="0">
                         <div class="section-title">
                             <MudIcon Icon="@Icons.Material.Filled.ReceiptLong" Size="Size.Small" />
                             <h3>الرسوم الإضافية</h3>
                         </div>
-                        <MudTable Items="inv.Charges" Dense="true" Hover="true" Elevation="0">
+                        <MudTable Items="additionalCharges" Dense="true" Hover="true" Elevation="0">
                             <HeaderContent>
                                 <MudTh>الوصف</MudTh>
                                 <MudTh Style="width:130px;">المبلغ</MudTh>
@@ -568,6 +584,28 @@ else
                         <strong>@paidPct%</strong>
                     </div>
 
+                    @if (_canViewProfit && !isPurchase && _details.GrossProfit.HasValue)
+                    {
+                        var profitMargin = _details.ProfitMarginPercentage ?? 0;
+                        <div class="summary-divider"></div>
+
+                        <div class="summary-row">
+                            <span>تكلفة الأصناف:</span>
+                            <strong>@FormatMoney(_details.TotalCost ?? 0) ج</strong>
+                        </div>
+
+                        <div class="summary-row" style="color:@(profitMargin >= 15 ? "#2e7d32" : "#c62828");">
+                            <span><strong>ربح الفاتورة:</strong></span>
+                            <strong style="display:flex;align-items:center;gap:6px;">
+                                @FormatMoney(_details.GrossProfit.Value) ج
+                                <MudChip T="string" Size="Size.Small"
+                                         Color="@(profitMargin >= 30 ? Color.Success : profitMargin >= 15 ? Color.Warning : Color.Error)">
+                                    @($"{profitMargin:N2}%")
+                                </MudChip>
+                            </strong>
+                        </div>
+                    }
+
                     <div class="progress-bar">
                         <div class="progress-fill @(isOverdue ? "progress-overdue" : "")"
                              style="width: @Math.Min(100, (double)paidPct).ToString("F0")%;"></div>
@@ -616,77 +654,6 @@ else
 </MudDialog>
 
 <!-- ================ Payment Dialog ================ -->
-<MudDialog @bind-Visible="_showPaymentDialog">
-    <TitleContent>
-        <div style="display:flex; align-items:center; gap:0.5rem;">
-            <MudIcon Icon="@Icons.Material.Filled.Payment" Color="Color.Success" />
-            <MudText Typo="Typo.h6">إضافة دفعة</MudText>
-        </div>
-    </TitleContent>
-    <DialogContent>
-        @{
-            var payRemaining = (_details?.Invoice.GrandTotal ?? 0) - (_details?.Invoice.PaidAmount ?? 0);
-            var grand = _details?.Invoice.GrandTotal ?? 0;
-        }
-        <MudText Class="mb-2">
-            المتبقي:
-            <strong style="color:var(--mud-palette-error);">@FormatMoney(payRemaining) ج</strong>
-        </MudText>
-
-        @if (grand > 0)
-        {
-            <div class="quick-pay-row mb-3">
-                <span style="font-size:0.85rem; font-weight:600;">دفع سريع:</span>
-                @foreach (var pct in SystemConstants.QuickPayPercentages)
-                {
-                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
-                               OnClick="@(() => SetPaymentByPct(pct))">@pct%</MudButton>
-                }
-                <MudButton Variant="Variant.Filled" Size="Size.Small" Color="Color.Success"
-                           OnClick="@(() => _paymentAmount = payRemaining)">كامل</MudButton>
-            </div>
-        }
-
-        <MudNumericField @bind-Value="_paymentAmount" Label="المبلغ"
-                         Variant="Variant.Outlined" Min="0.01m" Max="@payRemaining" Class="mb-2" />
-
-        @if (grand > 0 && _paymentAmount > 0)
-        {
-            var payPct = Math.Round((_paymentAmount / grand) * 100, 1);
-            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
-                هذه الدفعة تساوي <strong>@payPct%</strong> من إجمالي الفاتورة
-            </MudAlert>
-        }
-
-        <MudSelect T="string" @bind-Value="_paymentMethod" Label="طريقة الدفع"
-                   Variant="Variant.Outlined" Class="mb-3">
-            @foreach (var pm in PaymentMethods.Selectable)
-            {
-                <MudSelectItem T="string" Value="@pm.Key">@pm.Value</MudSelectItem>
-            }
-        </MudSelect>
-        <MudSelect T="int?" @bind-Value="_paymentCashBoxId" Label="الخزينة"
-                   Variant="Variant.Outlined" Class="mb-3">
-            @foreach (var cb in _cashBoxes)
-            {
-                <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName</MudSelectItem>
-            }
-        </MudSelect>
-        <MudTextField @bind-Value="_paymentNotes" Label="ملاحظات"
-                      Variant="Variant.Outlined" Lines="2" />
-    </DialogContent>
-    <DialogActions>
-        <MudButton OnClick="@(() => _showPaymentDialog = false)" Variant="Variant.Outlined">إلغاء</MudButton>
-        <MudButton Color="Color.Success" Variant="Variant.Filled"
-                   OnClick="ExecuteAddPayment" Disabled="@_isSavingPayment">
-            @if (_isSavingPayment)
-            {
-                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
-            }
-            تسجيل
-        </MudButton>
-    </DialogActions>
-</MudDialog>
 
 <!-- ================ Edit Request Dialog (Simple Working Version) ================ -->
 <MudDialog @bind-Visible="_showEditRequestDialog" Options="_editRequestDialogOptions">
@@ -1200,20 +1167,14 @@ else
     private bool _canEdit;
     private bool _canApproveEdit;
     private bool _canViewPurchases;
+    private Components.Shared.InvoiceEditHistoryDrawer? _historyDrawer;
+    private bool _canViewProfit;
+    private bool _canViewHistory;
     private bool _isFactory;
     private bool _isPureFactory;
     private bool _isProcessingEdit;
     private string? _currentUserName;
 
-    private List<Models.CashBox> _cashBoxes = new();
-
-    // Payment Dialog
-    private bool _showPaymentDialog;
-    private bool _isSavingPayment;
-    private decimal _paymentAmount;
-    private string _paymentMethod = PaymentMethods.Cash;
-    private int? _paymentCashBoxId;
-    private string? _paymentNotes;
 
     // Edit Request Dialog
     private bool _showEditRequestDialog;
@@ -1259,11 +1220,13 @@ else
         _currentUserName = user.Identity?.Name ?? "System";
         _canEdit = user.HasClaim("Permission", "frm_SalesInvoiveNew:Edit") || user.IsInRole("Admin");
         _canApproveEdit = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
+        _canViewProfit = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
+        // ⭐ سجل التعديلات: Admin + مدير الحسابات فقط (طلب المستخدم)
+        _canViewHistory = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
         _canViewPurchases = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager) || user.IsInRole("Account") || user.IsInRole(SystemRoles.Account);
         _isFactory = isSupplyViewer;
         _isPureFactory = user.IsInRole("factory");
 
-        _cashBoxes = await InvoiceService.GetCashBoxesAsync();
     }
 
     protected override async Task OnParametersSetAsync()
@@ -1320,42 +1283,19 @@ else
         _showImagePreview = true;
     }
 
-    // Payment Methods
-    private void OpenAddPaymentDialog()
+    // ⭐ إضافة دفعة — انتقال مباشر لشاشة المدفوعات مع اختيار الفاتورة تلقائياً
+    // ⭐ فتح سجل تعديلات الفاتورة
+    private async Task OpenEditHistory()
     {
-        if (_details == null) return;
-        var remaining = _details.Invoice.GrandTotal - _details.Invoice.PaidAmount;
-        _paymentAmount = remaining;
-        _paymentMethod = PaymentMethods.Cash;
-        _paymentCashBoxId = _cashBoxes.FirstOrDefault()?.CashBoxId;
-        _paymentNotes = null;
-        _showPaymentDialog = true;
+        if (_details != null && _historyDrawer != null)
+            await _historyDrawer.OpenAsync(_details.Invoice.TransactionId);
     }
 
-    private void SetPaymentByPct(int pct)
+    private void GoToAddPayment()
     {
         if (_details == null) return;
-        var grand = _details.Invoice.GrandTotal;
-        var remaining = grand - _details.Invoice.PaidAmount;
-        var amount = Math.Round(grand * (pct / 100m), 2);
-        if (amount > remaining) amount = remaining;
-        _paymentAmount = amount;
-    }
-
-    private async Task ExecuteAddPayment()
-    {
-        if (_details == null) return;
-        if (_paymentAmount <= 0) { Snackbar.Add("أدخل مبلغاً صحيحاً", Severity.Warning); return; }
-
-        _isSavingPayment = true;
-        var (ok, msg) = await InvoiceService.AddPaymentAsync(
-            Id, _paymentAmount, _paymentMethod, _paymentCashBoxId,
-            _paymentNotes, _currentUserName!);
-        _isSavingPayment = false;
-        _showPaymentDialog = false;
-
-        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-        if (ok) await LoadInvoice();
+        var inv = _details.Invoice;
+        Navigation.NavigateTo($"/payments/new?type={inv.TransactionType}&invoice={inv.TransactionId}");
     }
 
     // Edit Request Methods
@@ -1454,4 +1394,10 @@ else
 
     private string GetPaymentMethodText(string? method) =>
         PaymentMethods.All.TryGetValue(method ?? "", out var ar) ? ar : (method ?? "-");
+}
+
+<!-- ⭐ سجل تعديلات الفاتورة (شاشة جانبية) -->
+@if (_details != null)
+{
+    <InvoiceEditHistoryDrawer @ref="_historyDrawer" />
 }

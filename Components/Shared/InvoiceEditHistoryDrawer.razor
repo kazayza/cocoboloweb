@@ -1,0 +1,571 @@
+@using System.Text.Json
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+
+@inject IInvoiceService InvoiceService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+@* ═══════════ ⭐ لوحة جانبية: سجل تعديلات الفاتورة (نفس نمط لوحة استرداد الخاسر) ═══════════ *@
+@if (_open)
+{
+    <div class="ieh-overlay" @onclick="Close">
+        <div class="ieh-drawer" @onclick="() => { }" @onclick:stopPropagation="true">
+            <div class="ieh-drawer-head">
+                <div>
+                    <h3>🕘 سجل تعديلات الفاتورة</h3>
+                    <p class="ieh-sub">@(_history?.ReferenceNumber ?? $"#{TransactionId}")</p>
+                </div>
+                <button type="button" class="ieh-x" @onclick="Close">✕</button>
+            </div>
+            <div class="ieh-drawer-body">
+                @if (_loading)
+                {
+                    <div class="ieh-loading"><span class="ieh-spin"></span><span>جارٍ تحميل السجل…</span></div>
+                }
+                else if (_history == null)
+                {
+                    <div class="ieh-empty"><h3>الفاتورة غير موجودة</h3></div>
+                }
+                else if (_history.Entries.Count == 0)
+                {
+                    <div class="ieh-empty">
+                        <h3>لا توجد حركات مسجلة</h3>
+                        <p>سجل التعديلات يتكوّن تلقائياً مع الاستخدام (إنشاء / تعديل كامل / طلبات التعديل / إلغاء).</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="ieh-hint">📜 التسلسل الزمني — من الأحدث للأقدم</div>
+                    <div class="ieh-list">
+                        @foreach (var e in _history.Entries)
+                        {
+                            var changes = ComputeChanges(e);
+                            <div class="ieh-item">
+                                <div class="ieh-ico @GetChipClass(e.ActionType)"><MudIcon Icon="@GetEntryIcon(e.ActionType)" /></div>
+                                <div class="ieh-item-top">
+                                    <span class="ieh-act @GetChipClass(e.ActionType)">@GetActionLabel(e.ActionType)</span>
+                                    <span class="ieh-date">@(e.ActionDate?.ToString("yyyy/MM/dd HH:mm"))</span>
+                                </div>
+                                <div class="ieh-by">بواسطة: @(string.IsNullOrWhiteSpace(e.LoginName) ? "النظام" : e.LoginName)</div>
+
+                                @if (changes.Any())
+                                {
+                                    <div class="ieh-changes">
+                                        @foreach (var c in changes)
+                                        {
+                                            <div class="ieh-change">
+                                                <span class="ieh-clbl">@c.Label:</span>
+                                                @if (!string.IsNullOrEmpty(c.Old))
+                                                {
+                                                    <span class="ieh-old">@c.Old</span>
+                                                    <span class="ieh-arrow">←</span>
+                                                }
+                                                <span class="ieh-new">@(string.IsNullOrEmpty(c.New) ? "—" : c.New)</span>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+
+                                @if (!string.IsNullOrWhiteSpace(e.Reason))
+                                {
+                                    <div class="ieh-reason">السبب: @e.Reason</div>
+                                }
+
+                                @if (e.ActionType == "FullEdit" && _canRestore && e.CanRestore)
+                                {
+                                    <button type="button" class="ieh-restore-btn" @onclick="() => OpenRestoreConfirm(e)">↺ استرجاع هذه النسخة</button>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    <div class="ieh-footer-note">
+                        إنشاء الفاتورة: @(_history.CreatedBy) — @_history.CreatedAt.ToString("yyyy/MM/dd HH:mm")
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@* ═══ دايلوج تأكيد الاسترجاع ═══ *@
+<MudDialog @bind-Visible="_restoreConfirmOpen">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.SettingsBackupRestore" Color="Color.Warning" />
+            <MudText Typo="Typo.h6">استرجاع نسخة من السجل</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mb-3">
+            سيتم إرجاع الفاتورة <strong>@(_history?.ReferenceNumber)</strong> إلى حالتها كما كانت في
+            <strong>@(_restoreEntry?.ActionDate?.ToString("yyyy/MM/dd HH:mm"))</strong>
+            — سيتم تصحيح المخزون تلقائياً ويسجَّل الاسترجاع في السجل باسمك.
+        </MudAlert>
+        <MudTextField @bind-Value="_restoreReason"
+                      Label="سبب الاسترجاع (إلزامي)"
+                      Lines="2" Variant="Variant.Outlined" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Outlined" OnClick="@(() => _restoreConfirmOpen = false)">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Warning"
+                   Disabled="@(_isRestoring || string.IsNullOrWhiteSpace(_restoreReason))"
+                   OnClick="ConfirmRestore">
+            @if (_isRestoring)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            تأكيد الاسترجاع
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    /* ── نفس نمط لوحة شاشة استرداد الخاسر ── */
+    .ieh-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); z-index: 1320; /* فوق التوب بار (1300) وتحت دايلوج MudBlazor (1400) */
+        display: flex; justify-content: flex-start; }
+    .ieh-drawer { width: min(500px, 94vw); height: 100%; background: #fff; box-shadow: -10px 0 40px rgba(2, 6, 23, .25);
+        display: flex; flex-direction: column; animation: iehslide .18s ease; }
+    .ieh-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+        padding: 16px 18px; border-bottom: 1px solid #e2e8f0;
+        background: linear-gradient(135deg, #f8fafc, #eef2ff); }
+    .ieh-drawer-head h3 { margin: 0; font-size: 1rem; color: #1e293b; }
+    .ieh-sub { margin: 2px 0 0; font-size: .78rem; color: #64748b; }
+    .ieh-drawer-body { flex: 1; overflow: auto; padding: 14px 18px; }
+    .ieh-x { border: 0; background: #f1f5f9; color: #475569; width: 30px; height: 30px; border-radius: 9px;
+        cursor: pointer; font-size: .9rem; }
+    .ieh-x:hover { background: #fee2e2; color: #b91c1c; }
+
+    .ieh-hint { font-size: .74rem; font-weight: 800; color: #4338ca; background: #eef2ff; border: 1px solid #e0e7ff;
+        border-radius: 8px; padding: 5px 10px; margin-bottom: 12px; display: inline-block; }
+    .ieh-list { display: flex; flex-direction: column; gap: 10px; position: relative; }
+    /* خط التسلسل الزمني الواصل بين الحركات */
+    .ieh-list::before { content: ''; position: absolute; right: 20px; top: 8px; bottom: 8px; width: 2px;
+        background: linear-gradient(180deg, #c7d2fe, #e2e8f0); border-radius: 2px; }
+    .ieh-item { position: relative; border: 1px solid #eef2f7; border-radius: 12px; padding: 10px 12px;
+        background: #f8fafc; margin-right: 58px; }
+    /* أيقونة الحركة (دائرية على الخط) */
+    .ieh-ico { position: absolute; right: -58px; top: 2px; width: 42px; height: 42px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center; border: 2px solid #fff;
+        box-shadow: 0 0 0 1px #e2e8f0, 0 2px 6px rgba(2, 6, 23, .10); z-index: 1; }
+    .ieh-ico .mud-icon-root { font-size: 20px; }
+    .ieh-ico.a-ins  { background: #dcfce7; color: #166534; }
+    .ieh-ico.a-edit { background: #fef3c7; color: #b45309; }
+    .ieh-ico.a-upd  { background: #dbeafe; color: #1d4ed8; }
+    .ieh-ico.a-appr { background: #cffafe; color: #0e7490; }
+    .ieh-ico.a-rej  { background: #fee2e2; color: #b91c1c; }
+    .ieh-ico.a-req  { background: #ede9fe; color: #6d28d9; }
+    .ieh-ico.a-canc { background: #fee2e2; color: #991b1b; }
+    .ieh-ico.a-del  { background: #ccfbf1; color: #0f766e; }
+    .ieh-ico.a-recv { background: #ecfccb; color: #3f6212; }
+    .ieh-item-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .ieh-act { font-size: .72rem; font-weight: 800; padding: 3px 10px; border-radius: 100px; }
+    .ieh-act.a-ins   { background: #dcfce7; color: #166534; }
+    .ieh-act.a-edit  { background: #fef3c7; color: #b45309; }
+    .ieh-act.a-upd   { background: #dbeafe; color: #1d4ed8; }
+    .ieh-act.a-appr  { background: #cffafe; color: #0e7490; }
+    .ieh-act.a-rej   { background: #fee2e2; color: #b91c1c; }
+    .ieh-act.a-req   { background: #ede9fe; color: #6d28d9; }
+    .ieh-act.a-canc  { background: #fee2e2; color: #991b1b; }
+    .ieh-act.a-del   { background: #ccfbf1; color: #0f766e; }
+    .ieh-act.a-recv  { background: #ecfccb; color: #3f6212; }
+    .ieh-date { font-size: .74rem; color: #6366f1; font-weight: 800; direction: ltr; }
+    .ieh-by { font-size: .72rem; color: #64748b; margin-top: 4px; }
+
+    .ieh-changes { margin-top: 8px; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+        padding: 8px 10px; display: flex; flex-direction: column; gap: 5px; }
+    .ieh-change { font-size: .8rem; color: #334155; display: flex; align-items: baseline; gap: 6px;
+        flex-wrap: wrap; line-height: 1.6; }
+    .ieh-clbl { font-weight: 800; color: #475569; }
+    .ieh-old { color: #b91c1c; text-decoration: line-through; text-decoration-thickness: 1px; }
+    .ieh-arrow { color: #94a3b8; }
+    .ieh-new { color: #047857; font-weight: 700; }
+
+    .ieh-reason { margin-top: 8px; font-size: .78rem; color: #475569; background: #fff;
+        border: 1px dashed #cbd5e1; border-radius: 8px; padding: 6px 10px; line-height: 1.7; }
+    .ieh-restore-btn { margin-top: 8px; border: 1px dashed #f59e0b; background: #fffbeb; color: #b45309;
+        border-radius: 8px; padding: 5px 12px; font-size: .78rem; font-weight: 700; cursor: pointer; }
+    .ieh-restore-btn:hover { background: #fef3c7; }
+    .ieh-footer-note { margin-top: 12px; font-size: .72rem; color: #64748b; }
+
+    .ieh-loading { display: flex; align-items: center; gap: 8px; justify-content: center; padding: 48px 0; color: #64748b; }
+    .ieh-spin { width: 22px; height: 22px; border: 3px solid #e2e8f0; border-top-color: #4f46e5;
+        border-radius: 50%; display: inline-block; animation: iehspin .8s linear infinite; }
+    .ieh-empty { text-align: center; padding: 48px 16px; color: #64748b; }
+    .ieh-empty h3 { font-size: .95rem; color: #334155; margin: 0 0 6px; }
+    .ieh-empty p { font-size: .8rem; margin: 0; line-height: 1.8; }
+
+    @@keyframes iehslide { from { transform: translateX(-18px); opacity: 0; } to { transform: none; opacity: 1; } }
+    @@keyframes iehspin { to { transform: rotate(360deg); } }
+</style>
+
+@code {
+    private int TransactionId { get; set; }
+    private bool _open;
+    private bool _loading;
+    private bool _canRestore;
+    private string? _currentUserName;
+    private InvoiceEditHistoryDto? _history;
+
+    private bool _restoreConfirmOpen;
+    private InvoiceAuditEntryDto? _restoreEntry;
+    private string? _restoreReason;
+    private bool _isRestoring;
+
+    // ⭐ الفتح المباشر من الصفحة
+    public async Task OpenAsync(int transactionId)
+    {
+        TransactionId = transactionId;
+        _open = true;
+        _loading = true;
+
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var u = auth.User;
+        _canRestore = u.IsInRole("Admin") || u.IsInRole(SystemRoles.Admin)
+            || u.IsInRole("AccountManager") || u.IsInRole(SystemRoles.AccountManager);
+        _currentUserName = u.Identity?.Name ?? "System";
+
+        // ⭐ حماية: سجل التعديلات للـ Admin ومدير الحسابات فقط — أي حد غير مصرح له تُقفل اللوحة فوراً
+        if (!_canRestore)
+        {
+            _open = false;
+            _loading = false;
+            return;
+        }
+
+        try
+        {
+            _history = await InvoiceService.GetInvoiceEditHistoryAsync(transactionId);
+        }
+        finally
+        {
+            _loading = false;
+        }
+        StateHasChanged();
+    }
+
+    private void Close()
+    {
+        _open = false;
+        StateHasChanged();
+    }
+
+    // ═══════════ استخراج تفاصيل كل حركة (ماذا تغيّر بالظبط) ═══════════
+    private sealed record Chg(string Label, string? Old, string? New);
+
+    private List<Chg> ComputeChanges(InvoiceAuditEntryDto e)
+    {
+        var res = new List<Chg>();
+        JsonDocument? oldDoc = null, newDoc = null;
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(e.OldData)) oldDoc = JsonDocument.Parse(e.OldData);
+            if (!string.IsNullOrWhiteSpace(e.NewData)) newDoc = JsonDocument.Parse(e.NewData);
+            var o = oldDoc?.RootElement ?? default;
+            var n = newDoc?.RootElement ?? default;
+
+            switch (e.ActionType)
+            {
+                case "FullEdit":
+                {
+                    AddIfMoney(res, "إجمالي الأصناف", o, n);
+                    AddIfMoney(res, "الخصم", o, n, "DiscountAmount");
+                    AddIfMoney(res, "الصافي", o, n);
+                    AddIfMoney(res, "رسوم إضافية", o, n, "TotalChargesAmount");
+                    AddIfMoney(res, "الإجمالي", o, n);
+                    AddStr(res, "المخزن", o, n, "WarehouseId", "مخزن #");
+                    AddStr(res, "طريقة الدفع", o, n, "PaymentMethod");
+                    AddDate(res, "تاريخ الفاتورة", o, n, "TransactionDate");
+                    AddDate(res, "تاريخ الاستحقاق", o, n, "DueDate");
+                    AddBool(res, "التسليم", o, n, "IsDelivered");
+
+                    // الأصناف
+                    var oldItems = GetItems(o);
+                    var newItems = GetItems(n);
+                    var oldById = oldItems.ToDictionary(i => GetInt(i, "DetailId"));
+                    foreach (var ni in newItems)
+                    {
+                        var nid = GetInt(ni, "DetailId");
+                        var nName = GetName(ni);
+                        if (!oldById.TryGetValue(nid, out var oi))
+                        {
+                            res.Add(new Chg("صنف مضاف", null, nName));
+                            continue;
+                        }
+                        var oName = GetName(oi);
+                        if (GetInt(oi, "ProductId") != GetInt(ni, "ProductId"))
+                        {
+                            res.Add(new Chg("استبدال صنف", oName, nName));
+                        }
+                        else
+                        {
+                            var oq = GetDec(oi, "Quantity"); var nq = GetDec(ni, "Quantity");
+                            if (oq != nq) res.Add(new Chg($"{nName} — الكمية", fmt(oq), fmt(nq)));
+                            var op = GetDec(oi, "UnitPrice"); var np = GetDec(ni, "UnitPrice");
+                            if (op != np) res.Add(new Chg($"{nName} — السعر", Money(op), Money(np)));
+                        }
+                    }
+                    var newIds = newItems.Select(i => GetInt(i, "DetailId")).ToHashSet();
+                    foreach (var oi in oldItems)
+                        if (!newIds.Contains(GetInt(oi, "DetailId")))
+                            res.Add(new Chg("صنف محذوف", GetName(oi), null));
+                    break;
+                }
+                case "Update":
+                {
+                    AddStr(res, "الملاحظات", o, n, "Notes");
+                    AddDate(res, "تاريخ الاستحقاق", o, n, "DueDate");
+                    AddBool(res, "التسليم", o, n, "IsDelivered");
+                    AddStr(res, "طريقة الدفع", o, n, "PaymentMethod");
+                    break;
+                }
+                case "DeliveryPermissionRequest":
+                {
+                    var note = JStr(n, "Note");
+                    if (!string.IsNullOrWhiteSpace(note)) res.Add(new Chg("تفاصيل الطلب", null, note));
+                    break;
+                }
+                case "DeliveryPermissionGranted":
+                {
+                    res.Add(new Chg("الحالة", null, "تم منح الإذن — يجوز التسليم رغم وجود مبالغ متبقية"));
+                    break;
+                }
+                case "ReceivePurchaseInvoice":
+                {
+                    AddStr(res, "المخزن المستلَم إليه", o, n, "WarehouseId", "مخزن #");
+                    AddDate(res, "تاريخ الاستلام", o, n, "DeliveredAt");
+                    AddStr(res, "ملاحظات الاستلام", o, n, "DeliveredNotes");
+                    break;
+                }
+                case "UpdateDeliveryStatus":
+                {
+                    var st = JStr(n, "RequestedStatus");
+                    if (!string.IsNullOrWhiteSpace(st)) res.Add(new Chg("الحالة المطلوبة", null, st));
+                    AddStr(res, "موظف التوصيل", o, n, "DeliveryEmployeeName");
+                    AddBool(res, "حالة التسليم", o, n, "IsDelivered");
+                    AddDate(res, "تاريخ التسليم", o, n, "DeliveredAt");
+                    AddStr(res, "ملاحظات التسليم", o, n, "DeliveredNotes");
+                    break;
+                }
+                case "Insert":
+                {
+                    var gt = GetDec(n, "GrandTotal");
+                    if (gt.HasValue) res.Add(new Chg("قيمة الفاتورة عند الإنشاء", null, Money(gt)));
+                    var cnt = GetItems(n).Count;
+                    if (cnt > 0) res.Add(new Chg("عدد الأصناف", null, cnt.ToString()));
+                    break;
+                }
+                case "Cancel":
+                {
+                    var r = JStr(n, "EditReason") ?? JStr(o, "EditReason") ?? JStr(n, "Reason");
+                    if (!string.IsNullOrWhiteSpace(r)) res.Add(new Chg("سبب الإلغاء", null, r));
+                    break;
+                }
+                case "EditRequest":
+                {
+                    var r = JStr(n, "Reason");
+                    if (!string.IsNullOrWhiteSpace(r)) res.Add(new Chg("سبب الطلب", null, r));
+                    break;
+                }
+                case "EditApprove":
+                case "EditReject":
+                {
+                    var nt = JStr(n, "Notes");
+                    if (!string.IsNullOrWhiteSpace(nt))
+                        res.Add(new Chg(e.ActionType == "EditReject" ? "سبب الرفض" : "ملاحظات الاعتماد", null, nt));
+                    break;
+                }
+            }
+        }
+        catch { /* لو JSON غير متوقع — نعرض الحركة بدون تفاصيل */ }
+        finally
+        {
+            oldDoc?.Dispose();
+            newDoc?.Dispose();
+        }
+        return res;
+    }
+
+    // ── أدوات قراءة JSON بشكل متسامح ──
+    private static string? JStr(JsonElement el, string name)
+    {
+        if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty(name, out var v)) return null;
+        return v.ValueKind switch
+        {
+            JsonValueKind.String => v.GetString(),
+            JsonValueKind.Number => v.GetRawText(),
+            JsonValueKind.True => "نعم",
+            JsonValueKind.False => "لا",
+            _ => null
+        };
+    }
+
+    private static decimal? GetDec(JsonElement el, string name)
+    {
+        if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty(name, out var v)) return null;
+        if (v.ValueKind == JsonValueKind.Number) return v.GetDecimal();
+        if (v.ValueKind == JsonValueKind.String && decimal.TryParse(v.GetString(), out var d)) return d;
+        return null;
+    }
+
+    private static DateTime? GetDate(JsonElement el, string name)
+    {
+        if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty(name, out var v)) return null;
+        if (v.ValueKind == JsonValueKind.String && DateTime.TryParse(v.GetString(), out var d)) return d;
+        return null;
+    }
+
+    private static int GetInt(JsonElement el, string name)
+    {
+        if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number)
+            return v.GetInt32();
+        return 0;
+    }
+
+    private static bool? GetBool(JsonElement el, string name)
+    {
+        if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty(name, out var v)) return null;
+        return v.ValueKind switch { JsonValueKind.True => true, JsonValueKind.False => false, _ => null };
+    }
+
+    private static List<JsonElement> GetItems(JsonElement el)
+    {
+        var list = new List<JsonElement>();
+        if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty("Items", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            foreach (var i in arr.EnumerateArray()) list.Add(i);
+        return list;
+    }
+
+    private static string GetName(JsonElement item)
+    {
+        var n = JStr(item, "ProductName");
+        if (string.IsNullOrWhiteSpace(n)) n = "#" + GetInt(item, "ProductId");
+        return n;
+    }
+
+    private static string Money(decimal? v) => (v ?? 0).ToString("N2") + " ج";
+    private static string? fmt(decimal? v) => v?.ToString("0.##");
+
+    private void AddIfMoney(List<Chg> res, string label, JsonElement o, JsonElement n, string? prop = null)
+    {
+        var name = prop ?? label switch
+        {
+            "إجمالي الأصناف" => "TotalAmount",
+            "الصافي" => "NetTotalAmount",
+            "الإجمالي" => "GrandTotal",
+            _ => prop!
+        };
+        var ov = GetDec(o, name); var nv = GetDec(n, name);
+        if (ov != nv && (ov.HasValue || nv.HasValue))
+            res.Add(new Chg(label, Money(ov), Money(nv)));
+    }
+
+    private static void AddStr(List<Chg> res, string label, JsonElement o, JsonElement n, string prop, string? prefix = null)
+    {
+        string? Map(string? v) => v == null ? null : (prefix ?? "") + v;
+        var ov = Map(JStr(o, prop)); var nv = Map(JStr(n, prop));
+        if (ov != nv && (ov != null || nv != null)) res.Add(new Chg(label, ov, nv));
+    }
+
+    private static void AddDate(List<Chg> res, string label, JsonElement o, JsonElement n, string prop)
+    {
+        var ov = GetDate(o, prop); var nv = GetDate(n, prop);
+        if (ov != nv && (ov.HasValue || nv.HasValue))
+            res.Add(new Chg(label, ov?.ToString("yyyy/MM/dd"), nv?.ToString("yyyy/MM/dd")));
+    }
+
+    private static void AddBool(List<Chg> res, string label, JsonElement o, JsonElement n, string prop)
+    {
+        var ov = GetBool(o, prop); var nv = GetBool(n, prop);
+        if (ov != nv && (ov.HasValue || nv.HasValue))
+            res.Add(new Chg(label, ov == true ? "تم التسليم" : ov == false ? "لم يتم" : null,
+                                          nv == true ? "تم التسليم" : nv == false ? "لم يتم" : null));
+    }
+
+    private string GetChipClass(string action) => action switch
+    {
+        "Insert" => "a-ins",
+        "Update" => "a-upd",
+        "FullEdit" => "a-edit",
+        "EditRequest" => "a-req",
+        "EditApprove" => "a-appr",
+        "EditReject" => "a-rej",
+        "ReceivePurchaseInvoice" => "a-recv",
+        "DeliveryPermissionRequest" => "a-req",
+        "DeliveryPermissionGranted" => "a-appr",
+        "UpdateDeliveryStatus" => "a-del",
+        "Cancel" => "a-canc",
+        _ => "a-upd"
+    };
+
+    private string GetActionLabel(string action) => action switch
+    {
+        "Insert" => "إنشاء الفاتورة",
+        "Update" => "تعديل بيانات عامة",
+        "FullEdit" => "تعديل كامل للفاتورة",
+        "EditRequest" => "طلب تعديل",
+        "EditApprove" => "اعتماد طلب تعديل",
+        "EditReject" => "رفض طلب تعديل",
+        "ReceivePurchaseInvoice" => "استلام فاتورة شراء",
+        "DeliveryPermissionRequest" => "طلب إذن تسليم (مبالغ متبقية)",
+        "DeliveryPermissionGranted" => "منح إذن تسليم",
+        "UpdateDeliveryStatus" => "تحديث حالة التسليم",
+        "Cancel" => "إلغاء الفاتورة",
+        _ => action
+    };
+
+    private string GetEntryIcon(string action) => action switch
+    {
+        "Insert" => Icons.Material.Filled.ReceiptLong,
+        "Update" => Icons.Material.Filled.Tune,
+        "FullEdit" => Icons.Material.Filled.EditNote,
+        "EditRequest" => Icons.Material.Filled.Send,
+        "EditApprove" => Icons.Material.Filled.CheckCircle,
+        "EditReject" => Icons.Material.Filled.Cancel,
+        "ReceivePurchaseInvoice" => Icons.Material.Filled.MoveToInbox,
+        "DeliveryPermissionRequest" => Icons.Material.Filled.Send,
+        "DeliveryPermissionGranted" => Icons.Material.Filled.Verified,
+        "UpdateDeliveryStatus" => Icons.Material.Filled.LocalShipping,
+        "Cancel" => Icons.Material.Filled.Block,
+        _ => Icons.Material.Filled.History
+    };
+
+    private void OpenRestoreConfirm(InvoiceAuditEntryDto e)
+    {
+        _restoreEntry = e;
+        _restoreReason = null;
+        _restoreConfirmOpen = true;
+    }
+
+    private async Task ConfirmRestore()
+    {
+        if (_isRestoring || _restoreEntry == null) return;
+        if (string.IsNullOrWhiteSpace(_restoreReason))
+        {
+            Snackbar.Add("سبب الاسترجاع إلزامي", Severity.Warning);
+            return;
+        }
+
+        _isRestoring = true;
+        try
+        {
+            var (ok, msg) = await InvoiceService.RestoreInvoiceSnapshotAsync(
+                TransactionId, _restoreEntry.AuditId, _currentUserName ?? "System", _restoreReason!.Trim());
+            if (ok)
+            {
+                Snackbar.Add(msg, Severity.Success);
+                _restoreConfirmOpen = false;
+                await OpenAsync(TransactionId);
+            }
+            else
+            {
+                Snackbar.Add(msg, Severity.Error);
+            }
+        }
+        finally
+        {
+            _isRestoring = false;
+        }
+    }
+}

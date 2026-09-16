@@ -143,13 +143,13 @@ else
                                        DateChanged="@(d => _form.TransactionDate = d ?? DateTime.Now)"
                                        Label="تاريخ الفاتورة"
                                        Variant="Variant.Outlined"
-                                       ReadOnly="@IsEdit" />
+                                       ReadOnly="@(IsEdit && !_canFullEdit)" />
 
                         <MudSelect T="int?" Value="_form.WarehouseId"
                                    ValueChanged="OnWarehouseChanged"
                                    Label="المخزن *"
                                    Variant="Variant.Outlined"
-                                   Disabled="@IsEdit">
+                                   Disabled="@(IsEdit && !_canFullEdit)">
                             @foreach (var w in _warehouses)
                             {
                                 <MudSelectItem T="int?" Value="@((int?)w.WarehouseId)">@(string.IsNullOrWhiteSpace(w.Branch?.BranchNameAr) ? w.WarehouseName : $"{w.WarehouseName} — {w.Branch!.BranchNameAr}")</MudSelectItem>
@@ -277,6 +277,20 @@ else
                                       Adornment="Adornment.Start"
                                       AdornmentIcon="@Icons.Material.Filled.Search"
                                       Class="mb-3" />
+                    }
+
+                    @if (IsEdit && !_canFullEdit)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined" Class="mb-2">
+                            أصناف الفاتورة للقراءة فقط في وضع التعديل — لتعديل الأصناف استخدم «طلب تعديل» من شاشة التفاصيل.
+                        </MudAlert>
+                    }
+                    @if (IsEdit && _canFullEdit && _form.PaidAmount > 0)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mb-2">
+                            ⚠️ هذه الفاتورة عليها مدفوعات بقيمة <strong>@FormatMoney(_form.PaidAmount) ج</strong>
+                            — الإجمالي الجديد بعد التعديل يجب ألا يقل عن المبلغ المدفوع.
+                        </MudAlert>
                     }
 
                     @if (!IsEdit && IsPurchaseCreateMode && !_availableProducts.Any())
@@ -434,7 +448,7 @@ else
                                                          Margin="Margin.Dense"
                                                          Min="0.01m"
                                                          Step="1m"
-                                                         Disabled="@IsEdit" />
+                                                         Disabled="@(IsEdit && !_canFullEdit)" />
                                     </div>
                                     <div class="col-price">
                                         <MudNumericField Value="item.UnitPrice"
@@ -444,7 +458,7 @@ else
                                                          Margin="Margin.Dense"
                                                          Min="0m"
                                                          Step="1m"
-                                                         Disabled="@IsEdit" />
+                                                         Disabled="@(IsEdit && !_canFullEdit)" />
                                     </div>
                                     <div class="col-total"><strong>@FormatMoney(item.TotalAmount) ج</strong></div>
                                     <div class="col-action">
@@ -454,6 +468,14 @@ else
                                                            Color="Color.Error"
                                                            Size="Size.Small"
                                                            OnClick="@(() => RemoveItem(index))" />
+                                        }
+                                        @if (IsEdit && _canFullEdit)
+                                        {
+                                            <MudIconButton Icon="@Icons.Material.Filled.SwapHoriz"
+                                                           Color="Color.Info"
+                                                           Size="Size.Small"
+                                                           Title="استبدال الصنف بصنف آخر"
+                                                           OnClick="@(() => OpenSwapDialog(index))" />
                                         }
                                     </div>
                                 </div>
@@ -511,6 +533,47 @@ else
                             </div>
                         }
                     }
+
+                    @* ⭐ التعديل الكامل: إضافة رسوم إضافية جديدة فوق قيمة الفاتورة (شحن/تركيب/أخرى فقط) *@
+                    @if (IsEdit && _canFullEdit)
+                    {
+                        <MudDivider Class="my-3" />
+                        <MudText Typo="Typo.subtitle2" Style="font-weight:800;">إضافة رسوم إضافية جديدة (تُضاف على إجمالي الفاتورة)</MudText>
+                        <div class="charge-row" style="align-items:center; margin-top:6px;">
+                            <MudSelect T="string" @bind-Value="_newChargeType" Label="النوع"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem T="string" Value="@ChargeTypes.Shipping">رسوم شحن</MudSelectItem>
+                                <MudSelectItem T="string" Value="@ChargeTypes.Installation">رسوم تركيب</MudSelectItem>
+                                <MudSelectItem T="string" Value="@ChargeTypes.Other">رسوم أخرى</MudSelectItem>
+                            </MudSelect>
+                            <MudTextField @bind-Value="_newChargeDesc" Label="الوصف"
+                                          Placeholder="مثل: شحن للمنزل..."
+                                          Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            <MudNumericField @bind-Value="_newChargeAmount" Label="المبلغ"
+                                             T="decimal" Min="0m" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary"
+                                           Title="إضافة الرسم"
+                                           OnClick="AddNewFullEditCharge" />
+                        </div>
+
+                        @if (_newFullEditCharges.Any())
+                        {
+                            @foreach (var nc in _newFullEditCharges)
+                            {
+                                <div class="charge-row" style="align-items:center;">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Info">@GetChargeTypeLabel(nc.ChargeType)</MudChip>
+                                    <span style="flex:1;">@nc.ChargeDescription</span>
+                                    <strong>@FormatMoney(nc.ChargeAmount) ج</strong>
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                   Color="Color.Error" Title="إزالة"
+                                                   OnClick="@(() => _newFullEditCharges.Remove(nc))" />
+                                </div>
+                            }
+                            <MudText Typo="Typo.caption" Style="color:var(--mud-palette-text-secondary);">
+                                إجمالي الرسوم الجديدة: @FormatMoney(_newFullEditCharges.Sum(c => c.ChargeAmount)) ج — ستضاف على إجمالي الفاتورة عند الحفظ
+                            </MudText>
+                        }
+                    }
                 </MudPaper>
 
                 <!-- 5) Notes -->
@@ -545,7 +608,7 @@ else
                                          Margin="Margin.Dense"
                                          Min="0m" Max="100m" Step="1m"
                                          Style="max-width:100px;"
-                                         Disabled="@IsEdit" />
+                                         Disabled="@(IsEdit && !_canFullEdit)" />
                     </div>
 
                     <div class="summary-row">
@@ -981,6 +1044,127 @@ else
     }
 </style>
 
+<!-- ⭐ دايلوج تأكيد التعديل الكامل -->
+<MudDialog @bind-Visible="_showFullEditConfirm">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.EditNote" Color="Color.Warning" />
+            <MudText Typo="Typo.h6">تأكيد التعديل الكامل للفاتورة</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined" Class="mb-3">
+            أنت على وشك تعديل الفاتورة <strong>بالأصناف والمبالغ والمخزن</strong>.
+            سيتم تصحيح المخزون تلقائياً، و<strong>فاتورة المرآة (إن وجدت) لن تتأثر</strong>.
+            هذا الإجراء سيُسجل باسمك في سجل التعديلات.
+        </MudAlert>
+
+        <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px;">
+            <div style="display:flex; justify-content:space-between;">
+                <span>الإجمالي قبل التعديل:</span>
+                <strong>@FormatMoney(_initialGrandTotal) ج</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+                <span>الإجمالي بعد التعديل:</span>
+                <strong style="color:var(--mud-palette-primary);">@FormatMoney(_form.GrandTotal) ج</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+                <span>المدفوع:</span>
+                <strong>@FormatMoney(_form.PaidAmount) ج</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+                <span>المتبقي بعد التعديل:</span>
+                <strong style="color:@((_form.GrandTotal - _form.PaidAmount) > 0 ? "var(--mud-palette-error)" : "var(--mud-palette-success)");">
+                    @FormatMoney(_form.GrandTotal - _form.PaidAmount) ج
+                </strong>
+            </div>
+        </div>
+
+        @{
+            var changes = GetItemChanges().ToList();
+        }
+        @if (changes.Any())
+        {
+            <div style="max-height:180px; overflow:auto; border:1px solid var(--mud-palette-divider); border-radius:8px; padding:8px 10px; margin-bottom:10px;">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:800;" Class="mb-1">تفاصيل التغييرات:</MudText>
+                @foreach (var (title, detail) in changes)
+                {
+                    <div style="display:flex; gap:8px; font-size:12.5px; padding:2px 0;">
+                        <strong style="min-width:130px;">@title</strong>
+                        <span>@detail</span>
+                    </div>
+                }
+            </div>
+        }
+        @if (_newFullEditCharges.Any())
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined" Class="mb-2">
+                رسوم إضافية جديدة: @_newFullEditCharges.Count بند بإجمالي <strong>@FormatMoney(_newFullEditCharges.Sum(c => c.ChargeAmount)) ج</strong> ستضاف على الإجمالي.
+            </MudAlert>
+        }
+        <MudText Typo="Typo.caption" Class="mb-2" Style="color:var(--mud-palette-text-secondary);">
+            ملاحظة: قيمة الخصم تُقرَّب تلقائياً لأقرب 100 جنيه.
+        </MudText>
+
+        <MudTextField @bind-Value="_fullEditReason"
+                      Label="سبب التعديل (إلزامي)"
+                      Placeholder="مثال: خطأ في الكمية/الصنف بناءً على اتفاق مع العميل..."
+                      Lines="2"
+                      Variant="Variant.Outlined" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Outlined" OnClick="@(() => _showFullEditConfirm = false)">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   OnClick="ConfirmFullEdit" Disabled="@(_isSavingFull || string.IsNullOrWhiteSpace(_fullEditReason))">
+            @if (_isSavingFull)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            تأكيد الحفظ
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- ⭐ دايلوج استبدال الصنف -->
+<MudDialog @bind-Visible="_showSwapDialog">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.SwapHoriz" Color="Color.Info" />
+            <MudText Typo="Typo.h6">استبدال الصنف</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined" Class="mb-3">
+            الصنف الحالي: <strong>@(_swapIndex >= 0 && _swapIndex < _form.Items.Count ? _form.Items[_swapIndex].ProductName : "")</strong>
+            <br />اختر الصنف البديل — سيتم تحديث السعر المقترح حسب نفس نظام التسعير، ويمكنك بعدها تعديل الكمية والسعر.
+        </MudAlert>
+        <MudAutocomplete T="ProductLookupDto"
+                         Label="ابحث بالاسم أو بكود المنتج (الرقم)..."
+                         SearchFunc="SearchSwapProducts"
+                         ToStringFunc="@(p => p == null ? "" : p.ProductName)"
+                         Value="_swapCandidate"
+                         ValueChanged="OnSwapProductPicked"
+                         Variant="Variant.Outlined"
+                         ResetValueOnEmptyText="true"
+                         CoerceText="true"
+                         Clearable="true"
+                         MinCharacters="1">
+            <ItemTemplate Context="prod">
+                <div style="display:flex; flex-direction:column;">
+                    <strong>@prod.ProductName <span style="color:var(--mud-palette-text-secondary); font-size:11.5px;">(#@prod.ProductId)</span></strong>
+                    @if (!string.IsNullOrWhiteSpace(prod.ProductDescription))
+                    {
+                        <span style="font-size:11.5px; color:var(--mud-palette-text-secondary);">@prod.ProductDescription</span>
+                    }
+                </div>
+            </ItemTemplate>
+        </MudAutocomplete>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Outlined" OnClick="@(() => _showSwapDialog = false)">إلغاء</MudButton>
+    </DialogActions>
+</MudDialog>
+
 @code {
     [Parameter] public int? Id { get; set; }
     private bool IsEdit => Id.HasValue && Id.Value > 0;
@@ -993,6 +1177,20 @@ else
 
     private bool _isLoading = true;
     private bool _isSaving = false;
+    private bool _canFullEdit = false;
+    private bool _showFullEditConfirm = false;
+    private bool _isSavingFull = false;
+    private string? _fullEditReason;
+    private decimal _initialGrandTotal;
+    private decimal _initialNetTotal;
+    private List<InvoiceItemDto> _initialEditItems = new();
+    private List<InvoiceChargeDto> _newFullEditCharges = new();
+    private string _newChargeType = ChargeTypes.Shipping;
+    private string? _newChargeDesc;
+    private decimal _newChargeAmount;
+    private bool _showSwapDialog = false;
+    private int _swapIndex = -1;
+    private ProductLookupDto? _swapCandidate;
 
     private InvoiceFormDto _form = new();
     private PartyLookupDto? _selectedParty;
@@ -1020,6 +1218,7 @@ else
             var canCreatePurchases = user.HasClaim("Permission", "frm_SupplierInvoices:View") || user.IsInRole("Admin") || user.IsInRole("factory");
             _canAdd = IsPurchaseCreateMode ? canCreatePurchases : canCreateSales;
             _canEdit = user.HasClaim("Permission", "frm_SalesInvoiveNew:Edit") || user.HasClaim("Permission", "frm_SupplierInvoices:View") || user.IsInRole("Admin") || user.IsInRole("factory");
+            _canFullEdit = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
 
             if (!IsEdit && !_canAdd) { Navigation.NavigateTo(IsPurchaseCreateMode ? "/factory/purchases" : "/sales"); return; }
 
@@ -1035,7 +1234,36 @@ else
                     Navigation.NavigateTo("/sales");
                     return;
                 }
+                if (_form.InvoiceStatus == InvoiceStatuses.Cancelled || _form.InvoiceStatus == InvoiceStatuses.Paid)
+                {
+                    Snackbar.Add("لا يمكن تعديل فاتورة ملغية أو مسددة بالكامل.", Severity.Warning);
+                    Navigation.NavigateTo($"/sales/invoices/{Id}");
+                    return;
+                }
                 _form = loaded;
+
+                // 🔒 تعديل فواتير البيع = Admin/مدير الحسابات فقط (حماية الرابط المباشر)
+                if (_form.TransactionType != TransactionTypes.Purchase && !_canFullEdit)
+                {
+                    Snackbar.Add("تعديل فواتير البيع متاح للمدير ومدير الحسابات فقط.", Severity.Warning);
+                    Navigation.NavigateTo($"/sales/invoices/{Id}");
+                    return;
+                }
+
+                _initialGrandTotal = _form.GrandTotal;
+                _initialNetTotal = _form.NetTotalAmount ?? 0;
+                if (_canFullEdit)
+                {
+                    _initialEditItems = _form.Items.Select(i => new InvoiceItemDto
+                    {
+                        DetailId = i.DetailId,
+                        ProductId = i.ProductId,
+                        ProductName = i.ProductName,
+                        Quantity = i.Quantity,
+                        UnitPrice = i.UnitPrice,
+                        PricingTier = i.PricingTier
+                    }).ToList();
+                }
                 if (_form.PartyId.HasValue)
                 {
                     _selectedParty = new PartyLookupDto
@@ -1336,6 +1564,14 @@ else
             }
         }
 
+        // ⭐ التعديل الكامل — Admin/AccountManager: دايلوج تأكيد + سبب إلزامي
+        if (IsEdit && _canFullEdit)
+        {
+            _fullEditReason = null;
+            _showFullEditConfirm = true;
+            return;
+        }
+
         _isSaving = true;
         StateHasChanged();
 
@@ -1390,6 +1626,162 @@ else
             _isSaving = false;
             StateHasChanged();
         }
+    }
+
+    // ⭐ إضافة رسم جديد في وضع التعديل الكامل
+    private void AddNewFullEditCharge()
+    {
+        if (_newChargeAmount <= 0)
+        {
+            Snackbar.Add("أدخل مبلغ الرسم", Severity.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_newChargeDesc))
+        {
+            Snackbar.Add("أدخل وصف الرسم", Severity.Warning);
+            return;
+        }
+
+        _newFullEditCharges.Add(new InvoiceChargeDto
+        {
+            ChargeType = _newChargeType,
+            ChargeDescription = _newChargeDesc!.Trim(),
+            ChargeAmount = _newChargeAmount
+        });
+        _newChargeDesc = null;
+        _newChargeAmount = 0;
+    }
+
+    private string GetChargeTypeLabel(string? type) => type switch
+    {
+        ChargeTypes.Shipping => "شحن",
+        ChargeTypes.Installation => "تركيب",
+        ChargeTypes.Other => "أخرى",
+        ChargeTypes.Inspection => "معاينة",
+        ChargeTypes.Advance => "دفعة مقدمة",
+        _ => type ?? ""
+    };
+
+    // ⭐ فروق الأصناف (قبل ← بعد) لدايلوج التأكيد
+    private IEnumerable<(string Title, string Detail)> GetItemChanges()
+    {
+        foreach (var cur in _form.Items)
+        {
+            var old = _initialEditItems.FirstOrDefault(o => o.DetailId == cur.DetailId);
+            if (old == null) continue;
+            var name = cur.ProductName ?? $"#{cur.ProductId}";
+
+            if (old.ProductId != cur.ProductId)
+            {
+                yield return ("استبدال صنف", $"{old.ProductName} ← {name}");
+            }
+            else
+            {
+                if ((int)Math.Round(old.Quantity) != (int)Math.Round(cur.Quantity))
+                    yield return (name, $"الكمية: {old.Quantity:0.##} ← {cur.Quantity:0.##}");
+                if (old.UnitPrice != cur.UnitPrice)
+                    yield return (name, $"السعر: {old.UnitPrice:N2} ← {cur.UnitPrice:N2} ج");
+            }
+        }
+    }
+
+    // ⭐ تأكيد حفظ التعديل الكامل
+    private async Task ConfirmFullEdit()
+    {
+        if (_isSavingFull) return;
+        if (string.IsNullOrWhiteSpace(_fullEditReason))
+        {
+            Snackbar.Add("سبب التعديل إلزامي", Severity.Warning);
+            return;
+        }
+
+        RecalculateTotals();
+        _isSavingFull = true;
+        StateHasChanged();
+        try
+        {
+            _form.FullEditReason = _fullEditReason!.Trim();
+            _form.NewCharges = _newFullEditCharges.ToList();
+            var (ok, msg) = await InvoiceService.UpdateInvoiceFullyAsync(_form, _currentUserName!);
+            if (ok) _newFullEditCharges.Clear();
+            if (ok)
+            {
+                _showFullEditConfirm = false;
+                Snackbar.Add(msg, Severity.Success);
+                Navigation.NavigateTo($"/sales/invoices/{Id}");
+            }
+            else
+            {
+                Snackbar.Add(msg, Severity.Error);
+            }
+        }
+        finally
+        {
+            _isSavingFull = false;
+            StateHasChanged();
+        }
+    }
+
+    // ⭐ استبدال الصنف — يفتح دايلوج البحث
+    private void OpenSwapDialog(int index)
+    {
+        if (index < 0 || index >= _form.Items.Count) return;
+        _swapIndex = index;
+        _swapCandidate = null;
+        _showSwapDialog = true;
+    }
+
+    private async Task<IEnumerable<ProductLookupDto>> SearchSwapProducts(string arg, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(arg)) return Enumerable.Empty<ProductLookupDto>();
+
+        if (IsPurchaseMode)
+            return (await InvoiceService.SearchShowroomProductsAsync(arg.Trim(), 30)).Take(30);
+
+        if (_form.PartyId.HasValue && _form.WarehouseId.HasValue)
+            return await InvoiceService.SearchAvailableSaleProductsAsync(_form.PartyId.Value, _form.WarehouseId.Value, arg.Trim(), 30);
+
+        return Enumerable.Empty<ProductLookupDto>();
+    }
+
+    private void OnSwapProductPicked(ProductLookupDto? product)
+    {
+        if (product == null) return;
+        if (_swapIndex < 0 || _swapIndex >= _form.Items.Count) return;
+
+        var item = _form.Items[_swapIndex];
+        if (item.ProductId == product.ProductId)
+        {
+            Snackbar.Add("نفس الصنف المختار حالياً", Severity.Info);
+            return;
+        }
+
+        item.ProductId = product.ProductId;
+        item.ProductName = product.ProductName;
+        item.ProductDescription = product.ProductDescription;
+        item.SelectedAlternativeId = null;
+        item.SelectedAlternativeName = null;
+        item.SelectedAlternativeSummary = null;
+        item.IsShowroomProduct = product.IsShowroomProduct;
+        item.AvailableStock = product.AvailableStock;
+
+        // تحديث ما يلزم: السعر المقترح حسب نفس tier الصف (للبيع) — للشراء يُبقى السعر للتعديل اليدوي
+        if (!IsPurchaseMode)
+        {
+            var suggested = item.PricingTier switch
+            {
+                PricingTiers.CClass => product.SuggestedSalePriceCClass ?? product.SuggestedSalePrice ?? 0m,
+                PricingTiers.Elite => product.SuggestedSalePriceElite ?? product.SuggestedSalePrice ?? 0m,
+                _ => product.SuggestedSalePrice ?? 0m
+            };
+            if (suggested > 0) item.UnitPrice = suggested;
+        }
+
+        RecalculateTotals();
+        _showSwapDialog = false;
+        _swapCandidate = null;
+        Snackbar.Add($"تم استبدال الصنف بـ '{product.ProductName}' — راجع الكمية والسعر قبل الحفظ", Severity.Success);
+        StateHasChanged();
     }
 
     private string GetCreateFlowHint()

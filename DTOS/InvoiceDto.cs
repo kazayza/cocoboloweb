@@ -23,6 +23,12 @@ public class InvoiceListDto
     public decimal PaidAmount { get; set; }
     public decimal Remaining => GrandTotal - PaidAmount;
     public decimal PaidPercentage => GrandTotal == 0 ? 0 : Math.Round((PaidAmount / GrandTotal) * 100, 1);
+
+    // ⭐ ربح فاتورة البيع — Admin/AccountManager فقط (null لغيرهم) — بدون الرسوم: صافي الأصناف − التكلفة
+    public decimal? TotalCost { get; set; }
+    public decimal? GrossProfit { get; set; }
+    public decimal? ProfitMarginPercentage { get; set; }
+
     public string? PaymentMethod { get; set; }
     public string? InvoiceStatus { get; set; }
     public bool? IsDelivered { get; set; }
@@ -57,6 +63,10 @@ public class InvoiceFormDto
     public string? EmpName { get; set; }
     public DateTime? DueDate { get; set; }
     public string TransactionType { get; set; } = "Sale";
+    // ⭐ سبب التعديل الكامل (إلزامي — Admin/AccountManager فقط)
+    public string? FullEditReason { get; set; }
+    // ⭐ رسوم إضافية جديدة تُضاف من داخل التعديل الكامل (فوق قيمة الفاتورة فقط — بدون معاينة/مقدم)
+    public List<InvoiceChargeDto> NewCharges { get; set; } = new();
 
     public decimal TotalAmount { get; set; }
     public decimal? DiscountPercentage { get; set; }
@@ -144,6 +154,7 @@ public class InvoiceChargeDto
     public int ChargeId { get; set; }
     public string? ChargeDescription { get; set; }
     public decimal ChargeAmount { get; set; }
+    public string? ChargeType { get; set; }
     public string? Notes { get; set; }
 }
 
@@ -179,6 +190,11 @@ public class InvoiceDetailsDto
 {
     public InvoiceFormDto Invoice { get; set; } = new();
     public List<PaymentHistoryDto> Payments { get; set; } = new();
+
+    // ⭐ ربح فاتورة البيع — Admin/AccountManager فقط (null لغيرهم) — بدون الرسوم
+    public decimal? TotalCost { get; set; }
+    public decimal? GrossProfit { get; set; }
+    public decimal? ProfitMarginPercentage { get; set; }
 }
 
 public class PaymentHistoryDto
@@ -201,6 +217,8 @@ public class InvoiceFilterDto
     public string? SearchText { get; set; }
     public int? PartyId { get; set; }
     public int? WarehouseId { get; set; }
+    // ⭐ فلتر الموظف (البائع) — لفواتير البيع فقط
+    public int? EmployeeId { get; set; }
     public DateTime? DateFrom { get; set; }
     public DateTime? DateTo { get; set; }
     public string? InvoiceStatus { get; set; }
@@ -213,6 +231,13 @@ public class InvoiceFilterDto
     public int PageSize { get; set; } = 25;
     public string SortBy { get; set; } = "TransactionDate";
     public bool SortDescending { get; set; } = true;
+}
+
+// ⭐ عنصر قائمة فلتر الموظف
+public class InvoiceEmployeeDto
+{
+    public int EmployeeId { get; set; }
+    public string FullName { get; set; } = "";
 }
 
 // ============================
@@ -303,6 +328,73 @@ public static class InvoiceStatuses
         { Paid, "مدفوعة بالكامل" },
         { Cancelled, "ملغية" }
     };
+}
+
+// ⭐ سجل تعديلات الفاتورة (Drawer)
+public class InvoiceEditHistoryDto
+{
+    public int TransactionId { get; set; }
+    public string? ReferenceNumber { get; set; }
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public int? EditStatus { get; set; }
+    public string? EditReason { get; set; }
+    public string? EditBy { get; set; }
+    public DateTime? EditAt { get; set; }
+    public string? EditDone { get; set; }
+    public List<InvoiceAuditEntryDto> Entries { get; set; } = new();
+}
+
+public class InvoiceAuditEntryDto
+{
+    public long AuditId { get; set; }
+    public string ActionType { get; set; } = "";
+    public DateTime? ActionDate { get; set; }
+    public string? LoginName { get; set; }
+    public string? OldData { get; set; }
+    public string? NewData { get; set; }
+    public bool CanRestore { get; set; }
+    public string? Reason { get; set; }
+}
+
+// ⭐ نسخة محفوظة في الـ Audit (للاسترجاع)
+public class InvoiceSnapshotDto
+{
+    public string? Reason { get; set; }
+    public decimal? TotalAmount { get; set; }
+    public decimal? DiscountAmount { get; set; }
+    public decimal? DiscountPercentage { get; set; }
+    public decimal? NetTotalAmount { get; set; }
+    public decimal? GrandTotal { get; set; }
+    public decimal? TotalChargesAmount { get; set; }
+    public int? WarehouseId { get; set; }
+    public DateTime? TransactionDate { get; set; }
+    public DateTime? DueDate { get; set; }
+    public string? PaymentMethod { get; set; }
+    public bool? IsDelivered { get; set; }
+    public string? Notes { get; set; }
+    public int? OpportunityId { get; set; }
+    public List<InvoiceSnapshotItemDto> Items { get; set; } = new();
+}
+
+public class InvoiceSnapshotItemDto
+{
+    public int DetailId { get; set; }
+    public int ProductId { get; set; }
+    public string? ProductName { get; set; }
+    public decimal Quantity { get; set; }
+    public decimal UnitPrice { get; set; }
+    public string? PricingTier { get; set; }
+    public int? SelectedAlternativeId { get; set; }
+}
+
+// ⭐ نسخة تعديل الهيدر العادي (حركات Update القديمة)
+public class InvoiceHeaderSnapshotDto
+{
+    public string? Notes { get; set; }
+    public DateTime? DueDate { get; set; }
+    public bool? IsDelivered { get; set; }
+    public string? PaymentMethod { get; set; }
 }
 
 public static class InvoiceEditStatuses

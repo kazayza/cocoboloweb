@@ -3,6 +3,7 @@
 
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.Components.Shared
 @using System.Security.Claims
 
 @inject IInvoiceService InvoiceService
@@ -209,6 +210,23 @@ else
                     <MudSelectItem T="bool?" Value="@((bool?)false)">مسددة بالكامل</MudSelectItem>
                 </MudSelect>
 
+                @if (_activeTab == "Sale")
+                {
+                    <MudSelect T="int?"
+                               Value="_filter.EmployeeId"
+                               ValueChanged="@(async (int? v) => { _filter.EmployeeId = v; await OnFilterChanged(); })"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Placeholder="الموظف"
+                               Clearable="true"
+                               Class="filter-select">
+                        @foreach (var emp in _invoiceEmployees)
+                        {
+                            <MudSelectItem T="int?" Value="@emp.EmployeeId">@emp.FullName</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+
                 @if (_filter.IsOverdue == true)
                 {
                     <MudChip T="string" Color="Color.Warning" Size="Size.Small"
@@ -253,6 +271,10 @@ else
                     <MudTh>التاريخ</MudTh>
                     <MudTh>@(_activeTab == "Purchase" ? "العميل (من فاتورة البيع)" : "العميل")</MudTh>
                     <MudTh>الإجمالي</MudTh>
+                    @if (_activeTab == "Sale" && _canSeeProfit)
+                    {
+                        <MudTh>الربح</MudTh>
+                    }
                     <MudTh>المدفوع</MudTh>
                     <MudTh>المتبقي</MudTh>
                     <MudTh>الحالة</MudTh>
@@ -261,7 +283,16 @@ else
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd>
-                        <span class="invoice-number">@(context.ReferenceNumber ?? $"#{context.TransactionId}")</span>
+                        <span style="display:inline-flex; align-items:center; gap:6px;">
+                            <span class="invoice-number">@(context.ReferenceNumber ?? $"#{context.TransactionId}")</span>
+                            @if (context.EditStatus == InvoiceEditStatuses.Edited || !string.IsNullOrWhiteSpace(context.EditBy))
+                            {
+                                <MudTooltip Text="@($"آخر تعديل: {context.EditBy} — {context.EditAt?.ToString("yyyy/MM/dd HH:mm")}{(string.IsNullOrWhiteSpace(context.EditReason) ? "" : " — السبب: " + context.EditReason)}")">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined"
+                                             Style="height:20px; min-width:0;">📝</MudChip>
+                                </MudTooltip>
+                            }
+                        </span>
                     </MudTd>
                     <MudTd>
                         <div class="date-cell">
@@ -295,6 +326,26 @@ else
                         </div>
                     </MudTd>
                     <MudTd><strong class="amount-total">@FormatMoney(context.GrandTotal)</strong></MudTd>
+                    @if (_activeTab == "Sale" && _canSeeProfit)
+                    {
+                        <MudTd>
+                            @if (context.GrossProfit.HasValue)
+                            {
+                                var marginPct = context.ProfitMarginPercentage ?? 0;
+                                <div style="display:flex;flex-direction:column;gap:2px;align-items:flex-start;">
+                                    <strong style="font-size:13px;">@FormatMoney(context.GrossProfit.Value)</strong>
+                                    <MudChip T="string" Size="Size.Small"
+                                             Color="@(marginPct >= 30 ? Color.Success : marginPct >= 15 ? Color.Warning : Color.Error)">
+                                        @($"{marginPct:N2}%")
+                                    </MudChip>
+                                </div>
+                            }
+                            else
+                            {
+                                <span class="text-muted">-</span>
+                            }
+                        </MudTd>
+                    }
                     <MudTd><span class="amount-paid">@FormatMoney(context.PaidAmount)</span></MudTd>
                     <MudTd>
                         <span class="@(context.Remaining > 0 ? "amount-remaining" : "amount-zero")">
@@ -360,15 +411,22 @@ else
                                            Size="Size.Small" Color="Color.Info"
                                            OnClick="() => GoToDetails(context.TransactionId)"
                                            Title="عرض" />
+                            @if (_canViewHistory)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.History"
+                                               Size="Size.Small" Color="Color.Default"
+                                               OnClick="() => OpenEditHistory(context.TransactionId)"
+                                               Title="سجل التعديلات" />
+                            }
                             @if (_canEdit && context.InvoiceStatus != InvoiceStatuses.Cancelled)
                             {
                                 <MudIconButton Icon="@Icons.Material.Filled.Payment"
                                                Size="Size.Small" Color="Color.Success"
-                                               OnClick="() => OpenAddPaymentDialog(context)"
+                                               OnClick="() => GoToAddPayment(context)"
                                                Title="إضافة دفعة"
                                                Disabled="@(context.Remaining <= 0)" />
                             }
-                            @if (context.InvoiceStatus != InvoiceStatuses.Cancelled)
+                            @if (context.InvoiceStatus != InvoiceStatuses.Cancelled && context.InvoiceStatus != InvoiceStatuses.Paid)
                             {
                                 <MudIconButton Icon="@Icons.Material.Filled.EditNote"
                                                Size="Size.Small" Color="Color.Warning"
@@ -479,69 +537,6 @@ else
 </MudDialog>
 
 <!-- Add Payment Dialog -->
-<MudDialog @bind-Visible="_showPaymentDialog">
-    <TitleContent>
-        <div style="display: flex; align-items: center; gap: 0.5rem;">
-            <MudIcon Icon="@Icons.Material.Filled.Payment" Color="Color.Success" />
-            <MudText Typo="Typo.h6">إضافة دفعة</MudText>
-        </div>
-    </TitleContent>
-    <DialogContent>
-        <MudText Class="mb-3">
-            الفاتورة: <strong>@(_selectedInvoice?.ReferenceNumber ?? "")</strong>
-        </MudText>
-        <MudText Typo="Typo.body2" Class="mb-3">
-            المتبقي: <strong style="color: var(--mud-palette-error);">
-                @FormatMoney(_selectedInvoice?.Remaining ?? 0)
-            </strong>
-        </MudText>
-
-        <MudNumericField @bind-Value="_paymentAmount"
-                         Label="المبلغ"
-                         Variant="Variant.Outlined"
-                         Min="0.01m"
-                         Max="@(_selectedInvoice?.Remaining ?? 0)"
-                         Class="mb-3" />
-
-        <MudSelect T="string" @bind-Value="_paymentMethod"
-                   Label="طريقة الدفع"
-                   Variant="Variant.Outlined"
-                   Class="mb-3">
-            @foreach (var pm in PaymentMethods.Selectable)
-            {
-                <MudSelectItem T="string" Value="@pm.Key">@pm.Value</MudSelectItem>
-            }
-        </MudSelect>
-
-        <MudSelect T="int?" @bind-Value="_paymentCashBoxId"
-                   Label="الخزينة"
-                   Variant="Variant.Outlined"
-                   Class="mb-3">
-            @foreach (var cb in _cashBoxes)
-            {
-                <MudSelectItem T="int?" Value="@((int?)cb.CashBoxId)">@cb.CashBoxName</MudSelectItem>
-            }
-        </MudSelect>
-
-        <MudTextField @bind-Value="_paymentNotes"
-                      Label="ملاحظات"
-                      Variant="Variant.Outlined"
-                      Lines="2" />
-    </DialogContent>
-    <DialogActions>
-        <MudButton OnClick="@(() => _showPaymentDialog = false)" Variant="Variant.Outlined">
-            إلغاء
-        </MudButton>
-        <MudButton Color="Color.Success" Variant="Variant.Filled"
-                   OnClick="ExecuteAddPayment" Disabled="@_isSavingPayment">
-            @if (_isSavingPayment)
-            {
-                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
-            }
-            تسجيل الدفعة
-        </MudButton>
-    </DialogActions>
-</MudDialog>
 
 <!-- Edit Request Dialog -->
 <MudDialog @bind-Visible="_showEditRequestDialog">
@@ -946,16 +941,17 @@ else
     private bool _isTableLoading = false;
     private bool _showCancelDialog = false;
     private bool _isCancelling = false;
-    private bool _showPaymentDialog = false;
-    private bool _isSavingPayment = false;
     private bool _showEditRequestDialog;
     private bool _isSendingEditRequest;
     private string? _editRequestReason;
     private bool _isAdmin = false;
     private bool _showPermanentDeleteDialog = false;
+    private Components.Shared.InvoiceEditHistoryDrawer? _historyDrawer;
+    private int _historyTransactionId;
     private bool _isDeletingPermanently = false;
 
     private InvoiceFilterDto _filter = new() { TransactionType = TransactionTypes.Sale };
+    private List<InvoiceEmployeeDto> _invoiceEmployees = new();
     private PagedResult<InvoiceListDto> _pagedResult = new();
     private InvoiceStatsDto _stats = new();
     private InvoiceListDto? _selectedInvoice;
@@ -964,16 +960,12 @@ else
     private DateTime? _dateFrom;
     private DateTime? _dateTo;
 
-    private decimal _paymentAmount;
-    private string _paymentMethod = PaymentMethods.Cash;
-    private int? _paymentCashBoxId;
-    private string? _paymentNotes;
-    private List<Models.CashBox> _cashBoxes = new();
-
     private string? _currentUserName;
     private bool _canView, _canAdd, _canEdit, _canDelete;
     private bool _canViewPurchases;
     private bool _canSeeAmounts;
+    private bool _canSeeProfit;
+    private bool _canViewHistory;
     private string _activeTab = "Sale";
 
     protected override async Task OnInitializedAsync()
@@ -992,6 +984,9 @@ else
 
             _canViewPurchases = user.IsInRole("Admin") || user.IsInRole("AccountManager") || user.IsInRole("Account");
             _canSeeAmounts = user.IsInRole("Admin") || user.IsInRole("AccountManager") || user.IsInRole("Account");
+            _canSeeProfit = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
+            // ⭐ سجل التعديلات: Admin + مدير الحسابات فقط (طلب المستخدم)
+            _canViewHistory = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
 
             if (!_canView)
             {
@@ -1000,7 +995,7 @@ else
             }
 
             await RestoreFilterStateAsync();
-            _cashBoxes = await InvoiceService.GetCashBoxesAsync();
+            _invoiceEmployees = await InvoiceService.GetInvoiceEmployeesAsync(TransactionTypes.Sale);
             await LoadData();
             await LoadStats();
         }
@@ -1019,7 +1014,8 @@ else
 
     private async Task LoadStats()
     {
-        _stats = await InvoiceService.GetStatsAsync(_filter.DateFrom, _filter.DateTo, _activeTab);
+        // ⭐ الكروت تتبع كل الفلاتر (موظف/حالة/سداد/بحث...)
+        _stats = await InvoiceService.GetStatsAsync(_filter);
     }
 
     private async Task OnSearchChanged()
@@ -1072,6 +1068,7 @@ else
     {
         _activeTab = tab;
         _filter.TransactionType = tab;
+        _filter.EmployeeId = null;
         _filter.PageNumber = 1;
         await SaveFilterStateAsync();
         await LoadData();
@@ -1107,30 +1104,15 @@ else
         if (ok) { await LoadData(); await LoadStats(); }
     }
 
-    private void OpenAddPaymentDialog(InvoiceListDto invoice)
+    // ⭐ إضافة دفعة — انتقال مباشر لشاشة المدفوعات مع اختيار الفاتورة تلقائياً
+    private void GoToAddPayment(InvoiceListDto invoice)
+        => Navigation.NavigateTo($"/payments/new?type={_activeTab}&invoice={invoice.TransactionId}");
+
+    // ⭐ فتح سجل تعديلات الفاتورة
+    private async Task OpenEditHistory(int transactionId)
     {
-        _selectedInvoice = invoice;
-        _paymentAmount = invoice.Remaining;
-        _paymentMethod = PaymentMethods.Cash;
-        _paymentCashBoxId = _cashBoxes.FirstOrDefault()?.CashBoxId;
-        _paymentNotes = null;
-        _showPaymentDialog = true;
-    }
-
-    private async Task ExecuteAddPayment()
-    {
-        if (_selectedInvoice == null) return;
-        if (_paymentAmount <= 0) { Snackbar.Add("أدخل مبلغاً صحيحاً", Severity.Warning); return; }
-
-        _isSavingPayment = true;
-        var (ok, msg) = await InvoiceService.AddPaymentAsync(
-            _selectedInvoice.TransactionId, _paymentAmount, _paymentMethod,
-            _paymentCashBoxId, _paymentNotes, _currentUserName!);
-        _isSavingPayment = false;
-        _showPaymentDialog = false;
-
-        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
-        if (ok) { await LoadData(); await LoadStats(); }
+        if (_historyDrawer != null)
+            await _historyDrawer.OpenAsync(transactionId);
     }
 
     private void OpenEditRequestDialog(InvoiceListDto invoice)
@@ -1280,3 +1262,6 @@ else
         catch { /* ignore */ }
     }
 }
+
+<!-- ⭐ سجل تعديلات الفاتورة (شاشة جانبية) -->
+<InvoiceEditHistoryDrawer @ref="_historyDrawer" />
