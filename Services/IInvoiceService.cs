@@ -24,6 +24,11 @@ public interface IInvoiceService
 
     // ⭐ التعديل الكامل للفاتورة — Admin/AccountManager فقط
     Task<(bool Success, string Message)> UpdateInvoiceFullyAsync(InvoiceFormDto dto, string currentUserName);
+
+    // ⭐ تنبيه المرآة: قبل حفظ تعديل البيع — لو أصناف العميل اتغيرت وفيه مرآة يرجع رقمها (وإلا null)
+    Task<int?> CheckMirrorSyncNeededAsync(int saleTransactionId, InvoiceFormDto dto);
+    // ⭐ مزامنة المرآة أوتوماتيك — بزر صريح من المستخدم في دايلوج التنبيه بعد حفظ تعديل البيع
+    Task<(bool Success, string Message)> SyncMirrorWithSaleAsync(int mirrorTransactionId, string currentUserName);
     // ⭐ سجل تعديلات الفاتورة (بيانات الشاشة الجانبية)
     Task<InvoiceEditHistoryDto?> GetInvoiceEditHistoryAsync(int transactionId);
     // ⭐ استرجاع نسخة من سجل التعديلات — Admin/AccountManager فقط
@@ -53,8 +58,10 @@ public interface IInvoiceService
 
     // ⭐ منتجات عميل معين فقط
     Task<List<ProductLookupDto>> SearchProductsForPartyAsync(int partyId, string? search, int max = 50);
-    Task<List<ProductLookupDto>> SearchAvailableSaleProductsAsync(int partyId, int warehouseId, string? search, int max = 200);
-    Task<List<ProductLookupDto>> SearchShowroomProductsAsync(string? search, int max = 200);
+    Task<List<ProductLookupDto>> SearchAvailableSaleProductsAsync(int partyId, int warehouseId, string? search, int max = 200, int? searchWarehouseId = null);
+    // warehouseId = مخزن الفاتورة (وجهة التسليم) — لحساب StockInInvoiceWarehouse فقط (ليس فلترة)
+    // searchWarehouseId = فلتر عرض اختياري: يعرض المنتجات المتوفرة في مخزن محدد مرتبة برصيده فيه
+    Task<List<ProductLookupDto>> SearchShowroomProductsAsync(string? search, int max = 200, int? warehouseId = null, int? searchWarehouseId = null);
 
     Task<List<Models.Warehouse>> GetWarehousesAsync();
     Task<List<Models.Warehouse>> GetWarehousesForUserAsync(string userName);

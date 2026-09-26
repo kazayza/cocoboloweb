@@ -265,18 +265,43 @@ else
                         </div>
                     </div>
 
-                    @if (!IsEdit && IsPurchaseCreateMode)
+                    @if ((!IsEdit && IsPurchaseCreateMode) || (IsEdit && _canFullEdit))
                     {
-                        <MudTextField T="string"
-                                      Value="_purchaseProductSearch"
-                                      ValueChanged="OnPurchaseProductSearchChanged"
-                                      Label="ابحث عن منتج المعرض"
-                                      Variant="Variant.Outlined"
-                                      Immediate="true"
-                                      Clearable="true"
-                                      Adornment="Adornment.Start"
-                                      AdornmentIcon="@Icons.Material.Filled.Search"
-                                      Class="mb-3" />
+                        <div class="purchase-filters">
+                            <MudTextField T="string"
+                                          Value="_purchaseProductSearch"
+                                          ValueChanged="OnPurchaseProductSearchChanged"
+                                          Label="@(IsPurchaseMode ? "ابحث عن منتج المعرض" : "ابحث عن منتج (منتجات العميل أولاً)")"
+                                          Variant="Variant.Outlined"
+                                          Immediate="true"
+                                          Clearable="true"
+                                          Adornment="Adornment.Start"
+                                          AdornmentIcon="@Icons.Material.Filled.Search" />
+
+                            <MudSelect T="int?" Value="_searchWarehouseId"
+                                           ValueChanged="OnSearchWarehouseChanged"
+                                           Label="بحث في مخزن"
+                                           Variant="Variant.Outlined"
+                                           Class="filter-warehouse">
+                                    <MudSelectItem T="int?" Value="@((int?)null)">🏢 كل المخازن</MudSelectItem>
+                                    @foreach (var w in _warehouses)
+                                    {
+                                        <MudSelectItem T="int?" Value="@((int?)w.WarehouseId)">@(string.IsNullOrWhiteSpace(w.Branch?.BranchNameAr) ? w.WarehouseName : $"{w.WarehouseName} — {w.Branch!.BranchNameAr}")</MudSelectItem>
+                                    }
+                                </MudSelect>
+
+                                <div class="filter-chips">
+                                    <MudChip T="string" OnClick="@(() => SetSourceFilter("all"))"
+                                             Color="@(_purchaseSourceFilter == "all" ? Color.Primary : Color.Default)"
+                                             Variant="@(_purchaseSourceFilter == "all" ? Variant.Filled : Variant.Outlined)">الكل</MudChip>
+                                    <MudChip T="string" OnClick="@(() => SetSourceFilter("site"))"
+                                             Color="@(_purchaseSourceFilter == "site" ? Color.Info : Color.Default)"
+                                             Variant="@(_purchaseSourceFilter == "site" ? Variant.Filled : Variant.Outlined)">🌐 الموقع</MudChip>
+                                    <MudChip T="string" OnClick="@(() => SetSourceFilter("showroom"))"
+                                             Color="@(_purchaseSourceFilter == "showroom" ? Color.Success : Color.Default)"
+                                             Variant="@(_purchaseSourceFilter == "showroom" ? Variant.Filled : Variant.Outlined)">🏷️ المعرض</MudChip>
+                                </div>
+                        </div>
                     }
 
                     @if (IsEdit && !_canFullEdit)
@@ -323,10 +348,10 @@ else
                     }
 
                     <!-- شبكة المنتجات المتاحة -->
-                    @if (!IsEdit && _availableProducts.Any())
+                    @if ((!IsEdit || _canFullEdit) && _availableProducts.Any())
                     {
                         <div class="products-grid">
-                            @foreach (var prod in _availableProducts)
+                            @foreach (var prod in _displayedProducts)
                             {
                                 var isAdded = _form.Items.Any(i => i.ProductId == prod.ProductId);
                                 <div class="product-card @(isAdded ? "product-added" : "")">
@@ -356,7 +381,30 @@ else
                                                     الرصيد: @prod.AvailableStock
                                                 </MudChip>
                                             }
+                                            @if (IsPurchaseCreateMode)
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Dense="true" Variant="Variant.Outlined"
+                                                         Color="@(prod.AvailableStock > 0 ? Color.Success : Color.Error)"
+                                                         Title="إجمالي الرصيد في كل المخازن">
+                                                    الرصيد الكلي: @prod.AvailableStock
+                                                </MudChip>
+                                                @if (_searchWarehouseId.HasValue && prod.StockInSearchWarehouse > 0)
+                                                {
+                                                    <MudChip T="string" Size="Size.Small" Dense="true" Color="Color.Info" Variant="Variant.Outlined"
+                                                             Title="الرصيد في مخزن البحث المختار">
+                                                        🔎 في مخزن البحث: @prod.StockInSearchWarehouse
+                                                    </MudChip>
+                                                }
+                                                @if (prod.IsWebsite)
+                                                {
+                                                    <MudChip T="string" Size="Size.Small" Dense="true" Color="Color.Info" Variant="Variant.Outlined">🌐 الموقع</MudChip>
+                                                }
+                                            }
                                         </div>
+                                        @if (IsPurchaseCreateMode && !string.IsNullOrWhiteSpace(prod.StockDetails))
+                                        {
+                                            <span class="stock-where" title="توزيع الرصيد على المخازن">📍 @prod.StockDetails</span>
+                                        }
                                         <div class="product-card-pricing">
                                             @if (prod.PricingType == PricingTiers.CClass)
                                             {
@@ -476,6 +524,11 @@ else
                                                            Size="Size.Small"
                                                            Title="استبدال الصنف بصنف آخر"
                                                            OnClick="@(() => OpenSwapDialog(index))" />
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                           Color="Color.Error"
+                                                           Size="Size.Small"
+                                                           Title="حذف الصنف من الفاتورة"
+                                                           OnClick="@(() => ConfirmRemoveEditItem(index))" />
                                         }
                                     </div>
                                 </div>
@@ -600,22 +653,31 @@ else
                     </div>
 
                     <div class="summary-row">
-                        <span>خصم %:</span>
-                        <MudNumericField Value="_form.DiscountPercentage"
-                                         ValueChanged="@((decimal? v) => { _form.DiscountPercentage = v; RecalculateTotals(); })"
-                                         T="decimal?"
-                                         Variant="Variant.Outlined"
-                                         Margin="Margin.Dense"
-                                         Min="0m" Max="100m" Step="1m"
-                                         Style="max-width:100px;"
-                                         Disabled="@(IsEdit && !_canFullEdit)" />
+                        <span>نسبة الخصم:</span>
+                        <MudTooltip Text="اكتب الخصم كنسبة مئوية — تُحفظ نسبة كما هي، والقيمة تُحسب منها">
+                            <MudNumericField Value="_form.DiscountPercentage"
+                                             ValueChanged="OnDiscountPercentChanged"
+                                             T="decimal?"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Min="0m" Max="100m" Step="1m"
+                                             Style="max-width:110px;"
+                                             Disabled="@(IsEdit && !_canFullEdit)" />
+                        </MudTooltip>
                     </div>
 
                     <div class="summary-row">
                         <span>قيمة الخصم:</span>
-                        <strong style="color:var(--mud-palette-error);">
-                            -@FormatMoney(_form.DiscountAmount ?? 0) ج
-                        </strong>
+                        <MudTooltip Text="اكتب الخصم كقيمة جنيه — يُحفظ قيمة كما هو بلا تحويل لنسبة، ولا يتجاوز إجمالي الأصناف">
+                            <MudNumericField Value="_form.DiscountAmount"
+                                             ValueChanged="OnDiscountAmountChanged"
+                                             T="decimal?"
+                                             Variant="Variant.Outlined"
+                                             Margin="Margin.Dense"
+                                             Min="0m" Step="100m"
+                                             Style="max-width:130px;"
+                                             Disabled="@(IsEdit && !_canFullEdit)" />
+                        </MudTooltip>
                     </div>
 
                     <div class="summary-row">
@@ -908,9 +970,12 @@ else
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 0.75rem;                       /* ⭐ مسافة ثابتة بين التسمية والحقل */
         padding: 0.4rem 0;
         font-size: 0.9rem;
     }
+    .summary-row > span { flex-shrink: 0; white-space: nowrap; }
+    .summary-row .mud-input-control { margin-inline-start: 0.75rem; flex-shrink: 0; }
     .summary-divider {
         height: 1px;
         background: var(--mud-palette-divider);
@@ -1042,6 +1107,16 @@ else
         }
         .charge-row { grid-template-columns: 1fr; }
     }
+
+    .stock-where { display: block; font-size: .72rem; color: #64748b; margin-top: .15rem; line-height: 1.6; }
+    .purchase-filters { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; margin-bottom: 1rem; }
+    .purchase-filters .mud-input-control { flex: 1 1 200px; min-width: 0; }
+    .purchase-filters .filter-warehouse { flex: 0 0 200px; min-width: 170px; }
+    .filter-chips { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+    @@media (max-width: 900px) {
+        .purchase-filters { flex-wrap: wrap; }
+        .purchase-filters .filter-warehouse { flex: 1 1 160px; }
+    }
 </style>
 
 <!-- ⭐ دايلوج تأكيد التعديل الكامل -->
@@ -1126,6 +1201,33 @@ else
 </MudDialog>
 
 <!-- ⭐ دايلوج استبدال الصنف -->
+<MudDialog @bind-Visible="_showRemoveEditDialog">
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Delete" Color="Color.Error" />
+            <MudText Typo="Typo.h6">تأكيد حذف الصنف</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        @if (_removeEditIndex >= 0 && _removeEditIndex < _form.Items.Count)
+        {
+            var remItem = _form.Items[_removeEditIndex];
+            <MudText Typo="Typo.body1" Class="mb-2">
+                سيتم حذف <strong>@(remItem.ProductName ?? $"#{remItem.ProductId}")</strong>
+                (كمية @remItem.Quantity.ToString("0.##")) من الفاتورة عند الحفظ.
+            </MudText>
+            <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined">
+                لو الفاتورة مستلمة سيرجع رصيد الصنف للمخزن تلقائياً — ويُسجَّل الحذف في سجل المراجعة.
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Outlined" OnClick="@(() => _showRemoveEditDialog = false)">تراجع</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                   OnClick="@(() => ExecuteRemoveEditItem())">حذف</MudButton>
+    </DialogActions>
+</MudDialog>
+
 <MudDialog @bind-Visible="_showSwapDialog">
     <TitleContent>
         <div style="display:flex; align-items:center; gap:0.5rem;">
@@ -1170,6 +1272,32 @@ else
     private bool IsEdit => Id.HasValue && Id.Value > 0;
     private bool IsPurchaseCreateMode => !IsEdit && Navigation.Uri.Contains("/factory/purchases/new", StringComparison.OrdinalIgnoreCase);
     private bool IsPurchaseMode => _form.TransactionType == TransactionTypes.Purchase;
+    private bool IsMirrorEdit => IsEdit && IsPurchaseMode
+        && !string.IsNullOrWhiteSpace(_form.ReferenceType)
+        && _form.ReferenceType.StartsWith("MirrorOf:");
+    // ⭐ حذف صنف في وضع التعديل (نفس صلاحيات التعديل الكامل) — دايلوج تأكيد بنمط المشروع
+    private int _removeEditIndex = -1;
+    private bool _showRemoveEditDialog = false;
+
+    private void ConfirmRemoveEditItem(int index)
+    {
+        if (index < 0 || index >= _form.Items.Count) return;
+        _removeEditIndex = index;
+        _showRemoveEditDialog = true;
+    }
+
+    private void ExecuteRemoveEditItem()
+    {
+        if (_removeEditIndex < 0 || _removeEditIndex >= _form.Items.Count) { _showRemoveEditDialog = false; return; }
+        var item = _form.Items[_removeEditIndex];
+        var name = item.ProductName ?? $"#{item.ProductId}";
+
+        _form.Items.RemoveAt(_removeEditIndex);
+        RecalculateTotals();
+        _showRemoveEditDialog = false;
+        _removeEditIndex = -1;
+        Snackbar.Add($"تم حذف «{name}» من القائمة — يُنفَّذ نهائياً عند حفظ التعديل", Severity.Info);
+    }
     private string PartySectionTitle => IsPurchaseMode ? "المورد" : "العميل";
     private string PartySearchLabel => IsPurchaseMode ? "ابحث عن المورد بالاسم أو الهاتف *" : "ابحث عن العميل بالاسم أو الهاتف *";
     private string NewInvoiceTitle => IsPurchaseCreateMode ? "فاتورة مشتريات جديدة" : "فاتورة مبيعات جديدة";
@@ -1263,6 +1391,9 @@ else
                         UnitPrice = i.UnitPrice,
                         PricingTier = i.PricingTier
                     }).ToList();
+
+                // ⭐ إتاحة إضافة أصناف في التعديل الكامل
+                await LoadAvailableProductsAsync();
                 }
                 if (_form.PartyId.HasValue)
                 {
@@ -1312,21 +1443,86 @@ else
         };
     }
 
+    private int _purchaseSearchToken;    // عدّاد الضغطات — آخر ضغطة فقط هي اللي تنفَّذ
+    private int _purchaseSearchRunning;  // 0/1: هل فيه دورة بحث شغالة الآن؟
+    private int? _searchWarehouseId;                 // فلتر «بحث في مخزن محدد» (مستقل عن مخزن الفاتورة)
+    private string _purchaseSourceFilter = "all";    // all | site 🌐 | showroom 🏷️
+
+    private IEnumerable<ProductLookupDto> _displayedProducts => _purchaseSourceFilter switch
+    {
+        "site" => _availableProducts.Where(x => x.IsWebsite),
+        "showroom" => _availableProducts.Where(x => !x.IsWebsite),
+        _ => _availableProducts
+    };
+
+    private void SetSourceFilter(string filter)
+    {
+        _purchaseSourceFilter = filter;
+        StateHasChanged();
+    }
+
+    private async Task OnSearchWarehouseChanged(int? warehouseId)
+    {
+        _searchWarehouseId = warehouseId;
+        await LoadAvailableProductsAsync();
+    }
+
     private async Task OnPurchaseProductSearchChanged(string? value)
     {
         _purchaseProductSearch = value;
-        await LoadAvailableProductsAsync();
+        var myToken = ++_purchaseSearchToken;
+
+        // ⭐ حماية الـDbContext: دورة بحث واحدة في نفس اللحظة — اللي بعدها بتستنى وتشيل الأحدث
+        if (System.Threading.Interlocked.CompareExchange(ref _purchaseSearchRunning, 1, 0) == 1)
+            return;
+
+        try
+        {
+            while (true)
+            {
+                var startToken = _purchaseSearchToken;
+                await Task.Delay(350);                       // مهلة استقرار الكتابة (debounce)
+                if (_purchaseSearchToken != startToken)
+                    continue;                                // لسه بيكتب — استنى من جديد
+
+                await LoadAvailableProductsAsync();
+
+                if (_purchaseSearchToken == startToken)
+                    break;                                   // مفيش ضغطات جديدة أثناء التحميل — خلاص
+                // دخل بحث جديد أثناء التحميل → لفّة أخرى بالقيمة الأحدث
+            }
+        }
+        finally
+        {
+            System.Threading.Interlocked.Exchange(ref _purchaseSearchRunning, 0);
+        }
     }
 
     private async Task LoadAvailableProductsAsync()
     {
-        if (IsEdit)
+        // في التعديل: المنتجات تتحمّل للتعديل الكامل لإتاحة إضافة أصناف
+        if (IsEdit && !_canFullEdit)
             return;
 
-        if (IsPurchaseCreateMode)
+        if (IsPurchaseCreateMode || (IsEdit && IsPurchaseMode))
         {
-            ApplyDefaultPurchaseSupplier();
-            _availableProducts = await InvoiceService.SearchShowroomProductsAsync(_purchaseProductSearch);
+            if (!IsEdit) ApplyDefaultPurchaseSupplier();
+            try
+            {
+                var list = await InvoiceService.SearchShowroomProductsAsync(
+                    _purchaseProductSearch, 200, _form.WarehouseId, _searchWarehouseId);
+                if (IsMirrorEdit && _form.EmpId.HasValue)
+                {
+                    var party = await InvoiceService.SearchProductsForPartyAsync(_form.EmpId.Value, _purchaseProductSearch, 200);
+                    list = party.Concat(list).ToList();
+                }
+                _availableProducts = list;
+            }
+            catch
+            {
+                _availableProducts = new();
+                Snackbar.Add("تعذر تحميل المنتجات — حاول مرة أخرى", Severity.Error);
+            }
             SyncAvailableStockIntoDraft();
             StateHasChanged();
             return;
@@ -1340,7 +1536,8 @@ else
             return;
         }
 
-        _availableProducts = await InvoiceService.SearchAvailableSaleProductsAsync(_form.PartyId.Value, _form.WarehouseId.Value, null);
+        _availableProducts = await InvoiceService.SearchAvailableSaleProductsAsync(
+            _form.PartyId.Value, _form.WarehouseId.Value, _purchaseProductSearch, 200, _searchWarehouseId);
         SyncAvailableStockIntoDraft();
         StateHasChanged();
     }
@@ -1355,7 +1552,8 @@ else
         {
             if (lookup.TryGetValue(item.ProductId, out var prod))
             {
-                item.AvailableStock = prod.AvailableStock;
+                // ⭐ رصيد السطر = مخزن الفاتورة (وجهة التسليم) — فحص النقص عند الإنشاء يعتمد عليه
+                item.AvailableStock = prod.StockInInvoiceWarehouse ?? prod.AvailableStock;
                 item.IsShowroomProduct = prod.IsShowroomProduct;
             }
             else if (!IsPurchaseCreateMode && item.IsShowroomProduct)
@@ -1405,7 +1603,7 @@ else
     {
         if (_form.Items.Any(i => i.ProductId == prod.ProductId)) return;
 
-        if (!IsPurchaseCreateMode && prod.IsShowroomProduct && prod.AvailableStock <= 0)
+        if (!IsPurchaseMode && prod.IsShowroomProduct && prod.AvailableStock <= 0)
         {
             Snackbar.Add("هذا الصنف لا يملك رصيدًا متاحًا في المخزن المختار.", Severity.Warning);
             return;
@@ -1417,19 +1615,19 @@ else
         if (prod.PricingType == PricingTiers.CClass)
         {
             tier = PricingTiers.CClass;
-            price = IsPurchaseCreateMode ? (prod.PurchasePriceCClass ?? 0) : (prod.SuggestedSalePriceCClass ?? 0);
+            price = IsPurchaseMode ? (prod.PurchasePriceCClass ?? 0) : (prod.SuggestedSalePriceCClass ?? 0);
         }
         else if (prod.PricingType == PricingTiers.Elite)
         {
             tier = PricingTiers.Elite;
-            price = IsPurchaseCreateMode
+            price = IsPurchaseMode
                 ? (prod.PurchasePriceElite ?? prod.PurchasePrice ?? 0)
                 : (prod.SuggestedSalePriceElite ?? prod.SuggestedSalePrice ?? 0);
         }
         else
         {
             tier = PricingTiers.Premium;
-            price = IsPurchaseCreateMode ? (prod.PurchasePrice ?? 0) : (prod.SuggestedSalePrice ?? 0);
+            price = IsPurchaseMode ? (prod.PurchasePrice ?? 0) : (prod.SuggestedSalePrice ?? 0);
         }
 
         var item = new InvoiceItemDto
@@ -1523,6 +1721,36 @@ else
     }
 
     // ============================
+    // Discount — ⭐ الصيغة المُدخلة هي اللي تثبت (قيمة تبقى قيمة، نسبة تبقى نسبة)
+    // ============================
+    private void OnDiscountPercentChanged(decimal? v)
+    {
+        _form.DiscountEntryMode = "percent";
+        _form.DiscountPercentage = v;
+        _form.DiscountAmount = (v.HasValue && v.Value > 0)
+            ? Math.Round(_form.TotalAmount * (v.Value / 100m), 2)
+            : 0;
+        RecalcNetOnly();
+    }
+
+    private void OnDiscountAmountChanged(decimal? v)
+    {
+        var amt = Math.Min(Math.Max(v ?? 0m, 0m), _form.TotalAmount); // بين صفر وإجمالي الأصناف
+        _form.DiscountEntryMode = "amount";
+        _form.DiscountAmount = Math.Round(amt, 2);
+        _form.DiscountPercentage = null;   // ⭐ قيمة فقط — لا تُشتق نسبة
+        RecalcNetOnly();
+    }
+
+    private void RecalcNetOnly()
+    {
+        _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
+        _form.TotalChargesAmount = Math.Round(_form.Charges.Sum(c => c.ChargeAmount), 2);
+        _form.GrandTotal = (_form.NetTotalAmount ?? 0) + _form.TotalChargesAmount;
+        StateHasChanged();
+    }
+
+    // ============================
     // Calculations
     // ============================
     private void RecalculateTotals()
@@ -1530,9 +1758,21 @@ else
         _form.TotalAmount = Math.Round(_form.Items.Sum(i => i.TotalAmount), 2);
 
         if (_form.DiscountPercentage.HasValue && _form.DiscountPercentage.Value > 0)
+        {
+            // نسبة مُدخلة — القيمة تُشتق منها للحساب
+            _form.DiscountEntryMode = "percent";
             _form.DiscountAmount = Math.Round(_form.TotalAmount * (_form.DiscountPercentage.Value / 100m), 2);
+        }
+        else if (_form.DiscountAmount.HasValue && _form.DiscountAmount.Value > 0)
+        {
+            // ⭐ قيمة مُدخلة — تبقى كما هي (تُ capped بإجمالي الأصناف فقط)
+            _form.DiscountEntryMode = "amount";
+            if (_form.DiscountAmount.Value > _form.TotalAmount) _form.DiscountAmount = _form.TotalAmount;
+        }
         else
+        {
             _form.DiscountAmount = 0;
+        }
 
         _form.NetTotalAmount = _form.TotalAmount - (_form.DiscountAmount ?? 0);
         _form.TotalChargesAmount = Math.Round(_form.Charges.Sum(c => c.ChargeAmount), 2);
@@ -1665,6 +1905,18 @@ else
     // ⭐ فروق الأصناف (قبل ← بعد) لدايلوج التأكيد
     private IEnumerable<(string Title, string Detail)> GetItemChanges()
     {
+        // ⭐ الأصناف المحذوفة تظهر أولاً في دايلوج التأكيد
+        foreach (var removed in _initialEditItems.Where(o => _form.Items.All(c => c.DetailId != o.DetailId)))
+        {
+            yield return ("🗑️ حذف صنف", $"{removed.ProductName} (كمية {removed.Quantity:0.##})");
+        }
+
+        // ⭐ الأصناف الجديدة المضافة أثناء التعديل
+        foreach (var added in _form.Items.Where(c => _initialEditItems.All(o => o.DetailId != c.DetailId)))
+        {
+            yield return ("➕ صنف جديد", $"{added.ProductName} (كمية {added.Quantity:0.##})");
+        }
+
         foreach (var cur in _form.Items)
         {
             var old = _initialEditItems.FirstOrDefault(o => o.DetailId == cur.DetailId);
@@ -1694,6 +1946,11 @@ else
             Snackbar.Add("سبب التعديل إلزامي", Severity.Warning);
             return;
         }
+        if (_initialEditItems.Count > 0 && _form.Items.Count == 0)
+        {
+            Snackbar.Add("لا يمكن حفظ الفاتورة بدون أصناف — استبدل أو أضف صنفاً واحداً على الأقل", Severity.Warning);
+            return;
+        }
 
         RecalculateTotals();
         _isSavingFull = true;
@@ -1702,12 +1959,44 @@ else
         {
             _form.FullEditReason = _fullEditReason!.Trim();
             _form.NewCharges = _newFullEditCharges.ToList();
+
+            // ⭐ قبل الحفظ: لو أصناف العميل اتغيرت وفيه مرآة — جهّز تنبيه المزامنة
+            int? mirrorIdForSync = null;
+            if (!IsPurchaseMode && Id.HasValue)
+                mirrorIdForSync = await InvoiceService.CheckMirrorSyncNeededAsync(Id.Value, _form);
+
             var (ok, msg) = await InvoiceService.UpdateInvoiceFullyAsync(_form, _currentUserName!);
             if (ok) _newFullEditCharges.Clear();
             if (ok)
             {
                 _showFullEditConfirm = false;
                 Snackbar.Add(msg, Severity.Success);
+
+                // 🔔 تنبيه المرآة: مزامنة أوتوماتيك / تعديل يدوي / لاحقاً — والوضع الافتراضي مستقل زي ما هو
+                if (mirrorIdForSync.HasValue)
+                {
+                    var parameters = new DialogParameters<MirrorSyncDialog>
+                    {
+                        { x => x.MirrorTransactionId, mirrorIdForSync.Value },
+                        { x => x.SaleReferenceNumber, _form.ReferenceNumber },
+                        { x => x.CurrentUserName, _currentUserName }
+                    };
+                    var options = new DialogOptions
+                    {
+                        MaxWidth = MaxWidth.Small,
+                        FullWidth = true,
+                        CloseOnEscapeKey = false,
+                        BackdropClick = false
+                    };
+                    var dlg = await DialogService.ShowAsync<MirrorSyncDialog>("تنبيه فاتورة المرآة", parameters, options);
+                    var res = await dlg.Result;
+                    if (res is { Canceled: false } && res.Data?.ToString() == "open")
+                    {
+                        Navigation.NavigateTo($"/sales/invoices/{mirrorIdForSync.Value}/edit");
+                        return;
+                    }
+                }
+
                 Navigation.NavigateTo($"/sales/invoices/{Id}");
             }
             else
@@ -1736,10 +2025,19 @@ else
         if (string.IsNullOrWhiteSpace(arg)) return Enumerable.Empty<ProductLookupDto>();
 
         if (IsPurchaseMode)
-            return (await InvoiceService.SearchShowroomProductsAsync(arg.Trim(), 30)).Take(30);
+        {
+            var res = (await InvoiceService.SearchShowroomProductsAsync(arg.Trim(), 30)).ToList();
+            // مرآة: أصنافها منتجات باسم العميل — البحث يشمل منتجات العميل للقدرة على الاستبدال
+            if (IsMirrorEdit && _form.EmpId.HasValue)
+            {
+                var party = await InvoiceService.SearchProductsForPartyAsync(_form.EmpId.Value, arg.Trim(), 30);
+                res = party.Concat(res).Take(30).ToList();
+            }
+            return res;
+        }
 
         if (_form.PartyId.HasValue && _form.WarehouseId.HasValue)
-            return await InvoiceService.SearchAvailableSaleProductsAsync(_form.PartyId.Value, _form.WarehouseId.Value, arg.Trim(), 30);
+            return await InvoiceService.SearchAvailableSaleProductsAsync(_form.PartyId.Value, _form.WarehouseId.Value, arg.Trim(), 30, _searchWarehouseId);
 
         return Enumerable.Empty<ProductLookupDto>();
     }

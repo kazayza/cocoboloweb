@@ -159,6 +159,26 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
         };
     }
 
+    // ⭐ جلب الموظف (كود + اسم) من اسم المستخدم — Users.EmployeeId → Employees.FullName
+    public async Task<(int? EmployeeId, string? FullName)> GetEmployeeByUserNameAsync(string userName)
+    {
+        using var db = await _factory.CreateDbContextAsync();
+
+        var empId = await db.Users.AsNoTracking()
+            .Where(u => u.Username == userName && u.EmployeeId.HasValue)
+            .Select(u => u.EmployeeId)
+            .FirstOrDefaultAsync();
+
+        if (empId == null) return (null, null);
+
+        var fullName = await db.Employees.AsNoTracking()
+            .Where(e => e.EmployeeId == empId.Value)
+            .Select(e => e.FullName)
+            .FirstOrDefaultAsync();
+
+        return (empId, fullName);
+    }
+
     public async Task<(bool Success, string Message)> UpdateDeliveryStatusAsync(
         DeliveryUpdateDto dto)
     {
@@ -216,8 +236,16 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
 
         try
         {
+            // ⭐ إصلاح باج: لو الـdto جاي من غير كود لكن بنفس اسم المندوب المسجل — نحتفظ بالكود القديم ولا يُمسح
+            var keepEmployeeId = dto.DeliveryEmployeeId
+                ?? (transaction.DeliveryEmployeeId != null
+                    && !string.IsNullOrWhiteSpace(dto.DeliveryEmployeeName)
+                    && dto.DeliveryEmployeeName == transaction.DeliveryEmployeeName
+                    ? transaction.DeliveryEmployeeId
+                    : null);
+
             transaction.DeliveryEmployeeName = dto.DeliveryEmployeeName;
-            transaction.DeliveryEmployeeId   = dto.DeliveryEmployeeId;
+            transaction.DeliveryEmployeeId   = keepEmployeeId;
 
             if (dto.Status == "تم التسليم")
             {

@@ -63,6 +63,7 @@ public class InvoiceFormDto
     public string? EmpName { get; set; }
     public DateTime? DueDate { get; set; }
     public string TransactionType { get; set; } = "Sale";
+    public string? ReferenceType { get; set; }   // MirrorOf:x لفواتير الشراء المرآة — يمنع حذف الأصناف في الواجهة
     // ⭐ سبب التعديل الكامل (إلزامي — Admin/AccountManager فقط)
     public string? FullEditReason { get; set; }
     // ⭐ رسوم إضافية جديدة تُضاف من داخل التعديل الكامل (فوق قيمة الفاتورة فقط — بدون معاينة/مقدم)
@@ -71,6 +72,7 @@ public class InvoiceFormDto
     public decimal TotalAmount { get; set; }
     public decimal? DiscountPercentage { get; set; }
     public decimal? DiscountAmount { get; set; }
+    public string? DiscountEntryMode { get; set; }   // "percent" | "amount" — الصيغة المُدخلة تُحفظ كما هي
     public decimal? NetTotalAmount { get; set; }
     public decimal TotalChargesAmount { get; set; }
     public decimal GrandTotal { get; set; }
@@ -283,7 +285,11 @@ public class ProductLookupDto
     public decimal? PurchasePriceCClass { get; set; }
     public decimal? PurchasePrice { get; set; }
     public decimal? PurchasePriceElite { get; set; }
-    public int AvailableStock { get; set; }
+    public int AvailableStock { get; set; }                     // الإجمالي في كل المخازن
+    public int? StockInInvoiceWarehouse { get; set; }           // الموجود تحديداً في مخزن الفاتورة (وجهة التسليم)
+    public int? StockInSearchWarehouse { get; set; }            // رصيده في مخزن البحث المختار (الفلتر)
+    public bool IsWebsite { get; set; }                         // 🌐 منتجات الموقع
+    public string? StockDetails { get; set; }   // توزيع الرصيد على المخازن: «المعرض: 3 · المخزن الرئيسي: 5»
     public bool IsShowroomProduct { get; set; }
     public string? PricingType { get; set; }
     public int? Period { get; set; }

@@ -8,13 +8,16 @@ namespace COCOBOLOERPNEW.Services;
 public class InvoiceService : IInvoiceService
 {
     private readonly db24804Context _db;
+    private readonly IDbContextFactory<db24804Context> _dbFactory;   // سياقات مستقلة لعمليات البحث السريعة (حماية من التزامن)
     private readonly IAuditService _audit;
     private readonly NotificationService _notify;
     private readonly IHttpContextAccessor _http;
 
-    public InvoiceService(db24804Context db, IAuditService audit, NotificationService notify, IHttpContextAccessor http)
+    public InvoiceService(db24804Context db, IDbContextFactory<db24804Context> dbFactory,
+        IAuditService audit, NotificationService notify, IHttpContextAccessor http)
     {
         _db = db;
+        _dbFactory = dbFactory;
         _audit = audit;
         _notify = notify;
         _http = http;
@@ -473,6 +476,7 @@ public class InvoiceService : IInvoiceService
             EmpName = empName,
             DueDate = t.DueDate,
             TransactionType = t.TransactionType,
+            ReferenceType = t.ReferenceType,
             TotalAmount = t.TotalAmount,
             DiscountPercentage = t.DiscountPercentage,
             DiscountAmount = t.DiscountAmount,
@@ -1351,6 +1355,22 @@ public class InvoiceService : IInvoiceService
             Items = oldDetails.Select(d => new { d.DetailId, d.ProductId, ProductName = ProdName(d.ProductId), d.Quantity, d.UnitPrice, d.PricingTier, d.SelectedAlternativeId }).ToList()
         };
 
+        // ⭐ حذف الأصناف: محظور على فواتير الشراء المرآة (تتبع فاتورة البيع الأصل)
+        var removedDetails = oldDetails
+            .Where(d => dto.Items.All(i => i.DetailId != d.DetailId))
+            .ToList();
+        var newItems = dto.Items
+            .Where(i => i.DetailId == 0 || oldDetails.All(d => d.DetailId != i.DetailId))
+            .ToList();
+        // ⭐ منتجات باسم العميل: تُصنع خصيصاً — لا رصيد مخزني لها ولا تُفحص ضده (نفس قاعدة الإنشاء)
+        var allInvolvedProductIds = dto.Items.Select(i => i.ProductId)
+            .Union(oldDetails.Select(d => d.ProductId)).Distinct().ToList();
+        var customerProductIds = (await _db.Products.AsNoTracking()
+            .Where(p => allInvolvedProductIds.Contains(p.ProductId) && p.Customer.HasValue)
+            .Select(p => p.ProductId).ToListAsync()).ToHashSet();
+        // ✅ قرار المستخدم: فواتير الشراء (بما فيها المرآة) تُعدَّل بحرية — كل تعديل مستقل
+        // (لو بُدّل صنف في فاتورة البيع يُبدل يدوياً في المرآة أيضاً — والمخزون يتوازن من التعديلين)
+
         using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
@@ -1369,8 +1389,18 @@ public class InvoiceService : IInvoiceService
                         d.UnitPrice, currentUserName, "SaleInvoiceEdit");
                 }
 
-                // التحقق من التوفر (بعد إرجاع القديم)
+                // التحقق من التوفر (بعد إرجاع القديم) — ⭐ البنود غير المتغيرة مستثناة:
+                // رصيدها محسوب أصلاً ضمن هذه الفاتورة، وإدراجها في الفحص كان يرفض تعديلات
+                // لا تمس الأصناف (مثل الخصم أو السعر) برسالة «غير كافٍ» رغم عدم تغيير أي كمية.
                 var needed = dto.Items
+                    .Where(i => !customerProductIds.Contains(i.ProductId))   // ⭐ منتجات العميل مصنوعة خصيصاً — بلا فحص مخزون
+                    .Where(i =>
+                    {
+                        var od = oldDetails.FirstOrDefault(x => x.DetailId == i.DetailId);
+                        if (od == null) return true; // بند جديد (احتياطاً)
+                        return !(i.ProductId == od.ProductId && newWarehouse == oldWarehouse
+                            && (int)Math.Round(i.Quantity) == (int)Math.Round(od.Quantity));
+                    })
                     .GroupBy(i => new { i.ProductId, newWarehouse })
                     .ToDictionary(g => g.Key, g => (int)Math.Round(g.Sum(x => x.Quantity)));
                 var productIds = needed.Keys.Select(k => k.ProductId).Distinct().ToList();
@@ -1390,8 +1420,8 @@ public class InvoiceService : IInvoiceService
 
                 foreach (var i in dto.Items)
                 {
-                    var d = oldDetails.First(x => x.DetailId == i.DetailId);
-                    bool unchanged = i.ProductId == d.ProductId && newWarehouse == oldWarehouse
+                    var d = oldDetails.FirstOrDefault(x => x.DetailId == i.DetailId);
+                    bool unchanged = d != null && i.ProductId == d.ProductId && newWarehouse == oldWarehouse
                         && (int)Math.Round(i.Quantity) == (int)Math.Round(d.Quantity);
                     if (unchanged) continue;
                     await UpdateStockAsync(i.ProductId, newWarehouse,
@@ -1416,8 +1446,8 @@ public class InvoiceService : IInvoiceService
                     }
                     foreach (var i in dto.Items)
                     {
-                        var d = oldDetails.First(x => x.DetailId == i.DetailId);
-                        bool unchanged = i.ProductId == d.ProductId && newWarehouse == oldWarehouse
+                        var d = oldDetails.FirstOrDefault(x => x.DetailId == i.DetailId);
+                        bool unchanged = d != null && i.ProductId == d.ProductId && newWarehouse == oldWarehouse
                             && (int)Math.Round(i.Quantity) == (int)Math.Round(d.Quantity);
                         if (unchanged) continue;
                         await UpdateStockAsync(i.ProductId, newWarehouse,
@@ -1444,11 +1474,16 @@ public class InvoiceService : IInvoiceService
                 });
             }
 
-            // 🧾 تحديث تفاصيل الأصناف (بنفس الصفوف — استبدال الصنف مسموح)
+            // 🧾 تحديث تفاصيل الأصناف (استبدال مسموح + صفوف جديدة تُدرج)
             var detailMap = oldDetails.ToDictionary(d => d.DetailId);
             foreach (var i in dto.Items)
             {
-                var d = detailMap[i.DetailId];
+                if (!detailMap.TryGetValue(i.DetailId, out var d))
+                {
+                    // ⭐ صنف جديد أُضيف أثناء التعديل — يدرج صفاً جديداً
+                    d = new TransactionDetail { TransactionId = transaction.TransactionId };
+                    _db.TransactionDetails.Add(d);
+                }
                 var tier = NormalizePricingTier(string.IsNullOrWhiteSpace(i.PricingTier) ? PricingTiers.Premium : i.PricingTier);
                 d.ProductId = i.ProductId;
                 d.Quantity = i.Quantity;
@@ -1457,6 +1492,22 @@ public class InvoiceService : IInvoiceService
                 d.SelectedAlternativeId = i.SelectedAlternativeId;
                 d.PricingTier = tier;
                 d.Notes = string.IsNullOrWhiteSpace(i.Notes) ? $"[{tier}]" : $"[{tier}] {i.Notes}";
+            }
+
+            // ⭐ تحرير/حجز منتجات العميل (IsSelected) — المبدَّلة/المحذوفة تتحرر والجديدة تُحجز
+            if (transaction.TransactionType == TransactionTypes.Sale && customerProductIds.Count > 0)
+            {
+                var oldCustIds = oldDetails.Where(d => customerProductIds.Contains(d.ProductId))
+                    .Select(d => d.ProductId).Distinct().ToList();
+                var newCustIds = dto.Items.Where(i => customerProductIds.Contains(i.ProductId))
+                    .Select(i => i.ProductId).Distinct().ToList();
+                var toggleIds = oldCustIds.Concat(newCustIds).Distinct().ToList();
+                if (toggleIds.Count > 0)
+                {
+                    var prods = await _db.Products.Where(x => toggleIds.Contains(x.ProductId)).ToListAsync();
+                    foreach (var pr in prods)
+                        pr.IsSelected = newCustIds.Contains(pr.ProductId);
+                }
             }
 
             // 🧾 الهيدر
@@ -1485,6 +1536,23 @@ public class InvoiceService : IInvoiceService
             }
 
             transaction.InvoiceStatus = ComputeStatus(transaction.GrandTotal, transaction.PaidAmount);
+
+            // ⭐ إزالة صفوف الأصناف المحذوفة فعلياً من التفاصيل (رصيدها رجع في حلقات المخزون أعلاه)
+            if (removedDetails.Count > 0)
+            {
+                _db.TransactionDetails.RemoveRange(removedDetails);
+                await _audit.LogAsync("TransactionDetails", "Delete",
+                    transaction.TransactionId.ToString(), null,
+                    new { Removed = removedDetails.Select(d => new { d.ProductId, d.Quantity }) },
+                    currentUserName);
+            }
+            if (newItems.Count > 0)
+            {
+                await _audit.LogAsync("TransactionDetails", "Insert",
+                    transaction.TransactionId.ToString(), null,
+                    new { Added = newItems.Select(i => new { i.ProductId, i.Quantity }) },
+                    currentUserName);
+            }
 
             await _db.SaveChangesAsync();
             await tx.CommitAsync();
@@ -2190,7 +2258,7 @@ public class InvoiceService : IInvoiceService
         return products.Take(max).ToList();
     }
 
-    public async Task<List<ProductLookupDto>> SearchAvailableSaleProductsAsync(int partyId, int warehouseId, string? search, int max = 200)
+    public async Task<List<ProductLookupDto>> SearchAvailableSaleProductsAsync(int partyId, int warehouseId, string? search, int max = 200, int? searchWarehouseId = null)
     {
         var customerProducts = await SearchProductsForPartyAsync(partyId, search, int.MaxValue);
 
@@ -2209,18 +2277,19 @@ public class InvoiceService : IInvoiceService
                 PurchasePriceCClass = p.PurchasePriceCClass,
                 PurchasePrice = p.PurchasePrice,
                 PurchasePriceElite = p.PurchasePriceElite,
+                // ⭐ نفس بحث المشتريات: الإجمالي في كل المخازن + رصيد مخزن الفاتورة في حقل منفصل
                 AvailableStock = _db.StockLevels
+                    .Where(s => s.ProductId == p.ProductId)
+                    .Sum(s => (int?)s.Quantity) ?? 0,
+                StockInInvoiceWarehouse = _db.StockLevels
                     .Where(s => s.ProductId == p.ProductId && s.WarehouseId == warehouseId)
                     .Sum(s => (int?)s.Quantity) ?? 0,
                 IsShowroomProduct = true,
+                IsWebsite = p.IsWebsite,
                 Period = p.Period,
                 PricingType = p.PricingType
             })
             .ToListAsync();
-
-        showroomProducts = showroomProducts
-            .Where(p => p.AvailableStock > 0)
-            .ToList();
 
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -2231,6 +2300,23 @@ public class InvoiceService : IInvoiceService
                 .ToList();
         }
 
+        // ⭐ فلتر «بحث في مخزن»: كل المنتجات تظهر — مرتبة برصيد المخزن المختار (الأوفر أولاً) — نفس فاتورة المشتريات
+        if (searchWarehouseId.HasValue)
+        {
+            var qtyByWarehouse = (await _db.StockLevels.AsNoTracking()
+                    .Where(s => s.WarehouseId == searchWarehouseId.Value)
+                    .ToListAsync())
+                .GroupBy(s => s.ProductId)
+                .ToDictionary(g => g.Key, g => g.Sum(x => x.Quantity));
+
+            showroomProducts = showroomProducts
+                .OrderByDescending(p => qtyByWarehouse.TryGetValue(p.ProductId, out var q) ? q : 0)
+                .ThenBy(p => p.ProductName)
+                .ToList();
+
+            return customerProducts.Concat(showroomProducts).Take(max).ToList();
+        }
+
         return customerProducts
             .Concat(showroomProducts)
             .OrderBy(p => p.IsShowroomProduct)
@@ -2239,10 +2325,25 @@ public class InvoiceService : IInvoiceService
             .ToList();
     }
 
-    public async Task<List<ProductLookupDto>> SearchShowroomProductsAsync(string? search, int max = 200)
+    public async Task<List<ProductLookupDto>> SearchShowroomProductsAsync(string? search, int max = 200, int? warehouseId = null, int? searchWarehouseId = null)
     {
-        var query = _db.Products.AsNoTracking()
+        // ⭐ سياق مستقل من الـFactory: البحث بيتنادى مع كل ضغطة حرف — لا يجوز مشاركة الـcontext العام
+        // (سبب خطأ "A second operation was started on this context instance" سابقاً)
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        var query = db.Products.AsNoTracking()
             .Where(p => !p.Customer.HasValue);
+
+        // تصفية مبدئية على مستوى SQL لتقليل الحمل (التنقيح العربي الدقيق بعد الجلب)
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim();
+            var numeric = int.TryParse(term, out var searchId);
+            query = query.Where(p =>
+                p.ProductName.Contains(term) ||
+                (p.ProductDescription != null && p.ProductDescription.Contains(term)) ||
+                (numeric && p.ProductId == searchId));
+        }
 
         var products = await query
             .OrderBy(p => p.ProductName)
@@ -2258,16 +2359,23 @@ public class InvoiceService : IInvoiceService
                 PurchasePriceCClass = p.PurchasePriceCClass,
                 PurchasePrice = p.PurchasePrice,
                 PurchasePriceElite = p.PurchasePriceElite,
-                AvailableStock = _db.StockLevels
+                // ⭐ الإجمالي في كل المخازن دائماً — مخزن الفاتورة يظهر في حقل منفصل
+                AvailableStock = db.StockLevels
                     .Where(s => s.ProductId == p.ProductId)
                     .Sum(s => (int?)s.Quantity) ?? 0,
+                StockInInvoiceWarehouse = warehouseId.HasValue
+                    ? db.StockLevels
+                        .Where(s => s.ProductId == p.ProductId && s.WarehouseId == warehouseId.Value)
+                        .Sum(s => (int?)s.Quantity) ?? 0
+                    : (int?)null,
                 IsShowroomProduct = true,
+                IsWebsite = p.IsWebsite,
                 Period = p.Period,
                 PricingType = p.PricingType
             })
             .ToListAsync();
 
-        // ⭐ البحث بالعربي + بالكود (رقم المنتج)
+        // ⭐ التنقيح بالعربي (همزات/تشكيل) + بالكود (رقم المنتج)
         if (!string.IsNullOrWhiteSpace(search))
         {
             var numeric = int.TryParse(search.Trim(), out var searchId);
@@ -2278,7 +2386,44 @@ public class InvoiceService : IInvoiceService
                 .ToList();
         }
 
-        return products.Take(max).ToList();
+        var final = products.Take(max).ToList();
+
+        // ⭐ توزيع الرصيد على المخازن — للمستخدم يعرف الصنف فين
+        if (final.Count > 0)
+        {
+            var ids = final.Select(p => p.ProductId).ToList();
+            var breakdown = await (from sl in db.StockLevels.AsNoTracking()
+                                   join w in db.Warehouses.AsNoTracking() on sl.WarehouseId equals w.WarehouseId
+                                   where ids.Contains(sl.ProductId) && sl.Quantity > 0 && w.IsActive == true
+                                   select new { sl.ProductId, w.WarehouseName, w.WarehouseId, sl.Quantity })
+                                  .ToListAsync();
+
+            // ⭐ فلتر «مخزن محدد» (قرار المستخدم): كل المنتجات تظهر — مرتبة برصيد المخزن المختار (الأوفر أولاً)
+            var qtyByProduct = new Dictionary<int, decimal>();
+            if (searchWarehouseId.HasValue)
+            {
+                qtyByProduct = breakdown
+                    .Where(b => b.WarehouseId == searchWarehouseId.Value)
+                    .ToDictionary(b => b.ProductId, b => (decimal)b.Quantity);
+                final = final
+                    .OrderByDescending(p => qtyByProduct.TryGetValue(p.ProductId, out var q) ? q : 0)
+                    .ToList();
+            }
+
+            foreach (var g in breakdown.GroupBy(b => b.ProductId))
+            {
+                var dtoRow = final.FirstOrDefault(p => p.ProductId == g.Key);
+                if (dtoRow == null) continue;
+                if (searchWarehouseId.HasValue && qtyByProduct.TryGetValue(g.Key, out var qSel))
+                    dtoRow.StockInSearchWarehouse = (int)qSel;
+                dtoRow.StockDetails = string.Join(" · ",
+                    g.OrderByDescending(x => x.WarehouseId == searchWarehouseId)
+                     .ThenByDescending(x => x.Quantity)
+                     .Select(x => $"{x.WarehouseName}: {x.Quantity:0.##}"));
+            }
+        }
+
+        return final;
     }
 
     public async Task<List<Warehouse>> GetWarehousesAsync()
@@ -2573,23 +2718,41 @@ public class InvoiceService : IInvoiceService
     {
         try
         {
-            var itemsCount = await _db.TransactionDetails
-                .CountAsync(d => d.TransactionId == transaction.TransactionId);
+            // ⭐ تفصيل المنتجات المطلوب إنتاجها (اسم × كمية) — جوهر أمر الإنتاج
+            var items = await (from d in _db.TransactionDetails.AsNoTracking()
+                               join pr in _db.Products.AsNoTracking() on d.ProductId equals pr.ProductId
+                               where d.TransactionId == transaction.TransactionId
+                               select new { pr.ProductName, d.Quantity })
+                              .ToListAsync();
 
-            var title = "🏭 أمر توريد جديد";
-            var message = $"تم إنشاء فاتورة شراء {transaction.ReferenceNumber} من المورد (المصنع) بواسطة {actor}."
-                          + $"\nعدد الأصناف: {itemsCount}"
+            var itemsCount = items.Count;
+            var itemLines = items
+                .Take(8)
+                .Select(x => $"• {x.ProductName} — كمية {x.Quantity:0.##}")
+                .ToList();
+            var moreCount = itemsCount - itemLines.Count;
+            var itemsBlock = itemsCount > 0
+                ? "\n🧾 المنتجات المطلوب إنتاجها:\n" + string.Join("\n", itemLines)
+                  + (moreCount > 0 ? $"\n• … و{moreCount} أصناف أخرى (التفاصيل في الفاتورة)" : "")
+                : $"\nعدد الأصناف: {itemsCount}";
+
+            var title = "🏭 أمر إنتاج جديد — ابدأ التصنيع";
+            var message = $"صدر أمر إنتاج {transaction.ReferenceNumber} من المورد (المصنع) بواسطة {actor}."
+                          + itemsBlock
                           + (transaction.DueDate.HasValue
-                              ? $"\nتاريخ الاستلام المتوقع: {transaction.DueDate.Value:yyyy/MM/dd}"
+                              ? $"\n📅 تاريخ الاستلام المتوقع: {transaction.DueDate.Value:yyyy/MM/dd}"
                               : "")
-                          + "\nبرجاء متابعة تجهيز المنتجات والشحن والاستلام من شاشة استلامات الشراء.";
+                          + "\nبرجاء البدء في التصنيع فوراً — وعند التجهيز تتم المتابعة والاستلام من شاشة استلامات الشراء.";
 
+            // ⭐ الضغط على الإشعار يفتح الجوب أوردر الخاص بالفاتورة (مستند التنفيذ)
+            // نمط المسار المدمج نفسه الموجود في إشعارات أمر التصنيع لفواتير البيع
+            var jobOrderForm = $"sales/invoices/{transaction.TransactionId}/job-order";
             await _notify.NotifyRoleAsync(title, message, SystemRoles.ProductionManager, actor,
-                "purchase-receipt-status", "Transactions", transaction.TransactionId);
+                jobOrderForm, "Transactions", transaction.TransactionId);
             await _notify.NotifyRoleAsync(title, message, "factory", actor,
-                "purchase-receipt-status", "Transactions", transaction.TransactionId);
+                jobOrderForm, "Transactions", transaction.TransactionId);
             await _notify.NotifyRoleAsync(title, message, SystemRoles.FactoryManager, actor,
-                "purchase-receipt-status", "Transactions", transaction.TransactionId);
+                jobOrderForm, "Transactions", transaction.TransactionId);
         }
         catch (Exception ex)
         {
@@ -2635,6 +2798,200 @@ public class InvoiceService : IInvoiceService
         {
             Console.WriteLine($"[InvoiceService.EditDecisionNotify] {ex.Message}");
         }
+    }
+
+    // ⭐ تنبيه المرآة: قبل حفظ تعديل البيع — مقارنة أصناف العميل القديمة بالجديدة، ولو فيه فرق وفيه مرآة يرجع رقمها
+    public async Task<int?> CheckMirrorSyncNeededAsync(int saleTransactionId, InvoiceFormDto dto)
+    {
+        try
+        {
+            if (dto.PartyId is null or 0) return null;
+
+            var sale = await _db.Transactions.AsNoTracking()
+                .FirstOrDefaultAsync(t => t.TransactionId == saleTransactionId);
+            if (sale == null || sale.TransactionType != TransactionTypes.Sale) return null;
+
+            var customerProductIds = await _db.Products.AsNoTracking()
+                .Where(p => p.Customer == dto.PartyId.Value)
+                .Select(p => p.ProductId).ToListAsync();
+            if (customerProductIds.Count == 0) return null;
+
+            var oldCust = (await _db.TransactionDetails.AsNoTracking()
+                    .Where(d => d.TransactionId == saleTransactionId
+                             && customerProductIds.Contains(d.ProductId))
+                    .ToListAsync())
+                .GroupBy(d => d.ProductId)
+                .ToDictionary(g => g.Key, g => Math.Round(g.Sum(x => x.Quantity), 2));
+
+            var newCust = dto.Items
+                .Where(i => customerProductIds.Contains(i.ProductId))
+                .GroupBy(i => i.ProductId)
+                .ToDictionary(g => g.Key, g => Math.Round(g.Sum(x => x.Quantity), 2));
+
+            bool changed = oldCust.Count != newCust.Count
+                || oldCust.Any(kv => !newCust.TryGetValue(kv.Key, out var q) || q != kv.Value);
+            if (!changed) return null;
+
+            var mirror = await _db.Transactions.AsNoTracking().FirstOrDefaultAsync(t =>
+                t.ReferenceType == "MirrorOf:" + saleTransactionId
+                && t.InvoiceStatus != InvoiceStatuses.Cancelled);
+            return mirror?.TransactionId;
+        }
+        catch { return null; }
+    }
+
+    // ⭐ مزامنة المرآة أوتوماتيك — تطبق حالة فاتورة البيع الحالية على أصناف العميل في المرآة (كمية/استبدال/إضافة/حذف)
+    public async Task<(bool Success, string Message)> SyncMirrorWithSaleAsync(int mirrorTransactionId, string currentUserName)
+    {
+        var mirror = await _db.Transactions.FirstOrDefaultAsync(t => t.TransactionId == mirrorTransactionId);
+        if (mirror == null || mirror.InvoiceStatus == InvoiceStatuses.Cancelled)
+            return (false, "فاتورة المرآة غير موجودة أو ملغاة.");
+        if (string.IsNullOrWhiteSpace(mirror.ReferenceType) || !mirror.ReferenceType.StartsWith("MirrorOf:"))
+            return (false, "هذه الفاتورة ليست مرآة لفاتورة بيع.");
+        if (!int.TryParse(mirror.ReferenceType.Substring("MirrorOf:".Length), out var saleId))
+            return (false, "رقم الفاتورة الأصل في المرجع غير صحيح.");
+
+        var sale = await _db.Transactions.FirstOrDefaultAsync(t => t.TransactionId == saleId);
+        if (sale == null) return (false, "فاتورة البيع الأصل غير موجودة.");
+
+        using var tx = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            var customerProductIds = await _db.Products
+                .Where(p => p.Customer == sale.PartyId)
+                .Select(p => p.ProductId).ToListAsync();
+
+            var mirrorDetails = await _db.TransactionDetails
+                .Where(d => d.TransactionId == mirror.TransactionId).ToListAsync();
+            var mirrorCust = mirrorDetails
+                .Where(d => customerProductIds.Contains(d.ProductId)).ToList();
+
+            var saleCust = await _db.TransactionDetails.AsNoTracking()
+                .Where(d => d.TransactionId == sale.TransactionId
+                         && customerProductIds.Contains(d.ProductId))
+                .ToListAsync();
+            var saleGroups = saleCust.GroupBy(d => d.ProductId).Select(g => new
+            {
+                ProductId = g.Key,
+                Qty = g.Sum(x => x.Quantity),
+                Tier = NormalizePricingTier(g.First().PricingTier),
+                AltId = g.First().SelectedAlternativeId
+            }).ToList();
+
+            var touchedIds = mirrorCust.Select(d => d.ProductId)
+                .Concat(saleGroups.Select(x => x.ProductId)).Distinct().ToList();
+            var products = touchedIds.Count > 0
+                ? await _db.Products.Where(p => touchedIds.Contains(p.ProductId)).ToListAsync()
+                : new List<Product>();
+            var altIds = saleGroups.Where(x => x.AltId.HasValue)
+                .Select(x => x.AltId!.Value).Distinct().ToList();
+            var alternatives = altIds.Count > 0
+                ? await _db.ProductFactoryAlternatives.Where(a => altIds.Contains(a.AlternativeId)).ToListAsync()
+                : new List<ProductFactoryAlternative>();
+
+            decimal mirrorDelta = 0m;
+            var auditLines = new List<string>();
+
+            // 1) أصناف اتشالت من البيع → تُحذف من المرآة + يترد كميتها من المخزون
+            foreach (var d in mirrorCust.Where(md => saleGroups.All(sg => sg.ProductId != md.ProductId)).ToList())
+            {
+                var qty = (int)Math.Round(d.Quantity);
+                await UpdateStockAsync(d.ProductId, mirror.WarehouseId, -qty, mirror.TransactionId,
+                    d.UnitPrice, currentUserName, "PurchaseInvoice");
+                mirrorDelta -= d.TotalAmount ?? 0m;
+                auditLines.Add($"حذف المنتج #{d.ProductId} × {qty}");
+                _db.TransactionDetails.Remove(d);
+            }
+
+            // 2) أصناف مشتركة → مزامنة الكمية (والتير/البديل/السعر لو اتغيروا)
+            foreach (var d in mirrorCust)
+            {
+                var s = saleGroups.FirstOrDefault(x => x.ProductId == d.ProductId);
+                if (s == null) continue;
+                if (Math.Round(d.Quantity, 2) == Math.Round(s.Qty, 2)
+                    && d.PricingTier == s.Tier && d.SelectedAlternativeId == s.AltId) continue;
+
+                var price = ComputeMirrorUnitPrice(s.Tier, s.AltId,
+                    products.FirstOrDefault(p => p.ProductId == d.ProductId),
+                    alternatives.FirstOrDefault(a => a.AlternativeId == s.AltId));
+                var qtyDelta = (int)Math.Round(s.Qty - d.Quantity);
+                var oldTotal = d.TotalAmount ?? 0m;
+                d.Quantity = s.Qty;
+                d.PricingTier = s.Tier;
+                d.SelectedAlternativeId = s.AltId;
+                d.UnitPrice = price;
+                d.TotalAmount = Math.Round(s.Qty * price, 2);
+                mirrorDelta += (d.TotalAmount ?? 0m) - oldTotal;
+                if (qtyDelta != 0)
+                    await UpdateStockAsync(d.ProductId, mirror.WarehouseId, qtyDelta, mirror.TransactionId,
+                        price, currentUserName, "PurchaseInvoice");
+                auditLines.Add($"كمية المنتج #{d.ProductId} → {s.Qty}");
+            }
+
+            // 3) أصناف جديدة في البيع → تُضاف للمرآة بسعر الباقة + تدخل المخزون
+            foreach (var s in saleGroups.Where(sg => mirrorCust.All(md => md.ProductId != sg.ProductId)))
+            {
+                var price = ComputeMirrorUnitPrice(s.Tier, s.AltId,
+                    products.FirstOrDefault(p => p.ProductId == s.ProductId),
+                    alternatives.FirstOrDefault(a => a.AlternativeId == s.AltId));
+                var det = new TransactionDetail
+                {
+                    TransactionId = mirror.TransactionId,
+                    ProductId = s.ProductId,
+                    Quantity = s.Qty,
+                    UnitPrice = price,
+                    TotalAmount = Math.Round(s.Qty * price, 2),
+                    SelectedAlternativeId = s.AltId,
+                    PricingTier = s.Tier,
+                    Notes = $"[{s.Tier}] - مزامنة مع فاتورة البيع {sale.ReferenceNumber}"
+                };
+                _db.TransactionDetails.Add(det);
+                mirrorDelta += det.TotalAmount ?? 0m;
+                await UpdateStockAsync(s.ProductId, mirror.WarehouseId, +(int)Math.Round(s.Qty),
+                    mirror.TransactionId, price, currentUserName, "PurchaseInvoice");
+                auditLines.Add($"إضافة المنتج #{s.ProductId} × {s.Qty}");
+            }
+
+            if (auditLines.Count == 0)
+            {
+                await tx.RollbackAsync();
+                return (false, "لا توجد فروق — المرآة متزامنة بالفعل مع فاتورة البيع.");
+            }
+
+            mirror.TotalAmount = Math.Max(0m, mirror.TotalAmount + mirrorDelta);
+            mirror.NetTotalAmount = mirror.TotalAmount;
+            mirror.GrandTotal = mirror.TotalAmount;
+            var syncNote = $"مزامنة تلقائية {DateTime.Now:yyyy-MM-dd HH:mm}: {string.Join("، ", auditLines)}";
+            mirror.Notes = string.IsNullOrWhiteSpace(mirror.Notes) ? syncNote : mirror.Notes + " | " + syncNote;
+
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+            return (true, $"تمت مزامنة المرآة #{mirror.TransactionId} مع فاتورة البيع بنجاح ({auditLines.Count} تغيير).");
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            return (false, "فشلت المزامنة: " + ex.Message);
+        }
+    }
+
+    // سعر شراء صنف المرآة — نفس منطق GetPurchasePriceByTier (البديل المصنعي أولاً ثم المنتج)
+    private static decimal ComputeMirrorUnitPrice(string tier, int? altId, Product? p, ProductFactoryAlternative? alt)
+    {
+        if (alt != null)
+            return tier switch
+            {
+                var t when t == PricingTiers.CClass => alt.PurchasePriceCClass ?? 0m,
+                var t when t == PricingTiers.Elite => alt.PurchasePriceElite ?? alt.PurchasePricePremium ?? 0m,
+                _ => alt.PurchasePricePremium ?? 0m
+            };
+        if (p == null) return 0m;
+        return tier switch
+        {
+            var t when t == PricingTiers.CClass => p.PurchasePriceCClass ?? 0m,
+            var t when t == PricingTiers.Elite => p.PurchasePriceElite ?? p.PurchasePrice ?? 0m,
+            _ => p.PurchasePrice ?? 0m
+        };
     }
 
     private static string NormalizePricingTier(string? tier)
@@ -2704,36 +3061,30 @@ public class InvoiceService : IInvoiceService
     {
         dto.TotalAmount = Math.Round(dto.Items.Sum(i => i.TotalAmount), 2);
 
-        // ✅ الأولوية لقيمة الخصم الفعلية لو موجودة
-        // لأن إعادة اشتقاق الخصم من نسبة مقربة قد يغيّر الرقم الأصلي.
-        // ⭐ قاعدة العمل: الخصم (نسبة أو مبلغ) يُقرَّب لأقرب 100 جنيه
-        if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
-        {
-            var amt = Math.Min(dto.DiscountAmount.Value, dto.TotalAmount);
-            amt = Math.Round(amt / 100m, MidpointRounding.AwayFromZero) * 100m;
-            if (amt < 0) amt = 0;
-            if (amt > dto.TotalAmount) amt = dto.TotalAmount;
-            dto.DiscountAmount = amt;
+        // ⭐ قاعدة المستخدم: الصيغة المُدخلة هي اللي تثبت —
+        // خصم كقيمة يُحفظ قيمة (بلا نسبة مشتقة)، وخصم كنسبة يُحفظ نسبة (بلا تقريب).
+        var amountEntered = dto.DiscountEntryMode == "amount"
+            || (dto.DiscountEntryMode == null && dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0
+                && !(dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0));
 
-            dto.DiscountPercentage = dto.TotalAmount > 0
-                ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100m, 2)
-                : 0;
+        if (amountEntered && dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
+        {
+            var amt = Math.Round(Math.Min(Math.Max(dto.DiscountAmount.Value, 0m), dto.TotalAmount), 2);
+            dto.DiscountAmount = amt;
+            dto.DiscountPercentage = null;   // قيمة فقط — لا تُشتق نسبة
         }
         else if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0)
         {
-            var amt = Math.Round(dto.TotalAmount * (dto.DiscountPercentage.Value / 100m), 2);
-            amt = Math.Round(amt / 100m, MidpointRounding.AwayFromZero) * 100m;
-            if (amt < 0) amt = 0;
+            var pct = Math.Min(Math.Max(dto.DiscountPercentage.Value, 0m), 100m);
+            var amt = Math.Round(dto.TotalAmount * (pct / 100m), 2);
             if (amt > dto.TotalAmount) amt = dto.TotalAmount;
+            dto.DiscountPercentage = pct;
             dto.DiscountAmount = amt;
-            dto.DiscountPercentage = dto.TotalAmount > 0
-                ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100m, 2)
-                : 0;
         }
         else
         {
             dto.DiscountAmount = 0;
-            dto.DiscountPercentage = 0;
+            dto.DiscountPercentage = null;
         }
 
         dto.NetTotalAmount = dto.TotalAmount - (dto.DiscountAmount ?? 0);

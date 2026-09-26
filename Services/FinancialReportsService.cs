@@ -8,9 +8,11 @@ public class FinancialReportsService : IFinancialReportsService
 {
     private readonly db24804Context _db;
     private readonly IHttpContextAccessor _http;
+    private readonly IAuditService _audit;
 
-    public FinancialReportsService(db24804Context db, IHttpContextAccessor http)
+    public FinancialReportsService(db24804Context db, IHttpContextAccessor http, IAuditService audit)
     {
+        _audit = audit;
         _db = db;
         _http = http;
     }
@@ -1027,5 +1029,205 @@ public class FinancialReportsService : IFinancialReportsService
             "#ec4899", "#06b6d4", "#84cc16", "#d4af37", "#6366f1"
         };
         return colors[index % colors.Length];
+    }
+
+    // ============================================================
+    // 💼 قائمة المركز المالي (الميزانية)
+    // ============================================================
+    public async Task<BalanceSheetDto> GetBalanceSheetAsync(int? branchId = null)
+    {
+        var dto = new BalanceSheetDto
+        {
+            AsOfDate = DateTime.Today,
+            AsOfLabel = DateTime.Today.ToString("dddd dd MMMM yyyy", new System.Globalization.CultureInfo("ar-EG")),
+            BranchId = branchId
+        };
+
+        if (branchId.HasValue)
+        {
+            dto.BranchName = await _db.Branches.AsNoTracking()
+                .Where(b => b.BranchId == branchId.Value)
+                .Select(b => b.BranchNameAr)
+                .FirstOrDefaultAsync();
+        }
+
+        // ⭐ نفس آلية إسناد الفواتير للفرع المستخدمة في قائمة الدخل بالحرف
+        var scope = await GetBranchScopeAsync(branchId);
+
+        // ───── 1) النقدية: رصيد الخزائن (افتتاحي + قبض - صرف) — بنطاق فرع الخزينة (نفس CashFlow)
+        var boxesQuery = _db.CashBoxes.AsNoTracking();
+        if (scope.IsScoped)
+            boxesQuery = boxesQuery.Where(b => b.BranchId == scope.BranchId.Value);
+
+        var boxes = await boxesQuery
+            .Select(b => new
+            {
+                b.CashBoxId,
+                b.OpeningBalance,
+                TotalIn = _db.CashboxTransactions
+                    .Where(t => t.CashBoxId == b.CashBoxId && t.TransactionType == "قبض")
+                    .Sum(t => (decimal?)t.Amount) ?? 0m,
+                TotalOut = _db.CashboxTransactions
+                    .Where(t => t.CashBoxId == b.CashBoxId && t.TransactionType == "صرف")
+                    .Sum(t => (decimal?)t.Amount) ?? 0m
+            }).ToListAsync();
+
+        dto.CashBoxesCount = boxes.Count;
+        dto.CashBalance = boxes.Sum(b => b.OpeningBalance + b.TotalIn - b.TotalOut);
+
+        // ───── 2) المدينون: متبقي فواتير البيع (GrandTotal - Paid) بإسناد الفرع (موظف ← مخزن)
+        var receivableQuery = _db.Transactions.AsNoTracking()
+            .Where(t => t.TransactionType == TransactionTypes.Sale
+                        && t.InvoiceStatus != InvoiceStatuses.Cancelled
+                        && t.GrandTotal > t.PaidAmount);
+        receivableQuery = ApplySaleBranchScope(receivableQuery, scope);
+
+        var salesReceivable = await receivableQuery
+            .GroupBy(_ => 1)
+            .Select(g => new { Sum = g.Sum(t => (decimal?)(t.GrandTotal - t.PaidAmount)) ?? 0m, Count = g.Count() })
+            .FirstOrDefaultAsync();
+        dto.AccountsReceivable = salesReceivable?.Sum ?? 0m;
+        dto.ReceivableInvoicesCount = salesReceivable?.Count ?? 0;
+
+        // ───── 3) المخزون: الأرصدة × تكلفة باقة المنتج نفسه — قيمة واحدة (بدون باقات بديلة)
+        var invWarehousesQuery = _db.Warehouses.AsNoTracking().Where(w => w.IsActive == true);
+        if (scope.IsScoped)
+            invWarehousesQuery = invWarehousesQuery.Where(w => w.BranchId == scope.BranchId.Value);
+
+        var invRaw = await (from sl in _db.StockLevels.AsNoTracking()
+                            join w in invWarehousesQuery on sl.WarehouseId equals w.WarehouseId
+                            join p in _db.Products.AsNoTracking() on sl.ProductId equals p.ProductId
+                            where sl.Quantity > 0
+                            select new
+                            {
+                                sl.Quantity,
+                                sl.ProductId,
+                                p.PurchasePrice,
+                                p.PurchasePriceCClass,
+                                p.PurchasePriceElite,
+                                p.PricingType
+                            }).ToListAsync();
+
+        decimal inv = 0m;
+        foreach (var x in invRaw)
+        {
+            var ownTier = string.IsNullOrWhiteSpace(x.PricingType) ? "Premium" : x.PricingType!.Trim();
+            decimal costOfOwn = ownTier switch
+            {
+                "CClass" => x.PurchasePriceCClass ?? x.PurchasePrice ?? 0m,
+                "Elite"  => x.PurchasePriceElite ?? x.PurchasePrice ?? 0m,
+                _        => x.PurchasePrice ?? x.PurchasePriceCClass ?? x.PurchasePriceElite ?? 0m
+            };
+            inv += costOfOwn * x.Quantity;
+        }
+        dto.InventoryValue = inv;
+        dto.InventoryItemsCount = invRaw.Select(x => x.ProductId).Distinct().Count();
+
+        // ───── 4) سلف الموظفين القائمة (أصل) — بنطاق فرع الموظف (نفس قائمة الدخل)
+        var loansQ = _db.EmployeeLoans.AsNoTracking().Where(l => l.Status == "Active");
+        if (scope.IsScoped)
+            loansQ = loansQ.Where(l => l.Employee.BranchId == scope.BranchId.Value);
+        dto.ActiveLoansCount = await loansQ.CountAsync();
+        dto.EmployeeLoansOutstanding = await loansQ
+            .SumAsync(l => (decimal?)l.RemainingAmount) ?? 0m;
+
+        dto.TotalAssets = dto.CashBalance + dto.AccountsReceivable + dto.InventoryValue
+                        + dto.EmployeeLoansOutstanding;
+
+        // ───── 5) الالتزامات: رواتب غير مدفوعة (عدا المرفوض) + متبقي مشتريات بنفس إسناد الفرع
+        var payrollQ = _db.Payrolls.AsNoTracking()
+            .Where(p => p.PaymentStatus != PayrollPaymentStatuses.Paid
+                     && p.PaymentStatus != PayrollPaymentStatuses.Rejected);
+        if (scope.IsScoped)
+            payrollQ = payrollQ.Where(p => p.Employee.BranchId == scope.BranchId.Value);
+        dto.PayrollPendingCount = await payrollQ.CountAsync();
+        dto.PayrollOutstanding = await payrollQ
+            .SumAsync(p => (decimal?)(p.NetSalary ?? p.BasicSalary)) ?? 0m;
+
+        var purchaseQuery = _db.Transactions.AsNoTracking()
+            .Where(t => t.TransactionType == TransactionTypes.Purchase
+                        && (t.InvoiceStatus == null || t.InvoiceStatus != InvoiceStatuses.Cancelled)
+                        && t.GrandTotal > t.PaidAmount);
+        purchaseQuery = ApplySaleBranchScope(purchaseQuery, scope);
+
+        var purchasePayable = await purchaseQuery
+            .GroupBy(_ => 1)
+            .Select(g => new { Sum = g.Sum(t => (decimal?)(t.GrandTotal - t.PaidAmount)) ?? 0m, Count = g.Count() })
+            .FirstOrDefaultAsync();
+        dto.SupplierPayables = purchasePayable?.Sum ?? 0m;
+        dto.PayablePurchasesCount = purchasePayable?.Count ?? 0;
+
+        dto.TotalLiabilities = dto.PayrollOutstanding + dto.SupplierPayables;
+
+        // ───── 6) حقوق الملكية: رأس مال افتتاحي + أرباح محتجزة (صافي ربح قائمة الدخل التراكمي)
+        var capital = await GetOpeningCapitalAsync();
+        dto.OpeningCapital = capital.Value;
+        dto.CapitalNotes = capital.Notes;
+        dto.CapitalUpdatedAt = capital.UpdatedAt;
+        dto.CapitalUpdatedBy = capital.UpdatedBy;
+
+        var cumulative = await GetIncomeStatementAsync(new IncomeStatementFilterDto
+        {
+            FromDate = new DateTime(2000, 1, 1),
+            ToDate = DateTime.Today,
+            PeriodType = "Custom",
+            IncludeComparison = false,
+            IncludeMonthlyTrend = false,
+            BranchId = branchId
+        });
+        dto.RetainedEarnings = cumulative.NetProfit;
+        dto.CumulativeRevenue = cumulative.NetRevenue;
+        dto.CumulativeCogs = cumulative.CostOfGoodsSold;
+        dto.CumulativeOperatingExpenses = cumulative.TotalOperatingExpenses;
+        dto.CumulativeFrom = cumulative.FromDate;
+
+        dto.TotalEquity = dto.OpeningCapital + dto.RetainedEarnings;
+        dto.LiabilitiesAndEquity = dto.TotalLiabilities + dto.TotalEquity;
+        dto.BalanceDifference = dto.TotalAssets - dto.LiabilitiesAndEquity;
+
+        return dto;
+    }
+
+    public async Task<(decimal Value, string? Notes, DateTime? UpdatedAt, string? UpdatedBy)> GetOpeningCapitalAsync()
+    {
+        var row = await _db.FinancialSettings.AsNoTracking()
+            .FirstOrDefaultAsync(f => f.SettingKey == "OpeningCapital");
+        return (row?.SettingValue ?? 0m, row?.Notes, row?.UpdatedAt, row?.UpdatedBy);
+    }
+
+    public async Task SaveOpeningCapitalAsync(decimal value, string? notes, string userName)
+    {
+        var row = await _db.FinancialSettings
+            .FirstOrDefaultAsync(f => f.SettingKey == "OpeningCapital");
+
+        if (row == null)
+        {
+            row = new FinancialSetting
+            {
+                SettingKey = "OpeningCapital",
+                SettingValue = value,
+                Notes = notes,
+                UpdatedBy = userName,
+                UpdatedAt = DateTime.Now
+            };
+            _db.FinancialSettings.Add(row);
+        }
+        else
+        {
+            row.SettingValue = value;
+            row.Notes = notes;
+            row.UpdatedBy = userName;
+            row.UpdatedAt = DateTime.Now;
+        }
+
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync<object>(
+            "FinancialSettings",
+            "OpeningCapitalUpdate",
+            row.FinancialSettingId.ToString(),
+            null,
+            new { row.SettingKey, row.SettingValue, row.Notes, row.UpdatedBy, row.UpdatedAt },
+            userName);
     }
 }

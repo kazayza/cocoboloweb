@@ -23,8 +23,32 @@ public class RecoveryService
     private readonly ILogger<RecoveryService> _logger;
 
     // مراحل الخروج من مصدر واحد للحقيقة (CrmStages) — نفس منطق OpportunityService
-    private const int LostStageId = CrmStages.LostStageId;
-    private const int NotInterestedStageId = CrmStages.NotInterestedStageId;
+    // ⭐ مراحل الخروج تُقرأ من الداتابيز **بالأسماء** (لا نثق بترقيم ثابت) —
+    // تُحمَّل مرة واحدة (cache) عبر EnsureStageIdsAsync التي تُستدعى أول كل دالة تستخدمها.
+    private int _lostStageId = CrmStages.LostStageId;
+    private int _notInterestedStageId = CrmStages.NotInterestedStageId;
+    private bool _stageIdsLoaded;
+
+    private async Task EnsureStageIdsAsync()
+    {
+        if (_stageIdsLoaded) return;
+        _stageIdsLoaded = true; // يُمنع التكرار حتى لو فشل — سيبقى على ثوابت الكود احتياطاً
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            var names = new[] { "Lost", "Not Interested" };
+            var rows = await db.SalesStages.AsNoTracking()
+                .Where(st => names.Contains(st.StageName))
+                .Select(st => new { st.StageId, st.StageName })
+                .ToListAsync();
+            _lostStageId = rows.FirstOrDefault(r => r.StageName == "Lost")?.StageId ?? CrmStages.LostStageId;
+            _notInterestedStageId = rows.FirstOrDefault(r => r.StageName == "Not Interested")?.StageId ?? CrmStages.NotInterestedStageId;
+        }
+        catch
+        {
+            // الاحتفاظ بثوابت الكود كخطة بديلة
+        }
+    }
     private const string CsDepartment = "خدمة العملاء";
     private const string ActiveEmployeeStatus = "نشط"; // أو "Active" حسب لغة الإدخال
     private const string TaskPending = "Pending";
@@ -46,12 +70,13 @@ public class RecoveryService
     // ═══════════════════════════════════════════════════════════
     public async Task<RecoveryStatsDto> GetStatsAsync(ClaimsPrincipal? user = null)
     {
+        await EnsureStageIdsAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
         var now = DateTime.Now;
         var monthStart = new DateTime(now.Year, now.Month, 1);
 
         var lost = await db.SalesOpportunities.AsNoTracking()
-            .Where(o => (o.StageId == LostStageId || o.StageId == NotInterestedStageId)
+            .Where(o => (o.StageId == _lostStageId || o.StageId == _notInterestedStageId)
                 && o.IsActive
                 && (o.IsRecoveryRejected == null || o.IsRecoveryRejected == false)) // NULL = ليس مرفوضًا
             .Select(o => new { o.OpportunityId, o.ExpectedValue })
@@ -76,10 +101,10 @@ public class RecoveryService
         var revived = await db.CustomerInteractions.AsNoTracking()
             .Where(i => i.InteractionDate >= monthStart
                 && i.StageBeforeId.HasValue
-                && (i.StageBeforeId == LostStageId || i.StageBeforeId == NotInterestedStageId)
+                && (i.StageBeforeId == _lostStageId || i.StageBeforeId == _notInterestedStageId)
                 && i.StageAfterId.HasValue
-                && i.StageAfterId != LostStageId
-                && i.StageAfterId != NotInterestedStageId)
+                && i.StageAfterId != _lostStageId
+                && i.StageAfterId != _notInterestedStageId)
             .Select(i => i.OpportunityId)   // ⭐ فرص مُستردة فعلًا (Distinct) — وليس عدد سجلات العودة
             .Distinct()
             .CountAsync();
@@ -91,9 +116,9 @@ public class RecoveryService
             var contacted = await db.CustomerInteractions.AsNoTracking()
                 .Where(i => lostIds.Contains(i.OpportunityId)
                     && i.StageBeforeId.HasValue
-                    && (i.StageBeforeId == LostStageId || i.StageBeforeId == NotInterestedStageId)
+                    && (i.StageBeforeId == _lostStageId || i.StageBeforeId == _notInterestedStageId)
                     && i.StageAfterId.HasValue
-                    && (i.StageAfterId == LostStageId || i.StageAfterId == NotInterestedStageId)
+                    && (i.StageAfterId == _lostStageId || i.StageAfterId == _notInterestedStageId)
                     && !i.Summary.StartsWith("نقل تلقائي"))
                 .Select(i => i.OpportunityId)
                 .Distinct()
@@ -109,7 +134,7 @@ public class RecoveryService
         {
             var uname = user.Identity.Name;
             var myEmp = await ResolveEmployeeByUsernameAsync(uname);
-            var lostOnly = new[] { LostStageId, NotInterestedStageId };
+            var lostOnly = new[] { _lostStageId, _notInterestedStageId };
             myTodayCalls = await db.CustomerInteractions.AsNoTracking()
                 .Where(i => i.InteractionDate >= DateTime.Today
                     && (i.CreatedBy == uname || (myEmp > 0 && i.EmployeeId == myEmp))
@@ -138,6 +163,7 @@ public class RecoveryService
     public async Task<LostRecoveryPageDto> GetQueueAsync(
         LostRecoveryFilterDto filter, int pageIndex, int pageSize, string? username = null)
     {
+        await EnsureStageIdsAsync();
         if (pageIndex < 1) pageIndex = 1;
         if (pageSize < 1) pageSize = 12;
 
@@ -145,7 +171,7 @@ public class RecoveryService
 
         // نبدأ من جدول الفرص نفسه حتى تتوفر أعمدة الاسترداد + الاستبعادات مباشرة
         var q = db.SalesOpportunities.AsNoTracking()
-            .Where(o => (o.StageId == LostStageId || o.StageId == NotInterestedStageId)
+            .Where(o => (o.StageId == _lostStageId || o.StageId == _notInterestedStageId)
                 && o.IsActive
                 && (o.IsRecoveryRejected == null || o.IsRecoveryRejected == false)); // NULL = ليس مرفوضًا
 
@@ -177,9 +203,9 @@ public class RecoveryService
         }
 
         if (filter.Kind == "lost")
-            q = q.Where(o => o.StageId == LostStageId);
+            q = q.Where(o => o.StageId == _lostStageId);
         else if (filter.Kind == "notinterested")
-            q = q.Where(o => o.StageId == NotInterestedStageId);
+            q = q.Where(o => o.StageId == _notInterestedStageId);
 
         if (filter.MinValue.HasValue)
             q = q.Where(o => o.ExpectedValue.HasValue && o.ExpectedValue >= filter.MinValue.Value);
@@ -223,9 +249,9 @@ public class RecoveryService
                     && t.TaskScope == "Recovery" && t.Status == TaskPending && t.IsActive)
                 && !db.CustomerInteractions.Any(i => i.OpportunityId == o.OpportunityId
                     && i.StageBeforeId.HasValue
-                    && (i.StageBeforeId == LostStageId || i.StageBeforeId == NotInterestedStageId)
+                    && (i.StageBeforeId == _lostStageId || i.StageBeforeId == _notInterestedStageId)
                     && i.StageAfterId.HasValue
-                    && (i.StageAfterId == LostStageId || i.StageAfterId == NotInterestedStageId)
+                    && (i.StageAfterId == _lostStageId || i.StageAfterId == _notInterestedStageId)
                     && !i.Summary.StartsWith("نقل تلقائي")));
 
         // فلترة تاريخ الإغلاق
@@ -266,6 +292,7 @@ public class RecoveryService
                 o.OpportunityId,
                 o.PartyId,
                 o.StageId,
+                o.EmployeeId,
                 o.ExpectedValue,
                 o.InterestedProduct,
                 o.ClosedAt,
@@ -326,6 +353,16 @@ public class RecoveryService
                 .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName);
         }
 
+        // أسماء مالكي الفرص في الصفحة (المسؤول الحالي قبل الاسترداد)
+        var ownerIds = rows.Where(x => x.EmployeeId.HasValue).Select(x => x.EmployeeId!.Value).Distinct().ToList();
+        var ownerNames = new Dictionary<int, string>();
+        if (ownerIds.Count > 0)
+        {
+            ownerNames = await db.Employees.AsNoTracking()
+                .Where(e => ownerIds.Contains(e.EmployeeId))
+                .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName);
+        }
+
         // آخر تواصل لخدمة العملاء (تواصل تم والفرصة ما زالت في مرحلة الخسارة)
         var lastCs = await GetLastCsContactsAsync(db, ids);
 
@@ -345,9 +382,11 @@ public class RecoveryService
                 StageId = r.StageId,
                 StageNameAr = v.StageNameAr ?? v.StageName ?? "خسارة",
                 StageColor = v.StageColor ?? "#94a3b8",
-                IsNotInterested = r.StageId == NotInterestedStageId,
+                IsNotInterested = r.StageId == _notInterestedStageId,
                 ExpectedValue = r.ExpectedValue,
                 InterestedProduct = r.InterestedProduct,
+                OwnerEmployeeId = r.EmployeeId,
+                OwnerEmployeeName = r.EmployeeId.HasValue && ownerNames.TryGetValue(r.EmployeeId.Value, out var own) ? own : null,
                 ClosedAt = r.ClosedAt,
                 DaysSinceClosed = r.ClosedAt.HasValue ? (DateTime.Today - r.ClosedAt.Value.Date).Days : 0,
                 LostReasonNameAr = r.LostReasonId.HasValue && reasonNames.TryGetValue(r.LostReasonId.Value, out var rn) ? rn : null,
@@ -375,8 +414,9 @@ public class RecoveryService
     private async Task<Dictionary<int, (DateTime Date, string? ByName, string? Summary, string? Outcome)>>
         GetLastCsContactsAsync(db24804Context db, List<int> opportunityIds)
     {
+        await EnsureStageIdsAsync();
         var result = new Dictionary<int, (DateTime, string?, string?, string?)>();
-        var closedStages = new[] { LostStageId, NotInterestedStageId };
+        var closedStages = new[] { _lostStageId, _notInterestedStageId };
 
         var ints = await db.CustomerInteractions.AsNoTracking()
             .Where(i => opportunityIds.Contains(i.OpportunityId)
@@ -467,10 +507,11 @@ public class RecoveryService
     // ═══════════════════════════════════════════════════════════
     public async Task SyncNewLossesAsync()
     {
+        await EnsureStageIdsAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         var lost = await db.SalesOpportunities.AsNoTracking()
-            .Where(o => (o.StageId == LostStageId || o.StageId == NotInterestedStageId) && o.IsActive)
+            .Where(o => (o.StageId == _lostStageId || o.StageId == _notInterestedStageId) && o.IsActive)
             .Select(o => new { o.OpportunityId, o.IsRecoveryRejected })
             .ToListAsync();
         if (lost.Count == 0) return;
@@ -602,6 +643,7 @@ public class RecoveryService
     // ═══════════════════════════════════════════════════════════
     public async Task EnsureRecoveryAssignmentAsync(int opportunityId)
     {
+        await EnsureStageIdsAsync();
         try
         {
             await using var db = await _dbFactory.CreateDbContextAsync();
@@ -623,7 +665,7 @@ public class RecoveryService
             if (opp == null) return;
             if (opp.PartyIsB2B) return; // 🏢 ملفات B2B لا تمر على خدمة العملاء/الاسترداد تحت أي مسار
             if (opp.IsActive != true) return;
-            if (opp.StageId != LostStageId && opp.StageId != NotInterestedStageId) return;
+            if (opp.StageId != _lostStageId && opp.StageId != _notInterestedStageId) return;
             if (opp.IsRecoveryRejected == true) return; // رفض نهائي — لا إزعاج إطلاقًا
 
             // ⭐ معاملة + فحص داخلي: لو وصل إغلاقان متزامنان لا يُنشأ إلا إسناد واحد
@@ -859,21 +901,22 @@ public class RecoveryService
 
     private async Task<List<RecoveryReportRowDto>> BuildReportSnapshotAsync()
     {
+        await EnsureStageIdsAsync();
         var rowsOut = new List<RecoveryReportRowDto>();
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         // 1) الفرص الحالية الخاسرة / غير المهتم (النشطة) = حالات مفتوحة في الاسترداد
         var lostIds = (await db.SalesOpportunities.AsNoTracking()
-            .Where(o => (o.StageId == LostStageId || o.StageId == NotInterestedStageId) && o.IsActive)
+            .Where(o => (o.StageId == _lostStageId || o.StageId == _notInterestedStageId) && o.IsActive)
             .Select(o => o.OpportunityId)
             .ToListAsync()).ToHashSet();
 
         // 2) سجل "العودة من الخسارة": تفاعلات بدأت في 4/5 وانتهت في مرحلة بيع (مُسترد)
         var revivedRows = await db.CustomerInteractions.AsNoTracking()
             .Where(i => i.StageBeforeId.HasValue
-                && (i.StageBeforeId == LostStageId || i.StageBeforeId == NotInterestedStageId)
+                && (i.StageBeforeId == _lostStageId || i.StageBeforeId == _notInterestedStageId)
                 && i.StageAfterId.HasValue
-                && i.StageAfterId != LostStageId && i.StageAfterId != NotInterestedStageId)
+                && i.StageAfterId != _lostStageId && i.StageAfterId != _notInterestedStageId)
             .Select(i => new { i.OpportunityId, i.InteractionDate, i.CreatedBy })
             .ToListAsync();
 
@@ -926,9 +969,9 @@ public class RecoveryService
         var csInts = await db.CustomerInteractions.AsNoTracking()
             .Where(i => allIds.Contains(i.OpportunityId)
                 && i.StageBeforeId.HasValue
-                && (i.StageBeforeId == LostStageId || i.StageBeforeId == NotInterestedStageId)
+                && (i.StageBeforeId == _lostStageId || i.StageBeforeId == _notInterestedStageId)
                 && i.StageAfterId.HasValue
-                && (i.StageAfterId == LostStageId || i.StageAfterId == NotInterestedStageId)
+                && (i.StageAfterId == _lostStageId || i.StageAfterId == _notInterestedStageId)
                 // استثناء تسجيلات النظام لتحركات المراحل (خسارة ↔ غير مهتم) — ليست محاولة تواصل
                 && !i.Summary.StartsWith("نقل تلقائي"))
             .Select(i => new { i.OpportunityId, i.InteractionDate, i.Summary, i.CreatedBy })
@@ -975,7 +1018,7 @@ public class RecoveryService
         {
             // هل الفرصة خاسرة الآن فعلا؟ (في طابور الاسترداد)
             var isCurrentlyLost = o.IsActive
-                && (o.StageId == LostStageId || o.StageId == NotInterestedStageId);
+                && (o.StageId == _lostStageId || o.StageId == _notInterestedStageId);
 
             var hasRevive = revivedByOpp.TryGetValue(o.OpportunityId, out var reviveDate);
             var isRejected = o.IsRecoveryRejected == true;
@@ -1241,9 +1284,10 @@ public class RecoveryService
     /// <summary>عدد الفرص الخاسرة المتأخرة عن موعد المتابعة (شارة على زر "متأخرة").</summary>
     public async Task<int> GetLateCountAsync()
     {
+        await EnsureStageIdsAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
         return await db.SalesOpportunities.AsNoTracking()
-            .CountAsync(o => (o.StageId == LostStageId || o.StageId == NotInterestedStageId)
+            .CountAsync(o => (o.StageId == _lostStageId || o.StageId == _notInterestedStageId)
                 && o.IsActive
                 && (o.IsRecoveryRejected == null || o.IsRecoveryRejected == false)
                 && o.NextFollowUpDate.HasValue
@@ -1253,9 +1297,10 @@ public class RecoveryService
     /// <summary>عدد الخسائر الجديدة غير المعالَجة (بلا مهمة استرداد) — للفحص الدوري أثناء فتح الشاشة.</summary>
     public async Task<int> GetUnprocessedNewLossesCountAsync()
     {
+        await EnsureStageIdsAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
         return await db.SalesOpportunities.AsNoTracking()
-            .CountAsync(o => (o.StageId == LostStageId || o.StageId == NotInterestedStageId)
+            .CountAsync(o => (o.StageId == _lostStageId || o.StageId == _notInterestedStageId)
                 && o.IsActive
                 && (o.IsRecoveryRejected == null || o.IsRecoveryRejected == false)
                 && !db.CrmTasks.Any(t => t.OpportunityId == o.OpportunityId
@@ -1395,6 +1440,7 @@ public class RecoveryService
     // ═══════════════════════════════════════════════════════════
     public async Task<(bool Success, string Message, int? NewOpportunityId)> ReviveAsync(RecoveryReviveDto dto, string actor, ClaimsPrincipal? user)
     {
+        await EnsureStageIdsAsync();
         // ⭐ تحصين في طبقة الخدمة: الاسترداد إجراء حساس — بصلاحية Revive أو الأدوار المصرّح بها فقط
         if (user == null || !RecoveryPermissions.CanRevive(user))
             return (false, "ليس لديك صلاحية تنفيذ استرداد الفرص.", null);
@@ -1408,10 +1454,10 @@ public class RecoveryService
         var opp = await db.SalesOpportunities.FindAsync(dto.OpportunityId);
         if (opp == null) return (false, "الفرصة غير موجودة.", null);
 
-        if (opp.StageId != LostStageId && opp.StageId != NotInterestedStageId)
+        if (opp.StageId != _lostStageId && opp.StageId != _notInterestedStageId)
             return (false, "الفرصة ليست في مرحلة خسارة — لا يمكن استردادها.", null);
 
-        if (dto.NewStageId == LostStageId || dto.NewStageId == NotInterestedStageId)
+        if (dto.NewStageId == _lostStageId || dto.NewStageId == _notInterestedStageId)
             return (false, "اختر مرحلة بيع فعلية (وليست مرحلة خسارة).", null);
 
         var stage = await db.SalesStages.AsNoTracking()
@@ -1430,6 +1476,18 @@ public class RecoveryService
             .Where(p => p.PartyId == opp.PartyId)
             .Select(p => p.PartyName)
             .FirstOrDefaultAsync() ?? $"عميل #{opp.PartyId}";
+
+        // ⭐ المسؤول الجديد (اختياري): افتراضياً تبقى الفرصة مع مالكها
+        int? assignedId = dto.AssignedEmployeeId ?? opp.EmployeeId;
+        string? assignedName = null;
+        if (assignedId.HasValue)
+        {
+            assignedName = await db.Employees.AsNoTracking()
+                .Where(e => e.EmployeeId == assignedId.Value)
+                .Select(e => e.FullName)
+                .FirstOrDefaultAsync();
+        }
+        var assignedSuffix = assignedName != null ? $" — أُسندت إلى {assignedName}" : "";
 
         var followUp = dto.NextFollowUpDate ?? DateTime.Today.AddDays(3);
 
@@ -1461,6 +1519,7 @@ public class RecoveryService
             opp.ClosedAt = null;
             opp.ClosedBy = null;
             if (dto.ExpectedValue.HasValue) opp.ExpectedValue = dto.ExpectedValue;
+            if (assignedId.HasValue) opp.EmployeeId = assignedId.Value;
             opp.NextFollowUpDate = followUp;
             opp.LastContactDate = now;
             opp.LastUpdatedBy = actor;
@@ -1472,7 +1531,7 @@ public class RecoveryService
                 PartyId = opp.PartyId,
                 EmployeeId = actorEmpId != 0 ? actorEmpId : opp.EmployeeId,
                 InteractionDate = now,
-                Summary = $"🔁 استرداد: عاد العميل بعد {oldStageAr} إلى {stageAr}",
+                Summary = $"🔁 استرداد: عاد العميل بعد {oldStageAr} إلى {stageAr}{assignedSuffix}",
                 StageBeforeId = oldStage,
                 StageAfterId = dto.NewStageId,
                 NextFollowUpDate = followUp,
@@ -1487,7 +1546,7 @@ public class RecoveryService
             var newOpp = new SalesOpportunity
             {
                 PartyId = opp.PartyId,
-                EmployeeId = opp.EmployeeId,
+                EmployeeId = assignedId ?? opp.EmployeeId,
                 SourceId = opp.SourceId,
                 CategoryId = opp.CategoryId,
                 InterestedProduct = dto.NewInterestedProduct ?? opp.InterestedProduct,
@@ -1533,7 +1592,7 @@ public class RecoveryService
                 PartyId = opp.PartyId,
                 EmployeeId = actorEmpId != 0 ? actorEmpId : opp.EmployeeId,
                 InteractionDate = now,
-                Summary = $"🔁 استرداد: عاد العميل بفرصة جديدة #{newId} بعد {oldStageAr} إلى {stageAr}",
+                Summary = $"🔁 استرداد: عاد العميل بفرصة جديدة #{newId} بعد {oldStageAr} إلى {stageAr}{assignedSuffix}",
                 StageBeforeId = opp.StageId,
                 StageAfterId = dto.NewStageId,
                 NextFollowUpDate = followUp,
@@ -1549,8 +1608,29 @@ public class RecoveryService
         await _audit.LogAsync("SalesOpportunities", "Recovery/Revive",
             dto.OpportunityId.ToString(),
             null,
-            new { dto.OpportunityId, PartyId = opp.PartyId, Mode = dto.SameOpportunity ? "SameOpportunity" : "NewOpportunity", NewStageId = dto.NewStageId, NewOpportunityId = newId, ExpectedValue = dto.ExpectedValue, Actor = actor },
+            new { dto.OpportunityId, PartyId = opp.PartyId, Mode = dto.SameOpportunity ? "SameOpportunity" : "NewOpportunity", NewStageId = dto.NewStageId, NewOpportunityId = newId, ExpectedValue = dto.ExpectedValue, AssignedTo = assignedId, AssignedToName = assignedName, Actor = actor },
             actor);
+
+        // ⭐ إشعار المسؤول الجديد — إلا إذا كان هو نفسه منفّذ الاسترداد (لا إشعار للذات)
+        if (assignedId.HasValue && assignedId.Value != actorEmpId)
+        {
+            var assignedUser = await db.Users.AsNoTracking()
+                .Where(u => u.EmployeeId == assignedId.Value && u.IsActive == true)
+                .Select(u => u.Username)
+                .FirstOrDefaultAsync();
+            if (!string.IsNullOrWhiteSpace(assignedUser))
+            {
+                var refOppId = newId ?? dto.OpportunityId;
+                await _notifications.AddAsync(
+                    "🔁 فرصة مستردة أُسندت إليك",
+                    $"العميل {partyName} عاد — الفرصة #{refOppId} أُسندت إليك في مرحلة {stageAr}{assignedSuffix}، موعد المتابعة {followUp:yyyy-MM-dd}.",
+                    assignedUser,
+                    actor,
+                    "crm/leads",
+                    null,
+                    refOppId);
+            }
+        }
 
         InvalidateReportCache(); // حالة الفرصة/العودة تغيّرت — التقرير يُبنى من جديد عند الطلب التالي
         return (true,
@@ -1578,12 +1658,28 @@ public class RecoveryService
     // ═══════════════════════════════════════════════════════════
     public async Task<List<SalesStage>> GetRecoveryStagesAsync()
     {
+        await EnsureStageIdsAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
         return await db.SalesStages.AsNoTracking()
             .Where(s => s.IsActive
-                && s.StageId != LostStageId
-                && s.StageId != NotInterestedStageId)
+                && s.StageId != _lostStageId
+                && s.StageId != _notInterestedStageId)
             .OrderBy(s => s.StageOrder)
+            .ToListAsync();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  قائمة المسؤولين المحتملين بعد الاسترداد (مبيعات + خدمة عملاء نشطين)
+    // ═══════════════════════════════════════════════════════════
+    public async Task<List<RecoveryEmployeeOptionDto>> GetAssignableEmployeesAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var departments = new[] { "المبيعات", CsDepartment };
+        return await db.Employees.AsNoTracking()
+            .Where(e => departments.Contains(e.Department!)
+                && (e.Status == ActiveEmployeeStatus || e.Status == "Active"))
+            .OrderBy(e => e.FullName)
+            .Select(e => new RecoveryEmployeeOptionDto { EmployeeId = e.EmployeeId, FullName = e.FullName })
             .ToListAsync();
     }
 

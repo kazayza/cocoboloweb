@@ -10,6 +10,12 @@ public class PriceListRowDto
     public decimal? PremiumPrice { get; set; }
     public decimal? ElitePrice { get; set; }
     public int PricingStatusId { get; set; }
+    public bool IsWebsite { get; set; }              // 🌐 منتجات الموقع (2026-09-17)
+
+    // 💰 التكاليف — تُعرض لذوي الصلاحية فقط (Admin/AccountManager/Account) — 2026-09-17
+    public decimal? StdCost { get; set; }
+    public decimal? PremiumCost { get; set; }
+    public decimal? EliteCost { get; set; }
 
     public bool HasAnyPrice => (StdPrice ?? 0) > 0 || (PremiumPrice ?? 0) > 0 || (ElitePrice ?? 0) > 0;
 }

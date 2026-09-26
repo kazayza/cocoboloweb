@@ -1,0 +1,921 @@
+@page "/executive-cockpit"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using ApexCharts
+@using Color = MudBlazor.Color
+@using Size = MudBlazor.Size
+@using Align = MudBlazor.Align
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+@inject IExecutiveCockpitService CockpitService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>لوحة القيادة التنفيذية</PageTitle>
+
+@if (_loading)
+{
+    <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-8">
+        <MudStack AlignItems="AlignItems.Center" Spacing="3" Style="min-height:300px; justify-content:center;">
+            <MudProgressCircular Indeterminate="true" Color="Color.Warning" Size="Size.Large" />
+            <MudText Typo="Typo.body1" Color="Color.Secondary">جارٍ تجهيز لوحة القيادة التنفيذية...</MudText>
+        </MudStack>
+    </MudContainer>
+}
+else if (_noAccess)
+{
+    <MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+            ليس لديك صلاحية للدخول — هذه الشاشة لرئيس مجلس الإدارة (Admin) أو بإذن «لوحة القيادة التنفيذية».
+        </MudAlert>
+    </MudContainer>
+}
+else if (_data != null)
+{
+<div class="ec-root">
+    <div class="ec-wrap">
+
+        @* ══ Hero ══ *@
+        <div class="ec-hero">
+            <div class="ec-hero-side">
+                <MudIcon Icon="@Icons.Material.Filled.WorkspacePremium" Class="ec-crown" Color="Color.Warning" />
+                <div>
+                    <h1>لوحة القيادة التنفيذية</h1>
+                    <div class="ec-hero-sub">بيانات لحظية من النظام · آخر تحديث @_data.GeneratedAt.ToString("hh:mm tt")</div>
+                </div>
+            </div>
+            <div class="ec-ptabs">
+                @foreach (var p in _periods)
+                {
+                    <button class="ec-ptab @(_period == p.Key ? "on" : "")" @onclick="() => SetPeriodAsync(p.Key)">@p.Value</button>
+                }
+            </div>
+        </div>
+
+        @* ══ القصة ══ *@
+        <div class="ec-story">
+            <MudIcon Icon="@Icons.Material.Filled.Bolt" Color="Color.Warning" Style="font-size:1.5rem;" />
+            <div style="flex:1;">@_data.Story</div>
+            @if (_data.DecisionsPending > 0)
+            {
+                <button class="ec-act" @onclick="OpenDecisions">@_data.DecisionsPending بند في انتظارك <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Style="font-size:.9rem; vertical-align:-2px;" /></button>
+            }
+        </div>
+
+        @* ══ تنبيه الموظفين المتوقفين ══ *@
+        @if (DormantEmployees().Count > 0)
+        {
+            <div class="ec-dormant">
+                <div class="ec-dormant-head">
+                    <MudIcon Icon="@Icons.Material.Filled.ReportProblem" Color="Color.Error" Style="font-size:1.4rem;" />
+                    <b>موظفون ساكنون يحتاجون قرارًا (@DormantEmployees().Count)</b>
+                    <small>بلا أي إجراء في النظام منذ 3 أيام أو أكثر</small>
+                </div>
+                <div class="ec-dormant-list">
+                    @foreach (var e in DormantEmployees())
+                    {
+                        <div class="ec-dormant-item" @onclick="() => OpenTimelineAsync(e.EmployeeId)">
+                            <span class="ec-avatar">@(e.FullName.FirstOrDefault())</span>
+                            <div>
+                                <b>@e.FullName</b>
+                                <div class="ec-dormant-meta">@e.JobTitle · آخر نشاط: @e.LastActivityText · حضور: @e.Attendance</div>
+                            </div>
+                            <span class="ec-dormant-go">الخط الزمني <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Style="font-size:.8rem; vertical-align:-2px;" /></span>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
+        @* ══ 1) نبض الشركة ══ *@
+        <div class="sec-h"><span class="dot"></span> نبض الشركة — @_data.PeriodLabel <small>مقارنة بالفترة السابقة ونفس الفترة سنويًا</small></div>
+        <div class="ec-kpis">
+            @foreach (var k in KpiCards())
+            {
+                <div class="ec-kpi">
+                    <div class="lab"><MudIcon Icon="@k.Icon" Color="Color.Warning" Style="font-size:1rem; vertical-align:-3px;" /> @k.Label</div>
+                    <div class="val">@k.Value.ToString("N0") <small>ج</small></div>
+                    @if (k.ShowCmp)
+                    {
+                        <div class="cmps">
+                            @CmpChip(k.PrevPct, k.Invert, "عن السابق")
+                            @CmpChip(k.YearPct, k.Invert, "سنويًا")
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="cmps"><span class="ec-cmp ec-flat">الرصيد اللحظي لكل الخزن</span></div>
+                    }
+                </div>
+            }
+        </div>
+
+        @* ══ 2) بايبلاين الفرص وB2B ══ *@
+        <div class="ec-pipe">
+            <div class="ec-pipe-card" @onclick="@(() => Nav.NavigateTo("/crm/opportunities"))">
+                <div class="n">@_data.PipelineOpen</div>
+                <div class="t"><MudIcon Icon="@Icons.Material.Filled.BusinessCenter" Style="font-size:.9rem; vertical-align:-2px;" /> فرصة بيعية مفتوحة</div>
+            </div>
+            <div class="ec-pipe-card" @onclick="@(() => Nav.NavigateTo("/crm/opportunities"))">
+                <div class="n">@_data.PipelineValue.ToString("N0") <small>ج</small></div>
+                <div class="t"><MudIcon Icon="@Icons.Material.Filled.Paid" Style="font-size:.9rem; vertical-align:-2px;" /> قيمتها المتوقعة</div>
+            </div>
+            <div class="ec-pipe-card @( _data.PipelineStalled > 0 ? "warn" : "")" @onclick="@(() => Nav.NavigateTo("/crm/opportunities"))">
+                <div class="n">@_data.PipelineStalled</div>
+                <div class="t"><MudIcon Icon="@Icons.Material.Filled.Schedule" Style="font-size:.9rem; vertical-align:-2px;" /> متابعة متأخرة على فرص</div>
+            </div>
+            <div class="ec-pipe-card @(_data.B2bPending > 0 ? "warn" : "")" @onclick="@(() => Nav.NavigateTo("/admin/b2b/requests"))">
+                <div class="n">@_data.B2bPending</div>
+                <div class="t"><MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Style="font-size:.9rem; vertical-align:-2px;" /> طلبات B2B جديدة/قيد المراجعة</div>
+            </div>
+        </div>
+
+        @* ══ 3) الاتجاهات + التوقع ══ *@
+        <div class="sec-h"><span class="dot"></span> الاتجاهات والتوقعات <small>— 12 شهر</small></div>
+        <MudGrid Spacing="2" Class="mb-3">
+            <MudItem xs="12" md="8">
+                <div class="ec-card">
+                    <ApexChart TItem="ExecutiveTrendPointDto"
+                               Options="_trendOpts"
+                               Height="300"
+                               Width="@("100%")">
+                        <ApexPointSeries TItem="ExecutiveTrendPointDto" Items="_data.Trend"
+                                         Name="المبيعات" SeriesType="SeriesType.Area"
+                                         XValue="@(d => d.Label)" YValue="@(d => (decimal?)d.Sales)" />
+                        <ApexPointSeries TItem="ExecutiveTrendPointDto" Items="_data.Trend"
+                                         Name="المحصَّل" SeriesType="SeriesType.Area"
+                                         XValue="@(d => d.Label)" YValue="@(d => (decimal?)d.Collected)" />
+                        <ApexPointSeries TItem="ExecutiveTrendPointDto" Items="_data.Trend"
+                                         Name="المشتريات" SeriesType="SeriesType.Line"
+                                         XValue="@(d => d.Label)" YValue="@(d => (decimal?)d.Purchases)" />
+                    </ApexChart>
+                </div>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <div class="ec-card ec-center" style="height:100%;">
+                    <MudText Typo="Typo.subtitle2" Style="color:#93a4bd;"><MudIcon Icon="@Icons.Material.Filled.Insights" Color="Color.Warning" Style="font-size:1rem; vertical-align:-2px;" /> توقع إقفال الشهر الحالي</MudText>
+                    <svg width="190" height="120" viewBox="0 0 190 120">
+                        <path d="M 20 100 A 75 75 0 0 1 170 100" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="14" stroke-linecap="round" />
+                        <path d="@GaugeArc()" fill="none" stroke="@GaugeColor()" stroke-width="14" stroke-linecap="round" />
+                        <text x="95" y="88" fill="@GaugeColor()" font-size="24" font-weight="900" text-anchor="middle">@ForecastPctDisplay()</text>
+                        <text x="95" y="108" fill="#93a4bd" font-size="10" text-anchor="middle">مقارنة بالشهر الماضي</text>
+                    </svg>
+                    <div class="ec-gauge-num">@_data.ForecastValue.ToString("N0") ج</div>
+                    <div class="ec-gauge-sub">على معدل أول @_dayOfMonth يوم — الشهر الماضي @_data.LastMonthSales.ToString("N0") ج</div>
+                </div>
+            </MudItem>
+        </MudGrid>
+
+        @* ══ 4) الفروع + الأكثر نشاطًا ══ *@
+        <MudGrid Spacing="2" Class="mb-3">
+            <MudItem xs="12" md="6">
+                <div class="ec-card">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2"><MudIcon Icon="@Icons.Material.Filled.Storefront" Color="Color.Info" Style="font-size:1rem; vertical-align:-2px;" /> المبيعات حسب الفرع — @_data.PeriodLabel</MudText>
+                    @if (_data.BranchSales.Count > 0)
+                    {
+                        <ApexChart TItem="ExecutiveBranchSaleDto" Options="_branchOpts" Height="250" Width="@("100%")">
+                            <ApexPointSeries TItem="ExecutiveBranchSaleDto" Items="_data.BranchSales"
+                                             Name="مبيعات" SeriesType="SeriesType.Bar"
+                                             XValue="@(d => d.Name)" YValue="@(d => (decimal?)d.Value)" />
+                        </ApexChart>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Style="color:#93a4bd;">لا مبيعات مرتبطة بفروع في هذه الفترة</MudText>
+                    }
+                </div>
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <div class="ec-card">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2"><MudIcon Icon="@Icons.Material.Filled.BarChart" Color="Color.Warning" Style="font-size:1rem; vertical-align:-2px;" /> الأكثر إجراءً في النظام (30 يوم)</MudText>
+                    <ApexChart TItem="ExecutiveEmployeeRowDto" Options="_actOpts" Height="250" Width="@("100%")">
+                        <ApexPointSeries TItem="ExecutiveEmployeeRowDto" Items="TopActive()"
+                                         Name="إجراء" SeriesType="SeriesType.Bar"
+                                         XValue="@(d => d.FullName)" YValue="@(d => (decimal?)d.ActionsMonth)" />
+                    </ApexChart>
+                </div>
+            </MudItem>
+        </MudGrid>
+
+        @* ══ 5) لوحة الشرف ══ *@
+        <div class="sec-h"><span class="dot"></span> لوحة الشرف — المبيعات <small>— إنتاج الشهر الحالي</small></div>
+        <MudGrid Spacing="2" Class="mb-3">
+            <MudItem xs="12" md="6">
+                <div class="ec-card">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2"><MudIcon Icon="@Icons.Material.Filled.EmojiEvents" Color="Color.Warning" Style="font-size:1rem; vertical-align:-2px;" /> الأعلى إنتاجًا</MudText>
+                    @foreach (var (e, i) in TopSales().Select((e, i) => (e, i)))
+                    {
+                        <div class="ec-lb" @onclick="() => OpenTimelineAsync(e.EmployeeId)">
+                            <span class="ec-rank rk@(i + 1)">@(i + 1)</span>
+                            <div style="flex:1;">
+                                <div class="ec-lb-name">@e.FullName <small>@e.JobTitle</small></div>
+                                <div class="ec-lb-bar"><i style="width:@(TopMax() == 0 ? 0 : (int)(e.MonthSales / TopMax() * 100))%; background:linear-gradient(90deg,#d4af37,#ffd700);"></i></div>
+                            </div>
+                            <b class="ec-lb-val">@e.MonthSales.ToString("N0") ج</b>
+                        </div>
+                    }
+                    @if (TopSales().Count == 0)
+                    {
+                        <MudText Typo="Typo.body2" Style="color:#93a4bd;">لا مبيعات بعد هذا الشهر</MudText>
+                    }
+                </div>
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <div class="ec-card">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2"><MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Style="font-size:1rem; vertical-align:-2px;" /> يحتاجون متابعة</MudText>
+                    @foreach (var e in BottomSales())
+                    {
+                        <div class="ec-lb" @onclick="() => OpenTimelineAsync(e.EmployeeId)">
+                            <span class="ec-rank rkx"><MudIcon Icon="@(e.MonthSales == 0 ? Icons.Material.Filled.PriorityHigh : Icons.Material.Filled.WarningAmber)" Style="font-size:.95rem;" /></span>
+                            <div style="flex:1;">
+                                <div class="ec-lb-name">@e.FullName <small>@e.JobTitle</small></div>
+                                <div class="ec-lb-bar"><i style="width:@(TopMax() == 0 ? 6 : Math.Max(6, (int)(e.MonthSales / TopMax() * 100)))%; background:linear-gradient(90deg,#7a3b3b,#ef5350);"></i></div>
+                            </div>
+                            <b class="ec-lb-val" style="color:#ef5350;">@e.MonthSales.ToString("N0") ج</b>
+                        </div>
+                    }
+                    @if (BottomSales().Count == 0)
+                    {
+                        <MudText Typo="Typo.body2" Style="color:#93a4bd;">—</MudText>
+                    }
+                </div>
+            </MudItem>
+        </MudGrid>
+
+        @* ══ 6) الفريق ══ *@
+        <div class="sec-h"><span class="dot"></span> فريق العمل <small>— الحرارة = نشاط 7 أيام · اضغط الصف للخط الزمني</small></div>
+        <div class="ec-chips mb-2">
+            @foreach (var f in _filters)
+            {
+                <button class="ec-chip @(_filter == f.Key ? "on" : "")" @onclick="() => SetFilter(f.Key)">
+                    <span class="ec-dot dc-@f.Key"></span>@f.Value @if (f.Key == "all") { <text>(@_data.Employees.Count)</text> } @if (f.Key == "red") { <text>(@DormantEmployees().Count)</text> }
+                </button>
+            }
+        </div>
+        <div class="ec-card mb-4" style="padding:0; overflow:hidden;">
+            <MudTable T="ExecutiveEmployeeRowDto" Items="FilteredEmployees()" Dense="true" Hover="true" Striped="true"
+                      Breakpoint="Breakpoint.Sm" Elevation="0" OnRowClick="@(r => OpenTimelineAsync(r.Item.EmployeeId))">
+                <HeaderContent>
+                    <MudTh>الموظف</MudTh>
+                    <MudTh>الوظيفة</MudTh>
+                    <MudTh>الحضور اليوم</MudTh>
+                    <MudTh>نشاط 7 أيام</MudTh>
+                    <MudTh>إجراءات اليوم</MudTh>
+                    <MudTh>آخر نشاط</MudTh>
+                    <MudTh Style="text-align:end;">إنتاج الشهر</MudTh>
+                    <MudTh>المهام (متأخر)</MudTh>
+                    <MudTh>الحالة</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="الموظف">
+                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                            <span class="ec-avatar">@context.FullName.FirstOrDefault()</span>
+                            <b>@context.FullName</b>
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="الوظيفة">@context.JobTitle</MudTd>
+                    <MudTd DataLabel="الحضور">@context.Attendance</MudTd>
+                    <MudTd DataLabel="نشاط 7 أيام">
+                        @if (context.Status == "off" || context.Status == "gray")
+                        {
+                            <span style="color:#93a4bd;">—</span>
+                        }
+                        else
+                        {
+                            <span class="ec-heat">
+                                @foreach (var h in context.Heat7)
+                                {
+                                    <i style="background:@HeatColor(h)"></i>
+                                }
+                            </span>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="إجراءات اليوم"><b>@context.ActionsToday</b></MudTd>
+                    <MudTd DataLabel="آخر نشاط">
+                        <span style="@(context.Status == "red" ? "color:#ef5350; font-weight:700;" : "")">@context.LastActivityText</span>
+                    </MudTd>
+                    <MudTd DataLabel="إنتاج الشهر" Style="text-align:end;">
+                        @if (context.IsSales)
+                        {
+                            <span>@context.MonthSales.ToString("N0") ج</span>
+                        }
+                        else
+                        {
+                            <span style="color:#93a4bd;">—</span>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="المهام">
+                        @context.TasksPending
+                        @if (context.TasksOverdue > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined">متأخر @context.TasksOverdue</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="الحالة">
+                        <span class="ec-badge @BadgeClass(context.Status)"><i class="bd-dot"></i>@BadgeText(context.Status)</span>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>لا موظفين بهذه الحالة</NoRecordsContent>
+            </MudTable>
+        </div>
+
+        @* ══ 7) لوحة المدير العام ══ *@
+        <div class="sec-h"><span class="dot"></span> لوحة المدير العام <small>— قياس بالأثر</small></div>
+        <MudGrid Spacing="2" Class="mb-3">
+            <MudItem xs="12" sm="6" md="3">
+                <div class="ec-card ec-gm">
+                    <div class="ec-gm-h"><MudIcon Icon="@Icons.Material.Filled.Gavel" Color="Color.Warning" Style="font-size:.95rem; vertical-align:-2px;" /> آخر قراراته وإجراءاته</div>
+                    @if (_data.Gm.Found)
+                    {
+                        <MudText Typo="Typo.body2" Class="mb-1"><b>@_data.Gm.FullName</b> — @_data.Gm.LastActivityText</MudText>
+                        @foreach (var a in _data.Gm.Recent)
+                        {
+                            <div class="ec-gm-row"><span>@a.When</span><b>@a.What</b></div>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Style="color:#93a4bd;">
+                            لم يتم التعرف على المدير العام — اكتب «مدير عام» في حقل الوظيفة ببيانات الموظف.
+                        </MudText>
+                    }
+                </div>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <div class="ec-card ec-gm">
+                    <div class="ec-gm-h"><MudIcon Icon="@Icons.Material.Filled.Inbox" Color="Color.Info" Style="font-size:.95rem; vertical-align:-2px;" /> طابور الانتظار عنده</div>
+                    <div class="ec-gm-row"><span>طلبات تغيير أسعار</span><b style="color:@(_data.Gm.PendingPrice > 0 ? "#ef5350" : "inherit")">@_data.Gm.PendingPrice</b></div>
+                    <div class="ec-gm-row"><span>شكاوى مصعَّدة</span><b style="color:@(_data.Gm.EscalatedComplaints > 0 ? "#ef5350" : "inherit")">@_data.Gm.EscalatedComplaints</b></div>
+                    <div class="ec-gm-row"><span>متابعات فرص متأخرة</span><b style="color:@(_data.PipelineStalled > 0 ? "#ffc94d" : "inherit")">@_data.PipelineStalled</b></div>
+                    <div class="ec-gm-row"><span>إجراءاته آخر 7 أيام</span><b>@_data.Gm.ActionsWeek</b></div>
+                </div>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <div class="ec-card ec-gm">
+                    <div class="ec-gm-h"><MudIcon Icon="@Icons.Material.Filled.Groups" Color="Color.Success" Style="font-size:.95rem; vertical-align:-2px;" /> فريقه في سطر</div>
+                    <div class="ec-gm-row"><span>مبيعات الفريق (شهر)</span><b>@_data.Gm.TeamSalesMonth.ToString("N0") ج</b></div>
+                    <div class="ec-gm-row"><span>نشطون اليوم (لهم حساب)</span><b style="color:#4caf50;">@_data.Gm.TeamActiveToday / @_data.Gm.TeamTotal</b></div>
+                    <div class="ec-gm-row"><span>ساكنون</span><b style="color:@(_data.DormantCount > 0 ? "#ef5350" : "inherit")">@_data.DormantCount</b></div>
+                </div>
+            </MudItem>
+            <MudItem xs="12" sm="6" md="3">
+                <div class="ec-card ec-gm">
+                    <div class="ec-gm-h"><MudIcon Icon="@Icons.Material.Filled.Factory" Color="Color.Info" Style="font-size:.95rem; vertical-align:-2px;" /> نبض التشغيل</div>
+                    <div class="ec-gm-row"><span>أوامر مصنع بانتظار الاستلام</span><b>@_data.Ops.FactoryOpen</b></div>
+                    <div class="ec-gm-row"><span>استلامات المصنع (شهر)</span><b>@_data.Ops.FactoryMonth</b></div>
+                    <div class="ec-gm-row"><span>Leads جديدة (شهر)</span><b>@_data.Ops.NewLeads</b></div>
+                </div>
+            </MudItem>
+        </MudGrid>
+
+        @* ══ 8) الاستثناءات ══ *@
+        <div class="sec-h"><span class="dot"></span> استثناءات تحتاج قرارك</div>
+        <div class="ec-exc mb-4">
+            <div class="ec-exc-card red" @onclick="@(() => Nav.NavigateTo("/sales-delivery-status"))">
+                <div class="n">@_data.Exceptions.Debts30</div>
+                <div class="t">مديونات +30 يوم<br>@_data.Exceptions.Debts30Amount.ToString("N0") ج</div>
+            </div>
+            <div class="ec-exc-card red" @onclick="@(() => Nav.NavigateTo("/sales-delivery-status"))">
+                <div class="n">@_data.Exceptions.LateDeliveries</div>
+                <div class="t">تسليم متأخر<br>عن موعده</div>
+            </div>
+            <div class="ec-exc-card yellow" @onclick="@(() => Nav.NavigateTo("/sales/price-requests"))">
+                <div class="n">@_data.Exceptions.PendingPrice</div>
+                <div class="t">طلبات أسعار<br>معلقة</div>
+            </div>
+            <div class="ec-exc-card yellow" @onclick="@(() => Snackbar.Add("راجع تقرير المخزون — أصناف برصيد سالب تحتاج تسوية", Severity.Info))">
+                <div class="n">@_data.Exceptions.NegativeStock</div>
+                <div class="t">أصناف برصيد سالب</div>
+            </div>
+            <div class="ec-exc-card blue" @onclick="@(() => Nav.NavigateTo("/crm/leads/dashboard"))">
+                <div class="n">@_data.Exceptions.StalledLeads</div>
+                <div class="t">Lead بلا متابعة<br>+10 أيام</div>
+            </div>
+            <div class="ec-exc-card blue" @onclick="@(() => Snackbar.Add($"{_data.Exceptions.OpenComplaints} شكوى مفتوحة لدى رعاية العملاء", Severity.Info))">
+                <div class="n">@_data.Exceptions.OpenComplaints</div>
+                <div class="t">شكاوى عملاء<br>مفتوحة</div>
+            </div>
+        </div>
+
+        <div class="ec-note">
+            كل الأرقام لحظية من: الفواتير · المصروفات · الخزائن · الفرص البيعية · B2B · سجل التدقيق · الحضور · المهام · العملاء المحتملين · الشكاوى — شاشة للقراءة فقط
+        </div>
+    </div>
+</div>
+}
+
+@* ══ دايلوج الخط الزمني ══ *@
+<MudDialog @bind-Visible="_showTimeline" Options="_timelineDlgOpts">
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Timeline" Color="Color.Warning" />
+            <MudText Typo="Typo.h6">@_timelineName</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        @if (_timelineLoading)
+        {
+            <MudStack AlignItems="AlignItems.Center" Style="min-height:150px; justify-content:center;">
+                <MudProgressCircular Indeterminate="true" Color="Color.Warning" />
+            </MudStack>
+        }
+        else
+        {
+            <MudTimeline TimelineOrientation="TimelineOrientation.Vertical" TimelinePosition="TimelinePosition.Start">
+                @foreach (var row in _timelineRows)
+                {
+                    <MudTimelineItem Size="Size.Small"
+                                     Color="@(row.Kind == "invoice" ? Color.Warning : Color.Info)"
+                                     Variant="Variant.Outlined">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@row.When.ToString("yyyy/MM/dd hh:mm tt")</MudText>
+                        <MudText Typo="Typo.body2">@row.What</MudText>
+                    </MudTimelineItem>
+                }
+                @if (_timelineRows.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">لا يوجد سجل بعد</MudText>
+                }
+            </MudTimeline>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showTimeline = false)">إغلاق</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@* ══ دايلوج القرارات ══ *@
+<MudDialog @bind-Visible="_showDecisions">
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Gavel" Color="Color.Warning" />
+            <MudText Typo="Typo.h6">بنود في انتظارك</MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        @if (_data != null)
+        {
+            <MudList T="string" Dense="true">
+                @if (_data.Exceptions.PendingPrice > 0)
+                {
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.RequestQuote" IconColor="Color.Error">
+                        @_data.Exceptions.PendingPrice طلب تغيير أسعار معلق — <MudLink Href="/sales/price-requests">اعتماد/رفض</MudLink>
+                    </MudListItem>
+                }
+                @if (_data.Gm.EscalatedComplaints > 0)
+                {
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.ReportProblem" IconColor="Color.Error">
+                        @_data.Gm.EscalatedComplaints شكوى مصعَّدة للمدير العام
+                    </MudListItem>
+                }
+                @if (_data.DormantCount > 0)
+                {
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.PersonOff" IconColor="Color.Warning">
+                        @_data.DormantCount موظف ساكن 3+ أيام — إنذار / متابعة / إعادة توزيع
+                    </MudListItem>
+                }
+            </MudList>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _showDecisions = false)">إغلاق</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    /* ═══ جزيرة تنفيذية داكنة — مستقلة عن ثيم التطبيق ═══ */
+    .ec-root { background: radial-gradient(1200px 500px at 80% -10%, #14263f 0%, transparent 60%), linear-gradient(180deg, #0a1628, #04080f 55%);
+               border: 1px solid rgba(255,215,0,.18); border-radius: 18px; padding: 6px; margin: 12px 0 30px; color: #eef3fa; }
+    .ec-wrap { max-width: 1400px; margin: 0 auto; padding: 14px 16px 20px; }
+    .ec-root b, .ec-root strong { font-weight: 800; }
+
+    .ec-hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+               padding: 16px 18px; margin-bottom: 16px; border-radius: 14px;
+               background: linear-gradient(135deg, #060C18 0%, #0D1B30 60%, #132A47 100%); border-bottom: 2px solid var(--gold); }
+    .ec-hero-side { display: flex; align-items: center; gap: 12px; }
+    .ec-crown { font-size: 2.2rem !important; color: var(--gold); }
+    .ec-hero h1 { font-size: 1.45rem; font-weight: 900; margin: 0; }
+    .ec-hero-sub { color: #93a4bd; font-size: .8rem; margin-top: 4px; }
+
+    .ec-ptabs { display: flex; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: 10px; overflow: hidden; }
+    .ec-ptab { background: none; border: none; color: #93a4bd; padding: 8px 15px; cursor: pointer; font-family: inherit; font-size: .82rem; transition: .2s; white-space: nowrap; }
+    .ec-ptab.on { background: linear-gradient(180deg, #ffd700, #e6c34a); color: #101826; font-weight: 800; }
+
+    .ec-story { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px solid rgba(255,215,0,.35);
+                border-inline-start: 4px solid var(--gold); border-radius: 12px; padding: 12px 16px; margin-bottom: 16px;
+                background: linear-gradient(90deg, rgba(255,215,0,.08), rgba(255,215,0,.01)); line-height: 1.9; }
+    .ec-act { background: linear-gradient(180deg,#ffd700,#e6c34a); color: #101826; border: none; font-family: inherit; font-weight: 800;
+              padding: 8px 16px; border-radius: 10px; cursor: pointer; font-size: .8rem; box-shadow: 0 4px 14px rgba(255,215,0,.25); }
+
+    /* الساكنون */
+    .ec-dormant { border: 1px solid rgba(239,83,80,.5); border-radius: 14px; margin-bottom: 16px; overflow: hidden;
+                  background: linear-gradient(90deg, rgba(239,83,80,.12), rgba(239,83,80,.02)); }
+    .ec-dormant-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; color: #ff8a80; font-size: .95rem;
+                       border-bottom: 1px dashed rgba(239,83,80,.3); flex-wrap: wrap; }
+    .ec-dormant-head small { color: #93a4bd; font-weight: 400; font-size: .72rem; }
+    .ec-dormant-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; padding: 10px 14px; }
+    .ec-dormant-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; cursor: pointer;
+                       background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06); transition: .15s; }
+    .ec-dormant-item:hover { border-color: rgba(239,83,80,.5); background: rgba(239,83,80,.08); }
+    .ec-dormant-meta { color: #93a4bd; font-size: .7rem; margin-top: 2px; }
+    .ec-dormant-go { margin-inline-start: auto; color: #ff8a80; font-size: .72rem; white-space: nowrap; }
+
+    .sec-h { display: flex; align-items: center; gap: 8px; margin: 20px 0 10px; font-size: 1.05rem; font-weight: 800; flex-wrap: wrap; }
+    .sec-h .dot { width: 8px; height: 20px; border-radius: 3px; background: linear-gradient(180deg, var(--gold), transparent); display: inline-block; }
+    .sec-h small { color: #93a4bd; font-weight: 400; font-size: .74rem; }
+
+    .ec-card { background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.09); border-radius: 14px; padding: 14px; transition: .2s; }
+    .ec-card:hover { border-color: rgba(255,215,0,.3); }
+    .ec-center { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 4px; }
+    .ec-gauge-num { font-size: 1.5rem; font-weight: 900; color: var(--gold); }
+    .ec-gauge-sub { font-size: .74rem; color: #93a4bd; line-height: 1.8; }
+
+    /* KPIs */
+    .ec-kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+    .ec-kpi { background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.09); border-radius: 14px; padding: 14px;
+              position: relative; transition: .2s; overflow: hidden; }
+    .ec-kpi:hover { transform: translateY(-2px); border-color: rgba(255,215,0,.4); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    .ec-kpi::after { content: ''; position: absolute; inset-inline-start: 0; top: 0; bottom: 0; width: 3px; background: var(--gold); opacity: .6; }
+    .ec-kpi .lab { color: #93a4bd; font-size: .72rem; margin-bottom: 6px; }
+    .ec-kpi .val { font-size: 1.28rem; font-weight: 900; letter-spacing: -.5px; }
+    .ec-kpi .val small { font-size: .62rem; color: #93a4bd; font-weight: 400; }
+    .ec-kpi .cmps { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+    .ec-cmp { font-size: .66rem; padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12); white-space: nowrap; }
+    .ec-up { color: #4caf50; border-color: rgba(76,175,80,.4) !important; }
+    .ec-down { color: #ef5350; border-color: rgba(239,83,80,.4) !important; }
+    .ec-flat { color: #93a4bd; }
+
+    /* Pipeline */
+    .ec-pipe { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0 6px; }
+    .ec-pipe-card { background: rgba(255,255,255,.045); border: 1px solid rgba(94,179,255,.25); border-radius: 14px; padding: 12px 14px;
+                    cursor: pointer; transition: .2s; text-align: center; }
+    .ec-pipe-card:hover { transform: translateY(-2px); border-color: rgba(94,179,255,.5); }
+    .ec-pipe-card .n { font-size: 1.3rem; font-weight: 900; color: #5eb3ff; }
+    .ec-pipe-card .n small { font-size: .65rem; color: #93a4bd; }
+    .ec-pipe-card .t { font-size: .72rem; color: #93a4bd; margin-top: 4px; }
+    .ec-pipe-card.warn { border-color: rgba(255,201,77,.45); }
+    .ec-pipe-card.warn .n { color: #ffc94d; }
+
+    /* Leaderboard */
+    .ec-lb { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 10px; cursor: pointer; transition: .15s; }
+    .ec-lb:hover { background: rgba(255,215,0,.06); }
+    .ec-rank { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+               font-weight: 900; font-size: .8rem; border: 1.5px solid; flex-shrink: 0; }
+    .rk1 { background: rgba(255,215,0,.15); color: #ffd700; border-color: rgba(255,215,0,.65); }
+    .rk2 { background: rgba(207,216,220,.12); color: #cfd8dc; border-color: rgba(207,216,220,.5); }
+    .rk3 { background: rgba(224,164,88,.12); color: #e0a458; border-color: rgba(224,164,88,.5); }
+    .rkx { background: rgba(239,83,80,.13); color: #ef5350; border-color: rgba(239,83,80,.5); }
+    .ec-lb-name { font-weight: 700; font-size: .85rem; }
+    .ec-lb-name small { color: #93a4bd; font-weight: 400; font-size: .7rem; }
+    .ec-lb-val { color: var(--gold); white-space: nowrap; font-size: .85rem; }
+    .ec-lb-bar { height: 6px; background: rgba(255,255,255,.07); border-radius: 3px; margin-top: 5px; overflow: hidden; }
+    .ec-lb-bar i { display: block; height: 100%; border-radius: 3px; }
+
+    /* Chips + table */
+    .ec-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .ec-chip { padding: 6px 14px; border-radius: 20px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04);
+               color: #93a4bd; cursor: pointer; font-size: .78rem; font-family: inherit; transition: .2s; }
+    .ec-chip.on { background: linear-gradient(180deg,#ffd700,#e6c34a); color: #101826; border-color: var(--gold); font-weight: 800; }
+    .ec-avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #22456e, #0d1c30); display: inline-flex;
+                 align-items: center; justify-content: center; font-weight: 800; color: var(--gold); font-size: .78rem;
+                 border: 1px solid rgba(255,215,0,.3); flex-shrink: 0; }
+    .ec-heat { display: inline-flex; gap: 2px; vertical-align: middle; }
+    .ec-heat i { width: 9px; height: 18px; border-radius: 2px; display: block; }
+    .ec-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: .7rem; font-weight: 700; white-space: nowrap; border: 1px solid; }
+    .bd-green { background: rgba(76,175,80,.13); color: #4caf50; border-color: rgba(76,175,80,.4); }
+    .bd-yellow { background: rgba(255,201,77,.12); color: #ffc94d; border-color: rgba(255,201,77,.4); }
+    .bd-red { background: rgba(239,83,80,.13); color: #ef5350; border-color: rgba(239,83,80,.45); }
+    .bd-off { background: rgba(158,158,158,.13); color: #bdbdbd; border-color: rgba(158,158,158,.4); }
+    .bd-gray { background: rgba(120,144,156,.12); color: #90a4ae; border-color: rgba(120,144,156,.35); }
+    .bd-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; vertical-align: middle; margin-inline-end: 5px; }
+    .ec-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; vertical-align: middle; margin-inline-end: 6px; }
+    .dc-all { background: linear-gradient(135deg, #ffd700, #4caf50); }
+    .dc-green { background: #4caf50; } .dc-yellow { background: #ffc94d; } .dc-red { background: #ef5350; }
+    .dc-off { background: #9e9e9e; } .dc-gray { background: #78909c; }
+
+    /* GM */
+    .ec-gm { min-height: 160px; }
+    .ec-gm-h { font-size: .8rem; color: #93a4bd; margin-bottom: 10px; font-weight: 700; }
+    .ec-gm-row { display: flex; justify-content: space-between; gap: 8px; padding: 7px 0; border-bottom: 1px dashed rgba(255,255,255,.06); font-size: .82rem; }
+    .ec-gm-row:last-child { border-bottom: none; }
+    .ec-gm-row span { color: #93a4bd; }
+
+    /* Exceptions */
+    .ec-exc { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+    .ec-exc-card { border-radius: 14px; padding: 14px; border: 1px solid; cursor: pointer; transition: .2s; background: rgba(255,255,255,.045); }
+    .ec-exc-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+    .ec-exc-card .n { font-size: 1.5rem; font-weight: 900; }
+    .ec-exc-card .t { font-size: .72rem; color: #93a4bd; margin-top: 4px; line-height: 1.5; }
+    .ec-exc-card.red { border-color: rgba(239,83,80,.45); } .ec-exc-card.red .n { color: #ef5350; }
+    .ec-exc-card.yellow { border-color: rgba(255,201,77,.4); } .ec-exc-card.yellow .n { color: #ffc94d; }
+    .ec-exc-card.blue { border-color: rgba(94,179,255,.35); } .ec-exc-card.blue .n { color: #5eb3ff; }
+
+    .ec-note { color: #93a4bd; font-size: .72rem; text-align: center; margin-top: 24px; line-height: 1.9; }
+
+    /* ═══ تظبيط MudTable داخل الجزيرة الداكنة ═══ */
+    .ec-root .mud-table { background: transparent; color: #eef3fa; }
+    .ec-root .mud-table-container, .ec-root .mud-table-root { background: transparent; }
+    .ec-root .mud-table-cell { border-color: rgba(255,255,255,.06); }
+    .ec-root .mud-table-row:hover { background: rgba(255,215,0,.05) !important; }
+    .ec-root .mud-table-row { cursor: pointer; }
+    .ec-root .mud-table-striped .mud-table-row:nth-child(odd) { background: rgba(255,255,255,.02); }
+    .ec-root .mud-table-head .mud-table-cell { background: rgba(255,255,255,.05); color: #93a4bd; }
+    .ec-root .mud-table-sort-label, .ec-root .mud-table-cell .mud-chip { color: inherit; }
+    .ec-root .mud-input, .ec-root .mud-select { color: #eef3fa; }
+    .ec-root .mud-table-pagination { color: #93a4bd; }
+
+    @@media (max-width: 1200px) {
+        .ec-kpis, .ec-exc { grid-template-columns: repeat(3, 1fr); }
+        .ec-pipe { grid-template-columns: repeat(2, 1fr); }
+    }
+    @@media (max-width: 700px) {
+        .ec-kpis, .ec-exc { grid-template-columns: repeat(2, 1fr); }
+        .ec-pipe { grid-template-columns: 1fr 1fr; }
+        .ec-hero { flex-direction: column; align-items: flex-start; }
+    }
+</style>
+
+@code {
+    private bool _loading = true;
+    private bool _noAccess;
+    private ExecutiveCockpitDto? _data;
+    private string _period = "month";
+    private string _filter = "all";
+    private int _dayOfMonth = DateTime.Today.Day;
+
+    private readonly Dictionary<string, string> _periods = new()
+    {
+        ["today"] = "اليوم",
+        ["week"] = "الأسبوع",
+        ["month"] = "هذا الشهر",
+        ["quarter"] = "ربع السنة",
+        ["year"] = "السنة"
+    };
+
+    private readonly Dictionary<string, string> _filters = new()
+    {
+        ["all"] = "الكل",
+        ["green"] = "نشط",
+        ["yellow"] = "نشاط قليل",
+        ["red"] = "ساكن",
+        ["off"] = "موقوف/إجازة",
+        ["gray"] = "بلا حساب"
+    };
+
+    private ApexChartOptions<ExecutiveTrendPointDto> _trendOpts = default!;
+    private ApexChartOptions<ExecutiveEmployeeRowDto> _actOpts = default!;
+    private ApexChartOptions<ExecutiveBranchSaleDto> _branchOpts = default!;
+
+    private bool _showTimeline;
+    private bool _timelineLoading;
+    private string _timelineName = "";
+    private List<ExecutiveTimelineRowDto> _timelineRows = new();
+    private readonly DialogOptions _timelineDlgOpts = new() { MaxWidth = MaxWidth.Medium, FullWidth = true };
+
+    private bool _showDecisions;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var allowed = user.IsInRole("Admin")
+                   || user.HasClaim(c => c.Type == "Permission" && c.Value == "frm_ExecutiveCockpit:View");
+        if (!allowed)
+        {
+            _noAccess = true;
+            _loading = false;
+            return;
+        }
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _data = await CockpitService.GetCockpitAsync(_period);
+            BuildChartOptions();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("تعذّر تحميل لوحة القيادة: " + ex.Message, Severity.Error);
+            _data = null;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SetPeriodAsync(string p)
+    {
+        _period = p;
+        await LoadAsync();
+    }
+
+    private void SetFilter(string f) => _filter = f;
+
+    private IEnumerable<ExecutiveEmployeeRowDto> FilteredEmployees()
+        => _filter == "all" ? _data?.Employees ?? new() : (_data?.Employees ?? new()).Where(e => e.Status == _filter);
+
+    private List<ExecutiveEmployeeRowDto> DormantEmployees()
+        => (_data?.Employees ?? new()).Where(e => e.Status == "red")
+           .OrderBy(e => e.LastActivity ?? DateTime.MinValue).ToList();
+
+    private List<ExecutiveEmployeeRowDto> SalesTeam()
+        => (_data?.Employees ?? new()).Where(e => e.IsSales && e.Status != "off").OrderByDescending(e => e.MonthSales).ToList();
+
+    private List<ExecutiveEmployeeRowDto> TopSales() => SalesTeam().Take(3).ToList();
+    private List<ExecutiveEmployeeRowDto> BottomSales() => SalesTeam().OrderBy(e => e.MonthSales).Take(3).ToList();
+    private decimal TopMax() => SalesTeam().Select(e => e.MonthSales).DefaultIfEmpty(0).Max();
+
+    private List<ExecutiveEmployeeRowDto> TopActive()
+        => (_data?.Employees ?? new()).Where(e => e.Status != "off").OrderByDescending(e => e.ActionsMonth).Take(8).ToList();
+
+    // ── KPI cards ──
+    private sealed record KpiCard(string Icon, string Label, decimal Value, decimal PrevPct, decimal YearPct, bool Invert, bool ShowCmp);
+    private List<KpiCard> KpiCards()
+    {
+        if (_data == null) return new();
+        return new()
+        {
+            new(Icons.Material.Filled.Paid, "المبيعات", _data.Sales.Value, _data.Sales.PrevPct, _data.Sales.YearPct, false, true),
+            new(Icons.Material.Filled.AccountBalance, "المحصَّل من فواتير الفترة", _data.Collected.Value, _data.Collected.PrevPct, _data.Collected.YearPct, false, true),
+            new(Icons.Material.Filled.LocalShipping, "المشتريات", _data.Purchases.Value, _data.Purchases.PrevPct, _data.Purchases.YearPct, true, true),
+            new(Icons.Material.Filled.ReceiptLong, "المصروفات", _data.Expenses.Value, _data.Expenses.PrevPct, _data.Expenses.YearPct, true, true),
+            new(Icons.Material.Filled.CurrencyExchange, "صافي التدفق", _data.Net.Value, _data.Net.PrevPct, _data.Net.YearPct, false, true),
+            new(Icons.Material.Filled.Savings, "رصيد الخزائن", _data.CashBalance, 0, 0, false, false)
+        };
+    }
+
+    private RenderFragment CmpChip(decimal pct, bool invert, string caption) => builder =>
+    {
+        var good = invert ? pct <= 0 : pct >= 0;
+        var cls = pct == 0 ? "ec-flat" : good ? "ec-up" : "ec-down";
+        var arr = pct > 0 ? "▲" : pct < 0 ? "▼" : "•";
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", $"ec-cmp {cls}");
+        builder.AddContent(2, $"{arr} {Math.Abs(pct)}% {caption}");
+        builder.CloseElement();
+    };
+
+    private static string HeatColor(int count)
+        => count == 0 ? "rgba(239,83,80,.55)"
+         : count <= 2 ? "rgba(255,201,77,.5)"
+         : count <= 4 ? "rgba(76,175,80,.45)"
+         : "rgba(76,175,80,.9)";
+
+    private static string BadgeClass(string st) => st switch
+    {
+        "green" => "bd-green", "yellow" => "bd-yellow", "red" => "bd-red",
+        "off" => "bd-off", _ => "bd-gray"
+    };
+    private static string BadgeText(string st) => st switch
+    {
+        "green" => "نشط", "yellow" => "قليل", "red" => "ساكن",
+        "off" => "موقوف/إجازة", _ => "بلا حساب"
+    };
+
+    // ── عداد التوقع ──
+    private decimal ForecastPctValue()
+        => _data == null ? 0 : Math.Clamp(_data.ForecastVsLastPct, -100, 100);
+
+    private string ForecastPctDisplay()
+        => _data == null ? "" : $"{(_data.ForecastVsLastPct >= 0 ? "+" : "")}{_data.ForecastVsLastPct}%";
+
+    private string GaugeColor()
+        => ForecastPctValue() >= 0 ? "#4caf50" : ForecastPctValue() >= -15 ? "#ffc94d" : "#ef5350";
+
+    private string GaugeArc()
+    {
+        const double r = 75, cx = 95, cy = 100;
+        var frac = (double)((ForecastPctValue() + 100) / 200m);
+        var ang = Math.PI * (1 - frac);
+        var x = cx + r * Math.Cos(ang);
+        var y = cy - r * Math.Sin(ang);
+        var large = frac > 0.5 ? 1 : 0;
+        return $"M {cx - r} {cy} A {r} {r} 0 {large} 1 {x:F1} {y:F1}";
+    }
+
+    // ── الخط الزمني ──
+    private async Task OpenTimelineAsync(int employeeId)
+    {
+        var emp = _data?.Employees.FirstOrDefault(e => e.EmployeeId == employeeId);
+        _timelineName = emp == null ? "" : $"{emp.FullName} — {emp.JobTitle}";
+        _timelineRows = new();
+        _timelineLoading = true;
+        _showTimeline = true;
+        StateHasChanged();
+        try
+        {
+            _timelineRows = await CockpitService.GetEmployeeTimelineAsync(employeeId);
+        }
+        catch
+        {
+            Snackbar.Add("تعذّر تحميل الخط الزمني", Severity.Error);
+        }
+        finally
+        {
+            _timelineLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OpenDecisions() => _showDecisions = true;
+
+    // ── ApexCharts ──
+    private void BuildChartOptions()
+    {
+        _trendOpts = new ApexChartOptions<ExecutiveTrendPointDto>
+        {
+            Chart = new Chart
+            {
+                FontFamily = "Cairo,sans-serif",
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent"
+            },
+            Colors = new List<string> { "#ffd700", "#4caf50", "#5eb3ff" },
+            Fill = new Fill
+            {
+                Type = new List<FillType> { FillType.Gradient, FillType.Gradient, FillType.Solid },
+                Gradient = new FillGradient { ShadeIntensity = 1, OpacityFrom = .3, OpacityTo = .02, Stops = new List<double> { 0, 100 } }
+            },
+            Stroke = new Stroke
+            {
+                Curve = new List<Curve> { Curve.Smooth },
+                Width = new List<double> { 3, 3, 2 }
+            },
+            DataLabels = new DataLabels { Enabled = false },
+            Grid = new Grid { BorderColor = "rgba(255,255,255,.08)", StrokeDashArray = 4 },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels
+                {
+                    Style = new AxisLabelStyle { FontSize = "10px", Colors = new List<string> { "#93a4bd" } },
+                    HideOverlappingLabels = true
+                },
+                AxisBorder = new AxisBorder { Show = false },
+                AxisTicks = new AxisTicks { Show = false }
+            },
+            Legend = new Legend { Show = true, Position = LegendPosition.Top },
+            Tooltip = new Tooltip { Theme = Mode.Dark }
+        };
+
+        _actOpts = new ApexChartOptions<ExecutiveEmployeeRowDto>
+        {
+            Chart = new Chart
+            {
+                FontFamily = "Cairo,sans-serif",
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent"
+            },
+            Colors = new List<string> { "#ffd700" },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar { BorderRadius = 4, Horizontal = true, Distributed = true }
+            },
+            DataLabels = new DataLabels { Enabled = false },
+            Grid = new Grid { BorderColor = "rgba(255,255,255,.08)", StrokeDashArray = 4 },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Style = new AxisLabelStyle { FontSize = "10px", Colors = new List<string> { "#93a4bd" } } },
+                AxisBorder = new AxisBorder { Show = false },
+                AxisTicks = new AxisTicks { Show = false }
+            },
+            Legend = new Legend { Show = false },
+            Tooltip = new Tooltip { Theme = Mode.Dark }
+        };
+
+        _branchOpts = new ApexChartOptions<ExecutiveBranchSaleDto>
+        {
+            Chart = new Chart
+            {
+                FontFamily = "Cairo,sans-serif",
+                Toolbar = new Toolbar { Show = false },
+                Background = "transparent"
+            },
+            Colors = new List<string> { "#5eb3ff" },
+            PlotOptions = new PlotOptions
+            {
+                Bar = new PlotOptionsBar { BorderRadius = 4, ColumnWidth = "55%" }
+            },
+            DataLabels = new DataLabels { Enabled = false },
+            Grid = new Grid { BorderColor = "rgba(255,255,255,.08)", StrokeDashArray = 4 },
+            Xaxis = new XAxis
+            {
+                Labels = new XAxisLabels { Style = new AxisLabelStyle { FontSize = "10px", Colors = new List<string> { "#93a4bd" } } },
+                AxisBorder = new AxisBorder { Show = false },
+                AxisTicks = new AxisTicks { Show = false }
+            },
+            Legend = new Legend { Show = false },
+            Tooltip = new Tooltip { Theme = Mode.Dark }
+        };
+    }
+}

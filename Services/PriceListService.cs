@@ -47,6 +47,10 @@ public class PriceListService : IPriceListService
                 StdPrice = p.SuggestedSalePriceCClass,
                 PremiumPrice = p.SuggestedSalePrice,
                 ElitePrice = p.SuggestedSalePriceElite,
+                StdCost = p.PurchasePriceCClass,
+                PremiumCost = p.PurchasePrice,
+                EliteCost = p.PurchasePriceElite,
+                IsWebsite = p.IsWebsite,
                 PricingStatusId = p.PricingStatusId
             })
             .ToListAsync();
@@ -192,6 +196,78 @@ public class PriceListService : IPriceListService
             await tx.RollbackAsync();
             _logger.LogError(ex, "UpdatePriceAsync failed for {Pid}", productId);
             return (false, "حدث خطأ أثناء حفظ السعر: " + ex.Message);
+        }
+    }
+
+    public async Task<(bool Success, string Message)> UpdateCostAsync(
+        int productId, string tier, decimal newCost, string reason, string currentUser)
+    {
+        // 🔒 التكلفة: المدير ومدير الحسابات والمحاسب فقط (قرار المستخدم 2026-09-17)
+        var user = _http.HttpContext?.User;
+        if (user == null || !(user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager)
+            || user.IsInRole("Account")))
+            return (false, "تعديل التكلفة متاح للمدير ومدير الحسابات والمحاسب فقط.");
+
+        if (string.IsNullOrWhiteSpace(reason))
+            return (false, "سبب التعديل إلزامي.");
+        if (newCost < 0)
+            return (false, "التكلفة لا يمكن أن تكون سالبة.");
+        if (tier != "CClass" && tier != "Premium" && tier != "Elite")
+            return (false, "فئة تكلفة غير معروفة.");
+
+        using var db = await _factory.CreateDbContextAsync();
+        var product = await db.Products.FirstOrDefaultAsync(p => p.ProductId == productId);
+        if (product == null) return (false, "المنتج غير موجود.");
+
+        var oldCost = tier switch
+        {
+            "CClass"  => product.PurchasePriceCClass,
+            "Premium" => product.PurchasePrice,
+            _         => product.PurchasePriceElite
+        };
+        if ((oldCost ?? 0) == newCost)
+            return (false, "التكلفة الجديدة مطابقة للقديمة.");
+
+        using var tx = await db.Database.BeginTransactionAsync();
+        try
+        {
+            switch (tier)
+            {
+                case "CClass":  product.PurchasePriceCClass = newCost; break;
+                case "Premium": product.PurchasePrice       = newCost; break;
+                default:        product.PurchasePriceElite  = newCost; break;
+            }
+
+            db.PriceHistories.Add(new PriceHistory
+            {
+                ProductId = productId,
+                PriceType = tier + "_Cost",
+                OldPrice = oldCost,
+                NewPrice = newCost,
+                ChangedBy = currentUser,
+                ChangedAt = DateTime.Now,
+                ChangeReason = reason.Trim()
+            });
+
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            await _audit.LogAsync<object>("Products", "CostUpdate",
+                productId.ToString(),
+                new { Tier = tier, OldCost = oldCost },
+                new { Tier = tier, NewCost = newCost, Reason = reason.Trim() },
+                currentUser);
+
+            _logger.LogInformation("Cost updated: product {Pid} tier {Tier} {Old}→{New} by {User}",
+                productId, tier, oldCost, newCost, currentUser);
+            return (true, $"تم تحديث تكلفة {TierName(tier)} إلى {newCost:N2} ج — وتم توثيقها في تاريخ الأسعار.");
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            _logger.LogError(ex, "UpdateCostAsync failed for {Pid}", productId);
+            return (false, "حدث خطأ أثناء حفظ التكلفة: " + ex.Message);
         }
     }
 

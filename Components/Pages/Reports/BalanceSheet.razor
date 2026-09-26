@@ -1,0 +1,827 @@
+@page "/reports/balance-sheet"
+@page "/financial/balance-sheet"
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using System.Globalization
+@using MudBlazor
+
+@inject IFinancialReportsService FinancialService
+@inject IBranchService BranchService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+<PageTitle>قائمة المركز المالي</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="loading-screen">
+        <MudProgressCircular Color="MudBlazor.Color.Primary" Size="MudBlazor.Size.Large" Indeterminate="true" />
+        <p>جاري إعداد قائمة المركز المالي...</p>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="MudBlazor.Severity.Error" Variant="MudBlazor.Variant.Filled" Class="ma-4">
+        غير مسموح لك بعرض هذه الشاشة.
+    </MudAlert>
+}
+else if (_report != null)
+{
+    <div class="bs-page" dir="rtl">
+
+        <!-- ═══ ترويسة الطباعة ═══ -->
+        <div class="print-only print-header">
+            <div class="ph-top">
+                <div class="ph-brand">
+                    <img src="logo.png" class="ph-logo" alt="" />
+                    <div>
+                        <div class="ph-company">COCOBOLO <span>ERP</span></div>
+                        <div class="ph-sub">نظام إدارة الأعمال المتكامل</div>
+                    </div>
+                </div>
+                <div class="ph-title">
+                    <h1>قائمة المركز المالي</h1>
+                    <p>@(_report.IsBranchScoped ? $"فرع: {_report.BranchName}" : "الشركة — على مستوى كل الفروع") — كما في @(_report.AsOfLabel)</p>
+                </div>
+                <div class="ph-meta">
+                    <span>صادر بتاريخ</span>
+                    <strong>@DateTime.Now.ToString("yyyy-MM-dd")</strong>
+                    <span>@DateTime.Now.ToString("HH:mm")</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ جسم التقرير المطبوع — صيغة الميزانية الكلاسيكية (عمودان متقابلان) ═══ -->
+        <div class="print-only print-body">
+            <div class="pb-grid">
+                <table class="pb-table">
+                    <thead>
+                        <tr><th colspan="2" class="pb-col-head assets">الأصول</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>النقدية والخزائن</td><td class="val">@FormatMoney(_report.CashBalance)</td></tr>
+                        <tr><td>المدينون (عملاء)</td><td class="val">@FormatMoney(_report.AccountsReceivable)</td></tr>
+                        <tr><td>المخزون</td><td class="val">@FormatMoney(_report.InventoryValue)</td></tr>
+                        <tr><td>سلف الموظفين</td><td class="val">@FormatMoney(_report.EmployeeLoansOutstanding)</td></tr>
+                    </tbody>
+                    <tfoot>
+                        <tr><td>إجمالي الأصول</td><td class="val">@FormatMoney(_report.TotalAssets)</td></tr>
+                    </tfoot>
+                </table>
+                <table class="pb-table">
+                    <thead>
+                        <tr><th colspan="2" class="pb-col-head liab">الالتزامات وحقوق الملكية</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr class="pb-subhead"><td colspan="2">الالتزامات</td></tr>
+                        <tr><td>رواتب مستحقة</td><td class="val">@FormatMoney(_report.PayrollOutstanding)</td></tr>
+                        <tr><td>مستحقات موردين</td><td class="val">@FormatMoney(_report.SupplierPayables)</td></tr>
+                        <tr class="pb-sub"><td>إجمالي الالتزامات</td><td class="val">@FormatMoney(_report.TotalLiabilities)</td></tr>
+                        <tr class="pb-subhead"><td colspan="2">حقوق الملكية</td></tr>
+                        <tr><td>رأس المال الافتتاحي</td><td class="val">@FormatMoney(_report.OpeningCapital)</td></tr>
+                        <tr><td>الأرباح المحتجزة</td><td class="val">@FormatMoney(_report.RetainedEarnings)</td></tr>
+                        <tr class="pb-sub"><td>إجمالي حقوق الملكية</td><td class="val">@FormatMoney(_report.TotalEquity)</td></tr>
+                    </tbody>
+                    <tfoot>
+                        <tr><td>إجمالي الالتزامات وحقوق الملكية</td><td class="val">@FormatMoney(_report.LiabilitiesAndEquity)</td></tr>
+                    </tfoot>
+                </table>
+            </div>
+            <div class="pb-balance">
+                الأصول <b>@FormatMoney(_report.TotalAssets)</b>
+                = الالتزامات + حقوق الملكية <b>@FormatMoney(_report.LiabilitiesAndEquity)</b>
+                <span class="pb-diff">(الفرق: @FormatMoney(_report.BalanceDifference) — @_report.BalanceStatus)</span>
+            </div>
+        </div>
+
+        <!-- ═══ الهيدر ═══ -->
+        <div class="bs-header no-print">
+            <div class="header-bg">
+                <div class="header-gradient"></div>
+                <div class="header-orbs">
+                    <div class="header-orb orb-1"></div>
+                    <div class="header-orb orb-2"></div>
+                </div>
+            </div>
+            <div class="header-content">
+                <div class="header-title">
+                    <div class="header-icon"><MudIcon Icon="@Icons.Material.Filled.AccountBalance" /></div>
+                    <div>
+                        <h1>قائمة المركز المالي</h1>
+                        <p>@(_report.IsBranchScoped ? $"فرع {_report.BranchName}" : "الشركة — كل الفروع") · @(_report.AsOfLabel)</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ شريط النطاق والأدوات ═══ -->
+        <div class="toolbar no-print">
+            <div class="scope-group">
+                <span class="scope-label"><MudIcon Icon="@Icons.Material.Filled.FilterAlt" /> نطاق العرض</span>
+                <button type="button" class="scope-chip @(!_report.IsBranchScoped ? "active" : "")" @onclick='@(() => PickScopeAsync(null))'>
+                    🏢 الشركة
+                </button>
+                @foreach (var b in _branches)
+                {
+                    <button type="button" class="scope-chip @(_report.BranchId == b.BranchId ? "active" : "")"
+                            @onclick='@(() => PickScopeAsync(b.BranchId))'>
+                        📍 @b.BranchNameAr
+                    </button>
+                }
+            </div>
+            <div class="toolbar-actions">
+                @if (_isAdmin)
+                {
+                    <MudButton Variant="MudBlazor.Variant.Text" Color="MudBlazor.Color.Warning"
+                               StartIcon="@Icons.Material.Filled.Savings" OnClick="OpenCapitalDialog">
+                        رأس المال
+                    </MudButton>
+                }
+                <MudButton Variant="MudBlazor.Variant.Filled" Color="MudBlazor.Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Print" OnClick="PrintReport">
+                    طباعة
+                </MudButton>
+            </div>
+        </div>
+
+        <!-- شريط تحديث رفيع (بدون إعادة تحميل الصفحة) -->
+        <div class="refresh-bar @(_isRefreshing ? "on" : "")"></div>
+
+        <!-- ملاحظة الفرع (سطر واحد فقط) -->
+        @if (_report.IsBranchScoped)
+        {
+            <div class="scope-note no-print">
+                <MudIcon Icon="@Icons.Material.Filled.Info" />
+                رأس المال أصل يخص الشركة كاملة ولا يُقسَّم على الفروع — حكم التوازن يظهر باختيار «الشركة».
+            </div>
+        }
+
+        <div class="bs-content @(_isRefreshing ? "refreshing" : "")">
+
+        <!-- ═══ لوحة التوازن (الشركة فقط) ═══ -->
+        @if (!_report.IsBranchScoped)
+        {
+            <div class="balance-panel @(_report.IsBalanced ? "balanced" : "off-balance")">
+                <div class="balance-main">
+                    <MudIcon Icon="@(_report.IsBalanced ? Icons.Material.Filled.Verified : Icons.Material.Filled.ReportProblem)"
+                             Class="balance-icon" />
+                    <div>
+                        <span class="balance-title">
+                            الميزانية @_report.BalanceStatus
+                            <MudTooltip Text="الفرق = الأصول − (الالتزامات + حقوق الملكية). لو الفرق ≠ صفر: راجع رأس المال الافتتاحي أو حركات نقدية غير مرتبطة بفواتير أو سحوبات ملاك.">
+                                <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="row-info" />
+                            </MudTooltip>
+                        </span>
+                        <span class="balance-sub">الأصول @FormatMoney(_report.TotalAssets) = الالتزامات + حقوق الملكية @FormatMoney(_report.LiabilitiesAndEquity)</span>
+                    </div>
+                </div>
+                <div class="balance-diff @(_report.IsBalanced ? "" : (_report.BalanceDifference > 0 ? "pos" : "neg"))">
+                    <span>الفرق</span>
+                    <strong>@FormatMoney(_report.BalanceDifference)</strong>
+                </div>
+            </div>
+        }
+
+        <!-- ═══ الأرقام الرئيسية ═══ -->
+        <MudGrid Spacing="3" Class="mb-2">
+            <MudItem xs="12" md="4">
+                <div class="hero-card assets">
+                    <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.Paid" /></div>
+                    <div class="hero-info">
+                        <span class="hero-label">إجمالي الأصول</span>
+                        <span class="hero-value">@FormatMoney(_report.TotalAssets)</span>
+                        <span class="hero-sub">نقدية + مدينون + مخزون + سلف</span>
+                    </div>
+                </div>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <div class="hero-card liabilities">
+                    <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.CreditScore" /></div>
+                    <div class="hero-info">
+                        <span class="hero-label">إجمالي الالتزامات</span>
+                        <span class="hero-value">@FormatMoney(_report.TotalLiabilities)</span>
+                        <span class="hero-sub">رواتب مستحقة + مستحقات موردين</span>
+                    </div>
+                </div>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <div class="hero-card equity">
+                    <div class="hero-icon"><MudIcon Icon="@Icons.Material.Filled.Workspaces" /></div>
+                    <div class="hero-info">
+                        <span class="hero-label">حقوق الملكية</span>
+                        <span class="hero-value">@FormatMoney(_report.TotalEquity)</span>
+                        <span class="hero-sub">رأس مال + أرباح محتجزة</span>
+                    </div>
+                </div>
+            </MudItem>
+        </MudGrid>
+
+        <!-- ═══ الأصول ═══ -->
+        <div class="bs-section">
+            <div class="section-head assets-head">
+                <MudIcon Icon="@Icons.Material.Filled.Inventory2" />
+                <h2>الأصول</h2>
+                <span class="section-total">@FormatMoney(_report.TotalAssets) ج</span>
+            </div>
+            <table class="bs-table">
+                <thead>
+                    <tr><th style="width:24%">البند</th><th>المعادلة</th><th class="num" style="width:17%">القيمة (ج.م)</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td class="item-name">
+                            💵 النقدية والخزائن
+                            <MudTooltip Text="المصدر: الخزائن وحركاتها (شاشة الخزنة) • التحقق: إجمالي الرصيد الحالي لكل الخزائن">
+                                <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="row-info" />
+                            </MudTooltip>
+                        </td>
+                        <td class="item-desc">رصيد افتتاحي + مقبوضات − مصروفات</td>
+                        <td class="num">@FormatMoney(_report.CashBalance)</td>
+                    </tr>
+                    <tr>
+                        <td class="item-name">
+                            🤝 المدينون
+                            <MudTooltip Text="@(_report.ReceivableInvoicesCount + " فاتورة بيع غير ملغاة ومتبقيها > صفر • نفس آلية الداشبورد المالي")">
+                                <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="row-info" />
+                            </MudTooltip>
+                        </td>
+                        <td class="item-desc">Σ (إجمالي الفاتورة − المدفوع)</td>
+                        <td class="num">@FormatMoney(_report.AccountsReceivable)</td>
+                    </tr>
+                    <tr>
+                        <td class="item-name">
+                            📦 المخزون
+                            <MudTooltip Text="@(_report.InventoryItemsCount + " صنف بأرصدة > صفر • الكمية × تكلفة باقة المنتج نفسه • يطابق شاشة تقييم المخزون")">
+                                <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="row-info" />
+                            </MudTooltip>
+                        </td>
+                        <td class="item-desc">Σ (الكمية × تكلفة باقة المنتج)</td>
+                        <td class="num strong">@FormatMoney(_report.InventoryValue)</td>
+                    </tr>
+                    <tr>
+                        <td class="item-name">
+                            🧑‍💼 سلف الموظفين
+                            <MudTooltip Text="@(_report.ActiveLoansCount + " سلفة بحالة Active • المتبقي عليها • بفرع الموظف عند التفرعة")">
+                                <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="row-info" />
+                            </MudTooltip>
+                        </td>
+                        <td class="item-desc">Σ المتبقي على السلف القائمة</td>
+                        <td class="num">@FormatMoney(_report.EmployeeLoansOutstanding)</td>
+                    </tr>
+                </tbody>
+                <tfoot>
+                    <tr><td colspan="2">إجمالي الأصول</td><td class="num">@FormatMoney(_report.TotalAssets)</td></tr>
+                </tfoot>
+            </table>
+        </div>
+
+        <!-- ═══ الالتزامات وحقوق الملكية ═══ -->
+        <MudGrid Spacing="3">
+            <MudItem xs="12" lg="6">
+                <div class="bs-section">
+                    <div class="section-head liabilities-head">
+                        <MudIcon Icon="@Icons.Material.Filled.ReceiptLong" />
+                        <h2>الالتزامات</h2>
+                        <span class="section-total">@FormatMoney(_report.TotalLiabilities) ج</span>
+                    </div>
+                    <table class="bs-table">
+                        <tbody>
+                            <tr>
+                                <td class="item-name">
+                                    🧾 رواتب مستحقة
+                                    <MudTooltip Text="@(_report.PayrollPendingCount + " مسير رواتب • كل الحالات عدا «مدفوع» و«مرفوض» • صافي الراتب أو الأساسي")">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="row-info" />
+                                    </MudTooltip>
+                                </td>
+                                <td class="item-desc">المسيرات غير المدفوعة (عدا المرفوض)</td>
+                                <td class="num">@FormatMoney(_report.PayrollOutstanding)</td>
+                            </tr>
+                            <tr>
+                                <td class="item-name">
+                                    🏭 مستحقات موردين
+                                    <MudTooltip Text="@(_report.PayablePurchasesCount + " فاتورة شراء غير ملغاة ومتبقيها > صفر")">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="row-info" />
+                                    </MudTooltip>
+                                </td>
+                                <td class="item-desc">Σ (إجمالي الشراء − المدفوع)</td>
+                                <td class="num">@FormatMoney(_report.SupplierPayables)</td>
+                            </tr>
+                        </tbody>
+                        <tfoot>
+                            <tr><td colspan="2">إجمالي الالتزامات</td><td class="num">@FormatMoney(_report.TotalLiabilities)</td></tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </MudItem>
+            <MudItem xs="12" lg="6">
+                <div class="bs-section">
+                    <div class="section-head equity-head">
+                        <MudIcon Icon="@Icons.Material.Filled.Workspaces" />
+                        <h2>حقوق الملكية</h2>
+                        <span class="section-total">@FormatMoney(_report.TotalEquity) ج</span>
+                    </div>
+                    <table class="bs-table">
+                        <tbody>
+                            <tr>
+                                <td class="item-name">
+                                    🏛️ رأس المال الافتتاحي
+                                    <MudTooltip Text="إدخال يدوي من Admin (زر رأس المال) • رقم واحد للشركة كاملة • لا يُشتق من المخزون ولا يُقسَّم على الفروع • كل تعديل يُسجل Audit">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="row-info" />
+                                    </MudTooltip>
+                                </td>
+                                <td class="item-desc">
+                                    إدخال يدوي — @(_report.CapitalUpdatedAt.HasValue ? $"آخر تحديث {_report.CapitalUpdatedBy}" : "لم يُدخل بعد")
+                                </td>
+                                <td class="num">@FormatMoney(_report.OpeningCapital)</td>
+                            </tr>
+                            <tr>
+                                <td class="item-name">
+                                    📈 الأرباح المحتجزة
+                                    <MudTooltip Text="@("نفس محرك قائمة الدخل تراكمياً من " + _report.CumulativeFrom.ToString("yyyy-MM-dd") + " حتى اليوم • " + (_report.IsBranchScoped ? "منسدة للفرع بإسناد الفواتير" : "على مستوى الشركة"))">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" Class="row-info" />
+                                    </MudTooltip>
+                                </td>
+                                <td class="item-desc">
+                                    @FormatMoney(_report.CumulativeRevenue) − @FormatMoney(_report.CumulativeCogs) − @FormatMoney(_report.CumulativeOperatingExpenses)
+                                </td>
+                                <td class="num @(_report.RetainedEarnings >= 0 ? "pos-text" : "neg-text")">@FormatMoney(_report.RetainedEarnings)</td>
+                            </tr>
+                        </tbody>
+                        <tfoot>
+                            <tr><td colspan="2">إجمالي حقوق الملكية</td><td class="num">@FormatMoney(_report.TotalEquity)</td></tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </MudItem>
+        </MudGrid>
+
+        <!-- ═══ المعادلة الختامية ═══ -->
+        <div class="closing-equation">
+            <span class="eq-box">الأصول <b>@FormatMoney(_report.TotalAssets)</b></span>
+            <span class="eq-sign">=</span>
+            <span class="eq-box">الالتزامات <b>@FormatMoney(_report.TotalLiabilities)</b></span>
+            <span class="eq-sign">+</span>
+            <span class="eq-box">حقوق الملكية <b>@FormatMoney(_report.TotalEquity)</b></span>
+        </div>
+
+        <!-- ═══ تحليل وتوصيات ═══ -->
+        @if (_insights.Count > 0)
+        {
+            <div class="insight-section no-print">
+                <div class="section-head">
+                    <MudIcon Icon="@Icons.Material.Filled.AutoAwesome" />
+                    <h2>تحليل وتوصيات</h2>
+                </div>
+                <div class="insight-grid">
+                    @foreach (var ins in _insights)
+                    {
+                        <div class="insight-card @ins.Severity">
+                            <div class="insight-icon"><MudIcon Icon="@ins.Icon" /></div>
+                            <div>
+                                <span class="insight-title">@ins.Title</span>
+                                <span class="insight-text">@ins.Text</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
+        </div><!-- /bs-content -->
+
+        <div class="print-footer">
+            صدرت هذه القائمة من نظام COCOBOLO ERP بتاريخ @DateTime.Now.ToString("yyyy-MM-dd HH:mm")
+            — @(_report.IsBranchScoped ? $"فرع {_report.BranchName}" : "الشركة على مستوى كل الفروع")
+        </div>
+    </div>
+}
+
+<!-- ═══ دايلوج رأس المال (Admin) ═══ -->
+<MudDialog @bind-Visible="_capitalOpen" Options="_capitalDialogOptions">
+    <TitleContent>
+        <div style="display:flex;align-items:center;gap:.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.Savings" Style="color:#b8860b;" />
+            <MudText Typo="Typo.h6" Style="font-weight:800;">رأس المال الافتتاحي</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="MudBlazor.Severity.Info" Dense="true" Class="mb-4">
+            رقم واحد للشركة كاملة — لا يُحتسب من المخزون ولا يُقسَّم على الفروع. يُدخل مرة عند البداية ويُعدَّل فقط عند زيادة رأس مال رسمية.
+        </MudAlert>
+        <MudNumericField T="decimal" Label="قيمة رأس المال (ج.م)" Variant="MudBlazor.Variant.Outlined"
+                          Min="0m" @bind-Value="_capitalValue" Class="mb-3" />
+        <MudTextField T="string" Label="ملاحظات (اختياري)" Variant="MudBlazor.Variant.Outlined"
+                      Lines="2" @bind-Value="_capitalNotes" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="MudBlazor.Variant.Text" OnClick="CloseCapitalDialog">إلغاء</MudButton>
+        <MudButton Variant="MudBlazor.Variant.Filled" Color="MudBlazor.Color.Success" Disabled="_savingCapital"
+                   OnClick="SaveCapitalAsync">
+            @(_savingCapital ? "جاري الحفظ..." : "حفظ رأس المال")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    /* ============ الأساس ============ */
+    .bs-page { position: relative; padding: 1.25rem 1.5rem 2.5rem; min-height: 100vh; }
+
+    /* ============ الهيدر ============ */
+    .bs-header { position: relative; border-radius: 24px; overflow: hidden; margin-bottom: 1rem; }
+    .header-bg { position: absolute; inset: 0; }
+    .header-gradient { position: absolute; inset: 0; background: linear-gradient(135deg, #0F1D36 0%, #1B2A4A 50%, #2D4A7A 100%); }
+    .header-orbs { position: absolute; inset: 0; overflow: hidden; }
+    .header-orb { position: absolute; border-radius: 50%; }
+    .orb-1 { width: 380px; height: 380px; top: -160px; right: -100px; background: radial-gradient(circle, rgba(212,168,83,.3), transparent 60%); }
+    .orb-2 { width: 280px; height: 280px; bottom: -100px; left: 30%; background: radial-gradient(circle, rgba(59,130,246,.2), transparent 60%); }
+    .header-content { position: relative; z-index: 1; padding: 1.8rem 2rem; }
+    .header-title { display: flex; align-items: center; gap: 1rem; }
+    .header-icon { width: 58px; height: 58px; border-radius: 16px; background: rgba(212,175,55,.18); border: 1px solid rgba(212,175,55,.4); display: flex; align-items: center; justify-content: center; color: #d4af37; }
+    .header-icon .mud-icon-root { font-size: 1.9rem !important; }
+    .header-title h1 { margin: 0; color: #fff; font-size: 1.6rem; font-weight: 900; letter-spacing: -.4px; }
+    .header-title p { margin: .3rem 0 0; color: rgba(255,255,255,.78); font-size: .88rem; }
+
+    /* ============ شريط النطاق والأدوات ============ */
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; background: #fff; border: 1px solid rgba(226,232,240,.9); border-radius: 16px; padding: .65rem .9rem; margin-bottom: 1rem; box-shadow: 0 8px 22px rgba(15,23,42,.05); }
+    .scope-group { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+    .scope-label { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; font-weight: 800; color: #64748b; margin-inline-end: .3rem; }
+    .scope-label .mud-icon-root { font-size: 1.05rem; color: #d4af37; }
+    .scope-chip { border: 1.5px solid #e2e8f0; background: #f8fafc; color: #334155; border-radius: 100px; padding: .42rem 1rem; font-family: inherit; font-size: .82rem; font-weight: 700; cursor: pointer; transition: all .18s ease; }
+    .scope-chip:hover { border-color: var(--mud-palette-primary, #2D4A7A); color: #0F1D36; transform: translateY(-1px); }
+    .scope-chip.active { background: linear-gradient(135deg, #0F1D36, #1B2A4A); color: #fff; border-color: #0F1D36; box-shadow: 0 5px 14px rgba(15,23,42,.25); }
+    .toolbar-actions { display: flex; align-items: center; gap: .5rem; }
+
+    .scope-note { display: flex; align-items: center; gap: .45rem; background: rgba(59,130,246,.07); border: 1px dashed rgba(59,130,246,.35); border-radius: 12px; padding: .5rem .9rem; margin-bottom: 1rem; font-size: .78rem; color: #1d4ed8; }
+    .scope-note .mud-icon-root { font-size: 1.05rem; flex: 0 0 auto; }
+
+    /* ============ أيقونة المعلومة ============ */
+    .row-info { opacity: .35; transition: opacity .15s ease; vertical-align: middle; }
+    .row-info:hover, .row-info:focus { opacity: 1; }
+    .row-info .mud-icon-root { font-size: 1rem !important; color: #b8860b !important; }
+    .item-name .row-info { margin-inline-start: .3rem; }
+    .balance-title .row-info { margin-inline-start: .4rem; margin-top: -2px; }
+
+    /* ============ لوحة التوازن ============ */
+    .balance-panel { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; border-radius: 18px; padding: 1rem 1.4rem; margin-bottom: 1.25rem; border: 1.5px solid; }
+    .balance-panel.balanced { background: linear-gradient(135deg, rgba(16,185,129,.10), rgba(16,185,129,.04)); border-color: rgba(16,185,129,.35); }
+    .balance-panel.off-balance { background: linear-gradient(135deg, rgba(245,158,11,.12), rgba(245,158,11,.04)); border-color: rgba(245,158,11,.4); }
+    .balance-main { display: flex; align-items: center; gap: .9rem; }
+    .balance-icon { color: #10b981; font-size: 2rem !important; }
+    .off-balance .balance-icon { color: #f59e0b; }
+    .balance-title { display: flex; align-items: center; font-weight: 900; font-size: 1.05rem; color: #0f172a; }
+    .balance-sub { display: block; color: #64748b; font-size: .82rem; margin-top: .15rem; }
+    .balance-diff { text-align: center; background: #fff; border-radius: 12px; padding: .5rem 1.1rem; border: 1px solid #e2e8f0; }
+    .balance-diff span { display: block; font-size: .72rem; color: #64748b; }
+    .balance-diff strong { font-size: 1.15rem; font-weight: 900; color: #0f172a; }
+    .balance-diff.pos strong { color: #059669; }
+    .balance-diff.neg strong { color: #dc2626; }
+
+    /* ============ كروت الأرقام ============ */
+    .hero-card { position: relative; overflow: hidden; border-radius: 18px; background: #fff; border: 1px solid rgba(226,232,240,.9); box-shadow: 0 10px 26px rgba(15,23,42,.06); padding: 1.2rem 1.3rem; display: flex; align-items: center; gap: 1rem; height: 100%; }
+    .hero-card::before { content: ''; position: absolute; top: 0; right: 0; left: 0; height: 4px; }
+    .hero-card.assets::before { background: linear-gradient(90deg, #10b981, #059669); }
+    .hero-card.liabilities::before { background: linear-gradient(90deg, #f59e0b, #d97706); }
+    .hero-card.equity::before { background: linear-gradient(90deg, #3b82f6, #1d4ed8); }
+    .hero-icon { flex: 0 0 auto; width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center; color: #fff; }
+    .hero-card.assets .hero-icon { background: linear-gradient(135deg, #10b981, #059669); }
+    .hero-card.liabilities .hero-icon { background: linear-gradient(135deg, #f59e0b, #d97706); }
+    .hero-card.equity .hero-icon { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+    .hero-label { display: block; font-size: .8rem; color: #64748b; font-weight: 600; }
+    .hero-value { display: block; font-size: 1.55rem; font-weight: 900; color: #0f172a; letter-spacing: -.5px; }
+    .hero-sub { display: block; font-size: .74rem; color: #94a3b8; margin-top: .15rem; }
+
+    /* ============ الأقسام والجداول ============ */
+    .bs-section { background: #fff; border: 1px solid rgba(226,232,240,.9); border-radius: 18px; box-shadow: 0 10px 26px rgba(15,23,42,.05); padding: 1.1rem 1.2rem; margin-bottom: 1.25rem; height: 100%; }
+    .section-head { display: flex; align-items: center; gap: .6rem; padding-bottom: .7rem; margin-bottom: .6rem; border-bottom: 2px solid #f1f5f9; }
+    .section-head h2 { margin: 0; font-size: 1.05rem; font-weight: 900; color: #0f172a; }
+    .section-head .mud-icon-root { color: #d4af37; }
+    .section-total { margin-inline-start: auto; background: #0F1D36; color: #d4af37; font-weight: 800; font-size: .85rem; border-radius: 100px; padding: .3rem .9rem; }
+    .bs-table { width: 100%; border-collapse: collapse; }
+    .bs-table th { text-align: right; font-size: .74rem; color: #94a3b8; font-weight: 700; padding: .45rem .5rem; border-bottom: 1px solid #f1f5f9; }
+    .bs-table td { padding: .7rem .5rem; border-bottom: 1px dashed #eef2f7; vertical-align: top; font-size: .88rem; }
+    .bs-table .item-name { font-weight: 800; color: #0f172a; white-space: nowrap; }
+    .bs-table .item-desc { color: #64748b; font-size: .8rem; }
+    .bs-table .num { text-align: left; font-weight: 800; color: #0f172a; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .bs-table .num.strong { color: #b8860b; }
+    .bs-table tfoot td { border-top: 2px solid #0F1D36; border-bottom: none; font-weight: 900; color: #0F1D36; padding-top: .8rem; }
+    .pos-text { color: #059669 !important; }
+    .neg-text { color: #dc2626 !important; }
+
+    /* ============ المعادلة الختامية ============ */
+    .closing-equation { display: flex; align-items: center; justify-content: center; gap: .8rem; flex-wrap: wrap; background: #fff; border: 1px solid rgba(226,232,240,.9); border-radius: 18px; padding: 1.1rem; margin-top: .25rem; }
+    .eq-box { background: linear-gradient(135deg, #0F1D36, #1B2A4A); color: #fff; border-radius: 12px; padding: .6rem 1.2rem; font-size: .85rem; }
+    .eq-box b { color: #d4af37; margin-inline-start: .4rem; }
+    .eq-sign { font-size: 1.4rem; font-weight: 900; color: #d4af37; }
+
+    /* ============ التحليل والتوصيات ============ */
+    .insight-section { background: #fff; border: 1px solid rgba(226,232,240,.9); border-radius: 18px; box-shadow: 0 10px 26px rgba(15,23,42,.05); padding: 1.1rem 1.2rem; margin-top: 1.25rem; }
+    .insight-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: .8rem; }
+    .insight-card { display: flex; gap: .75rem; align-items: flex-start; border: 1.5px solid #eef2f7; border-radius: 14px; padding: .85rem .9rem; transition: transform .18s ease, box-shadow .18s ease; }
+    .insight-card:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(15,23,42,.08); }
+    .insight-icon { flex: 0 0 auto; width: 38px; height: 38px; border-radius: 11px; display: flex; align-items: center; justify-content: center; }
+    .insight-card.good .insight-icon { background: rgba(16,185,129,.12); color: #059669; }
+    .insight-card.warn .insight-icon { background: rgba(245,158,11,.13); color: #b45309; }
+    .insight-card.risk .insight-icon { background: rgba(239,68,68,.11); color: #b91c1c; }
+    .insight-card.info .insight-icon { background: rgba(59,130,246,.11); color: #1d4ed8; }
+    .insight-title { display: block; font-weight: 800; font-size: .84rem; color: #0f172a; margin-bottom: .15rem; }
+    .insight-text { display: block; font-size: .78rem; color: #64748b; line-height: 1.6; }
+
+    .print-footer { text-align: center; color: #94a3b8; font-size: .75rem; margin-top: 1.2rem; }
+    .loading-screen { min-height: 50vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; }
+    .print-only { display: none; }
+
+    /* ============ تحديث بدون تكسير الصفحة ============ */
+    .bs-content { transition: opacity .25s ease; }
+    .bs-content.refreshing { opacity: .5; pointer-events: none; }
+    .refresh-bar { height: 3px; border-radius: 3px; margin: -0.55rem 0 .8rem; background: transparent; }
+    .refresh-bar.on {
+        background: linear-gradient(90deg, transparent 0%, #d4af37 50%, transparent 100%);
+        background-size: 200% 100%;
+        animation: bsSlide .9s linear infinite;
+    }
+    @@keyframes bsSlide { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+    /* ═══ الطباعة: عزل محكم — كل الصفحة مخفية إلا التقرير نفسه ═══
+       (يشتغل حتى لو السايدبار والتوب-بار من بره التقرير،
+        وبنفس النتيجة سواء الطباعة من الزر أو Ctrl+P) */
+    @@page { size: A4; margin: 10mm; }
+
+    @@media print {
+        /* 1) أخفِ كل شيء في الصفحة (سايدبار/توب-بار/أي عنصر خارج التقرير) */
+        body * { visibility: hidden !important; }
+
+        /* 2) وأظهِر التقرير فقط، ومثِّته أعلى الورقة بعرض كامل */
+        .bs-page, .bs-page * { visibility: visible !important; }
+        .bs-page {
+            position: absolute !important;
+            top: 0 !important; right: 0 !important; left: 0 !important;
+            width: 100% !important; padding: 0 !important; min-height: auto !important;
+        }
+
+        /* 3) صفِّر حشوات الـLayout حتى لا ينزاح التقرير */
+        .main-body, .mud-main-content, .mud-layout { margin: 0 !important; padding: 0 !important; }
+        html, body { background: #fff !important; }
+
+        /* 4) أخفِ عناصر التفاعل نهائياً (احتياطاً فوق الـvisibility) */
+        .no-print, .row-info, .mud-popover, .balance-panel, .hero-card, .insight-section,
+        .bs-header, .toolbar, .scope-note, .loading-screen, .bs-section, .closing-equation,
+        .refresh-bar { display: none !important; }
+        .print-only { display: block !important; }
+
+        /* 5) ترويسة وتنسيق التقرير المطبوع */
+        .print-header { text-align: center; border-bottom: 3px double #0F1D36; padding-bottom: .5rem; margin-bottom: 1rem; }
+        .print-header h1 { margin: 0; font-size: 1.4rem; color: #0F1D36; font-weight: 900; }
+        .print-header p { margin: .2rem 0 0; color: #475569; font-size: .85rem; }
+        .bs-section { box-shadow: none !important; border: 1px solid #999 !important; border-radius: 0; padding: .7rem .9rem; margin-bottom: .8rem; page-break-inside: avoid; }
+        .section-head { border-bottom: 1.5px solid #333; }
+        .section-head h2 { font-size: .95rem; }
+        .section-total { background: none; color: #0F1D36; border: 1px solid #333; }
+        .bs-table th { color: #333; }
+        .bs-table td { border-bottom: 1px solid #ccc; font-size: .78rem; padding: .45rem .4rem; }
+        .bs-table .item-desc, .bs-table .item-desc b { color: #333 !important; }
+        .bs-table .num, .bs-table .item-name { color: #000; }
+        .bs-table tfoot td { border-top: 2px solid #000; color: #000; }
+        .closing-equation { border: 1px solid #999; border-radius: 0; box-shadow: none !important; padding: .7rem; }
+        .eq-box { background: none; color: #000; border: 1px solid #333; }
+        .eq-box b { color: #000; }
+        .eq-sign { color: #000; }
+        .print-footer { color: #333; }
+        * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+        /* — ترويسة فخمة — */
+        .ph-top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+        .ph-brand { display: flex; align-items: center; gap: .55rem; }
+        .ph-logo { width: 52px; height: 52px; object-fit: contain; }
+        .ph-company { font-weight: 900; font-size: 1.05rem; color: #0F1D36; letter-spacing: .5px; }
+        .ph-company span { color: #b8860b; }
+        .ph-sub { font-size: .68rem; color: #64748b; }
+        .ph-title { text-align: center; }
+        .ph-title h1 { margin: 0; font-size: 1.35rem; color: #0F1D36; font-weight: 900; }
+        .ph-title p { margin: .15rem 0 0; color: #475569; font-size: .8rem; }
+        .ph-meta { text-align: left; font-size: .72rem; color: #475569; display: flex; flex-direction: column; gap: .05rem; }
+        .ph-meta strong { font-size: .85rem; color: #0F1D36; }
+
+        /* — صيغة الميزانية الكلاسيكية — */
+        .pb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; margin-top: .8rem; }
+        .pb-table { width: 100%; border-collapse: collapse; }
+        .pb-table th.pb-col-head { background: #0F1D36; color: #d4af37; font-size: .95rem; font-weight: 900; padding: .45rem .6rem; text-align: right; }
+        .pb-table td { border: 1px solid #b9b9b9; padding: .38rem .55rem; font-size: .8rem; color: #000; }
+        .pb-table td.val { text-align: left; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .pb-table tr.pb-subhead td { background: #eef2f7; font-weight: 900; color: #0F1D36; font-size: .82rem; }
+        .pb-table tr.pb-sub td { font-weight: 800; border-top: 1.5px solid #0F1D36; }
+        .pb-table tfoot td { border-top: 2px solid #000; font-weight: 900; font-size: .88rem; background: #fafafa; }
+        .pb-balance { margin-top: 4mm; border: 1.5px solid #0F1D36; padding: .5rem .8rem; text-align: center; font-weight: 800; font-size: .88rem; color: #0F1D36; }
+        .pb-balance b { color: #b8860b; }
+        .pb-diff { display: block; margin-top: .2rem; font-size: .75rem; font-weight: 700; color: #475569; }
+
+        /* — تذييل يتكرر في كل صفحة — */
+        .print-footer { position: fixed; bottom: 0; left: 0; right: 0; text-align: center; font-size: .68rem; color: #555; border-top: 1px solid #999; padding-top: .3rem; background: #fff; }
+    }
+</style>
+
+@code {
+    private bool _isLoading = true;      // للتحميل الأول فقط
+    private bool _isRefreshing;          // تحديث داخل الأثناء (بدون تكسير الصفحة)
+    private bool _canView;
+    private bool _isAdmin;
+    private BalanceSheetDto? _report;
+    private int? _branchId;
+    private List<BranchOptionDto> _branches = new();
+    private List<InsightVm> _insights = new();
+
+    // دايلوج رأس المال
+    private bool _capitalOpen;
+    private bool _savingCapital;
+    private decimal _capitalValue;
+    private string? _capitalNotes;
+    private readonly DialogOptions _capitalDialogOptions = new() { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+
+    private sealed record InsightVm(string Icon, string Severity, string Title, string Text);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+
+        // نفس بوابة قائمة الدخل بالحرف
+        _canView = user.HasClaim("Permission", "frmIncomeStatement:View")
+                || user.HasClaim("Permission", "frmCashBoxDashboard:View")
+                || user.IsInRole("Admin");
+        _isAdmin = user.IsInRole("Admin");
+
+        if (!_canView) { _isLoading = false; return; }
+
+        try { _branches = await BranchService.GetBranchesForFilterAsync(); } catch { _branches = new(); }
+        _report = await FinancialService.GetBalanceSheetAsync(_branchId);
+        _insights = BuildInsights(_report);
+        _isLoading = false;
+    }
+
+    private async Task PickScopeAsync(int? branchId)
+    {
+        if (_branchId == branchId || _isRefreshing) return;   // منع النقر المزدوج
+        _branchId = branchId;
+        _isRefreshing = true;                                  // الشاشة تبقى واقفة — تعتم فقط
+        try
+        {
+            _report = await FinancialService.GetBalanceSheetAsync(_branchId);
+            _insights = BuildInsights(_report);
+        }
+        finally
+        {
+            _isRefreshing = false;
+        }
+    }
+
+    private async Task OpenCapitalDialog()
+    {
+        var capital = await FinancialService.GetOpeningCapitalAsync();
+        _capitalValue = capital.Value;
+        _capitalNotes = capital.Notes;
+        _capitalOpen = true;
+    }
+
+    private void CloseCapitalDialog() => _capitalOpen = false;
+
+    private async Task SaveCapitalAsync()
+    {
+        if (_capitalValue < 0)
+        {
+            Snackbar.Add("قيمة رأس المال غير صحيحة", MudBlazor.Severity.Warning);
+            return;
+        }
+
+        _savingCapital = true;
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var userName = auth.User.Identity?.Name ?? "system";
+
+            await FinancialService.SaveOpeningCapitalAsync(_capitalValue, _capitalNotes, userName);
+            Snackbar.Add("تم حفظ رأس المال الافتتاحي", MudBlazor.Severity.Success);
+
+            _capitalOpen = false;
+            _isRefreshing = true;
+            try
+            {
+                _report = await FinancialService.GetBalanceSheetAsync(_branchId);
+                _insights = BuildInsights(_report);
+            }
+            finally
+            {
+                _isRefreshing = false;
+            }
+        }
+        finally
+        {
+            _savingCapital = false;
+        }
+    }
+
+    private async Task PrintReport() => await JS.InvokeVoidAsync("window.print");
+
+    // ═══════════ محرك التحليل والتوصيات ═══════════
+    private List<InsightVm> BuildInsights(BalanceSheetDto r)
+    {
+        var list = new List<InsightVm>();
+        if (r == null) return list;
+
+        decimal assets = r.TotalAssets;
+
+        // 1) السيولة النقدية
+        if (assets > 0)
+        {
+            var cashPct = r.CashBalance / assets * 100m;
+            if (cashPct < 10m)
+                list.Add(new(Icons.Material.Filled.WaterDrop, "risk", "سيولة نقدية منخفضة",
+                    $"النقدية {Pct(r.CashBalance, assets)} فقط من الأصول — راقب التدفقات الداخلة قبل أي التزام دفع."));
+            else if (cashPct > 60m)
+                list.Add(new(Icons.Material.Filled.Savings, "info", "نقدية راكدة",
+                    $"النقدية {Pct(r.CashBalance, assets)} من الأصول — فكّر في توظيفها (بضاعة سريعة الدوران أو سلف مُدرّة)."));
+            else
+                list.Add(new(Icons.Material.Filled.WaterDrop, "good", "سيولة صحية",
+                    $"النقدية تمثل {Pct(r.CashBalance, assets)} من الأصول — نسبة طبيعية."));
+        }
+
+        // 2) تركز المخزون
+        if (assets > 0)
+        {
+            var invPct = r.InventoryValue / assets * 100m;
+            if (invPct > 70m)
+                list.Add(new(Icons.Material.Filled.Inventory, "warn", "تركّز عالي في المخزون",
+                    $"المخزون {Pct(r.InventoryValue, assets)} من الأصول — رأس مالك عايش في بضاعة؛ سرّع الدوران أو نوّع."));
+            else
+                list.Add(new(Icons.Material.Filled.Inventory, "good", "توزيع مخزون معقول",
+                    $"المخزون {Pct(r.InventoryValue, assets)} من الأصول."));
+        }
+
+        // 3) المدينون
+        if (r.ReceivableInvoicesCount > 0)
+        {
+            var avg = r.AccountsReceivable / r.ReceivableInvoicesCount;
+            var recPct = assets > 0 ? r.AccountsReceivable / assets * 100m : 0m;
+            list.Add(recPct > 35m
+                ? new(Icons.Material.Filled.RequestQuote, "warn", "مدينون مرتفعون",
+                    $"{r.ReceivableInvoicesCount} فاتورة متبقية بمتوسط {FormatMoney(avg)} — {Pct(r.AccountsReceivable, assets)} من أصولك عند العملاء؛ شغّل التحصيل.")
+                : new(Icons.Material.Filled.RequestQuote, "good", "تحصيلات تحت السيطرة",
+                    $"{r.ReceivableInvoicesCount} فاتورة متبقية بمتوسط {FormatMoney(avg)} — نسبة صحية من الأصول."));
+        }
+
+        // 4) تغطية الالتزامات
+        if (r.TotalLiabilities > 0)
+        {
+            var coverage = r.CashBalance / r.TotalLiabilities;
+            if (coverage < 0.5m)
+                list.Add(new(Icons.Material.Filled.Warning, "risk", "تغطية نقدية ضعيفة",
+                    $"النقدية تغطي {coverage:N1}x من الالتزامات ({FormatMoney(r.TotalLiabilities)}) — خطّط للمستحقات قريباً."));
+            else
+                list.Add(new(Icons.Material.Filled.VerifiedUser, "good", "التزامات مغطاة",
+                    $"النقدية تغطي {coverage:N1}x من الالتزامات — وضع مريح."));
+        }
+        else
+        {
+            list.Add(new(Icons.Material.Filled.VerifiedUser, "good", "لا التزامات مسجلة",
+                "لا رواتب مستحقة ولا مستحقات موردين حالياً."));
+        }
+
+        // 5) الملاءة (الرافعة)
+        if (r.TotalEquity > 0)
+        {
+            var leverage = r.TotalLiabilities / r.TotalEquity * 100m;
+            list.Add(leverage > 100m
+                ? new(Icons.Material.Filled.TrendingDown, "warn", "رافعة مالية مرتفعة",
+                    $"الالتزامات = {leverage:N0}% من حقوق الملكية — تُدار، لكن تجنّب الاقتراض الإضافي الآن.")
+                : new(Icons.Material.Filled.TrendingUp, "good", "ملاءة قوية",
+                    $"الالتزامات {leverage:N0}% فقط من حقوق الملكية — بنية تمويل آمنة."));
+        }
+
+        // 6) اقتراح التوازن (الشركة فقط)
+        if (!r.IsBranchScoped)
+        {
+            if (r.IsBalanced)
+            {
+                list.Add(new(Icons.Material.Filled.Balance, "good", "الميزانية متوازنة",
+                    "الأرقام متماسكة: الأصول = الالتزامات + حقوق الملكية. استمر في الجرد الدوري لتبقى كذلك."));
+            }
+            else
+            {
+                var suggested = r.TotalAssets - r.TotalLiabilities - r.RetainedEarnings;
+                list.Add(new(Icons.Material.Filled.TipsAndUpdates, "info", "اقتراح قيمة رأس المال",
+                    Math.Abs(suggested) < 0.5m
+                        ? "الفرق سببه كمية بسيطة — راجع التقريب أو أدخل رأس المال بدقة أعلى."
+                        : $"لتوازن مثالي أدخل رأس مال افتتاحي ≈ {FormatMoney(Math.Max(0m, suggested))} (الأصول − الالتزامات − الأرباح المحتجزة)."));
+            }
+        }
+
+        return list;
+    }
+
+    private static string Pct(decimal part, decimal whole)
+        => whole == 0m ? "0%" : $"{part / whole * 100m:N1}%";
+
+    private static string FormatMoney(decimal v)
+        => v.ToString("N2", CultureInfo.GetCultureInfo("ar-EG"));
+}

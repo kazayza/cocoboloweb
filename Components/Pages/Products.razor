@@ -11,6 +11,9 @@
 @inject IAuditService AuditService
 @inject NavigationManager Navigation
 @inject AuthenticationStateProvider AuthProvider
+@inject IProductImportService ImportService
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
 @inject db24804Context Db
 @inject IJSRuntime JS
 @inject IServiceScopeFactory ScopeFactory
@@ -61,6 +64,17 @@
                            OnClick="OpenStockEntry">
                     إضافة رصيد للمخزن
                 </MudButton>
+                @if (_canImport)
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Info"
+                               StartIcon="@Icons.Material.Filled.CloudUpload"
+                               Class="add-btn"
+                               Style="background: rgba(255,255,255,0.15); color: white; border-color: rgba(255,255,255,0.4);"
+                               OnClick="OpenImportDialog">
+                        🌐 استيراد منتجات الموقع
+                    </MudButton>
+                }
                 <MudButton Variant="Variant.Filled"
                            Color="Color.Primary"
                            StartIcon="@Icons.Material.Filled.Add"
@@ -741,6 +755,98 @@
                    Disabled="@(_jobOrderSelectedCustomer == null)"
                    OnClick="OpenSelectedCustomerJobOrder">
             فتح امر التشغيل
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<!-- 🌐 WEBSITE PRODUCTS IMPORT DIALOG -->
+<MudDialog @bind-Visible="_importOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true })">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Color="Color.Info" />
+            <MudText Typo="Typo.h6">استيراد منتجات الموقع</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudAlert Severity="Severity.Info" Dense Class="mb-3">
+            ارفع ملف Excel (.xlsx) بأعمدة القالب — كل المنتجات ستُضاف معلَّمة <b>🌐 منتج الموقع</b> وتظهر بفلتر خاص في قائمة الأسعار. المكرر بالاسم يُتخطى تلقائياً، والمجموعة غير الموجودة تُنشأ.
+        </MudAlert>
+        <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-bottom:.75rem;">
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Download"
+                       OnClick="DownloadImportTemplateAsync">تحميل القالب الجاهز</MudButton>
+            <InputFile OnChange="OnImportFileChanged" accept=".xlsx" class="attachment-input" style="max-width:320px" />
+        </div>
+        @if (_importBusy)
+        {
+            <MudProgressLinear Indeterminate Color="Color.Info" Class="mb-2" />
+        }
+        @if (!string.IsNullOrEmpty(_importError))
+        {
+            <MudAlert Severity="Severity.Error" Dense Class="mb-2">@_importError</MudAlert>
+        }
+        @if (!string.IsNullOrEmpty(_importInfo))
+        {
+            <MudAlert Severity="Severity.Success" Dense Class="mb-2">@_importInfo</MudAlert>
+        }
+        @if (_importPreview.Any())
+        {
+            var validCount  = _importPreview.Count(r => r.Error == null);
+            var errorCount  = _importPreview.Count - validCount;
+            <MudText Typo="Typo.body2" Class="mb-1">
+                <b>@validCount</b> صف جاهز للإضافة · <b style="color:#d93445">@errorCount</b> صف به خطأ
+            </MudText>
+            <div style="max-height:280px; overflow:auto; border:1px solid var(--mud-palette-divider); border-radius:8px;">
+                <table class=" MudSimpleTable-simple" style="width:100%; font-size:.78rem; border-collapse:collapse;">
+                    <thead>
+                        <tr style="background:var(--mud-palette-background-grey);">
+                            <th style="padding:6px 8px; text-align:right;">#</th>
+                            <th style="padding:6px 8px; text-align:right;">الصنف</th>
+                            <th style="padding:6px 8px; text-align:right;">المجموعة</th>
+                            <th style="padding:6px 8px; text-align:right;">الأسعار (ت/س)</th>
+                            <th style="padding:6px 8px; text-align:right;">ملاحظة</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in _importPreview.Take(60))
+                        {
+                            <tr style="border-top:1px solid var(--mud-palette-divider); @(r.Error != null ? "opacity:.55" : "")">
+                                <td style="padding:4px 8px;">@r.RowNumber</td>
+                                <td style="padding:4px 8px;">@r.ProductName
+                                    @if (!string.IsNullOrEmpty(r.ProductDescription)) { <div style="font-size:.66rem;color:var(--mud-palette-text-secondary)">@r.ProductDescription</div> }
+                                </td>
+                                <td style="padding:4px 8px;">@(string.IsNullOrWhiteSpace(r.GroupName) ? "منتجات الموقع" : r.GroupName)</td>
+                                <td style="padding:4px 8px; direction:ltr; text-align:right;">
+                                    @(FormatImportPrice(r.CostStd)) / @(FormatImportPrice(r.PriceStd))
+                                    @if (r.PricePremium > 0 || r.PriceElite > 0) { <text>| @(FormatImportPrice(r.PricePremium)) / @(FormatImportPrice(r.PriceElite))</text> }
+                                </td>
+                                <td style="padding:4px 8px; color:#d93445;">@r.Error</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (_importPreview.Count > 60)
+            {
+                <MudText Typo="Typo.caption" Class="mt-1">يُعرض أول 60 صف من @(_importPreview.Count) — الكل سيُستورد.</MudText>
+            }
+        }
+        @if (_importResult is ProductWebsiteImportResultDto _done)
+        {
+            <MudAlert Severity="Severity.Success" Class="mt-2">
+                <b>تم!</b> أُضيف @_done.Added منتج · تُخطي @_done.SkippedDuplicates مكرر · مجموعات جديدة @_done.GroupsCreated
+                @if (_done.SampleDuplicateNames.Any())
+                {
+                    <div style="font-size:.75rem; margin-top:.35rem;">أمثلة المكرر: @string.Join("، ", _done.SampleDuplicateNames)</div>
+                }
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Outlined" OnClick="@(() => _importOpen = false)">إغلاق</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CloudDone"
+                   Disabled="@(_importBusy || !_importPreview.Any(r => r.Error == null) || _importResult != null)"
+                   OnClick="ConfirmImportAsync">
+            تنفيذ الاستيراد
         </MudButton>
     </DialogActions>
 </MudDialog>
@@ -2009,6 +2115,84 @@
     private bool _isDeleting = false;
     private bool _canJobOrderAccess = false;
     private bool _jobOrderDialogOpen = false;
+
+    // ═══════════════ 🌐 استيراد منتجات الموقع (2026-09-17) ═══════════════
+    private bool _importOpen;
+    private bool _importBusy;
+    private string? _importError;
+    private string? _importInfo;
+    private IBrowserFile? _importFile;
+    private List<ProductWebsiteImportRowDto> _importPreview = new();
+    private ProductWebsiteImportResultDto? _importResult;
+
+    private void OpenImportDialog()
+    {
+        _importFile = null; _importPreview = new(); _importResult = null;
+        _importError = null; _importInfo = null; _importBusy = false;
+        _importOpen = true;
+    }
+
+    private async Task DownloadImportTemplateAsync()
+    {
+        try
+        {
+            var b64 = Convert.ToBase64String(ImportService.GetTemplateBytes());
+            await JS.InvokeVoidAsync("eval", $"var a=document.createElement('a');a.href='data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}';a.download='قالب-منتجات-الموقع.xlsx';a.click();");
+        }
+        catch (Exception ex) { Snackbar.Add("تعذّر تحميل القالب: " + ex.Message, Severity.Error); }
+    }
+
+    private async Task OnImportFileChanged(InputFileChangeEventArgs e)
+    {
+        _importError = null; _importInfo = null; _importResult = null; _importPreview = new();
+        var f = e.File;
+        if (f == null) return;
+        if (!f.Name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+        { _importError = "الملف لازم يكون بصيغة .xlsx"; return; }
+        if (f.Size > 8 * 1024 * 1024)
+        { _importError = "الحد الأقصى لحجم الملف 8 ميجابايت"; return; }
+        _importFile = f;
+        _importBusy = true;
+        try
+        {
+            await using var stream = f.OpenReadStream(8 * 1024 * 1024);
+            var (ok, msg, rows) = await ImportService.ParseAsync(stream);
+            if (!ok) { _importError = msg; return; }
+            _importPreview = rows;
+            if (rows.Any(r => r.Error == null))
+                _importInfo = msg;
+            else
+                _importError = msg;   // كل الصفوف بها أخطاء → تنبيه أحمر + جدول التفاصيل ظاهر
+        }
+        catch (Exception ex) { _importError = "تعذّر قراءة الملف: " + ex.Message; }
+        finally { _importBusy = false; }
+    }
+
+    private async Task ConfirmImportAsync()
+    {
+        if (!_importPreview.Any(r => r.Error == null)) return;
+        _importBusy = true; _importError = null;
+        try
+        {
+            var (ok, msg, result) = await ImportService.ImportAsync(_importPreview, _currentUserName ?? "System");
+            if (ok)
+            {
+                _importResult = result;
+                _importInfo = msg;
+                _importPreview = new();
+                _importFile = null;
+                await LoadData();      // تحديث القائمة فوراً
+            }
+            else
+            {
+                _importError = msg;
+            }
+        }
+        catch (Exception ex) { _importError = "حدث خطأ: " + ex.Message; }
+        finally { _importBusy = false; }
+    }
+
+    private static string FormatImportPrice(decimal? v) => v > 0 ? v.Value.ToString("N0") : "—";
     private JobOrderCustomerOptionVm? _jobOrderSelectedCustomer;
     private List<JobOrderCustomerOptionVm> _jobOrderCustomers = new();
     private List<BranchListDto> _branches = new();
@@ -2026,6 +2210,7 @@
     private bool _showSalePrice = true;
     private bool _canDelete = false;
     private bool _canExport = false;
+    private bool _canImport = false;
     private bool _canViewPricingHistory = false;
 
     // ==================== DIALOGS ====================
@@ -2068,6 +2253,7 @@ private bool _isLoadingHistory = false;
         _showSalePrice = _currentRole != "factory";
         _canDelete = _currentRole is "Admin" or "AccountManager";
         _canExport = _currentRole is "Admin" or "AccountManager";
+        _canImport = _currentRole is "Admin" or "AccountManager";
         _canViewPricingHistory = _currentRole is "Admin" or "AccountManager";
         _canJobOrderAccess = user.IsInRole(SystemRoles.Admin)
             || user.IsInRole(SystemRoles.SalesManager)

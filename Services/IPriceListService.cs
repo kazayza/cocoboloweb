@@ -18,6 +18,7 @@ public interface IPriceListService
 
     /// <summary>تعديل مباشر — المدير ومدير الحسابات فقط (يتسجل في PriceHistory + AuditLogs)</summary>
     Task<(bool Success, string Message)> UpdatePriceAsync(int productId, string tier, decimal newPrice, string reason, string currentUser);
+    Task<(bool Success, string Message)> UpdateCostAsync(int productId, string tier, decimal newCost, string reason, string currentUser);
 
     /// <summary>طلب تعديل سعر — يستخدم نفس جدول PriceChangeRequests وورك فلو المراجعة الموجود</summary>
     Task<(bool Success, string Message)> RequestPriceChangeAsync(int productId, string tier, decimal newPrice, string reason, string currentUser);

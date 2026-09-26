@@ -21,6 +21,10 @@ public class LostRecoveryItemDto
     public decimal? ExpectedValue { get; set; }
     public string? InterestedProduct { get; set; }
 
+    // مالك الفرصة الأصلي (المسؤول الحالي قبل الاسترداد)
+    public int? OwnerEmployeeId { get; set; }
+    public string? OwnerEmployeeName { get; set; }
+
     public DateTime? ClosedAt { get; set; }
     public int DaysSinceClosed { get; set; }
 
@@ -131,6 +135,9 @@ public class RecoveryReviveDto
 
     // المرحلة الجديدة (مرحلة بيع نشطة غير خسارة)
     public int NewStageId { get; set; }
+
+    // المسؤول الجديد عن الفرصة (اختياري — افتراضياً يبقى مالكها كما هو)
+    public int? AssignedEmployeeId { get; set; }
     public decimal? ExpectedValue { get; set; }
     public DateTime? NextFollowUpDate { get; set; }
 

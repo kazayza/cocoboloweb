@@ -148,11 +148,13 @@ builder.Services.AddScoped<IPasswordService, PasswordService>();
 builder.Services.AddScoped<ICompanyInfoService, CompanyInfoService>();
 builder.Services.AddScoped<IBranchService, BranchService>();
 builder.Services.AddScoped<IPriceListService,        PriceListService>();
+builder.Services.AddScoped<IProductImportService,    ProductImportService>(); // 🌐 استيراد منتجات الموقع
 builder.Services.AddScoped<IWarehouseService, WarehouseService>();
 builder.Services.AddScoped<IStockService, StockService>();
 builder.Services.AddScoped<GlobalSearchService>();
 builder.Services.AddScoped<ICrmDashboardService, CrmDashboardService>();
 builder.Services.AddScoped<IMarketingDashboardService, MarketingDashboardService>();
+builder.Services.AddScoped<IExecutiveCockpitService, ExecutiveCockpitService>();
 builder.Services.AddScoped<ISalesAnalyticsService, SalesAnalyticsService>();
 builder.Services.AddScoped<IOpportunityService, OpportunityService>();
 builder.Services.AddScoped<IInteractionService, InteractionService>();
@@ -489,8 +491,9 @@ app.MapGet("/b2b/auth/current-user", (ClaimsPrincipal user) =>
 app.MapGet("/api/product-images/{productId:int}", async (
     int productId,
     db24804Context db,
-    IWebHostEnvironment env) =>
+    IWebHostEnvironment env, HttpContext http) =>
 {
+    http.Response.Headers.CacheControl = "private, max-age=86400";
     // 1) جيب الصورة الرئيسية أولاً، وإلا الأحدث
     var image = await db.ProductImages
         .AsNoTracking()
@@ -532,8 +535,9 @@ app.MapGet("/api/product-images/{productId:int}", async (
 app.MapGet("/api/public/product-images/{productId:int}", async (
     int productId,
     db24804Context db,
-    IWebHostEnvironment env) =>
+    IWebHostEnvironment env, HttpContext http) =>
 {
+    http.Response.Headers.CacheControl = "public, max-age=604800";
     var image = await db.ProductImages
         .AsNoTracking()
         .Where(im => im.ProductId == productId)

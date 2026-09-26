@@ -459,6 +459,7 @@
                     <div class="lr-callout lr-callout-green">
                         <span>✅ العميل عاد — الفرصة <b>#OP-@_sel.OpportunityId</b></span>
                         <span>القيمة المتوقعة: <b>@Money(_sel.ExpectedValue)</b></span>
+                        <span>المسؤول الحالي: <b>@(_sel.OwnerEmployeeName ?? "غير محدد")</b></span>
                     </div>
 
                     <div class="lr-radio-row">
@@ -488,6 +489,23 @@
                         </div>
                     </div>
 
+                    <div class="lr-field">
+                        <label>المسؤول الجديد بعد الاسترداد</label>
+                        @if (_assignables.Count > 0)
+                        {
+                            <select @bind="_revAssignedId">
+                                @foreach (var a in _assignables)
+                                {
+                                    <option value="@a.EmployeeId">@a.FullName@(a.EmployeeId == _sel.OwnerEmployeeId ? " — مالك الفرصة (البقاء معه)" : "")</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <select disabled="disabled"><option>لا يوجد موظفو مبيعات / خدمة عملاء نشطون — ستبقى الفرصة مع مالكها</option></select>
+                        }
+                    </div>
+
                     @if (!_same)
                     {
                         <div class="lr-field">
@@ -501,6 +519,10 @@
                         <textarea rows="2" placeholder="أي تفاصيل عن اتفاق العودة..." @bind="_revNotes"></textarea>
                     </div>
 
+                    @if (_revStageId == 0)
+                    {
+                        <div class="lr-err">⚠ لا توجد مراحل بيع نشطة في النظام — فعّل مراحل البيع في جدول SalesStages (عمود IsActive = 1) ثم أعد فتح الشاشة.</div>
+                    }
                     @if (!string.IsNullOrWhiteSpace(_errorMsg))
                     {
                         <div class="lr-err">⚠ @_errorMsg</div>
@@ -508,9 +530,16 @@
                 </div>
                 <div class="lr-modal-foot">
                     <button class="lr-btn lr-btn-ghost" @onclick="CloseModals">إلغاء</button>
-                    <button class="lr-btn lr-btn-revive" @onclick="SubmitRevive" disabled="@_busy || _revStageId == 0">
-                        @(_busy ? "جارٍ التنفيذ..." : (_same ? "تفعيل الفرصة" : "إنشاء فرصة جديدة"))
-                    </button>
+                    @if (_revStageId == 0)
+                    {
+                        <button class="lr-btn lr-btn-revive" disabled="true" title="لا توجد مراحل بيع نشطة — راجع جدول SalesStages">لا توجد مراحل بيع</button>
+                    }
+                    else
+                    {
+                        <button class="lr-btn lr-btn-revive" @onclick="SubmitRevive" disabled="@_busy" title="تحويل الفرصة إلى المرحلة المختارة وتسجيل الاسترداد">
+                            @(_busy ? "جارٍ التنفيذ..." : (_same ? "تفعيل الفرصة" : "إنشاء فرصة جديدة"))
+                        </button>
+                    }
                 </div>
             </div>
         </div>
@@ -955,6 +984,8 @@
     // نموذج الاسترداد
     private bool _same = true;
     private int _revStageId;
+    private List<RecoveryEmployeeOptionDto> _assignables = new();
+    private int _revAssignedId;
     private string _revProduct = "";
     private string _revNotes = "";
     private decimal? _revValue;
@@ -1035,6 +1066,7 @@
             await Recovery.RunQueueMaintenanceAsync();
 
             _stages = await Recovery.GetRecoveryStagesAsync();
+            _assignables = await Recovery.GetAssignableEmployeesAsync();
             _myEmpId = await Recovery.GetCurrentCsEmployeeIdAsync(_userName);
             _stats = await Recovery.GetStatsAsync(_user);
             _lateCount = await Recovery.GetLateCountAsync();
@@ -1082,6 +1114,13 @@
         _errorMsg = null;
         try
         {
+            // ⭐ إعادة تحميل المراحل مع كل تحديث — حتى لا يبقى المودال معطلاً
+            // لو كانت مراحل البيع غير نشطة عند فتح الشاشة ثم فُعّلت لاحقاً
+            _stages = await Recovery.GetRecoveryStagesAsync();
+            _assignables = await Recovery.GetAssignableEmployeesAsync();
+            if (_revStageId == 0 && _stages.Count > 0)
+                _revStageId = _stages.First().StageId;
+
             _stats = await Recovery.GetStatsAsync(_user);
             _lateCount = await Recovery.GetLateCountAsync();
             var page = await Recovery.GetQueueAsync(CurrentFilter(), 1, _pageSize, _userName);
@@ -1577,6 +1616,9 @@
         _sel = it;
         _same = true;
         _revStageId = _stages.Count > 0 ? _stages.First().StageId : 0;
+        _revAssignedId = (it.OwnerEmployeeId.HasValue && _assignables.Any(a => a.EmployeeId == it.OwnerEmployeeId.Value))
+            ? it.OwnerEmployeeId.Value
+            : (_assignables.Count > 0 ? _assignables[0].EmployeeId : 0);
         _revValue = it.ExpectedValue;
         _revProduct = it.InterestedProduct ?? "";
         _revNotes = "";
@@ -1602,6 +1644,7 @@
                 OpportunityId = _sel.OpportunityId,
                 SameOpportunity = _same,
                 NewStageId = _revStageId,
+                AssignedEmployeeId = _revAssignedId > 0 ? _revAssignedId : null,
                 ExpectedValue = _revValue,
                 NextFollowUpDate = DateTime.Today.AddDays(3),
                 NewInterestedProduct = _same ? null : _revProduct,
@@ -1612,6 +1655,7 @@
             {
                 CloseModals();
                 await RefreshAsync();
+                _successMsg = msg;   // رسالة نجاح مرئية (كما في حفظ التواصل)
             }
             else
             {

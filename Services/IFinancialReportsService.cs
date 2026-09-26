@@ -13,4 +13,19 @@ public interface IFinancialReportsService
     /// تحليل سريع للحصول على نسبة الربح فقط
     /// </summary>
     Task<decimal> GetNetProfitMarginAsync(DateTime from, DateTime to);
+
+    /// <summary>
+    /// قائمة المركز المالي (الميزانية) — على مستوى الشركة، كما في تاريخ اليوم
+    /// </summary>
+    Task<BalanceSheetDto> GetBalanceSheetAsync(int? branchId = null);
+
+    /// <summary>
+    /// قراءة رأس المال الافتتاحي (سطر OpeningCapital من FinancialSettings)
+    /// </summary>
+    Task<(decimal Value, string? Notes, DateTime? UpdatedAt, string? UpdatedBy)> GetOpeningCapitalAsync();
+
+    /// <summary>
+    /// حفظ رأس المال الافتتاحي (Admin فقط — مع Audit)
+    /// </summary>
+    Task SaveOpeningCapitalAsync(decimal value, string? notes, string userName);
 }

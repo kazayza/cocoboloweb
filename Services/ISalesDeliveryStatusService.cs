@@ -33,6 +33,9 @@ public interface ISalesDeliveryStatusService
     
     // ─── تحديث حالة التسليم ────────────────────────
     
+    // ⭐ جلب الموظف (كود + اسم) من اسم المستخدم — لزرار التسليم السريع
+    Task<(int? EmployeeId, string? FullName)> GetEmployeeByUserNameAsync(string userName);
+
     Task<(bool Success, string Message)> UpdateDeliveryStatusAsync(
         DeliveryUpdateDto dto);
     
