@@ -17,8 +17,14 @@ public interface IEmployeeLoanService
     // ── الأقساط ─────────────────────────────────────────────
     Task<List<InstallmentListDto>>  GetMonthInstallmentsAsync(string month); // الأقساط المستحقة في شهر
     Task<(bool Success, string Message)> DeductInstallmentAsync(int installmentId, int payrollDetailId, string userName);
-    Task<(bool Success, string Message)> SkipInstallmentAsync(int installmentId, string reason, string userName);
-    Task<(bool Success, string Message)> SplitInstallmentAsync(int installmentId, decimal amountToKeepThisMonth, string reason, string userName);
+    Task<(bool Success, string Message)> SkipInstallmentAsync(int installmentId, string reason, string userName, string? targetMonth = null);
+    Task<(bool Success, string Message)> SplitInstallmentAsync(int installmentId, decimal amountToKeepThisMonth, string reason, string userName, string? targetMonth = null);
+
+    // (12-H9) تعديل قسط معلق (مبلغ/شهر/ملاحظات)
+    Task<(bool Success, string Message)> UpdateInstallmentAsync(int installmentId, decimal? newAmount, string? newMonth, string? notes, string userName);
+
+    // (12-H9) تعديل السلفة (ملاحظات/معتمد دائمًا — الحقول المالية فقط عند صفر خصم)
+    Task<(bool Success, string Message)> UpdateLoanAsync(LoanFormDto dto, string userName);
 
     // ── كشف الحساب ───────────────────────────────────────────
     Task<EmployeeLoanStatementDto?> GetEmployeeStatementAsync(int employeeId);

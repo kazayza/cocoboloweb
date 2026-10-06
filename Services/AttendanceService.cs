@@ -284,6 +284,21 @@ public class AttendanceService : IAttendanceService
         dashboard.Statistics.TodayAbsent = todayStats.TodayAbsent;
         dashboard.Statistics.TodayLate = todayStats.TodayLate;
 
+        // (12-H10) متوسط وقت الوصول اليوم — بديل الرقم الثابت (08:12) اللي كان مكتوب في الشاشة
+        var todayArrivals = (await _db.Attendances.AsNoTracking()
+            .Where(a => a.LogDate == DateTime.Today && a.TimeIn != null)
+            .Select(a => a.TimeIn)
+            .ToListAsync())
+            .Where(t => t.HasValue)
+            .Select(t => t!.Value)
+            .ToList();
+
+        if (todayArrivals.Count > 0)
+        {
+            var avgMinutes = todayArrivals.Average(t => t.Hour * 60 + t.Minute);
+            dashboard.Statistics.AvgArrivalTime = TimeOnly.FromTimeSpan(TimeSpan.FromMinutes(Math.Round(avgMinutes)));
+        }
+
         // 2. الاتجاه اليومي
         var dailyData = await _db.Attendances.AsNoTracking()
             .Where(a => a.LogDate >= fromDate && a.LogDate <= toDate)

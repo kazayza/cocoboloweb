@@ -1291,13 +1291,15 @@ public class InvoiceService : IInvoiceService
             .OrderBy(d => d.DetailId)
             .ToListAsync();
 
-        // 🔒 نفس الصفوف: ممنوع إضافة أو حذف — تعديل كمية/سعر أو استبدال صنف فقط
-        if (dto.Items == null || dto.Items.Count == 0 || dto.Items.Count != oldDetails.Count)
-            return (false, "لا يمكن إضافة أو حذف أصناف — عدّل الكمية/السعر أو استبدل الصنف.");
-        var oldIds = oldDetails.Select(d => d.DetailId).OrderBy(x => x).ToList();
-        var newIds = dto.Items.Select(i => i.DetailId).OrderBy(x => x).ToList();
-        if (!oldIds.SequenceEqual(newIds))
+        // ✅ قرار المستخدم: مرونة كاملة — إضافة/حذف/استبدال أصناف في فواتير البيع والشراء (بما فيها المرايا)
+        // الضوابط: إذن التعديل الكامل (Admin/AM) + سبب إلزامي + سجل تدقيق + تصحيح المخزون أوتوماتيك + الإجمالي ≥ المدفوع
+        if (dto.Items == null || dto.Items.Count == 0)
+            return (false, "لا يمكن حفظ الفاتورة بدون أصناف.");
+        var oldIdSet = oldDetails.Select(d => d.DetailId).ToHashSet();
+        if (dto.Items.Any(i => i.DetailId != 0 && !oldIdSet.Contains(i.DetailId)))
             return (false, "بيانات الأصناف غير مطابقة للفاتورة الأصلية.");
+        if (dto.Items.Where(i => i.DetailId != 0).GroupBy(i => i.DetailId).Any(g => g.Count() > 1))
+            return (false, "لا يمكن تكرار نفس الصف الأصلي أكثر من مرة.");
 
         // 💰 إعادة حساب المجاميع — الرسوم القديمة تبقى كما هي + رسوم جديدة اختيارية (فوق القيمة فقط)
         // TotalAmount لكل صنف محسوبة تلقائياً (كمية × سعر)
@@ -1355,7 +1357,7 @@ public class InvoiceService : IInvoiceService
             Items = oldDetails.Select(d => new { d.DetailId, d.ProductId, ProductName = ProdName(d.ProductId), d.Quantity, d.UnitPrice, d.PricingTier, d.SelectedAlternativeId }).ToList()
         };
 
-        // ⭐ حذف الأصناف: محظور على فواتير الشراء المرآة (تتبع فاتورة البيع الأصل)
+        // ⭐ الأصناف المحذوفة: رصيدها يرجع في حلقات المخزون أعلاه والصفوف تُحذف أدناه بتسجيل تدقيق (للبيع والشراء)
         var removedDetails = oldDetails
             .Where(d => dto.Items.All(i => i.DetailId != d.DetailId))
             .ToList();

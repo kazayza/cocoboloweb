@@ -22,10 +22,13 @@ public interface IFinancialReportsService
     /// <summary>
     /// قراءة رأس المال الافتتاحي (سطر OpeningCapital من FinancialSettings)
     /// </summary>
-    Task<(decimal Value, string? Notes, DateTime? UpdatedAt, string? UpdatedBy)> GetOpeningCapitalAsync();
+    Task<(decimal Value, string? Notes, DateTime? UpdatedAt, string? UpdatedBy)> GetOpeningCapitalAsync(int? branchId = null);
 
     /// <summary>
     /// حفظ رأس المال الافتتاحي (Admin فقط — مع Audit)
     /// </summary>
-    Task SaveOpeningCapitalAsync(decimal value, string? notes, string userName);
+    Task SaveOpeningCapitalAsync(int? branchId, decimal value, string? notes, string userName);
+
+    /// <summary>اقتراح رأس المال من بضاعة المعرض الافتتاحية (حركات OpeningBalance)</summary>
+    Task<decimal> GetOpeningStockValueAsync(int? branchId = null);
 }

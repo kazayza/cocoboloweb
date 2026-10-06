@@ -134,6 +134,7 @@
                     <MudSelectItem T="string" Value="@("all")">كل المنتجات</MudSelectItem>
                     <MudSelectItem T="string" Value="@("showroom")">منتجات المعرض (@_showroomCount)</MudSelectItem>
                     <MudSelectItem T="string" Value="@("linked")">مرتبطة بعميل (@_linkedToCustomerCount)</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("website")">منتجات الموقع (@_websiteCount)</MudSelectItem>
                 </MudSelect>
             </div>
 
@@ -232,9 +233,18 @@
             <div class="empty-state">
                 <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Large" />
                 <h3>لا توجد منتجات</h3>
-                <p>@(string.IsNullOrWhiteSpace(_searchText) && !_statusFilter.HasValue && _activeStatFilter == "all"
+                <p>@(string.IsNullOrWhiteSpace(_searchText) && !_statusFilter.HasValue && _activeStatFilter == "all" && _ownershipFilter == "all" && !_selectedBranchId.HasValue && !_selectedWarehouseId.HasValue
                     ? "لم يتم إضافة أي منتجات بعد"
-                    : "لم يتم العثور على نتائج مطابقة")</p>
+                    : "لم يتم العثور على نتائج مطابقة لمجموعة الفلاتر الحالية — جرّب مسح الفلاتر")</p>
+                @if (!string.IsNullOrWhiteSpace(_searchText) || _statusFilter.HasValue || _activeStatFilter != "all" || _ownershipFilter != "all" || _selectedBranchId.HasValue || _selectedWarehouseId.HasValue)
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Warning"
+                               StartIcon="@Icons.Material.Filled.FilterAltOff"
+                               OnClick="ClearAllFilters">
+                        مسح كل الفلاتر
+                    </MudButton>
+                }
                 @if (string.IsNullOrWhiteSpace(_searchText) && !_statusFilter.HasValue && _activeStatFilter == "all" && _ownershipFilter == "all" && !_selectedBranchId.HasValue && !_selectedWarehouseId.HasValue)
                 {
                     <MudButton Variant="Variant.Filled"
@@ -349,7 +359,9 @@
                 <MudTd DataLabel="المنتج">
                     <div class="product-info product-info-merged">
                         <div class="product-title-row">
-                            <strong>@context.ProductName</strong>
+                            <MudTooltip Text="@ProductTypeFull(context)" Placement="Placement.Top" Arrow="true">
+                                <strong style="cursor:help;">@context.ProductName</strong>
+                            </MudTooltip>
                             <span class="code-badge">#@context.ProductId</span>
                         </div>
                         @if (!string.IsNullOrWhiteSpace(context.ProductDescription))
@@ -625,7 +637,7 @@
             </div>
             <!-- Elite -->
             <div class="card-price-item">
-                <span class="card-price-label elite-label">Elite ✦</span>
+                <span class="card-price-label elite-label">Elite</span>
                 @if (HasSalePrice(product.SuggestedSalePriceElite))
                 {
                     <span class="card-price-value elite-val">@product.SuggestedSalePriceElite!.Value.ToString("N0") <small>ج.م</small></span>
@@ -817,7 +829,7 @@
                                 <td style="padding:4px 8px;">@(string.IsNullOrWhiteSpace(r.GroupName) ? "منتجات الموقع" : r.GroupName)</td>
                                 <td style="padding:4px 8px; direction:ltr; text-align:right;">
                                     @(FormatImportPrice(r.CostStd)) / @(FormatImportPrice(r.PriceStd))
-                                    @if (r.PricePremium > 0 || r.PriceElite > 0) { <text>| @(FormatImportPrice(r.PricePremium)) / @(FormatImportPrice(r.PriceElite))</text> }
+                                    @if (r.PricePremium > 0 || r.PriceElite > 0 || r.DiscountedPremium > 0) { <text>| @(FormatImportPrice(r.DiscountedPremium ?? r.PricePremium))@(r.DiscountedPremium > 0 ? " (بعد الخصم)" : "") / @(FormatImportPrice(r.PriceElite))</text> }
                                 </td>
                                 <td style="padding:4px 8px; color:#d93445;">@r.Error</td>
                             </tr>
@@ -833,12 +845,27 @@
         @if (_importResult is ProductWebsiteImportResultDto _done)
         {
             <MudAlert Severity="Severity.Success" Class="mt-2">
-                <b>تم!</b> أُضيف @_done.Added منتج · تُخطي @_done.SkippedDuplicates مكرر · مجموعات جديدة @_done.GroupsCreated
+                <b>تم!</b> أُضيف @_done.Added منتج · حُدّث @_done.Updated · تُخطي @_done.SkippedDuplicates مكرر · مجموعات جديدة @_done.GroupsCreated
+                @if (_done.SampleUpdatedNames.Any())
+                {
+                    <div style="font-size:.75rem; margin-top:.35rem;">أمثلة المحدّث: @string.Join("، ", _done.SampleUpdatedNames)</div>
+                }
                 @if (_done.SampleDuplicateNames.Any())
                 {
                     <div style="font-size:.75rem; margin-top:.35rem;">أمثلة المكرر: @string.Join("، ", _done.SampleDuplicateNames)</div>
                 }
             </MudAlert>
+        }
+        @if (_importPreview.Any() && _importResult == null)
+        {
+            <MudPaper Class="pa-3 mt-3" Elevation="0" Style="background:#f6f8fb; border:1px solid #e4e9f1; border-radius:10px;">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:800; margin-bottom:4px;">المنتجات الموجودة في النظام</MudText>
+                <MudRadioGroup T="bool" @bind-Value="_importUpdateExisting">
+                    <MudRadio T="bool" Value="@false" Color="Color.Primary">تخطيها — إضافة المنتجات الجديدة فقط</MudRadio>
+                    <MudRadio T="bool" Value="@true" Color="Color.Primary">تحديث أسعارها (التكلفة والبيع لكل الفئات) + إضافة الجديد</MudRadio>
+                </MudRadioGroup>
+                <MudText Typo="Typo.caption" Style="color:#6a7890;">التحديث يطبق أسعار الملف على منتجات الموقع الموجودة (مطابقة برقم المنتج بالموقع ثم بالاسم) — الاسم والمجموعة والوصف لا تتغير.</MudText>
+            </MudPaper>
         }
     </DialogContent>
     <DialogActions>
@@ -854,19 +881,24 @@
 <!-- VIEW DIALOG -->
 @if (_viewDialogOpen && _selectedProduct != null)
 {
-    <MudOverlay ZIndex="1000" OnClick="@(() => _viewDialogOpen = false)" />
+    <MudOverlay ZIndex="1399" OnClick="@(() => _viewDialogOpen = false)" />
     <div class="custom-dialog">
         <MudPaper class="vd-paper" Elevation="24">
 
-            <!-- Header متدرج مع الباقة -->
-            <div class="vd-header @GetViewDialogHeaderClass(_selectedProduct.PricingType)">
+            <!-- ✅ Header بستايل دايلوج الفيدباك: تدرج تيل + أيقونة ذهبية + شارات -->
+            <div class="vd-header">
                 <div class="vd-header-left">
-                    <span class="vd-badge">@GetPricingTypeText(_selectedProduct.PricingType)</span>
-                    <span class="vd-code">#@_selectedProduct.ProductId</span>
+                    <div class="vd-hico"><MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Large" /></div>
+                    <div>
+                        <h6 class="vd-h-title">تفاصيل المنتج</h6>
+                        <div class="vd-h-sub">
+                            <span class="vd-badge">@GetPricingTypeText(_selectedProduct.PricingType)</span>
+                            <span class="vd-type-badge @(_selectedProduct.Customer.HasValue ? "vd-type-cust" : _selectedProduct.IsWebsite ? "vd-type-web" : "vd-type-show")">@ProductTypeShort(_selectedProduct)</span>
+                            <span>#@_selectedProduct.ProductId</span>
+                        </div>
+                    </div>
                 </div>
-                <MudIconButton Icon="@Icons.Material.Filled.Close"
-                               OnClick="@(() => _viewDialogOpen = false)"
-                               Color="Color.Inherit" Size="Size.Small" />
+                <button type="button" class="vd-dlg-x" @onclick="@(() => _viewDialogOpen = false)">✕</button>
             </div>
 
             <!-- صورة المنتج -->
@@ -932,7 +964,7 @@
                         </span>
                     </div>
                     <div class="vd-price-card vd-price-elite">
-                        <span class="vd-price-label">✦ سعر البيع Elite</span>
+                        <span class="vd-price-label">سعر البيع Elite</span>
                         <span class="vd-price-value elite-val">
                             @if (HasSalePrice(_selectedProduct.SuggestedSalePriceElite))
                             {
@@ -1022,7 +1054,7 @@
 <!-- DELETE DIALOG -->
 @if (_deleteDialogOpen && _productToDelete != null)
 {
-    <MudOverlay ZIndex="1000" OnClick="@(() => _deleteDialogOpen = false)" />
+    <MudOverlay ZIndex="1399" OnClick="@(() => _deleteDialogOpen = false)" />
     <div class="custom-dialog">
         <MudPaper Style="border-radius: 20px; overflow: hidden; width: 450px; max-width: 95vw;" Elevation="24">
             <div style="background: #ef4444; padding: 1.25rem; color: white; display: flex; justify-content: space-between; align-items: center;">
@@ -1072,7 +1104,7 @@
 <!-- ⭐ PRICING HISTORY DIALOG -->
 @if (_pricingHistoryDialogOpen && _selectedProduct != null)
 {
-    <MudOverlay ZIndex="1000" OnClick="@(() => _pricingHistoryDialogOpen = false)" />
+    <MudOverlay ZIndex="1399" OnClick="@(() => _pricingHistoryDialogOpen = false)" />
     <div class="custom-dialog">
         <MudPaper Style="border-radius: 20px; overflow: hidden; width: 700px; max-width: 95vw; max-height: 85vh; display: flex; flex-direction: column;" Elevation="24">
             <!-- Header -->
@@ -1370,7 +1402,7 @@
         top: 3vh;
         left: 50%;
         transform: translateX(-50%);
-        z-index: 1001;
+        z-index: 1400;   /* ✅ فوق الأببار (1300) — الهيدر مش هيختفي تاني */
         width: min(560px, 95vw);
         max-height: 94vh;
         display: flex;
@@ -1859,51 +1891,53 @@
 
 /* ===== VIEW DIALOG REDESIGN ===== */
 .vd-paper {
-    border-radius: 20px !important;
+    border-radius: 18px !important;
     overflow: hidden auto;
     width: 100%;
     max-width: 100%;
     max-height: 94vh;
     display: flex;
     flex-direction: column;
+    box-shadow: 0 24px 70px rgba(0,0,0,.4);   /* ✅ مثل دايلوج الفيدباك */
 }
 .vd-header {
-    padding: 1rem 1.25rem;
+    padding: 16px 20px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 12px;
+    background: linear-gradient(135deg, #0f766e, #155e75);   /* ✅ نفس تدرج دايلوج الفيدباك */
+    color: #fff;
     position: sticky;
     top: 0;
     z-index: 3;
 }
-.vd-header-cclass {
-    background: linear-gradient(135deg, #6d28d9 0%, #8b5cf6 50%, #a855f7 100%);
-}
-.vd-header-premium {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-.vd-header-elite {
-    background: linear-gradient(135deg, #b8860b 0%, #f5d76e 50%, #c9a84c 100%);
-}
-.vd-header-left { display: flex; align-items: center; gap: 0.75rem; }
+.vd-header-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.vd-hico { width: 42px; height: 42px; border-radius: 12px; background: rgba(245,158,11,.22); border: 1px solid rgba(245,158,11,.45); display: flex; align-items: center; justify-content: center; color: #f59e0b; flex: 0 0 auto; }
+.vd-h-title { font-size: 15px; font-weight: 900; margin: 0; color: #fff; }
+.vd-h-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: #a7f3d0; margin-top: 2px; }
+.vd-dlg-x { background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.35); color: #fff; width: 34px; height: 34px; border-radius: 50%; cursor: pointer; font-size: 14px; font-weight: 900; line-height: 1; flex: 0 0 auto; transition: .15s; }
+.vd-dlg-x:hover { background: rgba(255,255,255,.32); transform: rotate(90deg); }
 .vd-badge {
-    background: rgba(255,255,255,0.25);
+    background: rgba(255,255,255,0.22);
     color: white;
     font-weight: 800;
-    font-size: 0.8rem;
-    padding: 0.25rem 0.75rem;
-    border-radius: 20px;
-    letter-spacing: 1px;
+    font-size: 0.68rem;
+    padding: 2px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
 }
-.vd-code {
-    color: rgba(255,255,255,0.85);
-    font-size: 0.85rem;
-    font-weight: 600;
-}
+.vd-type-badge { font-size: .68rem; font-weight: 800; padding: 2px 9px; border-radius: 999px; color: #fff; white-space: nowrap; }
+.vd-type-cust { background: rgba(245,158,11,.9); }
+.vd-type-web  { background: rgba(6,182,212,.9); }
+.vd-type-show { background: rgba(22,163,74,.9); }
 .vd-image-wrap {
-    width: 100%;
-    height: 240px;
+    width: calc(100% - 40px);
+    margin: 14px 20px 0;
+    height: 220px;
     background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2111,6 +2145,7 @@
     private int _noPriceCount;
     private int _showroomCount;
     private int _linkedToCustomerCount;
+    private int _websiteCount;
     private bool _isLoading = true;
     private bool _isDeleting = false;
     private bool _canJobOrderAccess = false;
@@ -2124,10 +2159,11 @@
     private IBrowserFile? _importFile;
     private List<ProductWebsiteImportRowDto> _importPreview = new();
     private ProductWebsiteImportResultDto? _importResult;
+    private bool _importUpdateExisting;   // false = تخطي الموجود · true = تحديث أسعاره
 
     private void OpenImportDialog()
     {
-        _importFile = null; _importPreview = new(); _importResult = null;
+        _importFile = null; _importPreview = new(); _importResult = null; _importUpdateExisting = false;
         _importError = null; _importInfo = null; _importBusy = false;
         _importOpen = true;
     }
@@ -2174,7 +2210,7 @@
         _importBusy = true; _importError = null;
         try
         {
-            var (ok, msg, result) = await ImportService.ImportAsync(_importPreview, _currentUserName ?? "System");
+            var (ok, msg, result) = await ImportService.ImportAsync(_importPreview, _currentUserName ?? "System", _importUpdateExisting);
             if (ok)
             {
                 _importResult = result;
@@ -2268,8 +2304,7 @@ private bool _isLoadingHistory = false;
         // ✅ تحميل الفلتر المحفوظ من sessionStorage
         await RestoreFilterState();
 
-        if (!_selectedBranchId.HasValue && _preferredBranchId.HasValue)
-            _selectedBranchId = _preferredBranchId;
+        // ✅ قرار المستخدم: الشاشة تفتح على «كل الفروع» افتراضيًا — الفلتر المحفوظ من الجلسة يُحترم إن وجد
 
         if (_selectedWarehouseId.HasValue && !FilteredWarehouseLookups.Any(w => w.WarehouseId == _selectedWarehouseId.Value))
             _selectedWarehouseId = null;
@@ -2319,8 +2354,9 @@ private bool _isLoadingHistory = false;
             // ✅ إحصائيات — مسعّر = عنده C Class أو Premium أو Elite
             _pricedCount = _allProducts.Count(HasAnySalePrice);
             _noPriceCount = _allProducts.Count(p => !HasAnySalePrice(p));
-            _showroomCount = _allProducts.Count(p => !p.Customer.HasValue);
+            _showroomCount = _allProducts.Count(p => !p.Customer.HasValue && !p.IsWebsite);   // ⭐ نفس تعريف الفلتر بالظبط
             _linkedToCustomerCount = _allProducts.Count(p => p.Customer.HasValue);
+            _websiteCount = _allProducts.Count(p => p.IsWebsite);
 
             if (_canJobOrderAccess)
                 await LoadJobOrderCustomersAsync();
@@ -2362,11 +2398,15 @@ private bool _isLoadingHistory = false;
 
         if (_ownershipFilter == "showroom")
         {
-            query = query.Where(p => !p.Customer.HasValue);
+            query = query.Where(p => !p.Customer.HasValue && !p.IsWebsite);   // ⭐ المعرض = بلا عميل وَمش موقع (منتجات الموقع ليها فلتر مستقل)
         }
         else if (_ownershipFilter == "linked")
         {
             query = query.Where(p => p.Customer.HasValue);
+        }
+        else if (_ownershipFilter == "website")
+        {
+            query = query.Where(p => p.IsWebsite);
         }
 
         // ✅ Stat filter (مسعّرة = عندها أي باقة / بدون سعر = لا يوجد أي سعر بيع)
@@ -2489,12 +2529,11 @@ private static string GetPricingTypeBadgeClass(string? pricingType) => Normalize
     _ => "premium"
 };
 
-private static string GetViewDialogHeaderClass(string? pricingType) => NormalizePricingType(pricingType) switch
-{
-    "CClass" => "vd-header-cclass",
-    "Elite" => "vd-header-elite",
-    _ => "vd-header-premium"
-};
+// 🏷️ تصنيف نوع المنتج: عميل ← موقع ← معرض (بالأولوية)
+    private static string ProductTypeShort(ProductListDto p) =>
+        p.Customer.HasValue ? "منتج عميل" : p.IsWebsite ? "منتج موقع" : "منتج معرض";
+    private static string ProductTypeFull(ProductListDto p) =>
+        p.Customer.HasValue ? $"منتج عميل — {p.CustomerName}" : p.IsWebsite ? "منتج موقع — مُستورد من الموقع" : "منتج معرض (كتالوج عام)";
 
 private string FormatPrice(object? price)
 {
@@ -2639,7 +2678,7 @@ private void SetViewMode(string mode)
     {
         _searchText = null;
         _statusFilter = null;
-        _selectedBranchId = _preferredBranchId;
+        _selectedBranchId = null;   // ✅ مسح = كل الفروع (كان بيرجّع الفرع المفضل فيعيد نفس المشكلة)
         _selectedWarehouseId = null;
         _ownershipFilter = "all";
         _activeStatFilter = "all";
@@ -2743,6 +2782,8 @@ private void SetViewMode(string mode)
                 if (root.TryGetProperty("StatusFilter", out var status) && status.ValueKind != System.Text.Json.JsonValueKind.Null)
                     _statusFilter = status.GetInt32();
 
+                // ✅ طلب المستخدم: الشاشة تحتفظ بآخر فلتر (بما فيه الفرع/المخزن) —
+                // الباج القديم (اختفاء منتجات العملاء) اتصلح من جذوره في ProductService (منتجات العميل مستثناة من فلتر المخزون)
                 if (root.TryGetProperty("BranchFilter", out var branchFilter) && branchFilter.ValueKind != System.Text.Json.JsonValueKind.Null)
                     _selectedBranchId = branchFilter.GetInt32();
 

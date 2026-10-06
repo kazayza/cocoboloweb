@@ -22,6 +22,7 @@ public class BalanceSheetDto
     public int InventoryItemsCount { get; set; }
     public decimal EmployeeLoansOutstanding { get; set; }    // سلف/قروض موظفين قائمة (أصل)
     public int ActiveLoansCount { get; set; }
+    public decimal PrepaidExpensesAsset { get; set; }      // مصروفات مدفوعة مقدمًا: الأشهر المستقبلية للمصروف المقدم (أصل)
 
     public decimal TotalAssets { get; set; }
 
@@ -30,6 +31,7 @@ public class BalanceSheetDto
     public int PayrollPendingCount { get; set; }
     public decimal SupplierPayables { get; set; }            // دائنون: متبقي فواتير الشراء (GrandTotal - Paid)
     public int PayablePurchasesCount { get; set; }
+    public decimal CustomerAdvances { get; set; }          // دفعات عملاء مقدمة مقبوضة لم تُطبق على فواتير (التزام)
 
     public decimal TotalLiabilities { get; set; }
 

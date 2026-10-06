@@ -189,6 +189,21 @@
 
 <AuthorizeView>
     <Authorized>
+        @if (!_hasViewPermission)
+        {
+            <MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+                <MudPaper Class="pa-8 text-center" Elevation="3" Style="border-radius: 20px;">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="@MudSize.Large"
+                             Style="font-size: 64px; color: #EF5350;" Class="mb-4" />
+                    <MudText Typo="Typo.h5" Color="@MudColor.Error" Class="mb-2">غير مصرح</MudText>
+                    <MudText Typo="Typo.body1" Color="@MudColor.Secondary">
+                        ليس لديك صلاحية الوصول للوحة تحليل الحضور
+                    </MudText>
+                </MudPaper>
+            </MudContainer>
+        }
+        else
+        {
         <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4 dash-root">
 
             @* ══════════════════ HEADER ══════════════════ *@
@@ -209,7 +224,7 @@
                                     <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.6);">
                                         <MudIcon Icon="@Icons.Material.Filled.CalendarMonth"
                                                  Size="@MudSize.Small" Style="vertical-align:middle;" />
-                                        @_selectedPeriod — آخر تحديث: @DateTime.Now.ToString("hh:mm tt")
+                                        @_selectedPeriod — آخر تحديث: @_lastLoaded.ToString("hh:mm tt")
                                     </MudText>
                                 </div>
                             </div>
@@ -358,12 +373,12 @@
                                 <div class="d-flex justify-space-between mb-2">
                                     <MudText Typo="Typo.caption" Style="color:#94A3B8;">إجمالي ساعات العمل</MudText>
                                     <MudText Typo="Typo.caption" Class="font-weight-bold">
-                                        @((_dashboard.Statistics.AverageHours * _dashboard.Statistics.TodayPresent).ToString("F0")) ساعة
+                                        @(_dashboard.Statistics.TotalHours.ToString("F0")) ساعة
                                     </MudText>
                                 </div>
                                 <div class="d-flex justify-space-between">
                                     <MudText Typo="Typo.caption" Style="color:#94A3B8;">متوسط وقت الوصول</MudText>
-                                    <MudText Typo="Typo.caption" Class="font-weight-bold">08:12 ص</MudText>
+                                    <MudText Typo="Typo.caption" Class="font-weight-bold">@AvgArrivalDisplay()</MudText>
                                 </div>
                             </div>
                         </MudPaper>
@@ -473,7 +488,7 @@
                                                 <div class="d-flex align-center gap-2">
                                                     <MudAvatar Size="@MudSize.Small"
                                                                Style="@($"background:{DeptBg(dept.AttendanceRate)};color:{DeptFg(dept.AttendanceRate)};font-size:12px;font-weight:700;")">
-                                                        @dept.Department[0]
+                                                        @(string.IsNullOrEmpty(dept.Department) ? "؟" : dept.Department.Substring(0, 1))
                                                     </MudAvatar>
                                                     <div>
                                                         <MudText Typo="Typo.body2" Class="font-weight-bold">@dept.Department</MudText>
@@ -597,7 +612,8 @@
                                     <MudText Typo="Typo.h6" Class="font-weight-bold">آخر البصمات</MudText>
                                 </div>
                                 <div class="live-badge">
-                                    <span class="live-dot"></span> مباشر
+                                    <span class="live-dot"></span>
+                                    آخر @_dashboard.RecentLogs.Count() بصمات
                                 </div>
                             </div>
 
@@ -645,6 +661,7 @@
             }
 
         </MudContainer>
+        }
     </Authorized>
 </AuthorizeView>
 
@@ -653,6 +670,8 @@
     // Type Aliases — حل تعارض ApexCharts/MudBlazor
     // ══════════════════════════════════════════
     private bool _isLoading = true;
+    private bool _hasViewPermission;
+    private DateTime _lastLoaded = DateTime.Now;
     private string _periodFilter = "month";
     private string _selectedPeriod = "";
     private AttendanceDashboardDto _dashboard = new();
@@ -675,6 +694,22 @@
     // ══════════════════ Lifecycle ══════════════════
     protected override async Task OnInitializedAsync()
     {
+        // (12-H10) بوابة عرض — نفس نمط سجل الحضور
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _hasViewPermission = user.IsInRole("Admin") ||
+                             user.IsInRole("Account") ||
+                             user.IsInRole("AccountManager") ||
+                             user.IsInRole("HrManager") ||
+                             user.IsInRole("HRManager") ||
+                             user.HasClaim("Permission", "frm_Attendance:View");
+
+        if (!_hasViewPermission)
+        {
+            _isLoading = false;
+            return;
+        }
+
         InitChartOptions();
         await LoadDashboard();
     }
@@ -684,7 +719,7 @@
         // ── Donut ──
         _donutOpts = new ApexChartOptions<StatusChartItem>
         {
-            Colors = new List<string> { "#22C55E", "#EF4444", "#F59E0B" },
+            Colors = new List<string> { "#22C55E", "#EF4444", "#F59E0B", "#8B5CF6" },
             PlotOptions = new PlotOptions
             {
                 Pie = new PlotOptionsPie
@@ -786,6 +821,7 @@
             var (from, to) = GetDateRange();
             _dashboard      = await AttendanceService.GetDashboardDataAsync(from, to);
             _selectedPeriod = GetPeriodText();
+            _lastLoaded     = DateTime.Now;
             BuildChartData();
         }
         catch (Exception ex)
@@ -802,7 +838,8 @@
         {
             new("حاضر",  _dashboard.Statistics.PresentCount),
             new("غائب",  _dashboard.Statistics.AbsentCount),
-            new("متأخر", _dashboard.Statistics.LateCount)
+            new("متأخر", _dashboard.Statistics.LateCount),
+            new("انصراف مبكر", _dashboard.Statistics.EarlyLeaveCount)
         };
 
         _hourlyData = _dashboard.TodayHourlyDistribution
@@ -841,7 +878,8 @@
         return _periodFilter switch
         {
             "today"     => (today, today),
-            "week"      => (today.AddDays(-(int)today.DayOfWeek + (int)DayOfWeek.Saturday), today),
+            // (12-H10) الأسبوع يبدأ السبت — المعادلة القديمة كانت بترجّع تاريخًا في المستقبل 6 أيام من 7
+            "week"      => (today.AddDays(-((7 + (today.DayOfWeek - DayOfWeek.Saturday)) % 7)), today),
             "month"     => (new DateTime(today.Year, today.Month, 1), today),
             "lastMonth" => (new DateTime(today.Year, today.Month, 1).AddMonths(-1),
                             new DateTime(today.Year, today.Month, 1).AddDays(-1)),
@@ -877,6 +915,10 @@
         => v >= 90 ? "#22C55E" : v >= 70 ? "#F59E0B" : "#EF4444";
 
     private string RankCls(int i) => i switch { 0 => "rk-gold", 1 => "rk-silver", 2 => "rk-bronze", _ => "rk-def" };
+
+    // (12-H10) عرض متوسط وقت الوصول المحسوب من البصمات الفعلية
+    private string AvgArrivalDisplay() =>
+        _dashboard.Statistics.AvgArrivalTime?.ToString("hh:mm tt", new System.Globalization.CultureInfo("ar-EG")) ?? "—";
 
     private string DeptBg(decimal r) => r >= 90 ? "#F0FDF4" : r >= 70 ? "#FFFBEB" : "#FEF2F2";
     private string DeptFg(decimal r) => r >= 90 ? "#22C55E" : r >= 70 ? "#F59E0B" : "#EF4444";

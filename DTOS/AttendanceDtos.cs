@@ -316,6 +316,7 @@ public class AttendanceStatisticsDto
     public int TodayPresent { get; set; }           // حاضرين اليوم
     public int TodayAbsent { get; set; }            // غائبين اليوم
     public int TodayLate { get; set; }              // متأخرين اليوم
+    public TimeOnly? AvgArrivalTime { get; set; }   // (12-H10) متوسط وقت الوصول اليوم — بديل الرقم الثابت
 }
 
 // ═══════════════════════════════════════════════════════════

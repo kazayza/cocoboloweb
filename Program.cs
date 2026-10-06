@@ -493,7 +493,8 @@ app.MapGet("/api/product-images/{productId:int}", async (
     db24804Context db,
     IWebHostEnvironment env, HttpContext http) =>
 {
-    http.Response.Headers.CacheControl = "private, max-age=86400";
+    //http.Response.Headers.CacheControl = "private, max-age=86400";
+    http.Response.Headers.CacheControl = "no-cache";
     // 1) جيب الصورة الرئيسية أولاً، وإلا الأحدث
     var image = await db.ProductImages
         .AsNoTracking()

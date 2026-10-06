@@ -11,6 +11,8 @@ public class PriceListRowDto
     public decimal? ElitePrice { get; set; }
     public int PricingStatusId { get; set; }
     public bool IsWebsite { get; set; }              // 🌐 منتجات الموقع (2026-09-17)
+    public int? SaleDiscountPercent { get; set; }    // 🏷️ نسبة الخصم لو آخر تغيير لسعر بريميوم كان تخفيضًا
+    public decimal? PreviousPremiumPrice { get; set; }  // السعر القديم (قبل التخفيض) — للعرض ~~قديم~~ جديد
 
     // 💰 التكاليف — تُعرض لذوي الصلاحية فقط (Admin/AccountManager/Account) — 2026-09-17
     public decimal? StdCost { get; set; }

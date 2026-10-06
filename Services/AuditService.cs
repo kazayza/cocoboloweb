@@ -31,20 +31,13 @@ public class AuditService : IAuditService
         {
             using var db = await _factory.CreateDbContextAsync();
 
-            var options = new JsonSerializerOptions
-            {
-                WriteIndented = false,
-                ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles,
-                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-            };
-
             var log = new AuditLog
             {
                 TableName       = tableName,
                 ActionType      = actionType,
                 PrimaryKeyValue = primaryKeyValue,
-                OldData         = oldData != null ? JsonSerializer.Serialize(oldData, options) : null,
-                NewData         = newData != null ? JsonSerializer.Serialize(newData, options) : null,
+                OldData         = SafeSerialize(oldData),
+                NewData         = SafeSerialize(newData),
                 ActionDate      = DateTime.Now,
                 LoginName       = userName,
                 AccessUserName  = userName,
@@ -58,6 +51,79 @@ public class AuditService : IAuditService
         catch (Exception ex)
         {
             _logger.LogError(ex, "AuditService.LogAsync failed");
+        }
+    }
+
+    // ════════════════════════════════════════════════
+    //   ⭐ (12-ح8) Serialize آمن للـ Audit — عام لكل الجداول:
+    //   1) يشيل كل Navigation Properties (كيانات/مجموعات كيانات من COCOBOLOERPNEW.Models)
+    //      → الحقول المباشرة بس — منع تضخم JSON بالعلاقات المتداخلة (سجلات الـ 21MB)
+    //   2) سقف صارم 200KB — أي سجل أكبر يُقصّ بعلامة [TRUNCATED]
+    //   3) MaxDepth حزام ثالث · وأي فشل serialize لا يسقط شغل المستخدم أبدًا
+    // ════════════════════════════════════════════════
+
+    private const int MaxAuditJsonChars = 200_000;
+
+    private static readonly JsonSerializerOptions AuditJsonOptions = CreateAuditJsonOptions();
+
+    private static JsonSerializerOptions CreateAuditJsonOptions()
+    {
+        var resolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver
+        {
+            Modifiers = { RemoveEntityNavigations }
+        };
+
+        return new JsonSerializerOptions
+        {
+            WriteIndented = false,
+            ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            MaxDepth = 32,
+            TypeInfoResolver = resolver
+        };
+    }
+
+    // يشيل أي خاصية نوعها كيان من الموديلات أو مجموعة كيانات (العلاقات المتداخلة)
+    private static void RemoveEntityNavigations(
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo typeInfo)
+    {
+        if (typeInfo.Kind != System.Text.Json.Serialization.Metadata.JsonTypeInfoKind.Object)
+            return;
+
+        for (int i = typeInfo.Properties.Count - 1; i >= 0; i--)
+        {
+            var propType = Nullable.GetUnderlyingType(typeInfo.Properties[i].PropertyType)
+                           ?? typeInfo.Properties[i].PropertyType;
+
+            bool isEntity = propType.Namespace == "COCOBOLOERPNEW.Models";
+
+            bool isEntityCollection = false;
+            if (!isEntity && propType != typeof(string)
+                && typeof(System.Collections.IEnumerable).IsAssignableFrom(propType))
+            {
+                isEntityCollection = propType.GetGenericArguments().Any(a =>
+                    (Nullable.GetUnderlyingType(a) ?? a).Namespace == "COCOBOLOERPNEW.Models");
+            }
+
+            if (isEntity || isEntityCollection)
+                typeInfo.Properties.RemoveAt(i);
+        }
+    }
+
+    // serialize + سقف الحجم + عدم رمي أخطاء أبدًا (التسجيل لا يعطّل شغل المستخدم)
+    private static string? SafeSerialize<T>(T? data)
+    {
+        if (data is null) return null;
+        try
+        {
+            var json = JsonSerializer.Serialize(data, AuditJsonOptions);
+            if (json.Length > MaxAuditJsonChars)
+                json = json.Substring(0, MaxAuditJsonChars) + "...[TRUNCATED]";
+            return json;
+        }
+        catch (Exception)
+        {
+            return "[SERIALIZATION_ERROR]";
         }
     }
 

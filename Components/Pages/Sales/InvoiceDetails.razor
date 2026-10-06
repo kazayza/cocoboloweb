@@ -1164,6 +1164,9 @@ else
     private InvoiceDetailsDto? _details;
 
     private bool _canViewInvoice;
+    private bool _hasSalesInvoicePerm;      // frm_PartiesInvoices:View — فواتير البيع
+    private bool _hasPurchaseInvoicePerm;   // frm_SupplierInvoices:View — فواتير الشراء
+    private bool _isAdminUser;
     private bool _canEdit;
     private bool _canApproveEdit;
     private bool _canViewPurchases;
@@ -1208,9 +1211,15 @@ else
                              || user.IsInRole(SystemRoles.ProductionManager)
                              || user.IsInRole(SystemRoles.FactoryManager);
 
-        _canViewInvoice = user.HasClaim("Permission", "frm_PartiesInvoices:View")
+        // ⭐ صلاحيتين منفصلتين: البيع = frm_PartiesInvoices:View · الشراء = frm_SupplierInvoices:View
+        _hasSalesInvoicePerm    = user.HasClaim("Permission", "frm_PartiesInvoices:View");
+        _hasPurchaseInvoicePerm = user.HasClaim("Permission", "frm_SupplierInvoices:View");
+        _isAdminUser            = user.IsInRole("Admin");
+
+        _canViewInvoice = _hasSalesInvoicePerm
+                          || _hasPurchaseInvoicePerm
                           || isSupplyViewer
-                          || user.IsInRole("Admin");
+                          || _isAdminUser;
         if (!_canViewInvoice)
         {
             Navigation.NavigateTo("/access-denied");
@@ -1251,6 +1260,23 @@ else
         {
             Navigation.NavigateTo("/factory/purchases");
             return;
+        }
+
+        // ⭐ البوابة حسب نوع الفاتورة (طلب المستخدم):
+        //    فاتورة شراء  → صلاحية فواتير الشراء (frm_SupplierInvoices:View) أو طاقم المصنع
+        //    فاتورة بيع    → صلاحية فواتير البيع (frm_PartiesInvoices:View)
+        //    Admin يعدي على الاتنين
+        if (!_isAdminUser)
+        {
+            bool isPurchaseInvoice = _details?.Invoice?.TransactionType == TransactionTypes.Purchase;
+            bool allowed = isPurchaseInvoice
+                ? (_hasPurchaseInvoicePerm || _isFactory)
+                : _hasSalesInvoicePerm;
+            if (!allowed)
+            {
+                Navigation.NavigateTo("/access-denied");
+                return;
+            }
         }
     }
 

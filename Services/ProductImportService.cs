@@ -60,7 +60,8 @@ public class ProductImportService : IProductImportService
             int cCp    = Col("تكلفة بريميوم");
             int cCe    = Col("تكلفة إيليت");
             int cPs    = Col("سعر ستاندرد");
-            int cPp    = Col("سعر بريميوم");
+            int cDp    = Col("بعد الخصم");   // عمود اختياري: «سعر بريميوم بعد الخصم»
+            int cPp    = headers.FirstOrDefault(kv => kv.Key.Contains("سعر بريميوم") && kv.Value != cDp).Value;
             int cPe    = Col("سعر إيليت");
             int cWeb   = Col("رقم المنتج بالموقع", "رقم المنتج في الموقع");
 
@@ -98,6 +99,8 @@ public class ProductImportService : IProductImportService
                 decimal? Num(int c) => c > 0 && decimal.TryParse(row.Cell(c).GetString().Trim(), out var d) && d >= 0 ? d : null;
                 dto.CostStd = Num(cCs); dto.CostPremium = Num(cCp); dto.CostElite = Num(cCe);
                 dto.PriceStd = Num(cPs); dto.PricePremium = Num(cPp); dto.PriceElite = Num(cPe);
+                var dpVal = Num(cDp);
+                dto.DiscountedPremium = dpVal > 0 ? dpVal : null;
 
                 if (dto.ProductName == "")
                     dto.Error = "اسم المنتج مطلوب";
@@ -128,7 +131,7 @@ public class ProductImportService : IProductImportService
 
     // ═══════════════ التنفيذ: معاملة واحدة ═══════════════
     public async Task<(bool Success, string Message, ProductWebsiteImportResultDto? Result)> ImportAsync(
-        List<ProductWebsiteImportRowDto> rows, string currentUsername)
+        List<ProductWebsiteImportRowDto> rows, string currentUsername, bool updateExisting = false)
     {
         var user = _http.HttpContext?.User;
         if (!IsAuthorized(user))
@@ -143,10 +146,22 @@ public class ProductImportService : IProductImportService
         {
             var norm = (string s) => s.Trim().ToLowerInvariant();
 
-            var groups = await db.ProductGroups.AsNoTracking()
-                .ToDictionaryAsync(g => norm(g.GroupName), g => g.ProductGroupId);
+            // ⭐ بناء آمن للقاموس: لو فيه مجموعتين اسمهم بيتطابق بعد التطبيع (فروق مسافات/حالة أحرف)
+            // ناخد الأقدم رقمًا بدل ما الاستيراد كله يفشل بـ «An item with the same key has already been added»
+            var groupRows = await db.ProductGroups.AsNoTracking()
+                .Select(g => new { g.ProductGroupId, g.GroupName })
+                .OrderBy(g => g.ProductGroupId)
+                .ToListAsync();
+            var groups = new Dictionary<string, int>();
+            foreach (var g in groupRows)
+                groups.TryAdd(norm(g.GroupName ?? ""), g.ProductGroupId);
             var existingNames = (await db.Products.AsNoTracking()
                 .Select(p => p.ProductName).ToListAsync()).Select(norm).ToHashSet();
+
+            // 🔄 وضع التحديث: منتجات الموقع الموجودة فقط (مطابقة برقم الموقع ثم بالاسم) — الأسعار فقط هي التي تتحدث
+            var websiteProducts = updateExisting
+                ? await db.Products.Where(p => p.IsWebsite == true).ToListAsync()
+                : new List<Product>();
 
             int groupsCreated = 0;
             var result = new ProductWebsiteImportResultDto();
@@ -155,6 +170,55 @@ public class ProductImportService : IProductImportService
             foreach (var r in valid)
             {
                 var nName = norm(r.ProductName);
+
+                // 🔄 تحديث أسعار منتج موقع موجود (بدل تخطيه) — التكلفة والبيع للفئات الثلاث
+                if (updateExisting)
+                {
+                    var match = (r.WebsiteProductId.HasValue
+                            ? websiteProducts.FirstOrDefault(p => p.WebsiteProductId == r.WebsiteProductId)
+                            : null)
+                        ?? websiteProducts.FirstOrDefault(p => norm(p.ProductName ?? "") == nName);
+                    if (match != null)
+                    {
+                        static bool Diff(decimal? a, decimal? b) => decimal.Round(a ?? 0m, 2) != decimal.Round(b ?? 0m, 2);
+                        bool changed = false;
+                        if (Diff(match.PurchasePriceCClass, r.CostStd))          { match.PurchasePriceCClass = r.CostStd; changed = true; }
+                        if (Diff(match.PurchasePrice, r.CostPremium))            { match.PurchasePrice = r.CostPremium; changed = true; }
+                        if (Diff(match.PurchasePriceElite, r.CostElite))         { match.PurchasePriceElite = r.CostElite; changed = true; }
+                        // 🏷️ كل تغيير في سعر بيع يُسجل في تاريخ الأسعار — شارة الخصم تُبنى على آخر حركة
+                        void LogSalePrice(string tier, decimal? oldV, decimal? newV) =>
+                            db.PriceHistories.Add(new PriceHistory
+                            {
+                                ProductId  = match.ProductId,
+                                PriceType  = tier,
+                                OldPrice   = oldV,
+                                NewPrice   = newV ?? 0m,
+                                ChangedBy  = currentUsername,
+                                ChangedAt  = now,
+                                ChangeReason = "استيراد منتجات الموقع"
+                            });
+                        if (Diff(match.SuggestedSalePriceCClass, r.PriceStd))    { LogSalePrice(PricingTiers.CClass, match.SuggestedSalePriceCClass, r.PriceStd); match.SuggestedSalePriceCClass = r.PriceStd; changed = true; }
+                        var effPremium = r.DiscountedPremium ?? r.PricePremium;   // سعر ما بعد الخصم (لو موجود) هو المُعتمد
+                        if (Diff(match.SuggestedSalePrice, effPremium))             { LogSalePrice(PricingTiers.Premium, match.SuggestedSalePrice, effPremium); match.SuggestedSalePrice = effPremium; changed = true; }
+                        if (Diff(match.SuggestedSalePriceElite, r.PriceElite))   { LogSalePrice(PricingTiers.Elite, match.SuggestedSalePriceElite, r.PriceElite); match.SuggestedSalePriceElite = r.PriceElite; changed = true; }
+
+                        if (changed)
+                        {
+                            await db.SaveChangesAsync();
+                            result.Updated++;
+                            if (result.SampleUpdatedNames.Count < 10)
+                                result.SampleUpdatedNames.Add(match.ProductName ?? r.ProductName);
+                        }
+                        else
+                        {
+                            result.SkippedDuplicates++;
+                            if (result.SampleDuplicateNames.Count < 10)
+                                result.SampleDuplicateNames.Add(r.ProductName);
+                        }
+                        continue;
+                    }
+                }
+
                 if (existingNames.Contains(nName))
                 {
                     result.SkippedDuplicates++;
@@ -192,7 +256,7 @@ public class ProductImportService : IProductImportService
                     PurchasePrice        = r.CostPremium,
                     PurchasePriceElite   = r.CostElite,
                     SuggestedSalePriceCClass = r.PriceStd,
-                    SuggestedSalePrice       = r.PricePremium,
+                    SuggestedSalePrice       = r.DiscountedPremium ?? r.PricePremium,
                     SuggestedSalePriceElite  = r.PriceElite,
                     PricingStatusId      = 1,                  // Draft
                     IsWebsite            = true,               // 🌐
@@ -212,14 +276,14 @@ public class ProductImportService : IProductImportService
             await _audit.LogAsync<object>("Products", "WebsiteImport",
                 "Batch",
                 new { Rows = valid.Count },
-                new { result.Added, result.SkippedDuplicates, result.GroupsCreated },
+                new { result.Added, result.Updated, result.SkippedDuplicates, result.GroupsCreated },
                 currentUsername);
 
-            _logger.LogInformation("Website products import: added {A}, skipped {S}, groups created {G} by {U}",
-                result.Added, result.SkippedDuplicates, groupsCreated, currentUsername);
+            _logger.LogInformation("Website products import: added {A}, updated {Up}, skipped {S}, groups created {G} by {U}",
+                result.Added, result.Updated, result.SkippedDuplicates, groupsCreated, currentUsername);
 
             result.GroupsCreated = groupsCreated;
-            return (true, $"✅ تم إضافة {result.Added} منتج موقع — تخطي {result.SkippedDuplicates} مكرر — مجموعات جديدة {groupsCreated}.", result);
+            return (true, $"تم الاستيراد: أُضيف {result.Added} منتج · حُدّث {result.Updated} · تُخطي {result.SkippedDuplicates} مكرر · مجموعات جديدة {groupsCreated}.", result);
         }
         catch (Exception ex)
         {
@@ -236,7 +300,8 @@ public class ProductImportService : IProductImportService
         var ws = wb.Worksheets.Add("منتجات الموقع");
         var headers = new[] { "اسم المنتج", "وصف المنتج (إلزامي - حتى 150 حرفاً)", "المجموعة (اسم أو رقم)",
                               "تكلفة ستاندرد", "تكلفة بريميوم", "تكلفة إيليت",
-                              "سعر ستاندرد", "سعر بريميوم", "سعر إيليت", "رقم المنتج بالموقع" };
+                              "سعر ستاندرد", "سعر بريميوم", "سعر إيليت",
+                              "سعر بريميوم بعد الخصم (اختياري)", "رقم المنتج بالموقع" };
         for (int i = 0; i < headers.Length; i++)
         {
             var c = ws.Cell(1, i + 1);
@@ -249,7 +314,8 @@ public class ProductImportService : IProductImportService
         ws.Cell(2, 2).Value = "بلوفة صيفي قماش قطن 100% قصّة كلاسيك";
         ws.Cell(2, 3).Value = "بلوفات";   // أو رقم المجموعة مثل: 14
         ws.Cell(2, 4).Value = 180; ws.Cell(2, 7).Value = 260;
-        ws.Cell(2, 10).Value = 1057;
+        ws.Cell(2, 10).Value = 234;   // مثال: بعد خصم 10% من 260
+        ws.Cell(2, 11).Value = 1057;
         ws.Columns().AdjustToContents();
         using var ms = new MemoryStream();
         wb.SaveAs(ms);

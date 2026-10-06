@@ -8,8 +8,8 @@ public interface IProductImportService
     /// <summary>قراءة ملف Excel والتحقق — بدون حفظ (للمعاينة)</summary>
     Task<(bool Success, string Message, List<ProductWebsiteImportRowDto> Rows)> ParseAsync(Stream excelStream);
 
-    /// <summary>تنفيذ الاستيراد: إنشاء المنتجات معلَّمة IsWebsite=true (Admin/AccountManager فقط)</summary>
-    Task<(bool Success, string Message, ProductWebsiteImportResultDto? Result)> ImportAsync(List<ProductWebsiteImportRowDto> rows, string currentUsername);
+    /// <summary>تنفيذ الاستيراد: إنشاء المنتجات معلَّمة IsWebsite=true (Admin/AccountManager فقط) — updateExisting: تحديث أسعار منتجات الموقع الموجودة بدل تخطيها</summary>
+    Task<(bool Success, string Message, ProductWebsiteImportResultDto? Result)> ImportAsync(List<ProductWebsiteImportRowDto> rows, string currentUsername, bool updateExisting = false);
 
     /// <summary>قالب Excel جاهز بالأعمدة المعتمدة + سطر مثال</summary>
     byte[] GetTemplateBytes();

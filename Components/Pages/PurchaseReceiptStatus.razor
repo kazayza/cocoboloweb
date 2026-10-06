@@ -152,8 +152,11 @@
                 <MudTh>المخزن</MudTh>
                 <MudTh>الاستلام المتوقع</MudTh>
                 <MudTh>الاستلام الفعلي</MudTh>
-                <MudTh Style="text-align:end;">الإجمالي</MudTh>
-                <MudTh Style="text-align:end;">المتبقي</MudTh>
+                @if (_canSeeAmounts)
+                {
+                    <MudTh Style="text-align:end;">الإجمالي</MudTh>
+                    <MudTh Style="text-align:end;">المتبقي</MudTh>
+                }
                 <MudTh>الحالة</MudTh>
                 <MudTh Style="text-align:center;">إجراءات</MudTh>
             </HeaderContent>
@@ -183,12 +186,15 @@
                     }
                 </MudTd>
                 <MudTd DataLabel="الاستلام الفعلي">@(context.DeliveredAt?.ToString("yyyy/MM/dd HH:mm") ?? "—")</MudTd>
-                <MudTd DataLabel="الإجمالي" Style="text-align:end;">@context.GrandTotal.ToString("N2")</MudTd>
-                <MudTd DataLabel="المتبقي" Style="text-align:end;">
-                    <span style="@(context.RemainingAmount > 0 ? "color:#d32f2f; font-weight:600;" : "color:#388e3c;")">
-                        @context.RemainingAmount.ToString("N2")
-                    </span>
-                </MudTd>
+                @if (_canSeeAmounts)
+                {
+                    <MudTd DataLabel="الإجمالي" Style="text-align:end;">@context.GrandTotal.ToString("N2")</MudTd>
+                    <MudTd DataLabel="المتبقي" Style="text-align:end;">
+                        <span style="@(context.RemainingAmount > 0 ? "color:#d32f2f; font-weight:600;" : "color:#388e3c;")">
+                            @context.RemainingAmount.ToString("N2")
+                        </span>
+                    </MudTd>
+                }
                 <MudTd DataLabel="الحالة">
                     <MudChip T="string"
                              Size="Size.Small"
@@ -200,11 +206,20 @@
                 </MudTd>
                 <MudTd DataLabel="إجراءات" Style="text-align:center;">
                     <MudStack Row="true" Spacing="0" Justify="Justify.Center">
-                        <MudTooltip Text="فتح الفاتورة">
-                            <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                        @if (_canOpenInvoice)
+                        {
+                            <MudTooltip Text="فتح الفاتورة">
+                                <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                               Size="Size.Small"
+                                               Color="Color.Primary"
+                                               OnClick="@(() => OpenInvoice(context.TransactionId))" />
+                            </MudTooltip>
+                        }
+                        <MudTooltip Text="أمر التشغيل — عرض المنتجات (بدون مبالغ)">
+                            <MudIconButton Icon="@Icons.Material.Filled.Assignment"
                                            Size="Size.Small"
-                                           Color="Color.Primary"
-                                           OnClick="@(() => OpenInvoice(context.TransactionId))" />
+                                           Color="Color.Secondary"
+                                           OnClick="@(() => OpenJobOrder(context.TransactionId))" />
                         </MudTooltip>
                         @if (_canConfirmReceipt && !context.IsDelivered)
                         {
@@ -247,6 +262,8 @@
     private string? _search;
     private string? _status;
     private bool _canView;
+    private bool _canSeeAmounts;
+    private bool _canOpenInvoice;   // مطابق لبوابة صفحة تفاصيل الفاتورة نفسها
     private bool _canConfirmReceipt;
     private string _currentUserName = "system";
     private CancellationTokenSource? _cts;
@@ -267,17 +284,50 @@
         var user = auth.User;
 
         _currentUserName = user.Identity?.Name ?? "system";
+
+        // عرض الصفحة: الإدارة + المدير العام + الحسابات + المبيعات + مندوب التسليمات + المصنع + أذونات فردية
         _canView = user.Identity?.IsAuthenticated == true &&
                    (user.IsInRole("Admin")
                     || user.IsInRole(SystemRoles.Admin)
+                    || user.IsInRole(SystemRoles.GeneralManager)
                     || user.IsInRole("AccountManager")
                     || user.IsInRole(SystemRoles.AccountManager)
+                    || user.IsInRole(SystemRoles.Sales)
+                    || user.IsInRole("User") // مندوب التسليمات
                     || user.IsInRole("factory")
                     || user.IsInRole(SystemRoles.ProductionManager)
                     || user.IsInRole(SystemRoles.FactoryManager)
+                    || user.HasClaim("Permission", "frm_PurchaseReceiptStatus:View")
                     || user.HasClaim("Permission", "frm_SupplierInvoices:View"));
 
-        _canConfirmReceipt = _canView;
+        // المبالغ (تكلفة المصنع): للموجودين فعليًا فقط — الإدارة والحسابات والمصنع
+        _canSeeAmounts = user.IsInRole("Admin")
+                         || user.IsInRole(SystemRoles.Admin)
+                         || user.IsInRole("AccountManager")
+                         || user.IsInRole(SystemRoles.AccountManager)
+                         || user.IsInRole("factory")
+                         || user.IsInRole(SystemRoles.ProductionManager)
+                         || user.IsInRole(SystemRoles.FactoryManager)
+                         || user.HasClaim("Permission", "frm_SupplierInvoices:View");
+
+        // فتح الفاتورة: دي فواتير شراء — البوابة = صلاحية فواتير الشراء (frm_SupplierInvoices:View) أو Admin أو طاقم المصنع
+        // ⭐ نفس بوابة صفحة الفاتورة لنوع الشراء بالظبط — اللي بيشوف الزر بيقدر يفتح فعلًا (طلب المستخدم: الصلاحية تتبع نوع الفاتورة)
+        _canOpenInvoice = user.IsInRole("Admin")
+                          || user.IsInRole(SystemRoles.Admin)
+                          || user.IsInRole("factory")
+                          || user.IsInRole(SystemRoles.ProductionManager)
+                          || user.IsInRole(SystemRoles.FactoryManager)
+                          || user.HasClaim("Permission", "frm_SupplierInvoices:View");
+
+        // تأكيد الاستلام: دائرة ضيقة — الإدارة + المدير العام + المصنع + إذن فردي (Edit)
+        _canConfirmReceipt = _canView &&
+                             (user.IsInRole("Admin")
+                              || user.IsInRole(SystemRoles.Admin)
+                              || user.IsInRole(SystemRoles.GeneralManager)
+                              || user.IsInRole("factory")
+                              || user.IsInRole(SystemRoles.ProductionManager)
+                              || user.IsInRole(SystemRoles.FactoryManager)
+                              || user.HasClaim("Permission", "frm_PurchaseReceiptStatus:Edit"));
 
         if (!_canView)
         {
@@ -350,6 +400,8 @@
     private void GoBack() => Nav.NavigateTo("/sales-delivery-status");
 
     private void OpenInvoice(int transactionId) => Nav.NavigateTo($"/sales/invoices/{transactionId}");
+
+    private void OpenJobOrder(int transactionId) => Nav.NavigateTo($"/sales/invoices/{transactionId}/job-order");
 
     private async Task ConfirmReceiptAsync(PurchaseReceiptListDto item)
     {

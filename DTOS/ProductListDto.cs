@@ -13,6 +13,7 @@ public class ProductListDto
     public decimal? SuggestedSalePriceCClass { get; set; }
     public decimal? SuggestedSalePriceElite { get; set; }
     public string? PdfPath { get; set; }
+    public bool IsWebsite { get; set; }   // 🌐 منتج موقع — لفلتر «منتجات الموقع»
     public bool HasOldPdf { get; set; } = false;
     public int StockQuantity { get; set; }
 

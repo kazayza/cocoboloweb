@@ -38,6 +38,7 @@ public class ProductService : IProductService
                         p.SuggestedSalePrice,
                         p.SuggestedSalePriceElite,
                         p.PdfPath,
+                        p.IsWebsite,
                         p.CreatedAt
                     };
 
@@ -139,6 +140,7 @@ public class ProductService : IProductService
                 SuggestedSalePrice = p.SuggestedSalePrice,
                 SuggestedSalePriceElite = p.SuggestedSalePriceElite,
                 PdfPath = p.PdfPath,
+                IsWebsite = p.IsWebsite,
                 HasOldPdf = idsWithOldPdf.Contains(p.ProductId),
                 StockQuantity = stockMap.TryGetValue(p.ProductId, out var qty) ? qty : 0,
                 CreatedAt = p.CreatedAt,
@@ -149,7 +151,7 @@ public class ProductService : IProductService
         });
 
         if (branchId.HasValue || warehouseId.HasValue)
-            products = products.Where(p => p.StockQuantity > 0);
+            products = products.Where(p => p.StockQuantity > 0 || p.Customer.HasValue);   // ⭐ منتجات العميل تُصنع بأمر تشغيل (غالبًا بلا مخزون) — لا تُقصى بفلتر مخزون الفرع (إصلاح فلتر «مرتبطة بعميل»)
 
         return products.ToList();
     }
@@ -1102,7 +1104,18 @@ public async Task<(bool Success, string Message)> ApproveFactoryAlternativeAsync
         "Products",
         "اعتماد بديل مصنع",
         product.ProductId.ToString(),
-        oldProduct,
+        // ⭐ (12-ح8) snapshot حقول مباشرة بدل الكيان كامل — بلا Navigation Properties
+        new
+        {
+            oldProduct.PurchasePriceCClass,
+            oldProduct.PurchasePrice,
+            oldProduct.PurchasePriceElite,
+            oldProduct.SuggestedSalePriceCClass,
+            oldProduct.SuggestedSalePrice,
+            oldProduct.SuggestedSalePriceElite,
+            oldProduct.Period,
+            oldProduct.ManufacturingDescription
+        },
         new
         {
             product.PurchasePriceCClass,

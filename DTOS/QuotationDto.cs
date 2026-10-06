@@ -188,6 +188,13 @@ public class QuotationStatsDto
     public int ExpiredCount { get; set; }
     public decimal ConvertedValue { get; set; }
     public decimal ConversionRate { get; set; }
+
+    // ⭐ 12-ح5: إحصائيات التحويل الجديدة (أعداد/نسب — تُعرض للجميع · المبالغ تخضع لقيد مشاهدي التكلفة)
+    public int ConvertedCustomersCount { get; set; }        // عملاء (بدون تكرار) عندهم عرض واحد على الأقل اتحوّل لفاتورة
+    public decimal CustomerConversionRate { get; set; }     // عملاء محوّلون ÷ عملاء ليهم عروض × 100
+    public decimal SentConversionRate { get; set; }         // محوّل ÷ الفرص المرسلة (كل العروض عدا مسودة لم تُحوّل) × 100
+    public decimal AvgConvertedCustomerValue { get; set; }  // قيمة المحوّل ÷ عملاء محوّلون (مبلغ — مقيد)
+
     public int PendingCount => DraftCount + SentCount;
 }
 

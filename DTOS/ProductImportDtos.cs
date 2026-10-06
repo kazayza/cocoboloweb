@@ -14,6 +14,7 @@ public class ProductWebsiteImportRowDto
     public decimal? PriceStd      { get; set; }
     public decimal? PricePremium  { get; set; }
     public decimal? PriceElite    { get; set; }
+    public decimal? DiscountedPremium { get; set; }     // عمود اختياري «سعر بريميوم بعد الخصم» — يُقدَّم على سعر بريميوم
     public int?    WebsiteProductId { get; set; }
     public string? Error         { get; set; }          // غير فارغة = الصف مرفوض
 }
@@ -22,9 +23,11 @@ public class ProductWebsiteImportRowDto
 public class ProductWebsiteImportResultDto
 {
     public int    Added           { get; set; }
+    public int    Updated         { get; set; }
     public int    SkippedDuplicates { get; set; }
     public int    GroupsCreated   { get; set; }
     public List<string> SampleAddedNames    { get; set; } = new();
+    public List<string> SampleUpdatedNames  { get; set; } = new();
     public List<string> SampleDuplicateNames { get; set; } = new();
     public List<string> Errors              { get; set; } = new();
 }

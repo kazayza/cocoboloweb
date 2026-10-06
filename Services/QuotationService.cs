@@ -842,6 +842,12 @@ if (canViewCost && quoteIds.Any())
             var totalValue = raw.Sum(x => x.Grand ?? x.Total ?? 0m);
             var convertedValue = raw.Where(x => x.InvId != null).Sum(x => x.Grand ?? x.Total ?? 0m);
 
+            // ⭐ 12-ح5: تحويل العملاء — العميل مبيتكررش (5 فواتير = عميل واحد)
+            var convertedCustomers = raw.Where(x => x.InvId != null).Select(x => x.PartyId).Distinct().Count();
+            // الفرص «المرسلة» = كل العروض عدا مسودة لم تُحوّل (مسودة اتحولت = فرصة حقيقية حصلت)
+            var sentBase = raw.Count(x => x.InvId != null
+                || (!string.IsNullOrEmpty(x.Stat) && x.Stat != QuotationStatuses.Draft));
+
             var stats = new QuotationStatsDto
             {
                 TotalCount = total,
@@ -859,7 +865,11 @@ if (canViewCost && quoteIds.Any())
                                               && (string.IsNullOrEmpty(x.Stat)
                                                   || x.Stat == QuotationStatuses.Draft
                                                   || x.Stat == QuotationStatuses.Sent)),
-                ConversionRate = total == 0 ? 0 : Math.Round(((decimal)converted / total) * 100, 1)
+                ConversionRate = total == 0 ? 0 : Math.Round(((decimal)converted / total) * 100, 1),
+                ConvertedCustomersCount = convertedCustomers,
+                CustomerConversionRate = distinctCustomers == 0 ? 0 : Math.Round((decimal)convertedCustomers / distinctCustomers * 100, 1),
+                SentConversionRate = sentBase == 0 ? 0 : Math.Round((decimal)converted / sentBase * 100, 1),
+                AvgConvertedCustomerValue = convertedCustomers == 0 ? 0 : Math.Round(convertedValue / convertedCustomers, 2)
             };
 
             // ⭐ قناع الأرقام المالية عن مشاهدي التكلفة المقيّدين
@@ -867,6 +877,7 @@ if (canViewCost && quoteIds.Any())
             {
                 stats.TotalValue = 0;
                 stats.ConvertedValue = 0;
+                stats.AvgConvertedCustomerValue = 0;   // ⭐ مبلغ — يُقيد مع باقي القيم (الأعداد والنسب تفضل ظاهرة)
             }
 
             return stats;
@@ -975,8 +986,27 @@ if (canViewCost && quoteIds.Any())
 
         await tx.CommitAsync();
 
-        await _audit.LogAsync("Quotations", "Insert",
-            quotation.QuotationId.ToString(), null, quotation, currentUserName);
+        // ⭐ (12-ح8) snapshot بدل الكيان كامل — أساسيات + عدد البنود
+        await _audit.LogAsync<object>("Quotations", "Insert",
+            quotation.QuotationId.ToString(), null,
+            new
+            {
+                quotation.QuotationId,
+                quotation.ReferenceNumber,
+                quotation.QuotationDate,
+                quotation.PartyId,
+                quotation.WarehouseId,
+                quotation.PricingType,
+                quotation.TotalAmount,
+                quotation.DiscountAmount,
+                quotation.GrandTotal,
+                quotation.OpportunityId,
+                quotation.Status,
+                quotation.ValidUntil,
+                quotation.EmpId,
+                ItemsCount = quotation.QuotationDetails?.Count ?? 0
+            },
+            currentUserName);
 
         await SendQuotationNotificationAsync(quotation, currentUserName, "تم إنشاء عرض سعر جديد");
 
@@ -1102,8 +1132,23 @@ if (canViewCost && quoteIds.Any())
             await _db.SaveChangesAsync();
             await tx.CommitAsync();
 
+            // ⭐ (12-ح8) snapshot بدل الكيان كامل
             await _audit.LogAsync<object>("Quotations", "Update",
-                quotation.QuotationId.ToString(), null, quotation, currentUserName);
+                quotation.QuotationId.ToString(), null,
+                new
+                {
+                    quotation.QuotationId,
+                    quotation.ReferenceNumber,
+                    quotation.PartyId,
+                    quotation.TotalAmount,
+                    quotation.DiscountAmount,
+                    quotation.GrandTotal,
+                    quotation.InvoiceId,
+                    quotation.Status,
+                    quotation.ValidUntil,
+                    ItemsCount = quotation.QuotationDetails?.Count ?? 0
+                },
+                currentUserName);
 
             if (!string.IsNullOrWhiteSpace(quotation.CreatedBy)
                 && !string.Equals(quotation.CreatedBy, currentUserName, StringComparison.OrdinalIgnoreCase)
@@ -2254,7 +2299,7 @@ private async Task<string?> ResolveQuotationActorDisplayNameAsync(string userNam
                         message,
                         role,
                         currentUserName,
-                        formName: "frmQuotationsList",
+                        formName: "quotations",
                         relatedTable: "Quotations",
                         relatedId: quotation.QuotationId);
                     sent++;

@@ -1,0 +1,663 @@
+@page "/hr/loans/{LoanId:int}"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+
+@inject IEmployeeLoanService         LoanService
+@inject ISnackbar                    Snackbar
+@inject AuthenticationStateProvider  AuthProvider
+@inject NavigationManager            Nav
+@inject IJSRuntime                   JS
+
+<PageTitle>تفاصيل السلفة</PageTitle>
+
+<style>
+    .ldp-root { direction: rtl; }
+
+    /* ── KPIs ── */
+    .ldp-kpi { background: #fff; border: 1px solid #e8edf5; border-radius: 14px; padding: 14px 16px; box-shadow: 0 1px 3px rgba(15,26,46,.05); height: 100%; }
+    .ldp-kpi-ic { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; margin-bottom: 9px; }
+    .ldp-kpi-v { font-size: 18px; font-weight: 900; color: #0f172a; line-height: 1.2; }
+    .ldp-kpi-l { font-size: 12px; color: #55617a; font-weight: 800; margin-top: 2px; }
+    .ldp-kpi-s { font-size: 10.5px; color: #98a4b8; font-weight: 700; margin-top: 1px; }
+
+    /* ── التقدم ── */
+    .ldp-prog { background: #fff; border: 1px solid #e8edf5; border-radius: 14px; padding: 14px 18px; }
+    .ldp-prog-top { display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 700; color: #55617a; margin-bottom: 9px; }
+    .ldp-prog-track { height: 9px; background: #eef2f7; border-radius: 999px; overflow: hidden; }
+    .ldp-prog-fill { height: 100%; background: linear-gradient(90deg, #b8941f, #e8c855); border-radius: 999px; transition: width .4s; min-width: 2px; }
+
+    /* ── البطاقات ── */
+    .ldp-card { background: #fff; border: 1px solid #e8edf5; border-radius: 14px; padding: 16px 18px; height: 100%; }
+    .ldp-card-title { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 900; color: #16233c; margin-bottom: 12px; }
+    .ldp-card-title .mud-icon-root { color: #d4af37; }
+    .ldp-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; padding: 9px 0; border-bottom: 1px dashed #eef2f7; }
+    .ldp-row:last-child { border-bottom: none; }
+    .ldp-row span { color: #7a869c; font-weight: 700; }
+    .ldp-row b { color: #16233c; }
+    .ldp-notes { background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 12px 14px; font-size: 13px; color: #92400e; line-height: 1.8; }
+
+    /* ── الجدول ── */
+    .ldp-tbl-wrap { background: #fff; border: 1px solid #e8edf5; border-radius: 14px; overflow: hidden; }
+    .ldp-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .ldp-tbl th { background: #f6f8fc; color: #55617a; font-size: 11.5px; font-weight: 800; padding: 11px 14px; text-align: right; border-bottom: 1px solid #e8edf5; }
+    .ldp-tbl td { padding: 9px 14px; border-bottom: 1px solid #f1f4f9; color: #33415a; vertical-align: middle; }
+    .ldp-tbl tbody tr:last-child td { border-bottom: none; }
+    .ldp-tbl tbody tr:hover { background: #fafbfe; }
+    .ldp-num { color: #98a4b8; font-weight: 800; }
+    .ldp-amt { font-weight: 900; color: #16233c; white-space: nowrap; }
+    .ldp-dash { color: #c3ccd9; }
+    .ldp-pill { display: inline-block; border-radius: 999px; padding: 3px 12px; font-size: 11.5px; font-weight: 800; }
+    .ldp-pill.wait { background: #fef3c7; color: #92400e; }
+    .ldp-pill.ok { background: #d1fae5; color: #065f46; }
+    .ldp-pill.off { background: #e7ecf3; color: #55617a; }
+
+    /* ── الأفاتار والهيدر ── */
+    .ldp-avatar { width: 54px; height: 54px; border-radius: 16px; background: linear-gradient(135deg, #e8c855, #d4af37); color: #1a2842; font-size: 22px; font-weight: 900; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(212,175,55,.35); flex: 0 0 auto; }
+    .ldp-chip { display: inline-flex; align-items: center; gap: 7px; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.3); border-radius: 999px; padding: 6px 15px; font-size: 12.5px; font-weight: 800; color: #fff; }
+    .ldp-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+    /* ── الدايلوجات الفرعية ── */
+    .loan-sub-dlg { border-radius: 16px !important; overflow: hidden; }
+    .loan-sub-dlg .mud-dialog-content { padding: 0 !important; }
+    .lsd-hd { display: flex; align-items: center; gap: 10px; padding: 13px 20px; background: linear-gradient(120deg, #16233c, #2c3e5f); color: #fff; font-weight: 900; font-size: 15px; }
+    .lsd-body { padding: 16px 20px; }
+    .lsd-ft { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; background: #fafbfe; border-top: 1px solid #eef1f7; }
+    .lsd-note { background: #f0f6ff; border: 1px solid #cfe0fa; border-radius: 10px; padding: 10px 12px; font-size: 12px; color: #1e4e8c; margin-bottom: 14px; line-height: 1.8; }
+    .lsd-note.warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+    .lsd-remaining { font-size: 12.5px; color: #55617a; font-weight: 700; margin-top: 10px; }
+    .lsd-remaining b { color: #16233c; }
+
+    /* ── الطباعة ── */
+    @@media print {
+        .mud-appbar, .mud-drawer, .mud-tabs-toolbar, .ldp-no-print { display: none !important; }
+        .ldp-root { padding: 0 !important; }
+        .mud-paper-root { box-shadow: none !important; }
+        .ldp-hero { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+        body { background: #fff !important; }
+    }
+</style>
+
+<div class="ldp-root">
+    @if (_loading)
+    {
+        <div class="d-flex justify-center pa-12">
+            <MudProgressCircular Indeterminate Color="Color.Primary" Size="Size.Large" />
+        </div>
+    }
+    else if (_detail is null)
+    {
+        <MudAlert Severity="Severity.Error" Class="mb-4">السلفة غير موجودة أو تم حذفها</MudAlert>
+        <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Outlined" OnClick="GoBack">العودة لقائمة السلف</MudButton>
+    }
+    else
+    {
+        var loan = _detail.Loan;
+
+        @* ══ الهيدر ══ *@
+        <MudPaper Class="ldp-hero pa-4 mb-4 rounded-xl" Style="background:linear-gradient(135deg,#0f172a,#1d4ed8);color:white;" Elevation="0">
+            <div class="d-flex align-center justify-space-between flex-wrap gap-3">
+                <div class="d-flex align-center gap-3" style="min-width:0">
+                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Class="ldp-no-print"
+                                   Style="color:#fff;background:rgba(255,255,255,.12)" OnClick="GoBack" Title="العودة لقائمة السلف" />
+                    <div class="ldp-avatar">@loan.EmployeeName.FirstOrDefault()</div>
+                    <div style="min-width:0">
+                        <MudText Typo="Typo.caption" Style="opacity:.75;font-weight:800;letter-spacing:1px">سلفة موظف · رقم @loan.LoanId</MudText>
+                        <MudText Typo="Typo.h6"><b>@loan.EmployeeName</b></MudText>
+                        <MudText Typo="Typo.body2" Style="opacity:.85">@(loan.Department ?? "—") · @(loan.JobTitle ?? "—")</MudText>
+                    </div>
+                </div>
+
+                <div class="d-flex align-center gap-2 flex-wrap">
+                    <div class="ldp-chip">
+                        <span class="ldp-dot" style="background:@loan.StatusColor"></span>
+                        @loan.StatusAr
+                    </div>
+                    <MudButton Class="ldp-no-print" Variant="Variant.Outlined" Size="Size.Small"
+                               Style="color:#fff;border-color:rgba(255,255,255,.4)"
+                               StartIcon="@Icons.Material.Filled.Person"
+                               OnClick="@(() => GoToEmployee(loan.EmployeeId))">ملف الموظف</MudButton>
+                    <MudButton Class="ldp-no-print" Variant="Variant.Outlined" Size="Size.Small"
+                               Style="color:#fff;border-color:rgba(255,255,255,.4)"
+                               StartIcon="@Icons.Material.Filled.Print" OnClick="PrintAsync">طباعة</MudButton>
+                    @if (_canEdit && loan.Status != "Cancelled")
+                    {
+                        <MudButton Class="ldp-no-print" Variant="Variant.Filled" Size="Size.Small" Color="Color.Warning"
+                                   StartIcon="@Icons.Material.Filled.Edit" OnClick="OpenEditLoanDialog">تعديل السلفة</MudButton>
+                    }
+                </div>
+            </div>
+        </MudPaper>
+
+        @* ══ KPIs ══ *@
+        <MudGrid Spacing="2" Class="mb-3">
+            <MudItem xs="6" sm="4" md="2">@RenderKpi("قيمة السلفة", loan.LoanAmount.ToString("N0") + " جـ", "إجمالي المبلغ المصروف", "#6366f1", "#eef2ff", Icons.Material.Filled.Payments)</MudItem>
+            <MudItem xs="6" sm="4" md="2">@RenderKpi("تم سداده", loan.PaidAmount.ToString("N0") + " جـ", $"{GetProgressPercent(loan):N0}% من السلفة", "#10b981", "#ecfdf5", Icons.Material.Filled.TrendingUp)</MudItem>
+            <MudItem xs="6" sm="4" md="2">@RenderKpi("المتبقي", loan.RemainingAmount.ToString("N0") + " جـ", "الرصيد غير المسدد", "#ef4444", "#fef2f2", Icons.Material.Filled.HourglassBottom)</MudItem>
+            <MudItem xs="6" sm="4" md="2">@RenderKpi("القسط الشهري", loan.MonthlyInstallment.ToString("N0") + " جـ", "قيمة الخصم الشهري", "#f59e0b", "#fffbeb", Icons.Material.Filled.CalendarMonth)</MudItem>
+            <MudItem xs="6" sm="4" md="2">@RenderKpi("الأقساط", $"{loan.PaidInstallments} / {loan.TotalInstallments}", "مسدد من الإجمالي", "#3b82f6", "#eff6ff", Icons.Material.Filled.FormatListNumbered)</MudItem>
+            <MudItem xs="6" sm="4" md="2">@RenderKpi("بداية الخصم", FormatMonth(loan.StartDeductionMonth), $"النهاية المتوقعة {FormatMonth(loan.ExpectedEndMonth)}", "#8b5cf6", "#f5f3ff", Icons.Material.Filled.Event)</MudItem>
+        </MudGrid>
+
+        @* ══ التقدم ══ *@
+        <div class="ldp-prog mb-4">
+            <div class="ldp-prog-top">
+                <span>تقدم السداد</span>
+                <span><b>@loan.PaidInstallments</b> / @loan.TotalInstallments قسط · <b>@GetProgressPercent(loan).ToString("N0")%</b></span>
+            </div>
+            <div class="ldp-prog-track">
+                <div class="ldp-prog-fill" style="width:@GetProgressPercent(loan)%"></div>
+            </div>
+        </div>
+
+        @* ══ التابات ══ *@
+        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" Class="ldp-tabs"
+                 ActivePanelIndex="@_activeTab" ActivePanelIndexChanged="OnTabChangedAsync">
+
+            <MudTabPanel Text="نظرة عامة" Icon="@Icons.Material.Filled.DashboardCustomize">
+                <MudGrid Spacing="3" Class="mt-1">
+                    <MudItem xs="12" md="6">
+                        <div class="ldp-card">
+                            <div class="ldp-card-title"><MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" /> بيانات السلفة</div>
+                            <div class="ldp-row"><span>تاريخ السلفة</span><b>@loan.LoanDate.ToString("dd/MM/yyyy")</b></div>
+                            <div class="ldp-row"><span>بداية الخصم</span><b>@FormatMonth(loan.StartDeductionMonth)</b></div>
+                            <div class="ldp-row"><span>آخر قسط متوقع</span><b>@FormatMonth(loan.ExpectedEndMonth)</b></div>
+                            <div class="ldp-row"><span>عدد الأقساط</span><b>@loan.TotalInstallments قسط</b></div>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <div class="ldp-card">
+                            <div class="ldp-card-title"><MudIcon Icon="@Icons.Material.Filled.VerifiedUser" Size="Size.Small" /> الاعتماد والخزينة</div>
+                            <div class="ldp-row"><span>الخزينة</span><b>@(loan.CashBoxName ?? "—")</b></div>
+                            <div class="ldp-row"><span>المعتمد</span><b>@(loan.ApprovedBy ?? "—")</b></div>
+                            <div class="ldp-row"><span>أنشأها</span><b>@(loan.CreatedBy ?? "—")</b></div>
+                            <div class="ldp-row"><span>الحالة</span><b style="color:@loan.StatusColor">@loan.StatusAr</b></div>
+                        </div>
+                    </MudItem>
+                    @if (!string.IsNullOrWhiteSpace(loan.Notes))
+                    {
+                        <MudItem xs="12">
+                            <div class="ldp-card">
+                                <div class="ldp-card-title"><MudIcon Icon="@Icons.Material.Filled.StickyNote2" Size="Size.Small" /> ملاحظات</div>
+                                <div class="ldp-notes">@loan.Notes</div>
+                            </div>
+                        </MudItem>
+                    }
+                </MudGrid>
+            </MudTabPanel>
+
+            <MudTabPanel Text="@($"جدول الأقساط ({_detail.Installments.Count})")" Icon="@Icons.Material.Filled.CalendarMonth">
+                <div class="ldp-tbl-wrap mt-1">
+                    <table class="ldp-tbl">
+                        <thead>
+                            <tr>
+                                <th style="width:50px">#</th>
+                                <th>الشهر</th>
+                                <th>المبلغ</th>
+                                <th>الحالة</th>
+                                <th>تاريخ الخصم</th>
+                                <th>ملاحظات</th>
+                                <th class="ldp-no-print" style="width:150px">إجراءات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var inst in _detail.Installments)
+                            {
+                                <tr>
+                                    <td class="ldp-num">@inst.InstallmentNumber</td>
+                                    <td><b>@inst.MonthDisplay</b></td>
+                                    <td class="ldp-amt">@inst.Amount.ToString("N2") جـ</td>
+                                    <td><span class="ldp-pill @PillClass(inst.Status)">@inst.StatusAr</span></td>
+                                    <td>@(inst.DeductionDate?.ToString("dd/MM/yyyy") ?? "—")</td>
+                                    <td style="max-width:220px;font-size:12px;color:#7a869c">@(string.IsNullOrWhiteSpace(inst.Notes) ? "—" : inst.Notes)</td>
+                                    <td class="ldp-no-print">
+                                        @if (inst.Status == "Pending" && loan.Status == "Active" && _canEdit)
+                                        {
+                                            <MudIconButton Icon="@Icons.Material.Filled.ContentCut" Size="Size.Small" Color="Color.Info" Title="تجزئة القسط" OnClick="@(() => OpenSplitDialog(inst))" />
+                                            <MudIconButton Icon="@Icons.Material.Filled.SkipNext" Size="Size.Small" Color="Color.Warning" Title="تأجيل القسط (اختيار الشهر)" OnClick="@(() => OpenSkipDialog(inst))" />
+                                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Primary" Title="تعديل القسط" OnClick="@(() => OpenEditInstDialog(inst))" />
+                                        }
+                                        else
+                                        {
+                                            <span class="ldp-dash">—</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </MudTabPanel>
+        </MudTabs>
+    }
+</div>
+
+@* ══ تأجيل قسط بشهر مختار ══ *@
+<MudDialog Class="loan-sub-dlg" @bind-Visible="_skipDialogOpen">
+    <DialogContent>
+        <div class="lsd-hd"><MudIcon Icon="@Icons.Material.Filled.SkipNext" Size="Size.Small" /> تأجيل القسط</div>
+        <div class="lsd-body">
+            @if (_skipInstallment is not null)
+            {
+                <div class="lsd-note">
+                    القسط رقم <b>@_skipInstallment.InstallmentNumber</b> بمبلغ <b>@_skipInstallment.Amount.ToString("N2") جـ</b> سيتم تأجيله بالكامل إلى الشهر الذي تختاره.
+                </div>
+                <MudDatePicker @bind-Date="_skipTargetMonth"
+                               Label="الشهر الجديد للقسط"
+                               OpenTo="OpenTo.Month" FixDay="1" MinDate="_skipMinDate" DateFormat="yyyy-MM"
+                               Variant="Variant.Outlined" Margin="Margin.Dense"
+                               HelperText="لا يمكن اختيار شهر ماضي أو شهر القسط الحالي"
+                               FullWidth />
+                <MudTextField T="string" @bind-Value="_skipReason" Label="سبب التأجيل / الملاحظة"
+                              Variant="Variant.Outlined" Lines="2" Class="mt-3" FullWidth />
+            }
+        </div>
+        <div class="lsd-ft">
+            <MudButton Variant="Variant.Text" OnClick='@(() => _skipDialogOpen = false)'>إلغاء</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Warning" OnClick="SubmitSkipAsync">تأجيل</MudButton>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@* ══ تجزئة قسط ══ *@
+<MudDialog Class="loan-sub-dlg" @bind-Visible="_splitDialogOpen">
+    <DialogContent>
+        <div class="lsd-hd"><MudIcon Icon="@Icons.Material.Filled.ContentCut" Size="Size.Small" /> تجزئة القسط وترحيل جزء</div>
+        <div class="lsd-body">
+            @if (_splitInstallment is not null)
+            {
+                <div class="lsd-note">
+                    قيمة القسط الحالية: <b>@_splitInstallment.Amount.ToString("N2") جـ</b> — أدخل القيمة المطلوب خصمها في هذا الشهر، وسيتم ترحيل الباقي للشهر الذي تختاره.
+                </div>
+                <MudNumericField T="decimal" @bind-Value="_splitCurrentAmount"
+                                 Label="القيمة المطلوب خصمها هذا الشهر"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                 Min="0.01m" Max="@(_splitInstallment.Amount - 0.01m)" FullWidth />
+                <div class="lsd-remaining">المتبقي الذي سيتم ترحيله: <b>@GetSplitRemainingDisplay()</b></div>
+                <MudDatePicker @bind-Date="_splitTargetMonth"
+                               Label="شهر ترحيل المتبقي"
+                               OpenTo="OpenTo.Month" FixDay="1" MinDate="_splitMinDate" DateFormat="yyyy-MM"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-3"
+                               HelperText="الشهر الذي سيُخصم فيه الجزء المرحّل"
+                               FullWidth />
+                <MudTextField T="string" @bind-Value="_splitReason" Label="سبب التجزئة / الملاحظة"
+                              Variant="Variant.Outlined" Lines="3" Class="mt-3" FullWidth />
+            }
+        </div>
+        <div class="lsd-ft">
+            <MudButton Variant="Variant.Text" OnClick='@(() => _splitDialogOpen = false)'>إلغاء</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="SubmitSplitAsync">حفظ</MudButton>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@* ══ تعديل قسط معلق ══ *@
+<MudDialog Class="loan-sub-dlg" @bind-Visible="_editInstOpen">
+    <DialogContent>
+        <div class="lsd-hd"><MudIcon Icon="@Icons.Material.Filled.Edit" Size="Size.Small" /> تعديل القسط</div>
+        <div class="lsd-body">
+            @if (_editInst is not null)
+            {
+                <div class="lsd-note">
+                    الأقساط المعلقة فقط قابلة للتعديل. القسط الأصلي: <b>@_editInst.Amount.ToString("N2") جـ</b> في <b>@_editInst.MonthDisplay</b>.
+                </div>
+                <MudNumericField T="decimal?" @bind-Value="_editAmount" Label="مبلغ القسط الجديد"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Min="0.01m" FullWidth />
+                <MudDatePicker @bind-Date="_editMonth" Label="شهر الخصم"
+                               OpenTo="OpenTo.Month" FixDay="1" DateFormat="yyyy-MM"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-3"
+                               HelperText="لا يمكن النقل لشهر ماضي"
+                               FullWidth />
+                <MudTextField T="string" @bind-Value="_editNotes" Label="ملاحظات"
+                              Variant="Variant.Outlined" Lines="2" Class="mt-3" FullWidth />
+            }
+        </div>
+        <div class="lsd-ft">
+            <MudButton Variant="Variant.Text" OnClick='@(() => _editInstOpen = false)'>إلغاء</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SubmitEditInstAsync">حفظ</MudButton>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@* ══ تعديل السلفة ══ *@
+<MudDialog Class="loan-sub-dlg" @bind-Visible="_editLoanOpen">
+    <DialogContent>
+        <div class="lsd-hd"><MudIcon Icon="@Icons.Material.Filled.EditNote" Size="Size.Small" /> تعديل السلفة</div>
+        <div class="lsd-body">
+            @if (_editLoanAllowedFinancial)
+            {
+                <div class="lsd-note">
+                    لا توجد أقساط مخصومة بعد — يمكنك تعديل المبلغ والأقساط والبداية والخزينة، وسيتم إعادة بناء جدول الأقساط وحركة الخزينة (عكس القديم + صرف الجديد).
+                </div>
+                <MudNumericField T="decimal" @bind-Value="_elAmount" Label="قيمة السلفة"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Min="0.01m" FullWidth />
+                <MudNumericField T="int" @bind-Value="_elTotal" Label="عدد الأقساط"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" Class="mt-3" FullWidth />
+                <MudDatePicker @bind-Date="_elStart" Label="شهر بداية الخصم"
+                               OpenTo="OpenTo.Month" FixDay="1" DateFormat="yyyy-MM"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-3" FullWidth />
+                <MudSelect T="int?" @bind-Value="_elCashBoxId" Label="الخزينة"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-3" FullWidth>
+                    @foreach (var cb in _cashBoxes)
+                    {
+                        <MudSelectItem T="int?" Value="@cb.CashBoxId">@cb.CashBoxName</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+            else
+            {
+                <div class="lsd-note warn">
+                    يوجد أقساط مخصومة على هذه السلفة — التعديل المالي مقفل حمايةً للرواتب. يمكنك تعديل الملاحظات والمعتمد فقط.
+                </div>
+            }
+            <MudTextField T="string" @bind-Value="_elNotes" Label="ملاحظات"
+                          Variant="Variant.Outlined" Lines="2" Class="mt-3" FullWidth />
+            <MudTextField T="string" @bind-Value="_elApprovedBy" Label="المعتمد"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-3" FullWidth />
+        </div>
+        <div class="lsd-ft">
+            <MudButton Variant="Variant.Text" OnClick='@(() => _editLoanOpen = false)'>إلغاء</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="SubmitEditLoanAsync">حفظ</MudButton>
+        </div>
+    </DialogContent>
+</MudDialog>
+
+@code {
+    [Parameter] public int LoanId { get; set; }
+
+    private LoanDetailDto? _detail;
+    private bool           _loading     = true;
+    private string         _currentUser = "system";
+    private System.Security.Claims.ClaimsPrincipal? _user;
+    private bool           _canEdit;
+    private int            _activeTab;
+    private List<CashBoxLookupDto> _cashBoxes = new();
+
+    // تأجيل
+    private bool _skipDialogOpen;
+    private InstallmentListDto? _skipInstallment;
+    private DateTime? _skipTargetMonth;
+    private DateTime? _skipMinDate;
+    private string? _skipReason;
+
+    // تجزئة
+    private bool _splitDialogOpen;
+    private InstallmentListDto? _splitInstallment;
+    private decimal _splitCurrentAmount;
+    private string? _splitReason;
+    private DateTime? _splitTargetMonth;
+    private DateTime? _splitMinDate;
+
+    // تعديل قسط
+    private bool _editInstOpen;
+    private InstallmentListDto? _editInst;
+    private decimal? _editAmount;
+    private DateTime? _editMonth;
+    private string? _editNotes;
+
+    // تعديل السلفة
+    private bool _editLoanOpen;
+    private decimal _elAmount;
+    private int _elTotal = 1;
+    private DateTime? _elStart;
+    private int? _elCashBoxId;
+    private string? _elNotes;
+    private string? _elApprovedBy;
+    private bool _editLoanAllowedFinancial;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        _user = auth.User;
+        _currentUser = _user.Identity?.Name ?? "system";
+
+        // (12-H9) بوابة عرض + صلاحية التعديل
+        if (!HasPermission("View"))
+        {
+            Nav.NavigateTo("/access-denied");
+            return;
+        }
+        _canEdit = HasPermission("Edit");
+
+        try { _cashBoxes = await LoanService.GetCashBoxesLookupAsync(); } catch { _cashBoxes = new(); }
+        await LoadDetailAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // التنقل بين سلفتين من نفس الصفحة
+        if (!_loading)
+            await LoadDetailAsync();
+    }
+
+    private async Task LoadDetailAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _detail = await LoanService.GetLoanDetailAsync(LoanId);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private bool HasPermission(string action) =>
+        _user?.Claims.Any(c => c.Type == "Permission" && c.Value == $"frmEmployeeLoans:{action}") == true;
+
+    private async Task OnTabChangedAsync(int tabIndex)
+    {
+        _activeTab = tabIndex;
+        await Task.CompletedTask;
+    }
+
+    // ===== تأجيل بشهر مختار =====
+    private void OpenSkipDialog(InstallmentListDto installment)
+    {
+        _skipInstallment = installment;
+        _skipReason = null;
+        var afterInst = ParseMonth(installment.DeductionMonth)?.AddMonths(1);
+        _skipTargetMonth = MaxDate(afterInst);
+        _skipMinDate = MaxDate(afterInst);
+        _skipDialogOpen = true;
+    }
+
+    private async Task SubmitSkipAsync()
+    {
+        if (_skipInstallment is null) return;
+        if (_skipTargetMonth is null)
+        {
+            Snackbar.Add("اختر الشهر الجديد للقسط", Severity.Warning);
+            return;
+        }
+
+        var result = await LoanService.SkipInstallmentAsync(
+            _skipInstallment.InstallmentId,
+            string.IsNullOrWhiteSpace(_skipReason) ? "تأجيل يدوي" : _skipReason!,
+            _currentUser,
+            _skipTargetMonth.Value.ToString("yyyy-MM"));
+
+        Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+        if (result.Success)
+        {
+            _skipDialogOpen = false;
+            await LoadDetailAsync();
+        }
+    }
+
+    // ===== تجزئة =====
+    private void OpenSplitDialog(InstallmentListDto installment)
+    {
+        _splitInstallment = installment;
+        _splitCurrentAmount = installment.Amount;
+        _splitReason = null;
+        var instDate = ParseMonth(installment.DeductionMonth);
+        _splitTargetMonth = MaxDate(instDate?.AddMonths(1));
+        _splitMinDate = MaxDate(instDate?.AddMonths(1));
+        _splitDialogOpen = true;
+    }
+
+    private async Task SubmitSplitAsync()
+    {
+        if (_splitInstallment is null) return;
+
+        if (_splitCurrentAmount <= 0 || _splitCurrentAmount >= _splitInstallment.Amount)
+        {
+            Snackbar.Add("أدخل قيمة أقل من مبلغ القسط الحالي وأكبر من صفر", Severity.Warning);
+            return;
+        }
+
+        var result = await LoanService.SplitInstallmentAsync(
+            _splitInstallment.InstallmentId,
+            _splitCurrentAmount,
+            _splitReason ?? string.Empty,
+            _currentUser,
+            _splitTargetMonth?.ToString("yyyy-MM"));
+
+        Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+        if (result.Success)
+        {
+            _splitDialogOpen = false;
+            await LoadDetailAsync();
+        }
+    }
+
+    private string GetSplitRemainingDisplay()
+    {
+        if (_splitInstallment is null) return "—";
+        var remaining = _splitInstallment.Amount - _splitCurrentAmount;
+        return remaining <= 0 ? "—" : remaining.ToString("N2") + " جـ";
+    }
+
+    // ===== تعديل قسط =====
+    private void OpenEditInstDialog(InstallmentListDto installment)
+    {
+        _editInst = installment;
+        _editAmount = installment.Amount;
+        _editMonth = ParseMonth(installment.DeductionMonth);
+        _editNotes = installment.Notes;
+        _editInstOpen = true;
+    }
+
+    private async Task SubmitEditInstAsync()
+    {
+        if (_editInst is null) return;
+        var result = await LoanService.UpdateInstallmentAsync(
+            _editInst.InstallmentId,
+            _editAmount,
+            _editMonth?.ToString("yyyy-MM"),
+            _editNotes,
+            _currentUser);
+
+        Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+        if (result.Success)
+        {
+            _editInstOpen = false;
+            await LoadDetailAsync();
+        }
+    }
+
+    // ===== تعديل السلفة =====
+    private void OpenEditLoanDialog()
+    {
+        var loan = _detail?.Loan;
+        if (loan is null) return;
+
+        _elAmount     = loan.LoanAmount;
+        _elTotal      = loan.TotalInstallments;
+        _elStart      = ParseMonth(loan.StartDeductionMonth);
+        _elNotes      = loan.Notes;
+        _elApprovedBy = loan.ApprovedBy;
+        _elCashBoxId  = _cashBoxes.FirstOrDefault()?.CashBoxId;
+        _editLoanAllowedFinancial = loan.Status == "Active"
+            && _detail!.Installments.All(i => i.Status != "Deducted");
+        _editLoanOpen = true;
+    }
+
+    private async Task SubmitEditLoanAsync()
+    {
+        var loan = _detail?.Loan;
+        if (loan is null) return;
+
+        var dto = new LoanFormDto
+        {
+            LoanId              = loan.LoanId,
+            EmployeeId          = loan.EmployeeId,
+            EmployeeName        = loan.EmployeeName,
+            LoanAmount          = _elAmount,
+            TotalInstallments   = _elTotal,
+            LoanDate            = loan.LoanDate,
+            StartDeductionMonth = _elStart?.ToString("yyyy-MM") ?? loan.StartDeductionMonth,
+            CashBoxId           = _elCashBoxId,
+            Notes               = _elNotes,
+            ApprovedBy          = _elApprovedBy
+        };
+
+        var result = await LoanService.UpdateLoanAsync(dto, _currentUser);
+        Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+        if (result.Success)
+        {
+            _editLoanOpen = false;
+            await LoadDetailAsync();
+        }
+    }
+
+    // ===== Helpers =====
+    private static DateTime? ParseMonth(string? ym) =>
+        DateTime.TryParseExact((ym ?? "") + "-01", "yyyy-MM-dd", null,
+            System.Globalization.DateTimeStyles.None, out var d) ? d : null;
+
+    private static DateTime? MaxDate(DateTime? d)
+    {
+        var cur = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        return d.HasValue && d.Value > cur ? d : cur;
+    }
+
+    private static string PillClass(string status) => status switch
+    {
+        "Deducted" => "ok",
+        "Skipped"  => "off",
+        _          => "wait"
+    };
+
+    private static string FormatMonth(string? yearMonth)
+    {
+        if (string.IsNullOrWhiteSpace(yearMonth)) return "—";
+        return DateTime.TryParseExact(yearMonth + "-01", "yyyy-MM-dd",
+            null, System.Globalization.DateTimeStyles.None, out var date)
+            ? date.ToString("MMMM yyyy", new System.Globalization.CultureInfo("ar-EG"))
+            : yearMonth;
+    }
+
+    private static double GetProgressPercent(LoanListDto loan) =>
+        loan.TotalInstallments > 0
+            ? (double)loan.PaidInstallments / loan.TotalInstallments * 100
+            : 0;
+
+    private RenderFragment RenderKpi(string title, string value, string sub, string color, string bg, string icon) => __builder =>
+    {
+        <div class="ldp-kpi">
+            <div class="ldp-kpi-ic" style="@($"background:{bg};color:{color}")"><MudIcon Icon="@icon" Size="Size.Small" /></div>
+            <div class="ldp-kpi-v">@value</div>
+            <div class="ldp-kpi-l">@title</div>
+            <div class="ldp-kpi-s">@sub</div>
+        </div>
+    };
+
+    private async Task PrintAsync() => await JS.InvokeVoidAsync("window.print");
+
+    private void GoBack() => Nav.NavigateTo("/hr/loans");
+
+    private void GoToEmployee(int employeeId) => Nav.NavigateTo($"/employees/profile/{employeeId}");
+}

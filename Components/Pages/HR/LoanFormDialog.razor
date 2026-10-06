@@ -94,6 +94,12 @@
         color: #1d4ed8;
         border: 1px solid #bfdbfe;
     }
+    .lf-schedule { max-height: 220px; overflow-y: auto; }
+    .lf-sched-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #eef2f7; font-size: .85rem; }
+    .lf-sched-row:last-child { border-bottom: none; }
+    .lf-sched-num { color: #8a97ab; font-size: .75rem; min-width: 30px; }
+    .lf-sched-month { flex: 1; font-weight: 600; }
+    .lf-sched-amt { color: #0f2b52; font-weight: 700; }
 </style>
 
 <MudDialog>
@@ -284,6 +290,29 @@
                                 </div>
                             </MudItem>
 
+                            @* (12-H9) معاينة جدول الأقساط *@
+                            @if (_dto.LoanAmount > 0 && _dto.TotalInstallments > 0 && !string.IsNullOrWhiteSpace(_dto.StartDeductionMonth))
+                            {
+                                <MudItem xs="12">
+                                    <div class="lf-card">
+                                        <div class="lf-card-title">
+                                            <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Size="Size.Small" />
+                                            معاينة جدول الأقساط
+                                        </div>
+                                        <div class="lf-schedule">
+                                            @foreach (var row in BuildSchedulePreview())
+                                            {
+                                                <div class="lf-sched-row">
+                                                    <span class="lf-sched-num">#@row.Number</span>
+                                                    <span class="lf-sched-month">@row.Month</span>
+                                                    <span class="lf-sched-amt">@row.Amount.ToString("N2") جـ</span>
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                </MudItem>
+                            }
+
                             @if (_dto.LoanAmount > 0 && _dto.TotalInstallments > 0 && _selectedEmployee != null)
                             {
                                 <MudItem xs="12">
@@ -415,6 +444,25 @@
         StateHasChanged();
     }
 
+    // (12-H9) معاينة جدول الأقساط — نفس منطق السيرفر (آخر قسط = الباقي)
+    private List<(int Number, string Month, decimal Amount)> BuildSchedulePreview()
+    {
+        var list = new List<(int Number, string Month, decimal Amount)>();
+        if (_dto.LoanAmount <= 0 || _dto.TotalInstallments <= 0) return list;
+        if (!DateTime.TryParseExact((_dto.StartDeductionMonth ?? "").Trim() + "-01", "yyyy-MM-dd",
+            null, System.Globalization.DateTimeStyles.None, out var start)) return list;
+
+        var monthly = Math.Round(_dto.LoanAmount / _dto.TotalInstallments, 2);
+        decimal cumulative = 0;
+        for (int i = 0; i < _dto.TotalInstallments; i++)
+        {
+            var amt = i == _dto.TotalInstallments - 1 ? _dto.LoanAmount - cumulative : monthly;
+            cumulative += amt;
+            list.Add((i + 1, start.AddMonths(i).ToString("yyyy-MM"), amt));
+        }
+        return list;
+    }
+
     private async Task SubmitAsync()
     {
         if (_form is null) return;
@@ -439,6 +487,13 @@
         if (!ValidateMonthFormat(_dto.StartDeductionMonth))
         {
             Snackbar.Add("صيغة شهر البداية غير صحيحة (مثال: 2026-07)", Severity.Warning);
+            return;
+        }
+
+        // (12-H9) منع شهر بداية ماضي — وإلا تبقى أقساط معلقة لا يخصمها أي راتب
+        if (string.CompareOrdinal(_dto.StartDeductionMonth.Trim(), DateTime.Today.ToString("yyyy-MM")) < 0)
+        {
+            Snackbar.Add("شهر بداية الخصم لا يمكن أن يكون في الماضي", Severity.Warning);
             return;
         }
 

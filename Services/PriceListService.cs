@@ -36,7 +36,7 @@ public class PriceListService : IPriceListService
     {
         using var db = await _factory.CreateDbContextAsync();
 
-        return await db.Products.AsNoTracking()
+        var rows = await db.Products.AsNoTracking()
             .Where(p => p.Customer == null)               // الكتالوج العام فقط — منتجات أوامر الشغل مستبعدة
             .OrderBy(p => p.ProductName)
             .Select(p => new PriceListRowDto
@@ -54,6 +54,26 @@ public class PriceListService : IPriceListService
                 PricingStatusId = p.PricingStatusId
             })
             .ToListAsync();
+
+        // 🏷️ نسبة الخصم: آخر تغيير مسجل لسعر البيع الرئيسي (بريميوم) — تظهر لو كان تخفيضًا
+        var ids = rows.Select(r => r.ProductId).ToList();
+        var lastChanges = await db.PriceHistories.AsNoTracking()
+            .Where(h => ids.Contains(h.ProductId) && h.PriceType == PricingTiers.Premium)
+            .GroupBy(h => h.ProductId)
+            .Select(g => g.OrderByDescending(x => x.ChangedAt).ThenByDescending(x => x.HistoryId).First())
+            .ToListAsync();
+        var rowMap = rows.ToDictionary(r => r.ProductId);
+        foreach (var h in lastChanges)
+        {
+            if (h.OldPrice.HasValue && h.OldPrice.Value > 0 && h.NewPrice < h.OldPrice.Value
+                && rowMap.TryGetValue(h.ProductId, out var row))
+            {
+                row.SaleDiscountPercent = (int)Math.Round((h.OldPrice.Value - h.NewPrice) / h.OldPrice.Value * 100m);
+                row.PreviousPremiumPrice = h.OldPrice.Value;
+            }
+        }
+
+        return rows;
     }
 
     public async Task<Dictionary<int, int>> GetStockMapAsync(int? branchId)

@@ -74,6 +74,7 @@ public class EmployeeLoanService : IEmployeeLoanService
                 x.l.LoanId,
                 x.l.EmployeeId,
                 x.e.FullName,
+                EmployeeStatus = x.e.Status,
                 x.e.Department,
                 x.e.JobTitle,
                 x.l.LoanAmount,
@@ -116,6 +117,7 @@ public class EmployeeLoanService : IEmployeeLoanService
                 LoanId              = x.LoanId,
                 EmployeeId          = x.EmployeeId,
                 EmployeeName        = x.FullName,
+                EmployeeStatus      = x.EmployeeStatus,
                 Department          = x.Department,
                 JobTitle            = x.JobTitle,
                 LoanAmount          = x.LoanAmount,
@@ -244,6 +246,10 @@ public class EmployeeLoanService : IEmployeeLoanService
             return (false, "عدد الأقساط يجب أن يكون أكبر من صفر", null);
         if (string.IsNullOrWhiteSpace(dto.StartDeductionMonth))
             return (false, "يرجى تحديد شهر بداية الخصم", null);
+
+        // (12-H9) شهر البداية لا يمكن أن يكون في الماضي — وإلا تبقى أقساط معلقة لا يخصمها أي راتب
+        if (string.CompareOrdinal(dto.StartDeductionMonth.Trim(), DateTime.Today.ToString("yyyy-MM")) < 0)
+            return (false, "شهر بداية الخصم لا يمكن أن يكون في الماضي", null);
         if (!dto.CashBoxId.HasValue || dto.CashBoxId == 0)
             return (false, "يرجى اختيار الخزينة", null);
 
@@ -494,110 +500,146 @@ public class EmployeeLoanService : IEmployeeLoanService
     // تأجيل قسط للشهر التالي
     // ============================================================
     public async Task<(bool Success, string Message)> SkipInstallmentAsync(
-        int installmentId, string reason, string userName)
+        int installmentId, string reason, string userName, string? targetMonth = null)
     {
         var inst = await _db.LoanInstallments
             .Include(i => i.Loan)
             .FirstOrDefaultAsync(i => i.InstallmentId == installmentId);
 
-        if (inst is null)             return (false, "القسط غير موجود");
-        if (inst.Status != "Pending") return (false, "لا يمكن تأجيل هذا القسط");
-
-        inst.Status = "Skipped";
-        inst.Notes  = reason;
+        if (inst is null) return (false, "القسط غير موجود");
+        if (inst.Status != "Pending")
+            return (false, "لا يمكن تأجيل هذا القسط — الأقساط المعلقة فقط هي التي يمكن تأجيلها");
 
         var lastInst = await _db.LoanInstallments
             .Where(i => i.LoanId == inst.LoanId)
             .OrderByDescending(i => i.InstallmentNumber)
-            .FirstOrDefaultAsync();
+            .FirstAsync();
 
-        if (lastInst != null &&
-            DateTime.TryParseExact(lastInst.DeductionMonth + "-01", "yyyy-MM-dd",
-                null, System.Globalization.DateTimeStyles.None, out var lastDate))
+        // (12-H9) شهر التأجيل: يختاره المستخدم أو افتراضي = بعد آخر شهر في الجدول
+        string newMonth;
+        if (string.IsNullOrWhiteSpace(targetMonth))
         {
-            _db.LoanInstallments.Add(new LoanInstallment
-            {
-                LoanId            = inst.LoanId,
-                EmployeeId        = inst.EmployeeId,
-                InstallmentNumber = lastInst.InstallmentNumber + 1,
-                DeductionMonth    = lastDate.AddMonths(1).ToString("yyyy-MM"),
-                Amount            = inst.Amount,
-                Status            = "Pending",
-                Notes             = $"مُرحَّل من {inst.DeductionMonth} - {reason}",
-                CreatedBy         = userName,
-                CreatedAt         = DateTime.Now
-            });
-
-            inst.Loan.TotalInstallments++;
-            inst.Loan.LastUpdatedAt = DateTime.Now;
+            var lastDate = DateTime.ParseExact(lastInst.DeductionMonth + "-01", "yyyy-MM-dd", null);
+            newMonth = lastDate.AddMonths(1).ToString("yyyy-MM");
+        }
+        else
+        {
+            newMonth = targetMonth.Trim();
+            if (!IsValidMonthFormat(newMonth))
+                return (false, "صيغة الشهر غير صحيحة — مثال: 2026-08");
+            if (string.CompareOrdinal(newMonth, inst.DeductionMonth) <= 0)
+                return (false, "شهر التأجيل يجب أن يكون بعد شهر القسط الحالي");
         }
 
-        await _db.SaveChangesAsync();
-        return (true, "تم تأجيل القسط للشهر القادم");
-    }
+        // (12-H9) لا تأجيل لشهر ماضي
+        if (string.CompareOrdinal(newMonth, DateTime.Today.ToString("yyyy-MM")) < 0)
+            return (false, "لا يمكن التأجيل لشهر ماضي");
 
-    public async Task<(bool Success, string Message)> SplitInstallmentAsync(
-        int installmentId, decimal amountToKeepThisMonth, string reason, string userName)
-    {
-        var inst = await _db.LoanInstallments
-            .Include(i => i.Loan)
-            .FirstOrDefaultAsync(i => i.InstallmentId == installmentId);
+        // (12-H9) حماية: القسط داخل راتب محسوب غير مصروف
+        var block = await GetUnpaidPayrollBlockAsync(inst.EmployeeId, inst.DeductionMonth);
+        if (block != null) return (false, block);
 
-        if (inst is null)
-            return (false, "القسط غير موجود");
-
-        if (inst.Status != "Pending")
-            return (false, "يمكن تعديل أو تجزئة القسط فقط وهو في حالة لم يُخصم بعد");
-
-        if (amountToKeepThisMonth <= 0)
-            return (false, "قيمة الخصم في هذا الشهر يجب أن تكون أكبر من صفر");
-
-        if (amountToKeepThisMonth >= inst.Amount)
-            return (false, "استخدم القسط الحالي كما هو أو التأجيل الكامل؛ التجزئة تتطلب مبلغًا أقل من قيمة القسط");
-
-        if (!DateTime.TryParseExact(inst.DeductionMonth + "-01", "yyyy-MM-dd",
-            null, System.Globalization.DateTimeStyles.None, out var currentMonthDate))
-            return (false, "شهر القسط الحالي غير صحيح");
-
-        var remainingAmount = inst.Amount - amountToKeepThisMonth;
-        var originalAmount = inst.Amount;
-
-        var lastInstallment = await _db.LoanInstallments
-            .Where(i => i.LoanId == inst.LoanId)
-            .OrderByDescending(i => i.InstallmentNumber)
-            .FirstOrDefaultAsync();
-
-        var nextInstallmentNumber = (lastInstallment?.InstallmentNumber ?? inst.InstallmentNumber) + 1;
-        var nextMonth = currentMonthDate.AddMonths(1).ToString("yyyy-MM");
-
-        inst.Amount = amountToKeepThisMonth;
-        inst.Notes = string.Join(" | ", new[]
-        {
-            inst.Notes,
-            $"تعديل جزئي: أصل القسط {originalAmount:N2} جـ، المستحق هذا الشهر {amountToKeepThisMonth:N2} جـ، المتبقي {remainingAmount:N2} جـ مرحّل إلى {nextMonth}",
-            string.IsNullOrWhiteSpace(reason) ? null : $"السبب: {reason}",
-            $"بواسطة: {userName} - {DateTime.Now:yyyy-MM-dd HH:mm}"
-        }.Where(x => !string.IsNullOrWhiteSpace(x)));
+        inst.Status = "Skipped";
+        inst.Notes = reason;
 
         _db.LoanInstallments.Add(new LoanInstallment
         {
-            LoanId = inst.LoanId,
-            EmployeeId = inst.EmployeeId,
-            InstallmentNumber = nextInstallmentNumber,
-            DeductionMonth = nextMonth,
-            Amount = remainingAmount,
-            Status = "Pending",
-            Notes = $"متبقي مرحّل من قسط شهر {inst.DeductionMonth} بقيمة {remainingAmount:N2} جـ" +
-                    (!string.IsNullOrWhiteSpace(reason) ? $" - {reason}" : string.Empty),
-            CreatedBy = userName,
-            CreatedAt = DateTime.Now
+            LoanId            = inst.LoanId,
+            EmployeeId        = inst.EmployeeId,
+            InstallmentNumber = lastInst.InstallmentNumber + 1,
+            Amount            = inst.Amount,
+            DeductionMonth    = newMonth,
+            Status            = "Pending",
+            CreatedBy         = userName,
+            CreatedAt         = DateTime.Now
         });
 
         inst.Loan.TotalInstallments++;
         inst.Loan.LastUpdatedAt = DateTime.Now;
 
         await _db.SaveChangesAsync();
-        return (true, $"تم تجزئة القسط: {amountToKeepThisMonth:N2} جـ لهذا الشهر، وترحيل {remainingAmount:N2} جـ للشهر القادم");
+
+        // (12-H9) Audit
+        await _audit.LogAsync("LoanInstallments", "Skip", installmentId.ToString(),
+            (object)new { inst.InstallmentNumber, inst.Amount, OldMonth = inst.DeductionMonth },
+            new { NewMonth = newMonth, Reason = reason }, userName);
+
+        return (true, $"تم تأجيل القسط إلى شهر {newMonth}");
+    }
+
+    public async Task<(bool Success, string Message)> SplitInstallmentAsync(
+        int installmentId, decimal amountToKeepThisMonth, string reason, string userName, string? targetMonth = null)
+    {
+        var inst = await _db.LoanInstallments
+            .Include(i => i.Loan)
+            .FirstOrDefaultAsync(i => i.InstallmentId == installmentId);
+
+        if (inst is null) return (false, "القسط غير موجود");
+        if (inst.Status != "Pending")
+            return (false, "يمكن تعديل أو تجزئة القسط فقط وهو في حالة لم يُخصم بعد");
+        if (amountToKeepThisMonth <= 0)
+            return (false, "قيمة الخصم في هذا الشهر يجب أن تكون أكبر من صفر");
+        if (amountToKeepThisMonth >= inst.Amount)
+            return (false, "استخدم القسط الحالي كما هو أو التأجيل الكامل؛ التجزئة تتطلب مبلغًا أقل من قيمة القسط");
+
+        var remainingAmount = inst.Amount - amountToKeepThisMonth;
+
+        // (12-H9) شهر الترحيل: يختاره المستخدم أو افتراضي = الشهر التالي
+        if (!DateTime.TryParseExact(inst.DeductionMonth + "-01", "yyyy-MM-dd",
+            null, System.Globalization.DateTimeStyles.None, out var currentMonthDate))
+            return (false, "شهر القسط الحالي غير صحيح");
+
+        string newMonth;
+        if (string.IsNullOrWhiteSpace(targetMonth))
+            newMonth = currentMonthDate.AddMonths(1).ToString("yyyy-MM");
+        else
+        {
+            newMonth = targetMonth.Trim();
+            if (!IsValidMonthFormat(newMonth))
+                return (false, "صيغة الشهر غير صحيحة — مثال: 2026-08");
+            if (string.CompareOrdinal(newMonth, inst.DeductionMonth) <= 0)
+                return (false, "شهر الترحيل يجب أن يكون بعد شهر القسط الحالي");
+            if (string.CompareOrdinal(newMonth, DateTime.Today.ToString("yyyy-MM")) < 0)
+                return (false, "لا يمكن الترحيل لشهر ماضي");
+        }
+
+        // (12-H9) حماية: القسط داخل راتب محسوب غير مصروف
+        var block = await GetUnpaidPayrollBlockAsync(inst.EmployeeId, inst.DeductionMonth);
+        if (block != null) return (false, block);
+
+        var lastInst = await _db.LoanInstallments
+            .Where(i => i.LoanId == inst.LoanId)
+            .OrderByDescending(i => i.InstallmentNumber)
+            .FirstAsync();
+
+        var oldAmount = inst.Amount;
+        inst.Amount = amountToKeepThisMonth;
+        inst.Notes = AppendNote(inst.Notes, reason);
+
+        _db.LoanInstallments.Add(new LoanInstallment
+        {
+            LoanId            = inst.LoanId,
+            EmployeeId        = inst.EmployeeId,
+            InstallmentNumber = lastInst.InstallmentNumber + 1,
+            Amount            = remainingAmount,
+            DeductionMonth    = newMonth,
+            Status            = "Pending",
+            Notes             = $"مُرحّل من تجزئة القسط رقم {inst.InstallmentNumber}",
+            CreatedBy         = userName,
+            CreatedAt         = DateTime.Now
+        });
+
+        inst.Loan.TotalInstallments++;
+        inst.Loan.LastUpdatedAt = DateTime.Now;
+
+        await _db.SaveChangesAsync();
+
+        // (12-H9) Audit
+        await _audit.LogAsync("LoanInstallments", "Split", installmentId.ToString(),
+            (object)new { OldAmount = oldAmount, Month = inst.DeductionMonth },
+            new { ThisMonth = amountToKeepThisMonth, CarryOver = remainingAmount, NewMonth = newMonth, Reason = reason }, userName);
+
+        return (true, $"تم تجزئة القسط: {amountToKeepThisMonth:N2} جـ لهذا الشهر، وترحيل {remainingAmount:N2} جـ إلى {newMonth}");
     }
 
     public async Task<EmployeeLoanStatementDto?> GetEmployeeStatementAsync(int employeeId)
@@ -805,6 +847,270 @@ public class EmployeeLoanService : IEmployeeLoanService
     // ============================================================
     // Helper خاص - رصيد خزينة
     // ============================================================
+    // ============================================================
+    // (12-H9) تعديل قسط معلق
+    // ============================================================
+    public async Task<(bool Success, string Message)> UpdateInstallmentAsync(
+        int installmentId, decimal? newAmount, string? newMonth, string? notes, string userName)
+    {
+        var inst = await _db.LoanInstallments
+            .Include(i => i.Loan)
+            .FirstOrDefaultAsync(i => i.InstallmentId == installmentId);
+
+        if (inst is null) return (false, "القسط غير موجود");
+        if (inst.Status != "Pending")
+            return (false, "يمكن تعديل الأقساط المعلقة فقط — المخصومة والمؤجلة سجل تاريخي لا يعدل");
+        if (inst.Loan.Status != "Active")
+            return (false, "السلفة غير نشطة");
+
+        var oldAmount = inst.Amount;
+        var oldMonth  = inst.DeductionMonth;
+        var oldNotes  = inst.Notes;
+
+        if (newAmount.HasValue)
+        {
+            if (newAmount.Value <= 0)
+                return (false, "قيمة القسط يجب أن تكون أكبر من صفر");
+            inst.Amount = Math.Round(newAmount.Value, 2);
+        }
+
+        if (!string.IsNullOrWhiteSpace(newMonth))
+        {
+            var m = newMonth.Trim();
+            if (!IsValidMonthFormat(m))
+                return (false, "صيغة الشهر غير صحيحة — مثال: 2026-08");
+            if (string.CompareOrdinal(m, DateTime.Today.ToString("yyyy-MM")) < 0)
+                return (false, "لا يمكن نقل القسط لشهر ماضي");
+
+            // حماية: لو القسط داخل راتب محسوب غير مصروف
+            var block = await GetUnpaidPayrollBlockAsync(inst.EmployeeId, inst.DeductionMonth);
+            if (block != null) return (false, block);
+
+            inst.DeductionMonth = m;
+        }
+
+        if (notes != null)
+            inst.Notes = notes;
+
+        inst.Loan.LastUpdatedAt = DateTime.Now;
+        await _db.SaveChangesAsync();
+
+        // (12-H9) Audit
+        await _audit.LogAsync("LoanInstallments", "Update", installmentId.ToString(),
+            (object)new { Amount = oldAmount, Month = oldMonth, Notes = oldNotes },
+            new { inst.Amount, inst.DeductionMonth, inst.Notes }, userName);
+
+        return (true, "تم تعديل القسط بنجاح");
+    }
+
+    // ============================================================
+    // (12-H9) تعديل السلفة
+    // الملاحظات/المعتمد: دائمًا — الحقول المالية: فقط لو صفر أقساط مخصومة
+    // ============================================================
+    public async Task<(bool Success, string Message)> UpdateLoanAsync(LoanFormDto dto, string userName)
+    {
+        var loan = await _db.EmployeeLoans
+            .Include(l => l.Installments)
+            .FirstOrDefaultAsync(l => l.LoanId == dto.LoanId);
+
+        if (loan is null) return (false, "السلفة غير موجودة");
+        if (loan.Status == "Cancelled")
+            return (false, "لا يمكن تعديل سلفة ملغاة");
+
+        var oldSnapshot = new
+        {
+            loan.LoanAmount,
+            loan.MonthlyInstallment,
+            loan.TotalInstallments,
+            loan.StartDeductionMonth,
+            CashBoxId = loan.CashBoxId,
+            loan.Notes,
+            loan.ApprovedBy
+        };
+
+        var newStart = string.IsNullOrWhiteSpace(dto.StartDeductionMonth)
+            ? loan.StartDeductionMonth
+            : dto.StartDeductionMonth.Trim();
+
+        bool financialChanged =
+            dto.LoanAmount        != loan.LoanAmount ||
+            dto.TotalInstallments != loan.TotalInstallments ||
+            newStart              != loan.StartDeductionMonth ||
+            (dto.CashBoxId ?? 0)  != (loan.CashBoxId ?? 0);
+
+        // الملاحظات والمعتمد يٌعدّلان دائمًا
+        loan.Notes = dto.Notes;
+        if (!string.IsNullOrWhiteSpace(dto.ApprovedBy))
+            loan.ApprovedBy = dto.ApprovedBy;
+
+        if (financialChanged)
+        {
+            if (loan.Status != "Active")
+                return (false, "التعديل المالي متاح للسلف النشطة فقط");
+            if (loan.Installments.Any(i => i.Status == "Deducted"))
+                return (false, "يوجد أقساط مخصومة على هذه السلفة — لا يمكن تعديل الحقول المالية. ألغِ السلفة وأنشئ سلفة جديدة.");
+            if (dto.LoanAmount <= 0)
+                return (false, "قيمة السلفة يجب أن تكون أكبر من صفر");
+            if (dto.TotalInstallments <= 0)
+                return (false, "عدد الأقساط يجب أن يكون أكبر من صفر");
+            if (!IsValidMonthFormat(newStart))
+                return (false, "صيغة شهر بداية الخصم غير صحيحة (مثال: 2026-08)");
+            if (string.CompareOrdinal(newStart, DateTime.Today.ToString("yyyy-MM")) < 0)
+                return (false, "شهر بداية الخصم لا يمكن أن يكون في الماضي");
+            if (!dto.CashBoxId.HasValue || dto.CashBoxId == 0)
+                return (false, "يرجى اختيار الخزينة");
+
+            var newBox = await _db.CashBoxes.FirstOrDefaultAsync(c => c.CashBoxId == dto.CashBoxId.Value);
+            if (newBox is null) return (false, "الخزينة غير موجودة");
+
+            var oldCashBoxId = loan.CashBoxId;
+            var oldAmount    = loan.LoanAmount;
+
+            // فحص رصيد الخزينة الجديدة (مع رد المبلغ القديم أولًا لو نفس الخزينة)
+            var newBoxBalance = await GetCashBoxBalanceAsync(dto.CashBoxId.Value);
+            if (oldCashBoxId == dto.CashBoxId.Value)
+                newBoxBalance += oldAmount;
+            if (dto.LoanAmount > newBoxBalance)
+                return (false, $"رصيد الخزينة غير كافٍ — المتاح {newBoxBalance:N2} جـ، المطلوب {dto.LoanAmount:N2} جـ");
+
+            using var tx = await _db.Database.BeginTransactionAsync();
+            try
+            {
+                // (1) عكس الصرف القديم: قبض المبلغ القديم في الخزينة القديمة
+                if (oldCashBoxId.HasValue && oldAmount > 0)
+                {
+                    _db.CashboxTransactions.Add(new CashboxTransaction
+                    {
+                        CashBoxId       = oldCashBoxId.Value,
+                        TransactionType = "قبض",
+                        ReferenceType   = "LoanEdit",
+                        ReferenceId     = loan.LoanId,
+                        Amount          = oldAmount,
+                        TransactionDate = DateTime.Now,
+                        Notes           = $"عكس صرف السلفة رقم {loan.LoanId} بسبب التعديل (المبلغ القديم {oldAmount:N2} جـ)",
+                        CreatedBy       = userName,
+                        CreatedAt       = DateTime.Now
+                    });
+                }
+
+                // (2) صرف جديد بالمبلغ الجديد
+                var newTx = new CashboxTransaction
+                {
+                    CashBoxId       = dto.CashBoxId.Value,
+                    TransactionType = "صرف",
+                    ReferenceType   = "Loan",
+                    Amount          = dto.LoanAmount,
+                    TransactionDate = DateTime.Now,
+                    Notes           = $"سلفة للموظف (بعد تعديل السلفة رقم {loan.LoanId}) - {dto.TotalInstallments} قسط",
+                    CreatedBy       = userName,
+                    CreatedAt       = DateTime.Now
+                };
+                _db.CashboxTransactions.Add(newTx);
+                await _db.SaveChangesAsync();
+
+                loan.CashBoxId            = dto.CashBoxId.Value;
+                loan.CashboxTransactionId = newTx.CashboxTransactionId;
+                loan.LoanAmount           = dto.LoanAmount;
+                loan.TotalInstallments    = dto.TotalInstallments;
+                loan.StartDeductionMonth  = newStart;
+                loan.MonthlyInstallment   = Math.Round(dto.LoanAmount / dto.TotalInstallments, 2);
+                loan.RemainingAmount      = dto.LoanAmount; // صفر خصم مؤكد أعلاه
+                loan.PaidInstallments     = 0;
+                loan.LastUpdatedAt        = DateTime.Now;
+
+                // (3) إعادة بناء جدول الأقساط من الصفر (نفس نمط SaveLoan)
+                _db.LoanInstallments.RemoveRange(loan.Installments.Where(i => i.Status != "Deducted"));
+
+                if (!DateTime.TryParseExact(newStart + "-01", "yyyy-MM-dd",
+                    null, System.Globalization.DateTimeStyles.None, out var startDate))
+                    throw new Exception("صيغة شهر البداية غير صحيحة");
+
+                decimal cumulative = 0;
+                var newInsts = new List<LoanInstallment>();
+                for (int i = 0; i < dto.TotalInstallments; i++)
+                {
+                    var amt = (i == dto.TotalInstallments - 1)
+                        ? dto.LoanAmount - cumulative   // آخر قسط = الباقي
+                        : loan.MonthlyInstallment;
+                    cumulative += amt;
+
+                    newInsts.Add(new LoanInstallment
+                    {
+                        LoanId            = loan.LoanId,
+                        EmployeeId        = loan.EmployeeId,
+                        InstallmentNumber = i + 1,
+                        DeductionMonth    = startDate.AddMonths(i).ToString("yyyy-MM"),
+                        Amount            = amt,
+                        Status            = "Pending",
+                        CreatedBy         = userName,
+                        CreatedAt         = DateTime.Now
+                    });
+                }
+                _db.LoanInstallments.AddRange(newInsts);
+
+                await _db.SaveChangesAsync();
+                await tx.CommitAsync();
+            }
+            catch
+            {
+                await tx.RollbackAsync();
+                throw;
+            }
+        }
+        else
+        {
+            await _db.SaveChangesAsync();
+        }
+
+        // (12-H9) Audit
+        await _audit.LogAsync("EmployeeLoans", "Update", loan.LoanId.ToString(),
+            (object)oldSnapshot,
+            new
+            {
+                loan.LoanAmount,
+                loan.MonthlyInstallment,
+                loan.TotalInstallments,
+                loan.StartDeductionMonth,
+                CashBoxId = loan.CashBoxId,
+                loan.Notes,
+                loan.ApprovedBy,
+                FinancialChanged = financialChanged
+            },
+            userName);
+
+        return (true, financialChanged ? "تم تعديل السلفة وجدول الأقساط بنجاح" : "تم تعديل بيانات السلفة بنجاح");
+    }
+
+    // ============================================================
+    // (12-H9) Helpers مشتركة
+    // ============================================================
+    private static bool IsValidMonthFormat(string? m) =>
+        !string.IsNullOrWhiteSpace(m)
+        && DateTime.TryParseExact(m.Trim() + "-01", "yyyy-MM-dd", null,
+               System.Globalization.DateTimeStyles.None, out _);
+
+    private static string AppendNote(string? notes, string line) =>
+        string.IsNullOrWhiteSpace(notes) ? line : $"{notes}\n{line}";
+
+    /// <summary>
+    /// (12-H9) حماية من خصم مزدوج ضمني: لو القسط داخل راتب محسوب غير مصروف،
+    /// أي تأجيل/تجزئة/تعديل لشهره ممنوع حتى يرفض الراتب أو يعاد حسابه.
+    /// </summary>
+    private async Task<string?> GetUnpaidPayrollBlockAsync(int employeeId, string month)
+    {
+        var exists = await _db.Payrolls.AsNoTracking().AnyAsync(p =>
+            p.EmployeeId == employeeId
+            && p.PayrollMonth == month
+            && (p.LoanDeduction ?? 0) > 0
+            && (p.PaymentStatus == PayrollPaymentStatuses.PendingReview
+             || p.PaymentStatus == PayrollPaymentStatuses.Approved
+             || p.PaymentStatus == PayrollPaymentStatuses.Unpaid));
+
+        return exists
+            ? $"هذا القسط داخل راتب شهر {month} المحسوب وغير المصروف بعد — ارفض الراتب أو أعد حسابه أولًا، وإلا سيُخصم المبلغ من الموظف دون أن يُسجل على السلفة"
+            : null;
+    }
+
     private async Task<decimal> GetCashBoxBalanceAsync(int cashBoxId)
 {
     var box = await _db.CashBoxes

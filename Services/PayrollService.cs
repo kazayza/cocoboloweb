@@ -1624,6 +1624,7 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
             return;
 
         var usedDetailIds = new HashSet<int>();
+        var mismatches = 0; // (12-H9) عدد الأقساط التي طابقت سطر خصم بمبلغ مختلف
 
         foreach (var inst in installments)
         {
@@ -1634,6 +1635,15 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
                 continue;
 
             usedDetailIds.Add(matchedDetail.PayrollDetailID);
+
+            // (12-H9) تنبيه عند اختلاف مبلغ السطر المطابق عن مبلغ القسط —
+            // المطابقة الاحتياطية (بلا مبلغ) قد تخفي فرقًا حقيقيًا
+            if (matchedDetail.Amount != inst.Amount)
+            {
+                mismatches++;
+                inst.Notes = AppendLine(inst.Notes,
+                    $"تنبيه: سطر الخصم في الراتب بمبلغ {matchedDetail.Amount:N2} يختلف عن مبلغ القسط {inst.Amount:N2} — راجع حساب السلفة");
+            }
 
             inst.Status = "Deducted";
             inst.PayrollId = payroll.PayrollId;
@@ -1654,6 +1664,23 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
         }
 
         await _db.SaveChangesAsync();
+
+        // (12-H9) Audit: خصم أقساط السلف مع صرف الراتب
+        var deducted = installments.Count(i => i.Status == "Deducted");
+        if (deducted > 0)
+        {
+            await _audit.LogAsync("LoanInstallments", "PayrollDeduct", payroll.PayrollId.ToString(),
+                null,
+                new
+                {
+                    payroll.EmployeeId,
+                    payroll.PayrollMonth,
+                    Count = deducted,
+                    Total = installments.Where(i => i.Status == "Deducted").Sum(i => i.Amount),
+                    Mismatches = mismatches
+                },
+                user);
+        }
     }
 
     private static string BuildAbsenceDescription(PayrollCalculationDto calc)

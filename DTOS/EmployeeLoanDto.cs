@@ -12,6 +12,7 @@ public class LoanListDto
     public string   EmployeeName         { get; set; } = "";
     public string?  Department           { get; set; }
     public string?  JobTitle             { get; set; }
+    public string?  EmployeeStatus       { get; set; } // (12-H9) Active/Resigned — لشارة "موظف مستقيل"
 
     public decimal  LoanAmount           { get; set; }
     public decimal  MonthlyInstallment   { get; set; }

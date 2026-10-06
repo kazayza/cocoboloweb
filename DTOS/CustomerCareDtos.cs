@@ -28,6 +28,7 @@ public static class CustomerCareStatus
 public static class CustomerCareOutcome
 {
     public const string Positive      = "Positive";      // رضا إيجابي
+    public const string Neutral       = "Neutral";       // محايد — رد بدون رضا أو استياء
     public const string Negative      = "Negative";      // شكوى/استياء
     public const string NoAnswer      = "NoAnswer";      // لم يرد
     public const string NotInterested = "NotInterested"; // غير مهتم
@@ -35,7 +36,9 @@ public static class CustomerCareOutcome
 
     public static string ToText(string? o) => o switch
     {
+        null or ""    => "لم يُحدد",
         Positive      => "إيجابي",
+        Neutral       => "محايد",
         Negative      => "سلبي / استياء",
         NoAnswer      => "لم يرد",
         NotInterested => "غير مهتم",
@@ -123,7 +126,7 @@ public class CustomerCareLogDto
     public int? VisitInteractionId { get; set; }
     public DateTime? SourceDate { get; set; }
     public string Channel { get; set; } = "اتصال";
-    public string Outcome { get; set; } = CustomerCareOutcome.Positive;
+    public string Outcome { get; set; } = "";   // فاضي افتراضيًا — بلا اختيار مسبق
     public byte? Satisfaction { get; set; }     // 1..5
     public string? Notes { get; set; }
     public string? EmployeeNotes { get; set; } // انطباع الموظف (داخلي)

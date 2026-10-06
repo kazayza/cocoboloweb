@@ -1,3 +1,4 @@
+using System.Globalization;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
 using Microsoft.EntityFrameworkCore;
@@ -18,10 +19,8 @@ public class FinancialReportsService : IFinancialReportsService
     }
 
     // ⭐ منشئو الفواتير المحمية (فواتير مديري الحسابات) — قائمة فارغة لو المستخدم مخوّل
-    private Task<List<string>> GetProtectedCreatorsAsync()
-        => SalesInvoiceAccess.CanViewAccountManagerInvoices(_http.HttpContext?.User)
-            ? Task.FromResult(new List<string>())
-            : SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(_db);
+    // ⭐ (12-ح7 قرار المستخدم): قائمة الدخل والمركز المالي يشملان كل الفواتير —
+    //    لا استبعاد لفواتير مدير الحسابات من الأرقام المالية (الحماية مكانها شاشة الفواتير فقط).
 
     // ============================================================
     //  ⭐ قائمة الدخل الكاملة (الـ Method الرئيسية)
@@ -139,9 +138,12 @@ public class FinancialReportsService : IFinancialReportsService
     {
         if (!scope.IsScoped) return query;
 
+        // ⭐ (12-ح7) موظف الفرع أولًا · احتياطي: الموظف بلا فرع (أو بلا سجل) ← فرع المخزن
+        //    (قبل كده: فاتورة موظف BranchId=NULL كانت بتختفي من كل الفروع)
         return query.Where(t =>
             (t.EmpId != null && scope.EmployeeIds.Contains(t.EmpId.Value))
-            || (t.EmpId == null && scope.WarehouseIds.Contains(t.WarehouseId)));
+            || ((t.EmpId == null || !_db.Employees.Any(e => e.EmployeeId == t.EmpId.Value && e.BranchId != null))
+                && scope.WarehouseIds.Contains(t.WarehouseId)));
     }
 
     // ============================================================
@@ -149,14 +151,11 @@ public class FinancialReportsService : IFinancialReportsService
     // ============================================================
     private async Task CalculateRevenueAsync(IncomeStatementDto dto, BranchScope scope)
     {
-        var protectedCreators = await GetProtectedCreatorsAsync();
-
         var query = _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Sale
                 && t.InvoiceStatus != "Cancelled"
                 && t.TransactionDate >= dto.FromDate
-                && t.TransactionDate <= dto.ToDate)
-            .ExcludeProtectedSales(protectedCreators);
+                && t.TransactionDate < dto.ToDate.Date.AddDays(1));
 
         // ⭐ فلترة بنطاق الفرع (موظف المنشئ ← مخزن احتياطي)
         query = ApplySaleBranchScope(query, scope);
@@ -185,19 +184,26 @@ public class FinancialReportsService : IFinancialReportsService
         // الرسوم المرتبطة بفواتير لا تدخل هنا حتى لا يتم احتسابها مرتين؛
         // فهي موجودة بالفعل داخل GrandTotal/TotalChargesAmount للفواتير.
         // الدفعات المقدمة غير المكتسبة لا تدخل قائمة الدخل.
-        // ⭐ الرسوم المستقلة (بلا فاتورة) لا يمكن إسنادها لفرع محدد —
-        //    تُحسب فقط مع "كل الفروع" وتُستبعد عند اختيار فرع.
+        // ⭐ (12-ح7/ج) الرسوم المستقلة (بلا فاتورة) تُسند لفرع الموظف المنشئ —
+        //    نفس منطق الفواتير: CreatedBy ← Users ← Employee ← Branch.
+        //    رسوم منشئها غير مربوط بموظف/فرع تُحسب مع "كل الفروع" فقط (لا تضيع).
         var query = _db.AdditionalCharges.AsNoTracking()
             .Where(c => c.TransactionId == null
                      && c.AppliedToTransactionId == null
                      && (c.Status == ChargeStatuses.Paid
                          || c.Status == ChargeStatuses.NonRefundable)
+                     // ⭐ دفعة مقدمة مدفوعة ولم تُطبق = التزام (إيراد غير مكتسب) — تُستبعد من الإيراد
+                     && !(c.ChargeType == ChargeTypes.Advance && c.Status == ChargeStatuses.Paid)
                      && c.CreatedAt.HasValue
                      && c.CreatedAt.Value >= dto.FromDate
-                     && c.CreatedAt.Value <= dto.ToDate);
+                     && c.CreatedAt.Value < dto.ToDate.Date.AddDays(1));
 
         if (scope.IsScoped)
-            query = query.Where(c => false);
+            query = query.Where(c => c.CreatedBy != null
+                && _db.Users.Any(u => u.Username == c.CreatedBy
+                    && u.EmployeeId != null
+                    && _db.Employees.Any(e => e.EmployeeId == u.EmployeeId.Value
+                        && e.BranchId == scope.BranchId.Value)));
 
         var charges = await query
             .Select(c => new
@@ -251,14 +257,11 @@ public class FinancialReportsService : IFinancialReportsService
         DateTime toDate,
         BranchScope scope)
     {
-        var protectedCreators = await GetProtectedCreatorsAsync();
-
         var salesQuery = _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Sale
                         && t.InvoiceStatus != InvoiceStatuses.Cancelled
                         && t.TransactionDate >= fromDate
-                        && t.TransactionDate <= toDate)
-            .ExcludeProtectedSales(protectedCreators);
+                        && t.TransactionDate < toDate.Date.AddDays(1));
 
         // ⭐ فلترة بنطاق الفرع — COGS يتبع نفس إسناد الفاتورة (اتساق الهامش)
         salesQuery = ApplySaleBranchScope(salesQuery, scope);
@@ -278,12 +281,165 @@ public class FinancialReportsService : IFinancialReportsService
 
         // نأخذ إجمالي فاتورة الشراء المرآة نفسها، مرة واحدة لكل فاتورة،
         // وليس سعر المنتج الحالي ولا مجموع كل فواتير المشتريات العامة.
-        return await _db.Transactions.AsNoTracking()
+        var mirrorCogs = await _db.Transactions.AsNoTracking()
             .Where(purchase => purchase.TransactionType == TransactionTypes.Purchase
                 && purchase.InvoiceStatus != InvoiceStatuses.Cancelled
                 && purchase.ReferenceType != null
                 && mirrorReferences.Contains(purchase.ReferenceType))
             .SumAsync(purchase => (decimal?)purchase.GrandTotal) ?? 0m;
+
+        // ⭐ (قرار المستخدم — الخيار أ) + تكلفة أصناف المعرض المباعة (بلا مرآة)
+        //    = الكمية × سعر الشراء بالباقة/البديل — نفس منطق ComputeSalesCostByTransactionAsync حرفيًا
+        var showroomCogs = await ComputeShowroomItemsCostAsync(saleIds);
+
+        return mirrorCogs + showroomCogs;
+    }
+
+    // ⭐ (12-ح7) تكلفة أصناف المعرض — إصلاحان جوهريان:
+    //    1) التصنيف لكل فاتورة: أي بند تغطيه مرآة الفاتورة (فاتورة شراء المصنع) يُستبعد،
+    //       بصرف النظر عن حالة Customer الحالية للمنتج — يمنع الازدواج لو الارتباط اتشال
+    //       بعد البيع، ويمنع اختفاء التكلفة لو الارتباط أُضيف بعد البيع.
+    //    2) سعر الشراء وقت الفاتورة من PriceHistory (نوع {tier}_Cost) — fallback: السعر الحالي.
+    //       الشهور التاريخية لم تعد تتغير مع كل تحديث سعر شراء.
+    private async Task<decimal> ComputeShowroomItemsCostAsync(List<int> saleIds)
+    {
+        if (saleIds.Count == 0) return 0m;
+
+        // 1) البنود التي غطّتها مرآة كل فاتورة بيع (فاتورة شراء المصنع المرتبطة بها)
+        var mirrorReferences = saleIds.Select(id => "MirrorOf:" + id).ToList();
+        var mirrorRows = await (from p in _db.Transactions.AsNoTracking()
+                                join d in _db.TransactionDetails.AsNoTracking()
+                                    on p.TransactionId equals d.TransactionId
+                                where p.TransactionType == TransactionTypes.Purchase
+                                   && p.InvoiceStatus != InvoiceStatuses.Cancelled
+                                   && p.ReferenceType != null
+                                   && mirrorReferences.Contains(p.ReferenceType)
+                                select new { p.ReferenceType, d.ProductId }).ToListAsync();
+
+        var coveredBySale = mirrorRows
+            .GroupBy(x => x.ReferenceType!)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.ProductId).ToHashSet());
+
+        // 2) بنود البيع كلها — التصنيف بالمرآة مش بحالة Customer الحالية
+        var rows = await (from d in _db.TransactionDetails.AsNoTracking()
+                          join tx in _db.Transactions.AsNoTracking()
+                              on d.TransactionId equals tx.TransactionId
+                          join pr in _db.Products.AsNoTracking() on d.ProductId equals pr.ProductId
+                          where saleIds.Contains(d.TransactionId)
+                          select new
+                          {
+                              d.TransactionId,
+                              d.ProductId,
+                              d.Quantity,
+                              d.PricingTier,
+                              d.Notes,
+                              d.SelectedAlternativeId,
+                              tx.TransactionDate,
+                              pr.PurchasePrice,
+                              pr.PurchasePriceCClass,
+                              pr.PurchasePriceElite,
+                              AltPurchasePriceCClass = d.SelectedAlternativeId != null
+                                  ? _db.ProductFactoryAlternatives
+                                      .Where(a => a.AlternativeId == d.SelectedAlternativeId)
+                                      .Select(a => a.PurchasePriceCClass).FirstOrDefault()
+                                  : (decimal?)null,
+                              AltPurchasePricePremium = d.SelectedAlternativeId != null
+                                  ? _db.ProductFactoryAlternatives
+                                      .Where(a => a.AlternativeId == d.SelectedAlternativeId)
+                                      .Select(a => a.PurchasePricePremium).FirstOrDefault()
+                                  : (decimal?)null,
+                              AltPurchasePriceElite = d.SelectedAlternativeId != null
+                                  ? _db.ProductFactoryAlternatives
+                                      .Where(a => a.AlternativeId == d.SelectedAlternativeId)
+                                      .Select(a => a.PurchasePriceElite).FirstOrDefault()
+                                  : (decimal?)null
+                          }).ToListAsync();
+
+        // 3) تاريخ أسعار الشراء لهذه المنتجات (PriceType = {tier}_Cost)
+        var productIds = rows.Select(r => r.ProductId).Distinct().ToList();
+        var historyRaw = await _db.PriceHistories.AsNoTracking()
+            .Where(h => productIds.Contains(h.ProductId) && h.PriceType.EndsWith("_Cost"))
+            .OrderBy(h => h.ChangedAt)
+            .Select(h => new { h.ProductId, h.PriceType, h.NewPrice, h.ChangedAt })
+            .ToListAsync();
+        var historyByProduct = historyRaw
+            .GroupBy(h => h.ProductId)
+            .ToDictionary(g => g.Key,
+                g => g.Select(x => (x.ProductId, x.PriceType, x.NewPrice, x.ChangedAt)).ToList());
+
+        decimal total = 0m;
+        foreach (var r in rows)
+        {
+            // بند مغطى بمرآة هذه الفاتورة → تكلفته محسوبة في إجمالي المرآة
+            if (coveredBySale.TryGetValue("MirrorOf:" + r.TransactionId, out var covered)
+                && covered.Contains(r.ProductId))
+                continue;
+
+            var tier = string.IsNullOrWhiteSpace(r.PricingTier)
+                ? ExtractTierFromNotes(r.Notes)
+                : r.PricingTier;
+
+            decimal unitCost;
+            if (r.SelectedAlternativeId.HasValue)
+            {
+                // أسعار البدائل غير مسجلة في PriceHistory — السعر الحالي (أفضل المتاح)
+                unitCost = tier switch
+                {
+                    var t when t == PricingTiers.CClass => r.AltPurchasePriceCClass ?? 0m,
+                    var t when t == PricingTiers.Elite => r.AltPurchasePriceElite ?? r.AltPurchasePricePremium ?? 0m,
+                    _ => r.AltPurchasePricePremium ?? 0m
+                };
+            }
+            else
+            {
+                var currentCost = tier switch
+                {
+                    var t when t == PricingTiers.CClass => r.PurchasePriceCClass ?? 0m,
+                    var t when t == PricingTiers.Elite => r.PurchasePriceElite ?? r.PurchasePrice ?? 0m,
+                    _ => r.PurchasePrice ?? 0m
+                };
+
+                // التاريخي: آخر تغيير {tier}_Cost في أو قبل يوم الفاتورة — وإلا الحالي
+                var tierKey = tier switch
+                {
+                    var t when t == PricingTiers.CClass => PricingTiers.CClass,
+                    var t when t == PricingTiers.Elite => PricingTiers.Elite,
+                    _ => PricingTiers.Premium
+                };
+                unitCost = HistoricalPurchaseCost(
+                    historyByProduct, r.ProductId, tierKey + "_Cost", r.TransactionDate)
+                    ?? currentCost;
+            }
+            total += Math.Round(r.Quantity * unitCost, 2);
+        }
+        return total;
+    }
+
+    // سعر الشراء الساري في تاريخ محدد: آخر تغيير مسجل قبله — null لو مفيش تاريخ
+    private static decimal? HistoricalPurchaseCost(
+        Dictionary<int, List<(int ProductId, string PriceType, decimal NewPrice, DateTime ChangedAt)>> historyByProduct,
+        int productId, string costType, DateTime at)
+    {
+        if (!historyByProduct.TryGetValue(productId, out var points)) return null;
+        decimal? price = null;
+        foreach (var pt in points)   // مرتبة تصاعديًا حسب ChangedAt
+        {
+            if (pt.PriceType != costType) continue;
+            if (pt.ChangedAt > at) break;
+            price = pt.NewPrice;
+        }
+        return price;
+    }
+
+    // استخراج الباقة من الملاحظات — نفس دالة InvoiceService
+    private static string ExtractTierFromNotes(string? notes)
+    {
+        if (string.IsNullOrWhiteSpace(notes)) return PricingTiers.Premium;
+        if (notes.StartsWith($"[{PricingTiers.CClass}]", StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.CClass;
+        if (notes.StartsWith($"[{PricingTiers.Elite}]", StringComparison.OrdinalIgnoreCase))
+            return PricingTiers.Elite;
+        return PricingTiers.Premium;
     }
 
     // ============================================================
@@ -316,6 +472,7 @@ public class FinancialReportsService : IFinancialReportsService
         var payrolls = await payrollsQuery
             .Select(p => new
             {
+                p.PayrollMonth,
                 p.BasicSalary,
                 p.Allowances,
                 p.BonusInPayroll,
@@ -327,8 +484,11 @@ public class FinancialReportsService : IFinancialReportsService
         // تكلفة الأجور = الإجمالي المستحق، وليس صافي ما تم تحويله للموظف.
         // Allowances و BonusInPayroll متداخلان في بعض السجلات القديمة، لذلك نستخدم
         // البدلات أولاً ثم المكافأة كبديل حتى لا يتم احتسابها مرتين.
-        dto.PayrollExpense = payrolls
-            .Sum(p => p.BasicSalary + (p.Allowances ?? p.BonusInPayroll ?? 0m));
+        // ⭐ استحقاق بالتناسب: الفترات الجزئية (اليوم/أسبوع/مخصصة) تحسب نسبة أيام الفترة من كل شهر
+        //    (الشهر الكامل = 100% — نفس الأرقام القديمة تمامًا للفترات الكاملة)
+        dto.PayrollExpense = Math.Round(SumPayrollProRated(
+            payrolls.Select(p => (p.PayrollMonth, p.BasicSalary + (p.Allowances ?? p.BonusInPayroll ?? 0m))),
+            dto.FromDate, dto.ToDate), 2);
         dto.PayrollPaidAmount = payrolls
             .Where(p => p.PaymentStatus == PayrollPaymentStatuses.Paid)
             .Sum(p => p.NetSalary ?? p.BasicSalary);
@@ -337,7 +497,7 @@ public class FinancialReportsService : IFinancialReportsService
             .Sum(p => p.NetSalary ?? p.BasicSalary);
 
         var loansQuery = _db.EmployeeLoans.AsNoTracking()
-            .Where(l => l.LoanDate >= dto.FromDate && l.LoanDate <= dto.ToDate);
+            .Where(l => l.LoanDate >= dto.FromDate && l.LoanDate < dto.ToDate.Date.AddDays(1));
 
         // ⭐ فلترة بالفرع عبر فرع الموظف
         if (scope.IsScoped)
@@ -392,7 +552,7 @@ public class FinancialReportsService : IFinancialReportsService
 
         var expensesQuery = _db.Expenses.AsNoTracking()
             .Where(e => e.ExpenseDate >= dto.FromDate
-                && e.ExpenseDate <= dto.ToDate
+                && e.ExpenseDate < dto.ToDate.Date.AddDays(1)
                 // نأخذ:
                 // - المصروفات العادية (مش مقدمة)
                 // - الأشهر الفرعية للمصروف المقدم (هي اللي بتمثل المصروف الفعلي)
@@ -471,7 +631,7 @@ public class FinancialReportsService : IFinancialReportsService
         var topQuery = (
             from e in _db.Expenses.AsNoTracking()
             where e.ExpenseDate >= dto.FromDate
-                && e.ExpenseDate <= dto.ToDate
+                && e.ExpenseDate < dto.ToDate.Date.AddDays(1)
                 && ((e.IsAdvance != true) || (e.AdvanceParentExpenseId.HasValue))
             orderby e.Amount descending
             select new { e.ExpenseId, e.ExpenseName, e.Amount, e.ExpenseDate, e.ExpenseGroupId, e.BranchId });
@@ -531,25 +691,21 @@ public class FinancialReportsService : IFinancialReportsService
         if (be.CurrentRevenue >= be.BreakEvenRevenue * 1.5m)
         {
             be.Status = "آمن جداً";
-            be.StatusIcon = "🟢";
             be.Description = $"إيراداتك أعلى من نقطة التعادل بمقدار {Math.Abs(be.RevenueGap):N2} ج (+{be.SafetyMargin}%) — وضع ممتاز!";
         }
         else if (be.CurrentRevenue >= be.BreakEvenRevenue)
         {
             be.Status = "آمن";
-            be.StatusIcon = "🟢";
             be.Description = $"تجاوزت نقطة التعادل بـ {Math.Abs(be.RevenueGap):N2} ج. هامش الأمان: {be.SafetyMargin}%";
         }
         else if (be.CurrentRevenue >= be.BreakEvenRevenue * 0.8m)
         {
             be.Status = "حرج";
-            be.StatusIcon = "🟡";
             be.Description = $"تحتاج {Math.Abs(be.RevenueGap):N2} ج إيراد إضافي للوصول لنقطة التعادل";
         }
         else
         {
             be.Status = "تحت التعادل";
-            be.StatusIcon = "🔴";
             be.Description = $"خطر! إيراداتك أقل من نقطة التعادل بمقدار {Math.Abs(be.RevenueGap):N2} ج";
         }
     }
@@ -571,7 +727,6 @@ public class FinancialReportsService : IFinancialReportsService
             t.CurrentTargetPercentage = 10;
             t.NextTargetPercentage = 20;
             t.Status = "تحت الهدف";
-            t.Icon = "🔴";
             t.Message = "العمل بخسارة - أولوية: الوصول لنقطة التعادل ثم تحقيق ربح 10%";
         }
         else
@@ -583,7 +738,6 @@ public class FinancialReportsService : IFinancialReportsService
                 t.CurrentTargetPercentage = 10;
                 t.NextTargetPercentage = 20;
                 t.Status = "قريب من الهدف";
-                t.Icon = "🟡";
                 t.Message = $"اقتربت من تحقيق ربح 10%. الفجوة: {(10 - t.CurrentMargin):N1}%";
             }
             else
@@ -594,13 +748,11 @@ public class FinancialReportsService : IFinancialReportsService
                 if (t.CurrentMargin >= achievedTier + 5)
                 {
                     t.Status = "متجاوز الهدف";
-                    t.Icon = "🌟";
                     t.Message = $"رائع! حققت {t.CurrentMargin:N1}% — أعلى من هدف {achievedTier}%. اطمح للوصول لـ {achievedTier + 10}%";
                 }
                 else
                 {
                     t.Status = "محقق الهدف";
-                    t.Icon = "🟢";
                     t.Message = $"ممتاز! حققت {t.CurrentMargin:N1}% (هدف {achievedTier}%). اطمح للوصول لـ {achievedTier + 10}%";
                 }
             }
@@ -669,8 +821,7 @@ public class FinancialReportsService : IFinancialReportsService
         .Where(t => t.TransactionType == TransactionTypes.Sale
             && t.InvoiceStatus != "Cancelled"
             && t.TransactionDate >= fromDate
-            && t.TransactionDate <= toDate)
-        .ExcludeProtectedSales(await GetProtectedCreatorsAsync());
+            && t.TransactionDate < toDate.Date.AddDays(1));
 
     // ⭐ فلترة بنطاق الفرع
     revQuery = ApplySaleBranchScope(revQuery, scope);
@@ -684,7 +835,7 @@ public class FinancialReportsService : IFinancialReportsService
     // المصروفات
     var expQuery = _db.Expenses.AsNoTracking()
         .Where(e => e.ExpenseDate >= fromDate
-            && e.ExpenseDate <= toDate
+            && e.ExpenseDate < toDate.Date.AddDays(1)
             && ((e.IsAdvance != true) || (e.AdvanceParentExpenseId.HasValue)));
 
     // ⭐ فلترة بالفرع
@@ -701,18 +852,25 @@ public class FinancialReportsService : IFinancialReportsService
 
     private async Task<decimal> GetOtherRevenueForRangeAsync(DateTime fromDate, DateTime toDate, BranchScope scope)
     {
-        // ⭐ الرسوم المستقلة بلا فرع — تُستبعد عند اختيار فرع محدد
-        if (scope.IsScoped) return 0m;
-
-        return await _db.AdditionalCharges.AsNoTracking()
+        // ⭐ (12-ح7/ج) الرسوم المستقلة تُسند لفرع الموظف المنشئ (اتساقًا مع القائمة)
+        var query = _db.AdditionalCharges.AsNoTracking()
             .Where(c => c.TransactionId == null
                      && c.AppliedToTransactionId == null
                      && (c.Status == ChargeStatuses.Paid
                          || c.Status == ChargeStatuses.NonRefundable)
+                     && !(c.ChargeType == ChargeTypes.Advance && c.Status == ChargeStatuses.Paid)
                      && c.CreatedAt.HasValue
                      && c.CreatedAt.Value >= fromDate
-                     && c.CreatedAt.Value <= toDate)
-            .SumAsync(c => (decimal?)(c.ChargeAmount ?? 0m)) ?? 0m;
+                     && c.CreatedAt.Value < toDate.Date.AddDays(1));
+
+        if (scope.IsScoped)
+            query = query.Where(c => c.CreatedBy != null
+                && _db.Users.Any(u => u.Username == c.CreatedBy
+                    && u.EmployeeId != null
+                    && _db.Employees.Any(e => e.EmployeeId == u.EmployeeId.Value
+                        && e.BranchId == scope.BranchId.Value)));
+
+        return await query.SumAsync(c => (decimal?)(c.ChargeAmount ?? 0m)) ?? 0m;
     }
 
     private async Task<decimal> GetPayrollExpenseForRangeAsync(DateTime fromDate, DateTime toDate, BranchScope scope)
@@ -736,9 +894,37 @@ public class FinancialReportsService : IFinancialReportsService
         if (scope.IsScoped)
             payrollQuery = payrollQuery.Where(p => p.Employee.BranchId == scope.BranchId.Value);
 
-        return await payrollQuery
-            .SumAsync(p => (decimal?)p.BasicSalary
-                + (p.Allowances ?? p.BonusInPayroll ?? 0m)) ?? 0m;
+        var rows = await payrollQuery
+            .Select(p => new { p.PayrollMonth, p.BasicSalary, p.Allowances, p.BonusInPayroll })
+            .ToListAsync();
+
+        // ⭐ نفس التناسب — اتساق المقارنات والترند مع القائمة الرئيسية
+        return Math.Round(SumPayrollProRated(
+            rows.Select(p => (p.PayrollMonth, p.BasicSalary + (p.Allowances ?? p.BonusInPayroll ?? 0m))),
+            fromDate, toDate), 2);
+    }
+
+    // ⭐ توزيع رواتب الشهور على الفترة بالأيام: كل شهر يُحسب بنسبة أيام الفترة المتداخلة معه
+    private static decimal SumPayrollProRated(
+        IEnumerable<(string Month, decimal Amount)> rows, DateTime from, DateTime to)
+    {
+        var fromD = from.Date;
+        var toD = to.Date;
+        decimal total = 0m;
+        foreach (var g in rows.GroupBy(r => r.Month))
+        {
+            if (!DateTime.TryParseExact(g.Key, "yyyy-MM",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out var monthStart))
+                continue;
+            var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+            var overlapFrom = monthStart > fromD ? monthStart : fromD;
+            var overlapTo = monthEnd < toD ? monthEnd : toD;
+            var days = (overlapTo - overlapFrom).Days + 1;
+            if (days <= 0) continue;
+            total += g.Sum(r => r.Amount) * days
+                     / DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
+        }
+        return total;
     }
 
     private IncomeComparisonDto BuildComparison(string label, IncomeStatementDto current,
@@ -830,7 +1016,6 @@ public class FinancialReportsService : IFinancialReportsService
             recs.Add(new SmartRecommendationDto
             {
                 Type = RecommendationTypes.Critical,
-                Icon = "🔴",
                 Title = "العمل بخسارة!",
                 Description = $"خسارة {Math.Abs(dto.NetProfit):N2} ج هذه الفترة. " +
                               $"يجب اتخاذ إجراءات فورية لتقليل المصروفات أو زيادة المبيعات.",
@@ -845,7 +1030,6 @@ public class FinancialReportsService : IFinancialReportsService
             recs.Add(new SmartRecommendationDto
             {
                 Type = RecommendationTypes.Critical,
-                Icon = "⚠️",
                 Title = "تحت نقطة التعادل",
                 Description = $"تحتاج {Math.Abs(dto.BreakEvenAnalysis.RevenueGap):N2} ج إيراد إضافي للوصول لنقطة التعادل.",
                 Priority = 2,
@@ -857,7 +1041,6 @@ public class FinancialReportsService : IFinancialReportsService
             recs.Add(new SmartRecommendationDto
             {
                 Type = RecommendationTypes.Warning,
-                Icon = "🟡",
                 Title = "هامش الأمان منخفض",
                 Description = $"هامش الأمان فقط {dto.BreakEvenAnalysis.SafetyMargin}%. حاول زيادته لـ 30% على الأقل.",
                 Priority = 3,
@@ -871,7 +1054,6 @@ public class FinancialReportsService : IFinancialReportsService
             recs.Add(new SmartRecommendationDto
             {
                 Type = RecommendationTypes.Warning,
-                Icon = "🎯",
                 Title = "نسبة الربح أقل من 10%",
                 Description = $"حالياً: {dto.NetProfitMargin:N1}%. " +
                               $"للوصول لـ 10% تحتاج إما زيادة الإيراد بـ {dto.ProfitTarget.RevenueIncreaseNeeded:N2} ج " +
@@ -885,7 +1067,6 @@ public class FinancialReportsService : IFinancialReportsService
             recs.Add(new SmartRecommendationDto
             {
                 Type = RecommendationTypes.Success,
-                Icon = "🟢",
                 Title = "نسبة ربح ممتازة - اطمح للأعلى",
                 Description = $"حققت {dto.NetProfitMargin:N1}%. " +
                               $"للوصول لـ 20% تحتاج زيادة إيراد بـ {dto.ProfitTarget.RevenueIncreaseNeeded:N2} ج",
@@ -898,7 +1079,6 @@ public class FinancialReportsService : IFinancialReportsService
             recs.Add(new SmartRecommendationDto
             {
                 Type = RecommendationTypes.Success,
-                Icon = "🌟",
                 Title = "أداء استثنائي!",
                 Description = $"نسبة ربح {dto.NetProfitMargin:N1}% — وضع ممتاز! " +
                               $"الهدف القادم: {dto.ProfitTarget.NextTargetPercentage}%. " +
@@ -917,7 +1097,6 @@ public class FinancialReportsService : IFinancialReportsService
                 recs.Add(new SmartRecommendationDto
                 {
                     Type = RecommendationTypes.Warning,
-                    Icon = "📊",
                     Title = $"مصروفات {biggestGroup.GroupName} مرتفعة",
                     Description = $"تمثل {biggestGroup.Percentage}% من إجمالي المصروفات " +
                                   $"({biggestGroup.Amount:N2} ج). راجع إمكانية التخفيض.",
@@ -935,7 +1114,6 @@ public class FinancialReportsService : IFinancialReportsService
                 recs.Add(new SmartRecommendationDto
                 {
                     Type = RecommendationTypes.Critical,
-                    Icon = "📉",
                     Title = "تراجع في الإيرادات",
                     Description = $"الإيرادات تراجعت بـ {Math.Abs(dto.PreviousPeriod.RevenueChange):N1}% " +
                                   $"مقارنة بالفترة السابقة. ابحث عن الأسباب.",
@@ -948,7 +1126,6 @@ public class FinancialReportsService : IFinancialReportsService
                 recs.Add(new SmartRecommendationDto
                 {
                     Type = RecommendationTypes.Success,
-                    Icon = "📈",
                     Title = "نمو رائع في الإيرادات",
                     Description = $"الإيرادات نمت بـ +{dto.PreviousPeriod.RevenueChange:N1}% " +
                                   $"مقارنة بالفترة السابقة. استمر!",
@@ -962,7 +1139,6 @@ public class FinancialReportsService : IFinancialReportsService
                 recs.Add(new SmartRecommendationDto
                 {
                     Type = RecommendationTypes.Warning,
-                    Icon = "💸",
                     Title = "زيادة في المصروفات",
                     Description = $"المصروفات زادت بـ +{dto.PreviousPeriod.ExpensesChange:N1}% " +
                                   $"عن الفترة السابقة. راجع المصروفات الجديدة.",
@@ -978,7 +1154,6 @@ public class FinancialReportsService : IFinancialReportsService
             recs.Add(new SmartRecommendationDto
             {
                 Type = RecommendationTypes.Warning,
-                Icon = "💰",
                 Title = "هامش الربح الإجمالي منخفض",
                 Description = $"الربح الإجمالي {dto.GrossProfitMargin:N1}% — تكلفة المبيعات مرتفعة. " +
                               $"فكر في رفع الأسعار أو تقليل تكلفة الشراء.",
@@ -993,7 +1168,6 @@ public class FinancialReportsService : IFinancialReportsService
             recs.Add(new SmartRecommendationDto
             {
                 Type = RecommendationTypes.Info,
-                Icon = "💡",
                 Title = "نصيحة: استثمر في النمو",
                 Description = "أداؤك المالي قوي. فكر في الاستثمار في التسويق، التوسع، " +
                               "أو إضافة منتجات جديدة لزيادة الإيرادات.",
@@ -1080,6 +1254,7 @@ public class FinancialReportsService : IFinancialReportsService
             .Where(t => t.TransactionType == TransactionTypes.Sale
                         && t.InvoiceStatus != InvoiceStatuses.Cancelled
                         && t.GrandTotal > t.PaidAmount);
+        // ⭐ (12-ح7) اتساقًا مع قائمة الدخل: كل الفواتير تُحتسب — لا استبعاد لفواتير مدير الحسابات
         receivableQuery = ApplySaleBranchScope(receivableQuery, scope);
 
         var salesReceivable = await receivableQuery
@@ -1131,13 +1306,22 @@ public class FinancialReportsService : IFinancialReportsService
         dto.EmployeeLoansOutstanding = await loansQ
             .SumAsync(l => (decimal?)l.RemainingAmount) ?? 0m;
 
+        // ───── 4ب) مصروفات مدفوعة مقدمًا (أصل): الأشهر الفرعية المستقبلية للمصروف المقدم ─────
+        //     (الأصل نفسه Amount=0 والأشهر الفرعية تحمل القيم — الشهر الحالي يُحسب مصروفًا في الدخل)
+        var prepaidQ = _db.Expenses.AsNoTracking()
+            .Where(e => e.AdvanceParentExpenseId != null && e.ExpenseDate > dto.AsOfDate);
+        if (scope.IsScoped)
+            prepaidQ = prepaidQ.Where(e => e.BranchId == scope.BranchId.Value);
+        dto.PrepaidExpensesAsset = await prepaidQ.SumAsync(e => (decimal?)e.Amount) ?? 0m;
+
         dto.TotalAssets = dto.CashBalance + dto.AccountsReceivable + dto.InventoryValue
-                        + dto.EmployeeLoansOutstanding;
+                        + dto.EmployeeLoansOutstanding + dto.PrepaidExpensesAsset;
 
         // ───── 5) الالتزامات: رواتب غير مدفوعة (عدا المرفوض) + متبقي مشتريات بنفس إسناد الفرع
         var payrollQ = _db.Payrolls.AsNoTracking()
             .Where(p => p.PaymentStatus != PayrollPaymentStatuses.Paid
-                     && p.PaymentStatus != PayrollPaymentStatuses.Rejected);
+                     && p.PaymentStatus != PayrollPaymentStatuses.Rejected
+                     && p.PaymentStatus != PayrollPaymentStatuses.Cancelled);
         if (scope.IsScoped)
             payrollQ = payrollQ.Where(p => p.Employee.BranchId == scope.BranchId.Value);
         dto.PayrollPendingCount = await payrollQ.CountAsync();
@@ -1147,6 +1331,8 @@ public class FinancialReportsService : IFinancialReportsService
         var purchaseQuery = _db.Transactions.AsNoTracking()
             .Where(t => t.TransactionType == TransactionTypes.Purchase
                         && (t.InvoiceStatus == null || t.InvoiceStatus != InvoiceStatuses.Cancelled)
+                        // ⚠️ بلا استبعاد للمرآة — المرآة فاتورة شراء حقيقية من المورد الوحيد (المصنع) وتُدفع فعلًا
+                        //    (قرار المستخدم 12-ح22: المتبقي على المرايا = ديون حقيقية للمصنع)
                         && t.GrandTotal > t.PaidAmount);
         purchaseQuery = ApplySaleBranchScope(purchaseQuery, scope);
 
@@ -1157,10 +1343,25 @@ public class FinancialReportsService : IFinancialReportsService
         dto.SupplierPayables = purchasePayable?.Sum ?? 0m;
         dto.PayablePurchasesCount = purchasePayable?.Count ?? 0;
 
-        dto.TotalLiabilities = dto.PayrollOutstanding + dto.SupplierPayables;
+        // ───── 5ب) دفعات عملاء مقدمة (التزام): رسوم «دفعة مقدمة» مقبوضة ولم تُطبق على فاتورة ─────
+        //     (12-ح7/ج: إسناد بالفرع عبر الموظف المنشئ — نفس معاملة الرسوم المستقلة في قائمة الدخل)
+        var advancesQ = _db.AdditionalCharges.AsNoTracking()
+            .Where(c => c.ChargeType == ChargeTypes.Advance
+                     && c.Status == ChargeStatuses.Paid
+                     && c.TransactionId == null
+                     && c.AppliedToTransactionId == null);
+        if (scope.IsScoped)
+            advancesQ = advancesQ.Where(c => c.CreatedBy != null
+                && _db.Users.Any(u => u.Username == c.CreatedBy
+                    && u.EmployeeId != null
+                    && _db.Employees.Any(e => e.EmployeeId == u.EmployeeId.Value
+                        && e.BranchId == scope.BranchId.Value)));
+        dto.CustomerAdvances = await advancesQ.SumAsync(c => (decimal?)(c.ChargeAmount ?? 0m)) ?? 0m;
+
+        dto.TotalLiabilities = dto.PayrollOutstanding + dto.SupplierPayables + dto.CustomerAdvances;
 
         // ───── 6) حقوق الملكية: رأس مال افتتاحي + أرباح محتجزة (صافي ربح قائمة الدخل التراكمي)
-        var capital = await GetOpeningCapitalAsync();
+        var capital = await GetOpeningCapitalAsync(branchId);
         dto.OpeningCapital = capital.Value;
         dto.CapitalNotes = capital.Notes;
         dto.CapitalUpdatedAt = capital.UpdatedAt;
@@ -1188,23 +1389,83 @@ public class FinancialReportsService : IFinancialReportsService
         return dto;
     }
 
-    public async Task<(decimal Value, string? Notes, DateTime? UpdatedAt, string? UpdatedBy)> GetOpeningCapitalAsync()
+    // ⭐ رأس المال لكل فرع (قرار المستخدم 12-خ23): مفتاح "OpeningCapital:{branchId}"
+    //    العام (null) = مجموع رؤوس أموال الفروع + أي رقم قديم عام غير موزع
+    private static string CapitalKey(int branchId) => $"OpeningCapital:{branchId}";
+
+    public async Task<(decimal Value, string? Notes, DateTime? UpdatedAt, string? UpdatedBy)> GetOpeningCapitalAsync(int? branchId = null)
     {
-        var row = await _db.FinancialSettings.AsNoTracking()
-            .FirstOrDefaultAsync(f => f.SettingKey == "OpeningCapital");
-        return (row?.SettingValue ?? 0m, row?.Notes, row?.UpdatedAt, row?.UpdatedBy);
+        var rows = await _db.FinancialSettings.AsNoTracking()
+            .Where(f => f.SettingKey == "OpeningCapital" || f.SettingKey.StartsWith("OpeningCapital:"))
+            .ToListAsync();
+
+        if (branchId.HasValue)
+        {
+            var key = CapitalKey(branchId.Value);
+            var row = rows.FirstOrDefault(f => f.SettingKey == key);
+            return (row?.SettingValue ?? 0m, row?.Notes, row?.UpdatedAt, row?.UpdatedBy);
+        }
+
+        var latest = rows.OrderByDescending(f => f.UpdatedAt).FirstOrDefault();
+        return (rows.Sum(f => f.SettingValue ?? 0m), latest?.Notes, latest?.UpdatedAt, latest?.UpdatedBy);
     }
 
-    public async Task SaveOpeningCapitalAsync(decimal value, string? notes, string userName)
+    // ⭐ اقتراح رأس المال من بضاعة المعرض الافتتاحية (حركات OpeningBalance × سعرها أو تكلفة الباقة الحالية)
+    public async Task<decimal> GetOpeningStockValueAsync(int? branchId = null)
     {
+        var rows = await (from st in _db.StockTransactions.AsNoTracking()
+                          join pr in _db.Products.AsNoTracking() on st.ProductId equals pr.ProductId
+                          where st.TransactionType == "In" && st.ReferenceType == "OpeningBalance"
+                          select new
+                          {
+                              st.Quantity,
+                              st.UnitPrice,
+                              st.WarehouseId,
+                              pr.PurchasePrice,
+                              pr.PurchasePriceCClass,
+                              pr.PurchasePriceElite,
+                              pr.PricingType
+                          }).ToListAsync();
+
+        if (branchId.HasValue)
+        {
+            var whIds = await _db.Warehouses.AsNoTracking()
+                .Where(w => w.BranchId == branchId.Value)
+                .Select(w => w.WarehouseId)
+                .ToListAsync();
+            rows = rows.Where(r => whIds.Contains(r.WarehouseId)).ToList();
+        }
+
+        decimal total = 0m;
+        foreach (var r in rows)
+        {
+            var unit = r.UnitPrice;
+            if (unit == null || unit == 0m)
+            {
+                var ownTier = string.IsNullOrWhiteSpace(r.PricingType) ? "Premium" : r.PricingType!.Trim();
+                unit = ownTier switch
+                {
+                    "CClass" => r.PurchasePriceCClass ?? r.PurchasePrice ?? 0m,
+                    "Elite" => r.PurchasePriceElite ?? r.PurchasePrice ?? 0m,
+                    _ => r.PurchasePrice ?? r.PurchasePriceCClass ?? r.PurchasePriceElite ?? 0m
+                };
+            }
+            total += r.Quantity * unit.Value;
+        }
+        return Math.Round(total, 2);
+    }
+
+    public async Task SaveOpeningCapitalAsync(int? branchId, decimal value, string? notes, string userName)
+    {
+        var key = branchId.HasValue ? CapitalKey(branchId.Value) : "OpeningCapital";
         var row = await _db.FinancialSettings
-            .FirstOrDefaultAsync(f => f.SettingKey == "OpeningCapital");
+            .FirstOrDefaultAsync(f => f.SettingKey == key);
 
         if (row == null)
         {
             row = new FinancialSetting
             {
-                SettingKey = "OpeningCapital",
+                SettingKey = key,
                 SettingValue = value,
                 Notes = notes,
                 UpdatedBy = userName,

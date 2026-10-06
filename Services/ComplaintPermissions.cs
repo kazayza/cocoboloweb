@@ -17,13 +17,12 @@ public static class ComplaintPermissions
     private const string RoleUser            = "User";
 
     // ─── أسماء الـ Claims ────────────────────────────
+    // ⭐ ملاحظة: النظام بيدعم 4 أفعال بس لكل شاشة (View/Add/Edit/Delete) — جدول UserPermission مفيهوش أعمدة غيرها.
+    // فالإسناد والحل بيتحكم فيهم per-user عبر صلاحية «التعديل» (Edit) الموجودة فعلًا في شاشة الصلاحيات.
     public const string PermView      = "frm_Complaints_Main:View";
     public const string PermAdd       = "frm_Complaints_Main:Add";
     public const string PermEdit      = "frm_Complaints_Main:Edit";
     public const string PermDelete    = "frm_Complaints_Main:Delete";
-    public const string PermAssign    = "frm_Complaints_Main:Assign";
-    public const string PermClose     = "frm_Complaints_Main:Close";
-    public const string PermEscalate  = "frm_Complaints_Main:Escalate";
 
     // ═══════════════════════════════════════════════
     //                    السماحيات
@@ -55,29 +54,24 @@ public static class ComplaintPermissions
         user.IsInRole(RoleAdmin)
         || user.HasClaim("Permission", PermDelete);
 
-    /// <summary>هل يقدر يسند الشكوى لموظف؟</summary>
+    /// <summary>⭐ هل يقدر يسند الشكوى لموظف؟ — الدايرة الإدارية + أي مستخدم معاه صلاحية «تعديل» الشكاوى (طلب المستخدم)</summary>
     public static bool CanAssign(ClaimsPrincipal user) =>
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleAccountManager)
         || user.IsInRole(RoleSalesManager)
         || user.IsInRole(RoleGeneralManager)
-        || user.HasClaim("Permission", PermAssign);
+        || user.HasClaim("Permission", PermEdit);
 
-    /// <summary>هل يقدر يغير الحالة (يحل/يرفض/يقفل)؟</summary>
+    /// <summary>⭐ هل يقدر يغير الحالة (يحل/يرفض/يقفل)؟ — اللي بيتابع من حقه يحل (12-ح4/ب) + أصحاب صلاحية «تعديل» الشكاوى (طلب المستخدم)</summary>
     public static bool CanChangeStatus(ClaimsPrincipal user) =>
-        user.IsInRole(RoleAdmin)
-        || user.IsInRole(RoleAccountManager)
-        || user.IsInRole(RoleSalesManager)
-        || user.IsInRole(RoleGeneralManager)
-        || user.HasClaim("Permission", PermClose);
+        CanAddFollowUp(user)   // Admin · AM · SM · GM · Sales · Account · أو إذن Add
+        || CanEdit(user);      // + دايرة التعديل (بما فيها إذن frm_Complaints_Main:Edit per-user)
 
-    /// <summary>هل يقدر يصعّد شكوى؟</summary>
+    /// <summary>⭐ هل يقدر يصعّد شكوى؟ — المدير العام + الأدمن + مدير الحسابات فقط (طلب المستخدم)</summary>
     public static bool CanEscalate(ClaimsPrincipal user) =>
         user.IsInRole(RoleAdmin)
         || user.IsInRole(RoleAccountManager)
-        || user.IsInRole(RoleSalesManager)
-        || user.IsInRole(RoleGeneralManager)
-        || user.HasClaim("Permission", PermEscalate);
+        || user.IsInRole(RoleGeneralManager);
 
     /// <summary>هل يقدر يضيف متابعة (Follow-up)؟</summary>
     public static bool CanAddFollowUp(ClaimsPrincipal user) =>
