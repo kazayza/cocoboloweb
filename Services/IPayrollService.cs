@@ -21,6 +21,9 @@ public interface IPayrollService
                           int cashBoxId, string user);
 
     Task<(bool Ok, string Msg)> PayOneAsync(int payrollId, int cashBoxId, string user);
+
+    // (12-H11/ب) صرف دفعة خارج الراتب مع مقاصة أقساط سلف — النقدي = الدفعة − المخصص
+    Task<(bool Ok, string Msg)> PayOneWithLoanAllocationAsync(int payrollId, int cashBoxId, List<OutOfPayrollPaymentItemDto> allocations, string user);
     Task<(bool Ok, string Msg)> ApprovePayrollAsync(int payrollId, string user);
     Task<(bool Ok, string Msg)> RejectPayrollAsync(int payrollId, string user, string? reason = null);
     Task<(bool Ok, string Msg)> CancelAsync(int payrollId, string user);

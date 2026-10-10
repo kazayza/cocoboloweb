@@ -26,6 +26,9 @@ public interface IEmployeeLoanService
     // (12-H9) تعديل السلفة (ملاحظات/معتمد دائمًا — الحقول المالية فقط عند صفر خصم)
     Task<(bool Success, string Message)> UpdateLoanAsync(LoanFormDto dto, string userName);
 
+    // (12-H11/ب) الأقساط المعلقة لموظف — لمقاصة الدفعات خارج الراتب
+    Task<List<InstallmentListDto>> GetPendingInstallmentsAsync(int employeeId);
+
     // ── كشف الحساب ───────────────────────────────────────────
     Task<EmployeeLoanStatementDto?> GetEmployeeStatementAsync(int employeeId);
 

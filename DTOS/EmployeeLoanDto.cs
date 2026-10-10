@@ -94,6 +94,7 @@ public class InstallmentListDto
         "Pending"  => "لم يُخصم بعد",
         "Deducted" => "تم الخصم",
         "Skipped"  => "مؤجل",
+        "PaidExternal" => "مسدد خارج الراتب",
         _          => Status
     };
     public string    StatusColor       => Status switch
@@ -101,6 +102,7 @@ public class InstallmentListDto
         "Pending"  => "#f59e0b",
         "Deducted" => "#10b981",
         "Skipped"  => "#94a3b8",
+        "PaidExternal" => "#0d9488",
         _          => "#94a3b8"
     };
     public string?   PayrollMonth      { get; set; }
@@ -176,3 +178,12 @@ public class EmployeeLoanStatementDto
 // لو مش موجود في أي حتة خليه هنا
 // ============================================================
 // public class PagedResult<T> { ... }  ← احذف لو موجود تاني
+
+// ============================================================
+// (12-H11/ب) بند مقاصة أقساط السلف من الدفعات خارج الراتب
+// ============================================================
+public class OutOfPayrollPaymentItemDto
+{
+    public int     InstallmentId { get; set; }
+    public decimal Amount        { get; set; }   // المبلغ المخصص من هذا القسط (كامل أو جزئي)
+}

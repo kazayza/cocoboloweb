@@ -3,285 +3,413 @@
 
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Routing
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
 @using MudBlazor
+@using System.Globalization
 
 @inject IPayrollService PayrollService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
 
 <PageTitle>معالجة المرتبات</PageTitle>
 
-<MudPaper Class="pa-4 mb-4 rounded-xl d-flex align-center gap-3 flex-wrap">
-    <div>
-        <MudText Typo="Typo.h5">معالجة المرتبات الشهرية</MudText>
-        <MudText Typo="Typo.body2" Color="Color.Secondary">
-            احسب المرتبات، راجع البنود، ثم أرسلها للمراجعة بدون صرف مباشر.
-        </MudText>
+<div dir="rtl" class="pp-page">
+
+    <div class="top-accent"><div class="accent-shimmer"></div></div>
+
+    @* (12-H14) منع مغادرة الصفحة وفيه تعديلات غير مرسلة *@
+    <NavigationLock OnBeforeInternalNavigation="OnBeforeInternalNavigation" />
+
+    @* ══ Premium Header ══ *@
+    <div class="dash-header">
+        <div class="dh-bg">
+            <div class="dh-gradient"></div>
+            <div class="dh-orbs">
+                <div class="dh-orb dh-o1"></div>
+                <div class="dh-orb dh-o2"></div>
+                <div class="dh-orb dh-o3"></div>
+            </div>
+            <div class="dh-grid"></div>
+        </div>
+        <div class="dh-content">
+            <div class="dh-info">
+                <div class="dh-icon-wrap">
+                    <div class="dh-icon-glow"></div>
+                    <div class="dh-icon">
+                        <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Large" />
+                    </div>
+                    <div class="dh-badge"><MudIcon Icon="@Icons.Material.Filled.AutoAwesome" Size="Size.Small" /></div>
+                </div>
+                <div class="dh-text">
+                    <div class="dh-title-row">
+                        <h1>معالجة المرتبات</h1>
+                        <span class="premium-tag">
+                            <MudIcon Icon="@Icons.Material.Filled.Diamond" Size="Size.Small" />
+                            Premium
+                        </span>
+                    </div>
+                    <p class="dh-subtitle">
+                        <MudIcon Icon="@Icons.Material.Filled.Insights" Size="Size.Small" />
+                        احسب المرتبات وراجع البنود ثم أرسلها للمراجعة — @DateTime.Now.ToString("dddd yyyy/MM/dd", new CultureInfo("ar-EG"))
+                    </p>
+                </div>
+            </div>
+            <div class="dh-actions">
+                @if (_canProcess)
+                {
+                    <MudButton Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Calculate"
+                               OnClick="CalculateAsync" Class="dh-btn-primary"
+                               Disabled="_calculating || string.IsNullOrWhiteSpace(_selectedMonth)">
+                        <span class="btn-shine"></span>@(_calculating ? "جاري الحساب..." : "احسب المرتبات")
+                    </MudButton>
+                }
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ListAlt"
+                           OnClick='@(() => Nav.NavigateTo("/hr/payroll"))' Class="dh-btn-ghost">سجل الرواتب</MudButton>
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.CardGiftcard"
+                           OnClick='@(() => Nav.NavigateTo("/hr/payroll/bonuses"))' Class="dh-btn-ghost">دفعات خارج الراتب</MudButton>
+            </div>
+        </div>
     </div>
 
-    <MudSpacer />
+    @* ══ شريط الخطوات والتنبيه ══ *@
+    <div class="pp-steps mb-3">
+        <span class="pp-step"><b>1</b> احسب مرتبات الشهر</span>
+        <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Class="pp-step-arrow" />
+        <span class="pp-step"><b>2</b> راجع وعدّل البنود</span>
+        <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Class="pp-step-arrow" />
+        <span class="pp-step"><b>3</b> احفظ وأرسل للمراجعة</span>
+        <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Class="pp-step-arrow" />
+        <span class="pp-step"><b>4</b> الاعتماد والصرف من سجل الرواتب</span>
+        <span class="pp-steps-note">
+            <MudIcon Icon="@Icons.Material.Filled.Info" />
+            هذه الشاشة لا تقوم بالصرف — بعد الإرسال يتم إشعار مدير الحسابات والأدمن
+        </span>
+    </div>
 
-    <MudSelect T="string"
-               Value="_selectedMonth"
-               ValueChanged="OnMonthChangedAsync"
-               Label="الشهر"
-               Variant="Variant.Outlined"
-               Style="min-width:185px"
-               Margin="Margin.Dense">
-        @foreach (var m in _monthOptions)
-        {
-            <MudSelectItem T="string" Value="@m.Month">@FormatMonth(m.Month)@(m.PayrollCount > 0 ? " — مسجل" : "")</MudSelectItem>
-        }
-    </MudSelect>
-
-    <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="@(() => QuickMonthAsync(0))">الشهر الحالي</MudButton>
-    <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="@(() => QuickMonthAsync(-1))">الشهر السابق</MudButton>
-
-    <MudButton Variant="Variant.Filled"
-               Color="Color.Primary"
-               StartIcon="@Icons.Material.Filled.Calculate"
-               OnClick="CalculateAsync"
-               Disabled="_calculating || string.IsNullOrWhiteSpace(_selectedMonth)">
-        @(_calculating ? "جاري الحساب..." : "احسب المرتبات")
-    </MudButton>
-
-    <MudButton Variant="Variant.Outlined"
-               Color="Color.Default"
-               StartIcon="@Icons.Material.Filled.ListAlt"
-               OnClick='@(() => Nav.NavigateTo("/hr/payroll"))'>
-        سجل الرواتب
-    </MudButton>
-
-    <MudButton Variant="Variant.Outlined"
-               Color="Color.Info"
-               StartIcon="@Icons.Material.Filled.CardGiftcard"
-               OnClick='@(() => Nav.NavigateTo("/hr/payroll/bonuses"))'>
-        دفعات خارج الراتب
-    </MudButton>
-</MudPaper>
-
-<MudGrid Class="mb-4">
-    <MudItem xs="12" md="4">
-        <MudPaper Class="pa-4 rounded-xl h-100" Style="border:1px solid rgba(59,130,246,.22);background:linear-gradient(135deg, rgba(59,130,246,.10), rgba(59,130,246,.03));">
-            <MudText Typo="Typo.caption" Color="Color.Secondary">خطوات العمل</MudText>
-            <MudStack Spacing="1" Class="mt-2">
-                <MudText Typo="Typo.body2">1) احسب مرتبات الشهر</MudText>
-                <MudText Typo="Typo.body2">2) راجع وعدّل البنود لكل موظف</MudText>
-                <MudText Typo="Typo.body2">3) احفظ وأرسل للمراجعة</MudText>
-                <MudText Typo="Typo.body2">4) الاعتماد والصرف من سجل الرواتب</MudText>
-            </MudStack>
-        </MudPaper>
-    </MudItem>
-
-    <MudItem xs="12" md="8">
-        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-            هذه الشاشة لا تقوم بالصرف. بعد الإرسال للمراجعة سيتم إشعار مدير الحسابات والأدمن، ثم يتم الاعتماد والصرف الفردي من شاشة سجل الرواتب.
-        </MudAlert>
-
-        <MudGrid>
-            <MudItem xs="6" md="3">
-                <MudPaper Class="pa-3 rounded-xl text-center h-100" Style="border:1px solid rgba(16,185,129,.25)">
-                    <MudText Typo="Typo.caption">جاهز للإرسال</MudText>
-                    <MudText Typo="Typo.h5" Color="Color.Success"><b>@SelectedCount</b></MudText>
-                </MudPaper>
-            </MudItem>
-            <MudItem xs="6" md="3">
-                <MudPaper Class="pa-3 rounded-xl text-center h-100" Style="border:1px solid rgba(239,68,68,.25)">
-                    <MudText Typo="Typo.caption">إجمالي الخصومات</MudText>
-                    <MudText Typo="Typo.h6" Color="Color.Error"><b>@SelectedSum(c => c.TotalDeductions).ToString("N0")</b> جـ</MudText>
-                </MudPaper>
-            </MudItem>
-            <MudItem xs="6" md="3">
-                <MudPaper Class="pa-3 rounded-xl text-center h-100" Style="border:1px solid rgba(14,165,233,.25)">
-                    <MudText Typo="Typo.caption">إضافات خارج الراتب</MudText>
-                    <MudText Typo="Typo.h6" Color="Color.Info"><b>@SelectedSum(c => c.TotalSeparateBonuses).ToString("N0")</b> جـ</MudText>
-                </MudPaper>
-            </MudItem>
-            <MudItem xs="6" md="3">
-                <MudPaper Class="pa-3 rounded-xl text-center h-100" Style="border:1px solid rgba(245,158,11,.25)">
-                    <MudText Typo="Typo.caption">صافي داخل الراتب</MudText>
-                    <MudText Typo="Typo.h5" Color="Color.Warning"><b>@SelectedSum(c => c.NetSalary).ToString("N0")</b> جـ</MudText>
-                </MudPaper>
-            </MudItem>
-        </MudGrid>
-    </MudItem>
-</MudGrid>
-
-@if (_calculations.Any())
-{
-    <MudPaper Class="pa-3 mb-3 rounded-xl d-flex align-center gap-3 flex-wrap">
-        <MudButton Variant="Variant.Filled"
-                   Color="Color.Primary"
-                   StartIcon="@Icons.Material.Filled.Send"
-                   OnClick="SaveWithoutPayAsync"
-                   Disabled="_processing || !HasSelected">
-            @(_processing ? "جاري الإرسال..." : $"حفظ وإرسال للمراجعة ({SelectedCount} موظف)")
-        </MudButton>
-
-        <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined">
-            تم تعديل خصومات تلقائية: @_calculations.Count(c => c.HasManualOverrides)
-        </MudChip>
-
-        <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined">
-            مرتبات مسجلة مسبقًا: @_calculations.Count(c => c.HasExistingPayroll)
-        </MudChip>
-
-        <MudChip T="string" Color="Color.Success" Variant="Variant.Outlined">
-            إضافات داخل الراتب: @_calculations.Sum(c => c.TotalBonusInPayroll).ToString("N0") جـ
-        </MudChip>
+    @* ══ الفلتر — سطر واحد ══ *@
+    <MudPaper Class="pa-4 mb-4" Elevation="2" Style="border-radius: 16px;">
+        <div class="pp-filter-row">
+            <MudSelect T="string" Class="pfr-month" Value="_selectedMonth" ValueChanged="OnMonthChangedAsync"
+                       Label="الشهر" Variant="Variant.Outlined" Margin="Margin.Dense">
+                @foreach (var m in _monthOptions)
+                {
+                    <MudSelectItem T="string" Value="@m.Month">@FormatMonth(m.Month)@(m.PayrollCount > 0 ? " — مسجل" : "")</MudSelectItem>
+                }
+            </MudSelect>
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pfr-chip" OnClick="@(() => QuickMonthAsync(0))">الشهر الحالي</MudButton>
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" Class="pfr-chip" OnClick="@(() => QuickMonthAsync(-1))">الشهر السابق</MudButton>
+            @if (_calculations.Any() && _selectedMonth != _calculationsMonth)
+            {
+                <div class="pp-mismatch">
+                    <MudIcon Icon="@Icons.Material.Filled.WarningAmber" />
+                    <span>البيانات المعروضة محسوبة لشهر <b>@FormatMonth(_calculationsMonth)</b> — اضغط «احسب المرتبات» لتحديث الشهر المختار قبل الإرسال</span>
+                </div>
+            }
+        </div>
     </MudPaper>
 
-    <MudPaper Class="rounded-xl overflow-hidden">
-        @if (_calculating)
-        {
-            <MudProgressLinear Indeterminate Color="Color.Primary" />
-        }
+    @* ══ KPIs ══ *@
+    @if (_calculations.Any())
+    {
+        <div class="pp-summary mb-3">
+            <div class="pp-sum-item">
+                <span>جاهز للإرسال</span>
+                <b class="ok">@SelectedCount</b>
+            </div>
+            <div class="pp-sum-item">
+                <span>إجمالي المستحق (مختار)</span>
+                <b>@SelectedSum(c => c.GrossSalary).ToString("N0") جـ</b>
+            </div>
+            <div class="pp-sum-item">
+                <span>إجمالي الخصومات (مختار)</span>
+                <b class="bad">@SelectedSum(c => c.TotalDeductions).ToString("N0") جـ</b>
+            </div>
+            <div class="pp-sum-item">
+                <span>إضافات خارج الراتب (مختار)</span>
+                <b class="info">@SelectedSum(c => c.TotalSeparateBonuses).ToString("N0") جـ</b>
+            </div>
+            <div class="pp-sum-item">
+                <span>صافي داخل الراتب (مختار)</span>
+                <b class="warn">@SelectedSum(c => c.NetSalary).ToString("N0") جـ</b>
+            </div>
+        </div>
+    }
 
-        <MudTable Items="_calculations" Dense Hover Striped Elevation="0">
-            <HeaderContent>
-                <MudTh Style="width:50px">
-                    <MudCheckBox T="bool" Value="_allSelected" ValueChanged="ToggleAll" />
-                </MudTh>
-                <MudTh>الموظف</MudTh>
-                <MudTh>الحضور</MudTh>
-                <MudTh>الخصومات الآلية</MudTh>
-                <MudTh>التعديلات اليدوية</MudTh>
-                <MudTh>الصافي داخل الراتب</MudTh>
-                <MudTh>إضافات منفصلة</MudTh>
-                <MudTh>الحالة</MudTh>
-                <MudTh>إجراءات</MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd>
-                    <MudCheckBox T="bool"
-                                 Value="@context.IsSelected"
-                                 ValueChanged="@(v => UpdateSelection(context, v))"
-                                 Disabled="context.HasExistingPayroll" />
-                </MudTd>
+    @if (_calculations.Any())
+    {
+        @* ══ أدوات الإرسال ══ *@
+        <MudPaper Class="pa-3 mb-3" Elevation="2" Style="border-radius: 16px;">
+            <div class="pp-toolbar">
+                @if (_canProcess)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Send"
+                               OnClick="SaveWithoutPayAsync"
+                               Disabled="_processing || !HasSelected || _selectedMonth != _calculationsMonth">
+                        @(_processing ? "جاري الإرسال..." : $"حفظ وإرسال للمراجعة ({SelectedCount} موظف)")
+                    </MudButton>
+                }
+                <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                           StartIcon="@Icons.Material.Filled.FileDownload"
+                           OnClick="ExportCsvAsync" Disabled="_exporting">
+                    @(_exporting ? "جاري التصدير..." : "تصدير Excel")
+                </MudButton>
 
-                <MudTd>
-                    <MudText Typo="Typo.body2"><b>@context.EmployeeName</b></MudText>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary">
-                        @(context.Department ?? "—") · أساسي @context.BasicSalary.ToString("N2") جـ
-                    </MudText>
-                </MudTd>
-
-                <MudTd>
-                    <MudText Typo="Typo.body2">@context.PresentDays / @context.WorkingDaysInMonth</MudText>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary">
-                        غياب @context.AbsenceDays يوم · تأخير @context.LateDisplay
-                    </MudText>
-                    <MudChip T="string" Size="Size.Small" Color="@(context.IsManualAttendance ? Color.Warning : Color.Default)">
-                        @(context.IsManualAttendance ? "يدوي" : "بصمة")
+                <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small">
+                    تعديلات يدوية: @_calculations.Count(c => c.HasManualOverrides)
+                </MudChip>
+                <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined" Size="Size.Small">
+                    مسجلة مسبقًا: @_calculations.Count(c => c.HasExistingPayroll)
+                </MudChip>
+                <MudChip T="string" Color="Color.Success" Variant="Variant.Outlined" Size="Size.Small">
+                    إضافات داخل الراتب: @_calculations.Sum(c => c.TotalBonusInPayroll).ToString("N0") جـ
+                </MudChip>
+                @if (_dirty)
+                {
+                    <MudChip T="string" Color="Color.Error" Variant="Variant.Filled" Size="Size.Small"
+                             Icon="@Icons.Material.Filled.EditNote">
+                        تعديلات غير مرسلة
                     </MudChip>
-                </MudTd>
+                }
+            </div>
+        </MudPaper>
 
-                <MudTd>
-                    <MudStack Spacing="1">
-                        <MudText Typo="Typo.caption">غياب: @FormatMoney(context.AbsenceDeduction)</MudText>
-                        <MudText Typo="Typo.caption">تأخير: @FormatMoney(context.LateDeduction)</MudText>
-                        <MudText Typo="Typo.caption">سلف: @FormatMoney(context.LoanDeduction)</MudText>
-                        @if (context.HasManualOverrides)
+        @* ══ بحث وفلاتر الجدول ══ *@
+        <MudPaper Class="pa-4 mb-3" Elevation="2" Style="border-radius: 16px;">
+            <div class="pp-filter-row">
+                <MudTextField T="string" Class="pfr-search" Label="بحث بالاسم" @bind-Value="_searchText"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" Immediate="true"
+                              Placeholder="ابحث..." />
+                <MudSelect T="string" Class="pfr-dept" Label="القسم" @bind-Value="_deptFilter"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" ClearText="كل الأقسام">
+                    @foreach (var d in DepartmentOptions)
+                    {
+                        <MudSelectItem T="string" Value="@d">@d</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudCheckBox T="bool" @bind-Value="_onlyOverridden" Dense="true" Label="المعدّلون يدويًا فقط"
+                             Color="Color.Warning" Class="pfr-check" />
+            </div>
+        </MudPaper>
+
+        @* ══ الجدول ══ *@
+        <div class="pp-table-shell mb-3">
+            @if (_calculating)
+            {
+                <MudProgressLinear Indeterminate Color="Color.Primary" />
+            }
+
+            <MudTable Items="FilteredCalculations" Dense="true" Hover="true" Striped="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh Style="width:50px">
+                        <MudCheckBox T="bool" Value="_allSelected" ValueChanged="ToggleAll" Disabled="!_canProcess" />
+                    </MudTh>
+                    <MudTh>الموظف</MudTh>
+                    <MudTh>الحضور</MudTh>
+                    <MudTh>الخصومات الآلية</MudTh>
+                    <MudTh>التعديلات اليدوية</MudTh>
+                    <MudTh>الصافي داخل الراتب</MudTh>
+                    <MudTh>إضافات منفصلة</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh Style="text-align:center">إجراءات</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <MudCheckBox T="bool"
+                                     Value="@context.IsSelected"
+                                     ValueChanged="@(v => UpdateSelection(context, v))"
+                                     Disabled="context.HasExistingPayroll || !_canProcess" />
+                    </MudTd>
+
+                    <MudTd>
+                        <MudText Typo="Typo.body2" Style="font-weight:700">@context.EmployeeName</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @(context.Department ?? "—") · أساسي @context.BasicSalary.ToString("N2") جـ
+                        </MudText>
+                    </MudTd>
+
+                    <MudTd>
+                        <MudText Typo="Typo.body2">
+                            @context.PresentDays / @context.WorkingDaysInMonth
+                            <MudTooltip Text="تفاصيل البصمة">
+                                <MudIconButton Icon="@Icons.Material.Filled.Fingerprint" Size="Size.Small"
+                                               Variant="Variant.Text" Color="Color.Info" Class="pp-mini-link"
+                                               OnClick='@(() => Nav.NavigateTo("/attendance"))' />
+                            </MudTooltip>
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            غياب @context.AbsenceDays يوم · تأخير @context.LateDisplay
+                        </MudText>
+                        <MudChip T="string" Size="Size.Small" Color="@(context.IsManualAttendance ? Color.Warning : Color.Default)">
+                            @(context.IsManualAttendance ? "يدوي" : "بصمة")
+                        </MudChip>
+                    </MudTd>
+
+                    <MudTd>
+                        <MudStack Spacing="1">
+                            <MudText Typo="Typo.caption">غياب: @FormatMoney(context.AbsenceDeduction)</MudText>
+                            <MudText Typo="Typo.caption">تأخير: @FormatMoney(context.LateDeduction)</MudText>
+                            <MudText Typo="Typo.caption">سلف: @FormatMoney(context.LoanDeduction)</MudText>
+                            @if (context.HasManualOverrides)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
+                                    خصومات معدلة يدويًا
+                                </MudChip>
+                            }
+                        </MudStack>
+                    </MudTd>
+
+                    <MudTd>
+                        <MudStack Spacing="1">
+                            <MudText Typo="Typo.caption">جزاءات/خصومات: @FormatMoney(context.TotalPenalties)</MudText>
+                            <MudText Typo="Typo.caption">إضافات داخل الراتب: @FormatMoney(context.TotalBonusInPayroll)</MudText>
+                            <MudText Typo="Typo.caption">عدد البنود: @(context.Penalties.Count + context.BonusItems.Count + context.SeparateBonuses.Count)</MudText>
+                        </MudStack>
+                    </MudTd>
+
+                    <MudTd>
+                        <MudText Typo="Typo.body1" Style="font-weight:800">@context.NetSalary.ToString("N2") جـ</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            إجمالي المستحق @context.GrossSalary.ToString("N2") جـ
+                        </MudText>
+                    </MudTd>
+
+                    <MudTd>
+                        @if (context.TotalSeparateBonuses > 0)
                         {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
-                                خصومات معدلة يدويًا
-                            </MudChip>
+                            <MudText Typo="Typo.body2" Color="Color.Info" Style="font-weight:700">@context.TotalSeparateBonuses.ToString("N2") جـ</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.SeparateBonuses.Count بند منفصل</MudText>
                         }
-                    </MudStack>
-                </MudTd>
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">لا يوجد</MudText>
+                        }
+                    </MudTd>
 
-                <MudTd>
-                    <MudStack Spacing="1">
-                        <MudText Typo="Typo.caption">جزاءات/خصومات: @FormatMoney(context.TotalPenalties)</MudText>
-                        <MudText Typo="Typo.caption">إضافات داخل الراتب: @FormatMoney(context.TotalBonusInPayroll)</MudText>
-                        <MudText Typo="Typo.caption">عدد البنود: @(context.Penalties.Count + context.BonusItems.Count + context.SeparateBonuses.Count)</MudText>
-                    </MudStack>
-                </MudTd>
+                    <MudTd>
+                        @if (context.HasExistingPayroll)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">مسجل مسبقًا</MudChip>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Warning</MudText>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(context.Warning))
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info">ملاحظة</MudChip>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Warning</MudText>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success">جاهز للمراجعة</MudChip>
+                        }
+                    </MudTd>
 
-                <MudTd>
-                    <MudText Typo="Typo.body1"><b>@context.NetSalary.ToString("N2") جـ</b></MudText>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary">
-                        إجمالي المستحق @context.GrossSalary.ToString("N2") جـ
+                    <MudTd Style="text-align:center">
+                        @if (!context.HasExistingPayroll && _canProcess)
+                        {
+                            <MudTooltip Text="تعديل البنود">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                               Color="Color.Primary" Variant="Variant.Outlined"
+                                               OnClick="@(() => OpenItemsDialogAsync(context))" />
+                            </MudTooltip>
+                            <MudTooltip Text="إزالة من المعالجة">
+                                <MudIconButton Icon="@Icons.Material.Filled.PersonRemove" Size="Size.Small"
+                                               Color="Color.Error" Variant="Variant.Outlined"
+                                               OnClick="@(() => RemoveEmployee(context))" />
+                            </MudTooltip>
+                        }
+                        else
+                        {
+                            <span class="pp-dash">—</span>
+                        }
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Class="pa-4" Color="Color.Secondary" Align="Align.Center">
+                        لا نتائج مطابقة للبحث الحالي
                     </MudText>
-                </MudTd>
+                </NoRecordsContent>
+            </MudTable>
 
-                <MudTd>
-                    @if (context.TotalSeparateBonuses > 0)
-                    {
-                        <MudText Typo="Typo.body2" Color="Color.Info"><b>@context.TotalSeparateBonuses.ToString("N2") جـ</b></MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.SeparateBonuses.Count بند منفصل</MudText>
-                    }
-                    else
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">لا يوجد</MudText>
-                    }
-                </MudTd>
-
-                <MudTd>
-                    @if (context.HasExistingPayroll)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">مسجل مسبقًا</MudChip>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Warning</MudText>
-                    }
-                    else if (!string.IsNullOrWhiteSpace(context.Warning))
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Info">ملاحظة</MudChip>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Warning</MudText>
-                    }
-                    else
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success">جاهز للمراجعة</MudChip>
-                    }
-                </MudTd>
-
-                <MudTd>
-                    @if (!context.HasExistingPayroll)
-                    {
-                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
-                                       Size="Size.Small"
-                                       Color="Color.Primary"
-                                       Title="تعديل البنود"
-                                       OnClick="@(() => OpenItemsDialogAsync(context))" />
-                        <MudIconButton Icon="@Icons.Material.Filled.PersonRemove"
-                                       Size="Size.Small"
-                                       Color="Color.Error"
-                                       Title="إزالة من المعالجة"
-                                       OnClick="@(() => RemoveEmployee(context))" />
-                    }
-                </MudTd>
-            </RowTemplate>
-            <NoRecordsContent>
-                <MudText Class="pa-4" Color="Color.Secondary" Align="Align.Center">
-                    اضغط "احسب المرتبات" أولاً
-                </MudText>
-            </NoRecordsContent>
-        </MudTable>
-    </MudPaper>
-}
-else
-{
-    <MudPaper Class="pa-6 rounded-xl text-center">
-        <MudIcon Icon="@Icons.Material.Filled.Payments" Size="Size.Large" Color="Color.Default" Class="mb-2" />
-        <MudText Typo="Typo.h6">ابدأ بحساب المرتبات للشهر المطلوب</MudText>
-        <MudText Typo="Typo.body2" Color="Color.Secondary">
-            بعد الحساب ستتمكن من مراجعة الغياب والتأخير والجزاءات والمكافآت ثم إرسال البيانات للمراجعة.
-        </MudText>
-    </MudPaper>
-}
+            @* ══ (12-H16) شريط الإجماليات — مستقل عن أعمدة الجدول ══ *@
+            <div class="pp-totals">
+                <div class="pp-tot-head">
+                    <MudIcon Icon="@Icons.Material.Filled.Insights" />
+                    <span>إجمالي @FilteredCalculations.Count() موظف (المعروض)</span>
+                </div>
+                <div class="pp-tot-cells">
+                    <div class="pp-tot-cell">
+                        <span>إجمالي المستحق</span>
+                        <b>@FilteredCalculations.Sum(c => c.GrossSalary).ToString("N0") جـ</b>
+                    </div>
+                    <div class="pp-tot-cell">
+                        <span>الخصومات</span>
+                        <b class="bad">@FilteredCalculations.Sum(c => c.TotalDeductions).ToString("N0") جـ</b>
+                    </div>
+                    <div class="pp-tot-cell">
+                        <span>جزاءات يدوية</span>
+                        <b class="bad">@FilteredCalculations.Sum(c => c.TotalPenalties).ToString("N0") جـ</b>
+                    </div>
+                    <div class="pp-tot-cell">
+                        <span>إضافات داخل الراتب</span>
+                        <b class="ok">@FilteredCalculations.Sum(c => c.TotalBonusInPayroll).ToString("N0") جـ</b>
+                    </div>
+                    <div class="pp-tot-cell">
+                        <span>إضافات منفصلة</span>
+                        <b class="info">@FilteredCalculations.Sum(c => c.TotalSeparateBonuses).ToString("N0") جـ</b>
+                    </div>
+                    <div class="pp-tot-cell net">
+                        <span>الصافي داخل الراتب</span>
+                        <b>@FilteredCalculations.Sum(c => c.NetSalary).ToString("N0") جـ</b>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <MudPaper Class="pa-8 text-center" Elevation="2" Style="border-radius:16px;">
+            <MudIcon Icon="@Icons.Material.Filled.Payments" Style="font-size:54px; opacity:.4" Color="Color.Secondary" />
+            <div class="mt-3"><MudText Typo="Typo.h6">ابدأ بحساب المرتبات للشهر المطلوب</MudText></div>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                بعد الحساب ستتمكن من مراجعة الغياب والتأخير والجزاءات والمكافآت ثم إرسال البيانات للمراجعة.
+            </MudText>
+        </MudPaper>
+    }
+</div>
 
 @code {
     private string _selectedMonth = DateTime.Today.ToString("yyyy-MM");
+    private string? _calculationsMonth;   // (12-H14) الشهر الفعلي للبيانات المحسوبة — حماية عدم التطابق
     private List<PayrollMonthSummaryDto> _monthOptions = new();
     private bool _calculating;
     private bool _processing;
+    private bool _exporting;
     private bool _allSelected = true;
+    private bool _dirty;                  // (12-H14) تعديلات غير مرسلة
     private string _currentUser = "system";
+    private bool _canProcess;
 
     private List<PayrollCalculationDto> _calculations = new();
+
+    // (12-H14) بحث وفلاتر
+    private string? _searchText;
+    private string? _deptFilter;
+    private bool _onlyOverridden;
+
+    private IEnumerable<PayrollCalculationDto> FilteredCalculations => _calculations
+        .Where(c => string.IsNullOrWhiteSpace(_searchText)
+                 || c.EmployeeName.Contains(_searchText.Trim(), StringComparison.OrdinalIgnoreCase))
+        .Where(c => string.IsNullOrWhiteSpace(_deptFilter) || c.Department == _deptFilter)
+        .Where(c => !_onlyOverridden || c.HasManualOverrides);
+
+    private List<string> DepartmentOptions =>
+        _calculations.Select(c => c.Department).Where(d => !string.IsNullOrWhiteSpace(d)).Distinct().OrderBy(d => d).ToList()!;
 
     private bool HasSelected => _calculations.Any(c => c.IsSelected && !c.HasExistingPayroll);
     private int SelectedCount => _calculations.Count(c => c.IsSelected && !c.HasExistingPayroll);
@@ -309,6 +437,40 @@ else
             Nav.NavigateTo("/access-denied");
             return;
         }
+
+        // (12-H14) أفعال الحساب والإرسال تحتاج صلاحية تعديل — الخدمة نفسها بلا بوابة
+        _canProcess = user.IsInRole("Admin")
+                      || user.IsInRole("HrManager")
+                      || user.IsInRole("HRManager")
+                      || user.IsInRole("AccountManager")
+                      || user.IsInRole("AccountsManager")
+                      || user.HasClaim("Permission", "frm_Payroll:Edit");
+    }
+
+    // (12-H14) تحذير التنقل وفيه تعديلات غير مرسلة (NavigationLock = نمط net8 الصحيح)
+    private void OnBeforeInternalNavigation(LocationChangingContext ctx)
+    {
+        if (!_dirty) return;
+        ctx.PreventNavigation();
+        _ = ConfirmLeaveAsync(ctx.TargetLocation);
+    }
+
+    private async Task ConfirmLeaveAsync(string target)
+    {
+        var parameters = new DialogParameters<MudMessageBox>
+        {
+            { x => x.Message,    "فيه تعديلات على البنود لسه مااترسلتش للمراجعة. لو مشيت دلوقتي هتضيع. متأكد إنك عايز تسيب الصفحة؟" },
+            { x => x.YesText,    "سيب الصفحة" },
+            { x => x.CancelText, "اقعد وعدّل" }
+        };
+        var dialog = await DialogService.ShowAsync<MudMessageBox>(
+            "تعديلات غير مرسلة", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+
+        if ((await dialog.Result) is { Canceled: true }) return;
+
+        _dirty = false;
+        Nav.NavigateTo(target);
     }
 
     private async Task CalculateAsync()
@@ -329,6 +491,9 @@ else
                 calc.IsSelected = !calc.HasExistingPayroll;
 
             _allSelected = _calculations.Any(c => !c.HasExistingPayroll);
+            _calculationsMonth = _selectedMonth;   // (12-H14) سجّل شهر البيانات
+            _dirty = false;
+            _searchText = null; _deptFilter = null; _onlyOverridden = false;
             Snackbar.Add($"تم حساب {_calculations.Count} موظف", Severity.Info);
         }
         catch (Exception ex)
@@ -346,7 +511,25 @@ else
     {
         _calculations.Remove(calc);
         SyncSelectAll();
-        Snackbar.Add($"تم إزالة {calc.EmployeeName} من هذه المعالجة", Severity.Info);
+        _dirty = true;   // الإزالة بتأثر على الإرسال
+
+        // (12-H14) Undo
+        Snackbar.Add($"تم إزالة {calc.EmployeeName} من هذه المعالجة", Severity.Info, cfg =>
+        {
+            cfg.Action = "تراجع";
+            cfg.ActionColor = Color.Warning;
+            cfg.VisibleStateDuration = 6000;
+            cfg.OnClick = _ =>
+            {
+                if (!_calculations.Contains(calc))
+                {
+                    _calculations.Add(calc);
+                    SyncSelectAll();
+                    StateHasChanged();
+                }
+                return Task.CompletedTask;
+            };
+        });
     }
 
     private async Task SaveWithoutPayAsync()
@@ -357,9 +540,12 @@ else
             return;
         }
 
+        // (12-H14) حماية نهائية: البيانات المرسلة = بيانات شهر الحساب نفسه
+        var monthToSave = _calculationsMonth ?? _selectedMonth;
+
         var parameters = new DialogParameters<MudMessageBox>
         {
-            { x => x.Message,    $"سيتم حفظ وإرسال {SelectedCount} راتب للمراجعة. هل تريد المتابعة؟" },
+            { x => x.Message,    $"سيتم حفظ وإرسال {SelectedCount} راتب لشهر {FormatMonth(monthToSave)} للمراجعة. هل تريد المتابعة؟" },
             { x => x.YesText,    "نعم، إرسال للمراجعة" },
             { x => x.CancelText, "إلغاء" }
         };
@@ -376,10 +562,13 @@ else
 
         try
         {
-            var (ok, msg, _) = await PayrollService.SaveOnlyAsync(_selectedMonth, _calculations, _currentUser);
+            var (ok, msg, _) = await PayrollService.SaveOnlyAsync(monthToSave, _calculations, _currentUser);
             Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
             if (ok)
+            {
+                _dirty = false;
                 await CalculateAsync();
+            }
         }
         catch (Exception ex)
         {
@@ -397,7 +586,11 @@ else
         var parameters = new DialogParameters
         {
             [nameof(PayrollItemsDialog.Calc)] = calc,
-            [nameof(PayrollItemsDialog.OnSaved)] = EventCallback.Factory.Create(this, StateHasChanged)
+            [nameof(PayrollItemsDialog.OnSaved)] = EventCallback.Factory.Create(this, () =>
+            {
+                _dirty = true;   // (12-H14) تعديل البنود = تغيير غير مرسل
+                StateHasChanged();
+            })
         };
 
         await DialogService.ShowAsync<PayrollItemsDialog>(
@@ -405,6 +598,46 @@ else
             parameters,
             new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true });
     }
+
+    // (12-H14) تصدير CSV (بيفتح في Excel) بنفس نمط downloadFileFromBase64
+    private async Task ExportCsvAsync()
+    {
+        _exporting = true;
+        StateHasChanged();
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("الموظف,القسم,أساسي,حضور,أيام عمل,غياب,تأخير,خصم غياب,خصم تأخير,سلف,جزاءات,إضافات داخل الراتب,إجمالي مستحق,صافي,إضافات منفصلة,مسجل مسبقًا,ملاحظات");
+            foreach (var c in FilteredCalculations)
+            {
+                sb.AppendLine(string.Join(",",
+                    Esc(c.EmployeeName), Esc(c.Department ?? ""), c.BasicSalary.ToString("0.##"),
+                    c.PresentDays, c.WorkingDaysInMonth, c.AbsenceDays, Esc(c.LateDisplay),
+                    c.AbsenceDeduction.ToString("0.##"), c.LateDeduction.ToString("0.##"), c.LoanDeduction.ToString("0.##"),
+                    c.TotalPenalties.ToString("0.##"), c.TotalBonusInPayroll.ToString("0.##"),
+                    c.GrossSalary.ToString("0.##"), c.NetSalary.ToString("0.##"), c.TotalSeparateBonuses.ToString("0.##"),
+                    c.HasExistingPayroll ? "نعم" : "لا", Esc(c.Warning ?? "")));
+            }
+
+            var bytes = System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+            var base64 = Convert.ToBase64String(bytes);
+            var fileName = $"معالجة_المرتبات_{_calculationsMonth}_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
+            await JS.InvokeVoidAsync("downloadFileFromBase64", base64, fileName);
+            Snackbar.Add("تم التصدير بنجاح", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ في التصدير: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _exporting = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string Esc(string s) =>
+        s.Contains(',') || s.Contains('"') ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
 
     private void ToggleAll(bool value)
     {
@@ -430,7 +663,6 @@ else
 
     private static string FormatMoney(decimal amount) => amount <= 0 ? "—" : amount.ToString("N2") + " جـ";
 
-    // ── اختيار الشهر: قائمة الشهور الحالية/السابقة/المسجلة ──
     private async Task LoadMonthOptionsAsync()
     {
         try
@@ -455,11 +687,13 @@ else
         _selectedMonth = string.IsNullOrWhiteSpace(month)
             ? DateTime.Today.ToString("yyyy-MM")
             : month;
+        await Task.CompletedTask;
     }
 
     private async Task QuickMonthAsync(int monthsOffset)
     {
         _selectedMonth = DateTime.Today.AddMonths(monthsOffset).ToString("yyyy-MM");
+        await Task.CompletedTask;
         StateHasChanged();
     }
 
@@ -476,3 +710,99 @@ else
         && DateTime.TryParseExact(month + "-01", "yyyy-MM-dd", null,
             System.Globalization.DateTimeStyles.None, out _);
 }
+
+<style>
+    /* ══ (12-H14) Premium Header — نفس تصميم لوحة الخزينة ══ */
+    .pp-page {
+        --gold: #D4A853; --gold-dark: #B8912A;
+        --navy: #1B2A4A; --navy-dark: #0F1D36; --navy-light: #2D4A7A;
+        max-width: 1800px; margin: 0 auto; position: relative;
+    }
+    @@keyframes ppFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-18px); } }
+    @@keyframes ppShimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+    @@keyframes ppPulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.7; } }
+
+    .top-accent { height: 5px; background: linear-gradient(90deg, var(--gold), var(--gold-dark), var(--gold)); position: relative; overflow: hidden; margin-bottom: 1.5rem; border-radius: 0 0 10px 10px; }
+    .accent-shimmer { position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent); animation: ppShimmer 3s ease-in-out infinite; }
+
+    .dash-header { position: relative; border-radius: 24px; overflow: hidden; margin-bottom: 1rem; }
+    .dh-bg { position: absolute; inset: 0; }
+    .dh-gradient { position: absolute; inset: 0; background: linear-gradient(135deg, #070D1A 0%, var(--navy) 40%, var(--navy-light) 100%); }
+    .dh-orbs { position: absolute; inset: 0; overflow: hidden; }
+    .dh-orb { position: absolute; border-radius: 50%; }
+    .dh-o1 { width: 380px; height: 380px; top: -160px; right: -100px; background: radial-gradient(circle, rgba(212,168,83,0.3), transparent 60%); animation: ppFloat 8s ease-in-out infinite; }
+    .dh-o2 { width: 260px; height: 260px; bottom: -100px; left: 15%; background: radial-gradient(circle, rgba(212,168,83,0.15), transparent 60%); }
+    .dh-o3 { width: 180px; height: 180px; top: 30%; left: 8%; background: radial-gradient(circle, rgba(255,255,255,0.04), transparent 60%); }
+    .dh-grid { position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 40px 40px; }
+    .dh-content { position: relative; z-index: 2; padding: 2rem 2.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1.5rem; }
+    .dh-info { display: flex; align-items: center; gap: 1.5rem; }
+    .dh-icon-wrap { position: relative; width: 80px; height: 80px; }
+    .dh-icon-glow { position: absolute; inset: -15px; background: radial-gradient(circle, rgba(212,168,83,0.4), transparent 70%); filter: blur(20px); animation: ppPulse 3s ease-in-out infinite; }
+    .dh-icon { position: relative; width: 100%; height: 100%; background: linear-gradient(135deg, var(--gold), var(--gold-dark)); border-radius: 22px; display: flex; align-items: center; justify-content: center; color: var(--navy-dark); box-shadow: 0 10px 40px rgba(212,168,83,0.4), inset 0 1px 0 rgba(255,255,255,0.2); }
+    .dh-icon ::deep .mud-icon-root { font-size: 38px !important; color: var(--navy-dark) !important; }
+    .dh-badge { position: absolute; bottom: -6px; left: -6px; width: 28px; height: 28px; background: linear-gradient(135deg, var(--gold), var(--gold-dark)); border-radius: 50%; border: 3px solid var(--navy-dark); display: flex; align-items: center; justify-content: center; color: white; }
+    .dh-badge ::deep .mud-icon-root { font-size: 13px !important; color: white !important; }
+    .dh-text { color: white; }
+    .dh-title-row { display: flex; align-items: center; gap: 0.85rem; flex-wrap: wrap; }
+    .dh-text h1 { margin: 0; font-size: 1.9rem; font-weight: 900; letter-spacing: -0.5px; line-height: 1.2; }
+    .premium-tag { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.85rem; background: linear-gradient(135deg, var(--gold), var(--gold-dark)); border-radius: 20px; font-size: 0.72rem; font-weight: 700; color: var(--navy-dark); box-shadow: 0 4px 12px rgba(212,168,83,0.3); }
+    .premium-tag ::deep .mud-icon-root { font-size: 12px !important; color: var(--navy-dark) !important; }
+    .dh-subtitle { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0 0; color: rgba(255,255,255,0.7); font-size: 0.92rem; }
+    .dh-subtitle ::deep .mud-icon-root { color: var(--gold) !important; font-size: 16px !important; }
+    .dh-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+    .dh-btn-primary { background: linear-gradient(135deg, var(--gold), var(--gold-dark)) !important; color: var(--navy-dark) !important; font-weight: 700 !important; border-radius: 12px !important; padding: 0.65rem 1.25rem !important; box-shadow: 0 8px 20px rgba(212,168,83,0.3) !important; position: relative; overflow: hidden; text-transform: none !important; }
+    .btn-shine { position: absolute; top: 0; left: -100%; width: 100%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent); animation: ppShimmer 3s ease-in-out infinite; }
+    .dh-btn-ghost { background: rgba(255,255,255,0.06) !important; color: white !important; border-color: rgba(255,255,255,0.2) !important; border-radius: 12px !important; padding: 0.65rem 1.25rem !important; text-transform: none !important; font-weight: 600 !important; backdrop-filter: blur(10px); }
+
+    /* ══ شريط الخطوات ══ */
+    .pp-steps { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: #f8fafc; border: 1px solid #e8edf5; border-radius: 12px; padding: 8px 14px; font-size: 12.5px; color: #475569; }
+    .pp-step b { display: inline-flex; width: 18px; height: 18px; border-radius: 50%; background: var(--navy); color: #fff; align-items: center; justify-content: center; font-size: 10px; margin-left: 4px; }
+    .pp-step-arrow { font-size: 14px !important; color: #cbd5e1; }
+    .pp-steps-note { margin-inline-start: auto; display: flex; align-items: center; gap: 5px; color: #1e40af; font-size: 11.5px; }
+    .pp-steps-note .mud-icon-root { font-size: 15px; }
+
+    /* ══ فلاتر ══ */
+    .pp-filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .pp-filter-row .pfr-month { flex: 0 0 210px; }
+    .pp-filter-row .pfr-chip { flex: 0 0 auto; border-radius: 8px; }
+    .pp-filter-row .pfr-search { flex: 1.6 1 190px; min-width: 170px; }
+    .pp-filter-row .pfr-dept { flex: 1 1 140px; min-width: 130px; }
+    .pp-filter-row .pfr-check { flex: 0 0 auto; }
+    .pp-mismatch { display: flex; align-items: center; gap: 6px; background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 10px; padding: 6px 12px; font-size: 12.5px; flex: 1 1 260px; }
+
+    /* ══ KPIs ══ */
+    .pp-summary { display: flex; gap: 10px; flex-wrap: wrap; }
+    .pp-sum-item { flex: 1 1 155px; background: #fff; border: 1px solid #e8edf5; border-radius: 14px; padding: 10px 16px; display: flex; flex-direction: column; gap: 2px; }
+    .pp-sum-item span { font-size: 11.5px; color: #7a869c; font-weight: 600; }
+    .pp-sum-item b { font-size: 1.2rem; color: #1B2A4A; }
+    .pp-sum-item b.ok { color: #059669; }
+    .pp-sum-item b.bad { color: #dc2626; }
+    .pp-sum-item b.info { color: #0284c7; }
+    .pp-sum-item b.warn { color: #d97706; }
+
+    /* ══ أدوات + جدول ══ */
+    .pp-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .pp-table-shell { border: 1px solid #e8edf5; border-radius: 14px; overflow: hidden; background: #fff; }
+    .pp-table-shell ::deep .mud-table-head .mud-table-cell { background: #f8fafc; font-weight: 800; color: #1B2A4A; }
+    .pp-totals { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; background: linear-gradient(135deg, #1B2A4A 0%, #2D4A7A 100%); border-top: 3px solid #D4A853; padding: 12px 18px; }
+    .pp-tot-head { display: flex; align-items: center; gap: 8px; color: #fff; font-weight: 800; font-size: 13.5px; white-space: nowrap; }
+    .pp-tot-head .mud-icon-root { color: #D4A853; font-size: 20px !important; }
+    .pp-tot-cells { display: flex; align-items: center; flex-wrap: wrap; margin-inline-start: auto; }
+    .pp-tot-cell { display: flex; flex-direction: column; gap: 1px; padding: 2px 16px; border-inline-start: 1px solid rgba(255,255,255,.15); }
+    .pp-tot-cell:first-child { border-inline-start: none; padding-inline-start: 0; }
+    .pp-tot-cell span { font-size: 10.5px; color: rgba(255,255,255,.6); font-weight: 600; white-space: nowrap; }
+    .pp-tot-cell b { font-size: 14px; color: #fff; font-weight: 800; white-space: nowrap; }
+    .pp-tot-cell b.bad { color: #fca5a5; }
+    .pp-tot-cell b.ok { color: #6ee7b7; }
+    .pp-tot-cell b.info { color: #7dd3fc; }
+    .pp-tot-cell.net b { color: #D4A853; font-size: 19px; line-height: 1.1; }
+    .pp-tot-cell.net span { color: rgba(212,168,83,.85); }
+    .pp-mini-link { padding: 0 4px !important; }
+    .pp-mini-link ::deep .mud-icon-root { font-size: 16px !important; }
+    .pp-dash { color: #94a3b8; }
+
+    @@media (max-width: 768px) {
+        .dh-content { flex-direction: column; align-items: flex-start; padding: 1.5rem; }
+        .dh-text h1 { font-size: 1.5rem; }
+    }
+</style>

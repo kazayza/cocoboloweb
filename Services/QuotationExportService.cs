@@ -230,10 +230,15 @@ public class QuotationExportService : IQuotationExportService
             col.Item().PaddingTop(15).Column(c =>
             {
                 c.Item().Text("الشروط والأحكام:").Bold().FontSize(10).FontColor("#B8860B");
-                c.Item().PaddingTop(3).Text("• الأسعار شاملة الضريبة وبعملة الجنيه المصري.").FontSize(8);
+                c.Item().PaddingTop(3).Text("• الأسعار غير شاملة ضريبة القيمة المضافة، وجميع المبالغ بعملة الجنيه المصري.").FontSize(8);
                 if (q.ValidUntil.HasValue)
-                    c.Item().Text($"• العرض ساري حتى {q.ValidUntil.Value:yyyy/MM/dd}.").FontSize(8);
-                c.Item().Text("• يُحفظ هذا العرض كوثيقة رسمية بين الطرفين عند القبول.").FontSize(8);
+                    c.Item().Text($"• العرض ساري حتى {q.ValidUntil.Value:yyyy/MM/dd} وبعده يحق للشركة تعديل الأسعار.").FontSize(8);
+                else
+                    c.Item().Text("• العرض ساري لمدة 15 يومًا من تاريخ الإصدار وبعدها يحق للشركة تعديل الأسعار.").FontSize(8);
+                c.Item().Text("• مدة التنفيذ تبدأ من تاريخ اعتماد أمر التشغيل (Job Order) بعد توقيعه من العميل وسداد 70% من قيمة التعاقد.").FontSize(8);
+                c.Item().Text("• طلبات تعديل أمر التشغيل خلال 48 ساعة من إرساله، وبعدها يُعد معتمدًا ونهائيًا ومجمّدًا (Final & Frozen).").FontSize(8);
+                c.Item().Text("• فترة الضمان تصل إلى 5 سنوات ضد عيوب الصناعة وصيانة مدى الحياة.").FontSize(8);
+                c.Item().Text("• بمجرد قبول العميل لعرض السعر يتم تحويله لفاتورة وتطبق عليه شروط التعاقد الكاملة.").FontSize(8);
             });
         });
     }

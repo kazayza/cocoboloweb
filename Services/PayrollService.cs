@@ -788,6 +788,210 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
             (totalSeparate > 0 ? $" + إضافات منفصلة {totalSeparate:N2} جـ" : string.Empty));
     }
 
+    // ============================================================
+    // (12-H11/ب) صرف دفعة خارج الراتب مع مقاصة أقساط سلف
+    // النقدي للموظف = قيمة الدفعة − المخصص للأقساط · بلا حركة قبض (المقاصة جوه الصرف)
+    // ============================================================
+    public async Task<(bool Ok, string Msg)> PayOneWithLoanAllocationAsync(
+        int payrollId, int cashBoxId, List<OutOfPayrollPaymentItemDto> allocations, string user)
+    {
+        if (allocations is null || allocations.Count == 0)
+            return await PayOneAsync(payrollId, cashBoxId, user);
+
+        if (allocations.Any(a => a.Amount <= 0))
+            return (false, "كل مبلغ مخصص يجب أن يكون أكبر من صفر");
+
+        var ids = allocations.Select(a => a.InstallmentId).Distinct().ToList();
+        if (ids.Count != allocations.Count)
+            return (false, "يوجد قسط مكرر في التخصيص");
+
+        var p = await _db.Payrolls
+            .Include(x => x.Employee)
+            .Include(x => x.PayrollDetails)
+            .FirstOrDefaultAsync(x => x.PayrollId == payrollId);
+
+        if (p is null) return (false, "الدفعة غير موجودة");
+        if (!IsOffPayrollRecord(p.Notes))
+            return (false, "المقاصة مقابل السلف متاحة للدفعات خارج الراتب فقط");
+        if (p.PaymentStatus == PayrollPaymentStatuses.Paid) return (false, "الدفعة تم صرفها بالفعل");
+        if (p.PaymentStatus == PayrollPaymentStatuses.Cancelled) return (false, "لا يمكن صرف دفعة ملغاة");
+        if (p.PaymentStatus != PayrollPaymentStatuses.Approved && p.PaymentStatus != PayrollPaymentStatuses.Unpaid)
+            return (false, "لا يمكن صرف الدفعة قبل الاعتماد");
+
+        var netAmount = p.NetSalary ?? p.BasicSalary;
+        var separateDetails = p.PayrollDetails
+            .Where(d => d.PaymentType == "Separate" && d.CashboxTransactionID == null)
+            .ToList();
+        var paymentAmount = netAmount + separateDetails.Sum(d => d.Amount);
+
+        var installments = await _db.LoanInstallments
+            .Include(i => i.Loan)
+            .Where(i => ids.Contains(i.InstallmentId))
+            .ToListAsync();
+
+        if (installments.Count != ids.Count)
+            return (false, "بعض الأقساط غير موجودة");
+        if (installments.Any(i => i.EmployeeId != p.EmployeeId))
+            return (false, "كل الأقساط يجب أن تكون خاصة بموظف الدفعة");
+        if (installments.Any(i => i.Status != "Pending"))
+            return (false, "يمكن تخصيص أقساط معلقة (لم تُخصم بعد) فقط");
+        if (installments.Any(i => i.Loan.Status != "Active"))
+            return (false, "توجد أقساط لسلف غير نشطة");
+
+        decimal totalAlloc = 0m;
+        foreach (var a in allocations)
+        {
+            var inst = installments.First(i => i.InstallmentId == a.InstallmentId);
+            if (a.Amount > inst.Amount)
+                return (false, $"المبلغ المخصص للقسط رقم {inst.InstallmentNumber} أكبر من قيمته ({inst.Amount:N2} جـ)");
+            totalAlloc += a.Amount;
+
+            // حماية: القسط داخل راتب محسوب غير مصروف → ممنوع (نفس حارس تعديل الأقساط)
+            var blocked = await _db.Payrolls.AsNoTracking().AnyAsync(x =>
+                x.EmployeeId == inst.EmployeeId
+                && x.PayrollMonth == inst.DeductionMonth
+                && (x.LoanDeduction ?? 0) > 0
+                && (x.PaymentStatus == PayrollPaymentStatuses.PendingReview
+                 || x.PaymentStatus == PayrollPaymentStatuses.Approved
+                 || x.PaymentStatus == PayrollPaymentStatuses.Unpaid));
+            if (blocked)
+                return (false, $"القسط رقم {inst.InstallmentNumber} داخل راتب شهر {inst.DeductionMonth} المحسوب وغير المصروف — ارفض الراتب أو أعد حسابه أولًا");
+        }
+        totalAlloc = Math.Round(totalAlloc, 2);
+
+        if (totalAlloc > paymentAmount)
+            return (false, $"إجمالي المخصص للأقساط ({totalAlloc:N2} جـ) أكبر من قيمة الدفعة ({paymentAmount:N2} جـ)");
+
+        var cashAmount = paymentAmount - totalAlloc;
+
+        var balance = await GetCashBalanceAsync(cashBoxId);
+        if (balance < cashAmount)
+            return (false, $"رصيد الخزينة ({balance:N2} جـ) أقل من المطلوب للصرف النقدي ({cashAmount:N2} جـ)");
+
+        using var tx = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            // 1) حركة الصرف النقدي (صافي الدفعة بعد المقاصة) — لو الصافي صفر مفيش حركة
+            if (cashAmount > 0)
+            {
+                var salaryTx = new CashboxTransaction
+                {
+                    CashBoxId       = cashBoxId,
+                    TransactionType = "صرف",
+                    ReferenceType   = CashBoxRefTypes.Payroll,
+                    ReferenceId     = p.PayrollId,
+                    Amount          = cashAmount,
+                    TransactionDate = DateTime.Now,
+                    Notes           = $"الدفعة خارج الراتب {p.Employee.FullName} - {p.PayrollMonth} (مقاصة أقساط سلف {totalAlloc:N2} جـ)",
+                    CreatedBy       = user,
+                    CreatedAt       = DateTime.Now
+                };
+                _db.CashboxTransactions.Add(salaryTx);
+                await _db.SaveChangesAsync();
+
+                p.CashboxTransactionId = salaryTx.CashboxTransactionId;
+                foreach (var d in separateDetails)
+                    d.CashboxTransactionID = salaryTx.CashboxTransactionId;
+            }
+
+            // 2) تخصيص الأقساط: كامل → PaidExternal · جزئي → تقسيم (مسدد + متبقي Pending)
+            var lastNumberByLoan = new Dictionary<int, int>();
+            foreach (var a in allocations)
+            {
+                var inst = installments.First(i => i.InstallmentId == a.InstallmentId);
+                var allocAmount = Math.Round(a.Amount, 2);
+                string allocNote = $"مقاصة مقابل الدفعة خارج الراتب رقم {p.PayrollId} ({p.PayrollMonth}) بواسطة {user}";
+
+                if (allocAmount == inst.Amount)
+                {
+                    inst.Status        = "PaidExternal";
+                    inst.DeductionDate = DateTime.Now;
+                    inst.Notes         = AppendLine(inst.Notes, allocNote);
+                }
+                else
+                {
+                    var remaining = inst.Amount - allocAmount;
+
+                    if (!lastNumberByLoan.TryGetValue(inst.LoanId, out var lastNumber))
+                    {
+                        lastNumber = await _db.LoanInstallments
+                            .Where(i => i.LoanId == inst.LoanId)
+                            .MaxAsync(i => (int?)i.InstallmentNumber) ?? 0;
+                    }
+                    lastNumberByLoan[inst.LoanId] = ++lastNumber;
+
+                    inst.Amount        = allocAmount;
+                    inst.Status        = "PaidExternal";
+                    inst.DeductionDate = DateTime.Now;
+                    inst.Notes         = AppendLine(inst.Notes, allocNote);
+
+                    _db.LoanInstallments.Add(new LoanInstallment
+                    {
+                        LoanId            = inst.LoanId,
+                        EmployeeId        = inst.EmployeeId,
+                        InstallmentNumber = lastNumber,
+                        Amount            = remaining,
+                        DeductionMonth    = inst.DeductionMonth,
+                        Status            = "Pending",
+                        Notes             = $"المتبقي بعد مقاصة جزئية من الدفعة خارج الراتب رقم {p.PayrollId} (قسط {inst.InstallmentNumber})",
+                        CreatedBy         = user,
+                        CreatedAt         = DateTime.Now
+                    });
+
+                    inst.Loan.TotalInstallments++;
+                }
+
+                inst.Loan.PaidInstallments++;
+                inst.Loan.RemainingAmount -= allocAmount;
+                inst.Loan.LastUpdatedAt    = DateTime.Now;
+
+                if (inst.Loan.RemainingAmount <= 0 || inst.Loan.PaidInstallments >= inst.Loan.TotalInstallments)
+                {
+                    inst.Loan.Status          = "Completed";
+                    inst.Loan.RemainingAmount = 0;
+                }
+            }
+
+            // 3) تعليم الدفعة كمدفوعة
+            p.PaymentStatus = PayrollPaymentStatuses.Paid;
+            p.PaymentDate   = DateTime.Now;
+            p.Notes         = AppendLine(p.Notes, $"[صرف: {user} - {DateTime.Now:yyyy-MM-dd HH:mm} | خزينة #{cashBoxId} | نقدي {cashAmount:N2} + مقاصة سلف {totalAlloc:N2}]");
+            await _db.SaveChangesAsync();
+
+            await UpdatePayrollRunStatusAsync(p.PayrollRunId);
+            await tx.CommitAsync();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            var inner = ex.InnerException?.Message ?? "";
+            return (false, $"خطأ أثناء صرف الدفعة: {ex.Message} | {inner}");
+        }
+
+        // Audit
+        await _audit.LogAsync("LoanInstallments", "OffPayrollAllocation", p.PayrollId.ToString(),
+            null,
+            new
+            {
+                p.EmployeeId,
+                p.PayrollMonth,
+                PaymentAmount  = paymentAmount,
+                Cash           = cashAmount,
+                LoanAllocation = totalAlloc,
+                Items          = allocations
+            },
+            user);
+
+        if (!string.IsNullOrWhiteSpace(p.CreatedBy))
+        {
+            await _notify.AddAsync("💸 تم الصرف",
+                $"تم صرف الدفعة خارج الراتب الخاصة بـ {p.Employee.FullName} لشهر {p.PayrollMonth} — نقدي {cashAmount:N2} جـ + مقاصة أقساط سلف {totalAlloc:N2} جـ",
+                p.CreatedBy, user, "frm_Payroll", "Payroll", p.PayrollId);
+        }
+
+        return (true, $"✅ تم صرف الدفعة لـ {p.Employee.FullName}: نقدي {cashAmount:N2} جـ + مقاصة أقساط سلف {totalAlloc:N2} جـ");
+    }
+
     public async Task<(bool Ok, string Msg)> ApprovePayrollAsync(int payrollId, string user)
     {
         var reviewer = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Username == user);

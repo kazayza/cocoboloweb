@@ -527,13 +527,11 @@ public class EmployeeLoanService : IEmployeeLoanService
             newMonth = targetMonth.Trim();
             if (!IsValidMonthFormat(newMonth))
                 return (false, "صيغة الشهر غير صحيحة — مثال: 2026-08");
-            if (string.CompareOrdinal(newMonth, inst.DeductionMonth) <= 0)
-                return (false, "شهر التأجيل يجب أن يكون بعد شهر القسط الحالي");
         }
 
-        // (12-H9) لا تأجيل لشهر ماضي
-        if (string.CompareOrdinal(newMonth, DateTime.Today.ToString("yyyy-MM")) < 0)
-            return (false, "لا يمكن التأجيل لشهر ماضي");
+        // (12-H11/د) الشهر الماضي مسموح — إلا لو راتبه مصروف أو محسوب
+        var monthBlock = await ValidateTargetMonthAsync(inst.EmployeeId, newMonth, inst.DeductionMonth, inst.Loan.StartDeductionMonth);
+        if (monthBlock != null) return (false, monthBlock);
 
         // (12-H9) حماية: القسط داخل راتب محسوب غير مصروف
         var block = await GetUnpaidPayrollBlockAsync(inst.EmployeeId, inst.DeductionMonth);
@@ -597,11 +595,11 @@ public class EmployeeLoanService : IEmployeeLoanService
             newMonth = targetMonth.Trim();
             if (!IsValidMonthFormat(newMonth))
                 return (false, "صيغة الشهر غير صحيحة — مثال: 2026-08");
-            if (string.CompareOrdinal(newMonth, inst.DeductionMonth) <= 0)
-                return (false, "شهر الترحيل يجب أن يكون بعد شهر القسط الحالي");
-            if (string.CompareOrdinal(newMonth, DateTime.Today.ToString("yyyy-MM")) < 0)
-                return (false, "لا يمكن الترحيل لشهر ماضي");
         }
+
+        // (12-H11/د) الشهر الماضي مسموح — إلا لو راتبه مصروف أو محسوب
+        var monthBlock = await ValidateTargetMonthAsync(inst.EmployeeId, newMonth, inst.DeductionMonth, inst.Loan.StartDeductionMonth);
+        if (monthBlock != null) return (false, monthBlock);
 
         // (12-H9) حماية: القسط داخل راتب محسوب غير مصروف
         var block = await GetUnpaidPayrollBlockAsync(inst.EmployeeId, inst.DeductionMonth);
@@ -879,8 +877,10 @@ public class EmployeeLoanService : IEmployeeLoanService
             var m = newMonth.Trim();
             if (!IsValidMonthFormat(m))
                 return (false, "صيغة الشهر غير صحيحة — مثال: 2026-08");
-            if (string.CompareOrdinal(m, DateTime.Today.ToString("yyyy-MM")) < 0)
-                return (false, "لا يمكن نقل القسط لشهر ماضي");
+
+            // (12-H11/د) الشهر الماضي مسموح — إلا لو راتبه مصروف أو محسوب
+            var monthBlock = await ValidateTargetMonthAsync(inst.EmployeeId, m, inst.DeductionMonth, inst.Loan.StartDeductionMonth);
+            if (monthBlock != null) return (false, monthBlock);
 
             // حماية: لو القسط داخل راتب محسوب غير مصروف
             var block = await GetUnpaidPayrollBlockAsync(inst.EmployeeId, inst.DeductionMonth);
@@ -1089,8 +1089,67 @@ public class EmployeeLoanService : IEmployeeLoanService
         && DateTime.TryParseExact(m.Trim() + "-01", "yyyy-MM-dd", null,
                System.Globalization.DateTimeStyles.None, out _);
 
+    // ============================================================
+    // (12-H11/ب) الأقساط المعلقة لموظف (سلف نشطة) — لمقاصة الدفعات خارج الراتب
+    // ============================================================
+    public async Task<List<InstallmentListDto>> GetPendingInstallmentsAsync(int employeeId)
+    {
+        return await _db.LoanInstallments.AsNoTracking()
+            .Where(i => i.EmployeeId == employeeId
+                     && i.Status == "Pending"
+                     && i.Loan.Status == "Active")
+            .OrderBy(i => i.DeductionMonth).ThenBy(i => i.InstallmentNumber)
+            .Select(i => new InstallmentListDto
+            {
+                InstallmentId     = i.InstallmentId,
+                LoanId            = i.LoanId,
+                InstallmentNumber = i.InstallmentNumber,
+                DeductionMonth    = i.DeductionMonth,
+                Amount            = i.Amount,
+                Status            = i.Status,
+                Notes             = i.Notes,
+                DeductionDate     = i.DeductionDate
+            })
+            .ToListAsync();
+    }
+
     private static string AppendNote(string? notes, string line) =>
         string.IsNullOrWhiteSpace(notes) ? line : $"{notes}\n{line}";
+
+    // ============================================================
+    // (12-H11/د) تحقق من شهر الهدف للنقل/الترحيل:
+    // الشهر الماضي مسموح — إلا لو راتب الشهر ده مصروف (القسط مش هيتخصم أبدًا)
+    // أو محسوب وغير مصروف (الصافي المحسوب مش شايف القسط — ارفضه/أعد حسابه أولًا)
+    // ============================================================
+    private async Task<string?> ValidateTargetMonthAsync(
+        int employeeId, string targetMonth, string currentInstMonth, string loanStartMonth)
+    {
+        if (targetMonth == currentInstMonth)
+            return "الشهر المختار هو نفس شهر القسط الحالي";
+
+        if (string.CompareOrdinal(targetMonth, loanStartMonth) < 0)
+            return $"لا يمكن نقل القسط لشهر قبل بداية خصم السلفة ({loanStartMonth})";
+
+        // سجلات الدفعات خارج الراتب ([OFFPAYROLL]) مش راتب شهري — مستثناة
+        var statuses = await _db.Payrolls.AsNoTracking()
+            .Where(p => p.EmployeeId == employeeId
+                     && p.PayrollMonth == targetMonth
+                     && (p.Notes == null || !p.Notes.Contains("[OFFPAYROLL]"))
+                     && p.PaymentStatus != PayrollPaymentStatuses.Cancelled
+                     && p.PaymentStatus != PayrollPaymentStatuses.Rejected)
+            .Select(p => p.PaymentStatus)
+            .ToListAsync();
+
+        if (statuses.Contains(PayrollPaymentStatuses.Paid))
+            return $"راتب شهر {targetMonth} تم صرفه بالفعل — القسط لن يُخصم أبدًا لو انتقل إليه";
+
+        if (statuses.Contains(PayrollPaymentStatuses.PendingReview)
+         || statuses.Contains(PayrollPaymentStatuses.Approved)
+         || statuses.Contains(PayrollPaymentStatuses.Unpaid))
+            return $"راتب شهر {targetMonth} محسوب وغير مصروف — ارفض الراتب أو أعد حسابه أولًا ثم انقل القسط";
+
+        return null;
+    }
 
     /// <summary>
     /// (12-H9) حماية من خصم مزدوج ضمني: لو القسط داخل راتب محسوب غير مصروف،
