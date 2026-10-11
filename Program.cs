@@ -10,6 +10,7 @@ using System.Security.Claims;
 using MudBlazor.Services;
 using ApexCharts;
 using COCOBOLOERPNEW.Helpers;
+using COCOBOLOERPNEW.Services.Assistant;
 using COCOBOLOERPNEW.Endpoints;
 using QuestPDF.Infrastructure;
 using System.Threading.RateLimiting;
@@ -116,6 +117,26 @@ builder.Services.AddOptions<CookieAuthenticationOptions>(CookieAuthenticationDef
 builder.Services.AddAuthorization();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient();
+
+// 🤖 زكي (المساعد الذكي) — الإعدادات + مزود Groq
+builder.Services.Configure<AssistantOptions>(builder.Configuration.GetSection("Assistant"));
+builder.Services.AddHttpClient<IAiProvider, GroqAiProvider>();
+builder.Services.AddScoped<ZakiToolExecutor>();
+builder.Services.AddScoped<ZakiAssistantService>();
+builder.Services.AddScoped<ZakiUserContext>();
+builder.Services.AddScoped<ZakiLogService>();
+builder.Services.AddScoped<ZakiEmployeeActivityService>();
+builder.Services.AddScoped<ZakiSalesDataService>();
+builder.Services.AddScoped<ZakiInventoryService>();
+builder.Services.AddScoped<ZakiCustomerCareService>();
+builder.Services.AddScoped<ZakiNotificationService>();
+builder.Services.AddScoped<ZakiSalesDocumentsService>();
+builder.Services.AddScoped<ZakiFinanceInvoicesService>();
+builder.Services.AddScoped<ZakiEmployeeTasksService>();
+builder.Services.AddScoped<ZakiApprovalsService>();
+builder.Services.AddScoped<ZakiHrService>();
+builder.Services.AddScoped<ZakiChatState>();
+builder.Services.AddHttpClient<ZakiVoiceService>();
 
 // ── Services ────────────────────────────────────────────────
 builder.Services.AddScoped<IProductService,           ProductService>();

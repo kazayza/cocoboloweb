@@ -26,6 +26,9 @@ public interface IAttendanceService
     // ═══════════════ بصمتي ═══════════════
     Task<List<AttendanceListDto>> GetMyAttendanceAsync(string userName, DateTime? month = null);
     Task<AttendanceStatisticsDto> GetMyStatisticsAsync(string userName, DateTime? month = null);
+
+    /// <summary>بيانات الموظف المرتبط بالمستخدم الحالي (لصفحة طلباتي)</summary>
+    Task<(int EmployeeId, string FullName)?> GetMyEmployeeInfoAsync(string userName);
     
     // ═══════════════ Dashboard ═══════════════
     Task<AttendanceDashboardDto> GetDashboardDataAsync(DateTime? dateFrom = null, DateTime? dateTo = null, int? branchId = null);

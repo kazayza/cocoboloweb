@@ -1,0 +1,526 @@
+@implements IDisposable
+
+@using COCOBOLOERPNEW.Services.Assistant
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Web
+@using System.Security.Claims
+
+@inject ZakiAssistantService ZakiService
+@inject ZakiChatState State
+@inject ZakiLogService LogService
+@inject ZakiVoiceService VoiceService
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+@inject ZakiNotificationService Notifs
+@inject NavigationManager Nav
+
+<div class="zk-panel @(Compact ? "zk-compact" : "")">
+
+    <!-- ═══ شريط السجل ═══ -->
+    <div class="zk-bar">
+        <button class="zk-chip @(State.HistoryOpen ? "zk-chip-on" : "")"
+                disabled="@State.IsBusy"
+                @onclick="ToggleHistoryAsync">
+            <MudIcon Icon="@Icons.Material.Filled.History" Size="Size.Small" Class="zk-chip-icon" />
+            <span>السجل</span>
+        </button>
+    </div>
+
+    @if (State.HistoryOpen)
+    {
+        <div class="zk-history">
+            @if (State.History.Count == 0)
+            {
+                <div class="zk-note">مفيش محادثات سابقة ليك لسه.</div>
+            }
+
+            @foreach (var h in State.History)
+            {
+                <button class="zk-history-item @(h.ConversationId == State.ConversationId ? "zk-history-current" : "")"
+                        disabled="@State.IsBusy"
+                        @onclick="() => OpenHistoryAsync(h.ConversationId)">
+                    <span class="zk-history-title">@(string.IsNullOrWhiteSpace(h.Title) ? "محادثة" : h.Title)</span>
+                    <span class="zk-history-date">@h.StartedAt.ToString("yyyy-MM-dd HH:mm")</span>
+                </button>
+            }
+        </div>
+    }
+
+    <!-- ═══ أسئلة سريعة ═══ -->
+    <div class="zk-suggest">
+        @foreach (var s in Compact ? _suggestions.Take(4) : _suggestions)
+        {
+            <button class="zk-chip" disabled="@State.IsBusy" @onclick="() => AskSuggestion(s.Text)">
+                <MudIcon Icon="@s.Icon" Size="Size.Small" Class="zk-chip-icon" />
+                <span>@s.Text</span>
+            </button>
+        }
+    </div>
+
+    <!-- ═══ المحادثة (من تحت لفوق: آخر رسالة دايماً ظاهرة) ═══ -->
+    <div class="zk-chat">
+
+        @if (State.IsBusy)
+        {
+            <div class="zk-row zk-row-bot">
+                <div class="zk-bot-avatar">
+                    <MudIcon Icon="@Icons.Material.Filled.SmartToy" Size="Size.Small" />
+                </div>
+                <div class="zk-typing">
+                    <span></span><span></span><span></span>
+                </div>
+            </div>
+        }
+
+        @for (int i = State.Items.Count - 1; i >= 0; i--)
+        {
+            var item = State.Items[i];
+
+            @if (item.IsUser)
+            {
+                <div class="zk-row zk-row-user">
+                    <div class="zk-bubble">@item.Text</div>
+                </div>
+            }
+            else
+            {
+                <div class="zk-row zk-row-bot">
+                    <div class="zk-bot-avatar">
+                        <MudIcon Icon="@Icons.Material.Filled.SmartToy" Size="Size.Small" />
+                    </div>
+                    <div class="zk-bot-body">
+
+                        <div class="zk-bubble @(item.Ok ? "" : "zk-bubble-error")">@item.Text</div>
+
+                        @if (item.Tools.Count > 0)
+                        {
+                            <div class="zk-tools">
+                                @foreach (var tool in item.Tools)
+                                {
+                                    <span class="zk-tool">
+                                        <MudIcon Icon="@ToolIcon(tool)" Size="Size.Small" Class="zk-tool-icon" />
+                                        @ToolLabel(tool)
+                                    </span>
+                                }
+                            </div>
+                        }
+
+                        @foreach (var t in item.Tables)
+                        {
+                            <div class="zk-table-card">
+                                <div class="zk-table-head">
+                                    <span class="zk-table-title">@t.Title</span>
+                                    <button class="zk-export" @onclick="() => ExportExcelAsync(t)">
+                                        <MudIcon Icon="@Icons.Material.Filled.Download" Size="Size.Small" />
+                                        تصدير Excel
+                                    </button>
+                                </div>
+                                <div class="zk-table-scroll">
+                                    <table class="zk-table">
+                                        <thead>
+                                            <tr>
+                                                @foreach (var h in t.Headers)
+                                                {
+                                                    <th>@h</th>
+                                                }
+                                                @if (t.RowLinks != null)
+                                                {
+                                                    <th></th>
+                                                }
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @for (int ri = 0; ri < t.Rows.Count; ri++)
+                                            {
+                                                var row = t.Rows[ri];
+                                                var link = (t.RowLinks != null && ri < t.RowLinks.Count) ? t.RowLinks[ri] : null;
+                                                <tr>
+                                                    @foreach (var cell in row)
+                                                    {
+                                                        <td>@cell</td>
+                                                    }
+                                                    @if (t.RowLinks != null)
+                                                    {
+                                                        <td>
+                                                            @if (link != null)
+                                                            {
+                                                                <button class="zk-open" @onclick="() => OpenLinkAsync(link)">فتح</button>
+                                                            }
+                                                        </td>
+                                                    }
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        }
+
+                        @if (item.Tokens > 0)
+                        {
+                            <div class="zk-meta">التوكنز: @item.Tokens</div>
+                        }
+                    </div>
+                </div>
+            }
+        }
+
+        @if (State.Items.Count == 0)
+        {
+            <div class="zk-empty">
+                <div class="zk-empty-icon">
+                    <MudIcon Icon="@Icons.Material.Filled.Forum" Size="Size.Large" />
+                </div>
+                <div class="zk-empty-title">اسأل زكي عن شغلك أو عن أي حاجة</div>
+                <div class="zk-empty-sub">اكتب سؤالك، أو اضغط الميكروفون واتكلم</div>
+            </div>
+        }
+    </div>
+
+    <!-- ═══ شريط الكتابة ═══ -->
+    <div class="zk-input">
+        <MudTextField @bind-Value="_question"
+                      Placeholder="اكتب سؤالك لزكي..."
+                      Variant="Variant.Text"
+                      DisableUnderLine="true"
+                      Immediate="true"
+                      Disabled="@State.IsBusy"
+                      OnKeyDown="HandleKey"
+                      Class="zk-input-field" />
+
+        <MudIconButton Icon="@(_recording ? Icons.Material.Filled.Stop : Icons.Material.Filled.Mic)"
+                       Class="@(_recording ? "zk-mic zk-mic-rec" : "zk-mic")"
+                       Variant="Variant.Text"
+                       OnClick="ToggleVoiceAsync"
+                       Disabled="@(State.IsBusy || _transcribing)" />
+
+        <MudIconButton Icon="@Icons.Material.Filled.Send"
+                       Variant="Variant.Filled"
+                       Class="zk-send"
+                       OnClick="SendAsync"
+                       Disabled="@(State.IsBusy || _recording || string.IsNullOrWhiteSpace(_question))" />
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_voiceStatus))
+    {
+        <div class="zk-note">@_voiceStatus</div>
+    }
+
+    <div class="zk-note">لا تكتب بيانات عملاء حساسة في الأسئلة العامة.</div>
+</div>
+
+@code {
+    /// <summary>وضع النافذة الصغيرة (الزر العائم)</summary>
+    [Parameter] public bool Compact { get; set; }
+
+    private sealed record Suggestion(string Text, string Icon);
+
+    private readonly Suggestion[] _suggestions =
+    {
+        new("عندي كام فرصة مفتوحة؟", Icons.Material.Filled.TrendingUp),
+        new("المهام المتأخرة عندي", Icons.Material.Filled.AlarmOn),
+        new("اعرض ملخص أرقامي", Icons.Material.Filled.Dashboard),
+        new("ملخص العملاء المحتملين", Icons.Material.Filled.PersonSearch),
+        new("مؤشرات التسويق للشهر ده", Icons.Material.Filled.Campaign),
+        new("المؤشرات التنفيذية للشهر ده", Icons.Material.Filled.AccountBalance)
+    };
+
+    private string _question = "";
+    private string? _userName;
+    private bool _recording;
+    private bool _transcribing;
+    private string? _voiceStatus;
+    private ClaimsPrincipal? _user;
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnStateChanged;
+
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        _userName = auth.User.Identity?.Name ?? "";
+        _user = auth.User;
+
+        // بيحمّل آخر محادثة من قاعدة البيانات (مرة واحدة بس)
+        await State.EnsureLoadedAsync(LogService, _userName);
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => State.Changed -= OnStateChanged;
+
+    private Task AskSuggestion(string text)
+    {
+        _question = text;
+        return SendAsync();
+    }
+
+    private async Task HandleKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await SendAsync();
+    }
+
+    private async Task SendAsync()
+    {
+        var question = _question.Trim();
+        if (State.IsBusy || _recording || question.Length == 0)
+            return;
+
+        var history = BuildHistory();
+        State.Items.Add(new ZakiChatItem { IsUser = true, Text = question });
+        _question = "";
+        State.SetBusy(true);
+
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var result = await ZakiService.AskAsync(auth.User, question, State.ConversationId, history);
+        State.ConversationId = result.ConversationId ?? State.ConversationId;
+
+        State.Items.Add(new ZakiChatItem
+        {
+            IsUser = false,
+            Text = result.Text,
+            Ok = result.Success,
+            Tokens = result.TotalTokens,
+            Tools = result.ToolsUsed.ToList(),
+            Tables = result.Tables.ToList()
+        });
+
+        State.SetBusy(false);
+    }
+
+    /// <summary>آخر رسائل المحادثة الناجحة (سؤال/رد بس، من غير الجداول)</summary>
+    private List<AiMessage> BuildHistory() =>
+        State.Items
+            .Where(i => i.Ok && !string.IsNullOrWhiteSpace(i.Text))
+            .TakeLast(6)
+            .Select(i => new AiMessage(i.IsUser ? "user" : "assistant", i.Text))
+            .ToList();
+
+    // ════════════════════════════════════════════════════════════
+    // الميكروفون
+    // ════════════════════════════════════════════════════════════
+    private async Task ToggleVoiceAsync()
+    {
+        if (_recording)
+            await StopVoiceAsync();
+        else
+            await StartVoiceAsync();
+    }
+
+    private async Task StartVoiceAsync()
+    {
+        _voiceStatus = null;
+
+        string reason;
+        try
+        {
+            // بيرجّع "" لو نجح، أو كود بيوضح السبب
+            reason = await JS.InvokeAsync<string>("zakiVoice.start");
+        }
+        catch (Exception)
+        {
+            reason = "other";
+        }
+
+        if (string.IsNullOrEmpty(reason))
+        {
+            _recording = true;
+            _voiceStatus = "جاري التسجيل. اضغط الزر الأحمر للإيقاف.";
+            return;
+        }
+
+        _recording = false;
+        _voiceStatus = MicErrorText(reason);
+    }
+
+    private static string MicErrorText(string reason) => reason switch
+    {
+        "insecure" => "الميكروفون مابيشتغلش على الرابط ده. افتح زكي من http://localhost (نفس البورت) أو من رابط https.",
+        "nosupport" => "المتصفح ده مابيدعمش تسجيل الصوت. جرّب Chrome أو Edge.",
+        "denied" => "الميكروفون متقفل للموقع. اضغط على أيقونة القفل جنب العنوان، اسمح بالميكروفون، وحدّث الصفحة.",
+        "notfound" => "مالقيتش ميكروفون متوصل بالجهاز.",
+        "busy" => "الميكروفون شغال في برنامج تاني. قفله وجرّب تاني.",
+        _ => "ماقدرتش أفتح الميكروفون. حاول تاني."
+    };
+
+    // ════════════════════════════════════════════════════════════
+    // فتح إشعار من الجدول (بيعلّمه مقروء ويفتح الصفحة)
+    // ════════════════════════════════════════════════════════════
+    private async Task OpenLinkAsync(ZakiRowLink link)
+    {
+        if (_user is null) return;
+
+        var ok = await Notifs.MarkAsReadAsync(link.NotificationId, _user);
+        if (!ok)
+        {
+            _voiceStatus = "الإشعار ده مش متاح ليك دلوقتي.";
+            return;
+        }
+
+        var targetPath = Nav.ToAbsoluteUri(link.Url).AbsolutePath;
+        var currentPath = new Uri(Nav.Uri).AbsolutePath;
+        var samePage = string.Equals(currentPath, targetPath, StringComparison.OrdinalIgnoreCase);
+
+        State.SetMiniOpen(false);
+        Nav.NavigateTo(link.Url, forceLoad: samePage);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // السجل
+    // ════════════════════════════════════════════════════════════
+    private async Task ToggleHistoryAsync()
+    {
+        if (State.HistoryOpen)
+        {
+            State.SetHistoryOpen(false);
+            return;
+        }
+
+        // بنحدّث القائمة الأول، وبعدين نفتحها (عشان ما يظهرش "فاضي" لحظة)
+        await State.RefreshHistoryAsync(LogService, _userName ?? "");
+        State.SetHistoryOpen(true);
+    }
+
+    private async Task OpenHistoryAsync(long conversationId)
+    {
+        if (State.IsBusy) return;
+        _voiceStatus = null;
+        await State.OpenConversationAsync(LogService, _userName ?? "", conversationId);
+    }
+
+    private async Task StopVoiceAsync()
+    {
+        _recording = false;
+        _transcribing = true;
+        _voiceStatus = "جاري تحويل الصوت لنص...";
+
+        try
+        {
+            var clip = await JS.InvokeAsync<ZakiVoiceClip>("zakiVoice.stop");
+            var bytes = Convert.FromBase64String(clip.Data ?? "");
+
+            var mime = (clip.Mime ?? "audio/webm").Split(';')[0];
+            var fileName = mime.Contains("mp4") ? "voice.mp4"
+                         : mime.Contains("ogg") ? "voice.ogg"
+                         : "voice.webm";
+
+            var result = await VoiceService.TranscribeAsync(bytes, fileName, mime);
+
+            if (result.Success)
+            {
+                _question = string.IsNullOrWhiteSpace(_question) ? result.Text : _question + " " + result.Text;
+                _voiceStatus = null;
+            }
+            else
+            {
+                _voiceStatus = result.ErrorMessage;
+            }
+        }
+        catch (Exception)
+        {
+            _voiceStatus = "حصل خطأ أثناء تسجيل الصوت. حاول تاني.";
+        }
+        finally
+        {
+            _transcribing = false;
+        }
+    }
+
+    /// <summary>تنزيل الجدول كملف Excel</summary>
+    private async Task ExportExcelAsync(ZakiTable table)
+    {
+        var base64 = ZakiExcelExporter.ToBase64(table);
+        var fileName = ZakiExcelExporter.SafeFileName(table.Title) + ".xlsx";
+        await JS.InvokeVoidAsync("downloadFileFromBase64", base64, fileName);
+    }
+
+    private static string ToolLabel(string name) => name switch
+    {
+        "get_open_opportunities" => "الفرص المفتوحة",
+        "get_open_tasks" => "المهام المفتوحة",
+        "get_overdue_tasks" => "المهام المتأخرة",
+        "get_crm_summary" => "ملخص CRM",
+        "get_recent_interactions" => "التواصلات",
+        "get_leads" => "العملاء المحتملين",
+        "get_marketing_summary" => "التسويق",
+        "get_executive_summary" => "المؤشرات التنفيذية",
+        "get_employee_activity" => "نشاط الموظف",
+        "get_product_stock" => "رصيد الصنف",
+        "get_stock_movements" => "حركات المخزون",
+        "get_stock_value" => "قيمة المخزون",
+        "get_open_complaints" => "الشكاوى المفتوحة",
+        "get_customer_care_summary" => "خدمة العملاء",
+        "get_unread_notifications" => "الإشعارات",
+        "get_sales_invoices_summary" => "ملخص الفواتير",
+        "get_open_sales_invoices" => "الفواتير المفتوحة",
+        "get_open_quotations" => "عروض الأسعار",
+        "get_largest_sales_invoices" => "أعلى الفواتير",
+        "get_undelivered_sales_invoices" => "فواتير لم تُسلَّم",
+        "get_top_customers" => "أعلى العملاء",
+        "get_top_products" => "أعلى المنتجات",
+        "get_sales_breakdown" => "تفصيل المبيعات",
+        "get_sales_invoice_details" => "تفاصيل فاتورة",
+        "get_customer_invoices" => "فواتير عميل",
+        "get_purchase_invoices_summary" => "ملخص المشتريات",
+        "get_open_purchase_invoices" => "مستحقات الموردين",
+        "get_purchase_invoice_details" => "تفاصيل فاتورة شراء",
+        "get_payments_summary" => "المدفوعات",
+        "get_employee_tasks" => "مهام موظف",
+        "get_invoice_edit_history" => "سجل تعديلات الفاتورة",
+        "get_pending_invoice_edit_requests" => "طلبات التعديل المعلقة",
+        "get_price_change_requests" => "طلبات تعديل الأسعار",
+        "get_pending_delivery_permissions" => "إذن التسليم المعلق",
+        "get_attendance_today" => "الحضور اليوم",
+        "get_employee_attendance" => "حضور موظف",
+        "get_employees_overview" => "الموظفين",
+        "get_exemptions" => "الاستثناءات والإذونات",
+        "get_my_schedule" => "شيفتاتي",
+        "get_sales_by_employee" => "ترتيب البائعين",
+        _ => name
+    };
+
+    private static string ToolIcon(string name) => name switch
+    {
+        "get_open_opportunities" => Icons.Material.Filled.TrendingUp,
+        "get_open_tasks" => Icons.Material.Filled.Checklist,
+        "get_overdue_tasks" => Icons.Material.Filled.AlarmOn,
+        "get_crm_summary" => Icons.Material.Filled.Dashboard,
+        "get_recent_interactions" => Icons.Material.Filled.Forum,
+        "get_leads" => Icons.Material.Filled.PersonSearch,
+        "get_marketing_summary" => Icons.Material.Filled.Campaign,
+        "get_executive_summary" => Icons.Material.Filled.AccountBalance,
+        "get_employee_activity" => Icons.Material.Filled.Insights,
+        "get_product_stock" => Icons.Material.Filled.Inventory2,
+        "get_stock_movements" => Icons.Material.Filled.SwapHoriz,
+        "get_stock_value" => Icons.Material.Filled.Paid,
+        "get_open_complaints" => Icons.Material.Filled.SupportAgent,
+        "get_customer_care_summary" => Icons.Material.Filled.Call,
+        "get_unread_notifications" => Icons.Material.Filled.Notifications,
+        "get_sales_invoices_summary" => Icons.Material.Filled.Receipt,
+        "get_open_sales_invoices" => Icons.Material.Filled.Receipt,
+        "get_open_quotations" => Icons.Material.Filled.Description,
+        "get_largest_sales_invoices" => Icons.Material.Filled.EmojiEvents,
+        "get_sales_by_employee" => Icons.Material.Filled.Leaderboard,
+        "get_undelivered_sales_invoices" => Icons.Material.Filled.LocalShipping,
+        "get_top_customers" => Icons.Material.Filled.Groups,
+        "get_top_products" => Icons.Material.Filled.Inventory2,
+        "get_sales_breakdown" => Icons.Material.Filled.PieChart,
+        "get_sales_invoice_details" => Icons.Material.Filled.ReceiptLong,
+        "get_customer_invoices" => Icons.Material.Filled.PersonSearch,
+        "get_purchase_invoices_summary" => Icons.Material.Filled.ShoppingCart,
+        "get_open_purchase_invoices" => Icons.Material.Filled.Money,
+        "get_purchase_invoice_details" => Icons.Material.Filled.ReceiptLong,
+        "get_payments_summary" => Icons.Material.Filled.Payments,
+        "get_employee_tasks" => Icons.Material.Filled.Assignment,
+        "get_invoice_edit_history" => Icons.Material.Filled.History,
+        "get_pending_invoice_edit_requests" => Icons.Material.Filled.EditNote,
+        "get_price_change_requests" => Icons.Material.Filled.LocalOffer,
+        "get_pending_delivery_permissions" => Icons.Material.Filled.LocalShipping,
+        "get_attendance_today" => Icons.Material.Filled.HowToReg,
+        "get_employee_attendance" => Icons.Material.Filled.EventAvailable,
+        "get_employees_overview" => Icons.Material.Filled.Badge,
+        "get_exemptions" => Icons.Material.Filled.EventBusy,
+        "get_my_schedule" => Icons.Material.Filled.Schedule,
+        _ => Icons.Material.Filled.Hub
+    };
+}

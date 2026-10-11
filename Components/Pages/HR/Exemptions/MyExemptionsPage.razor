@@ -1,0 +1,436 @@
+@page "/my-exemptions"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@attribute [Authorize]
+
+@inject IAttendanceService AttendanceService
+@inject AuthenticationStateProvider AuthState
+@inject ISnackbar Snackbar
+
+<PageTitle>طلباتي</PageTitle>
+
+<div dir="rtl" class="mxr-page">
+    <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4">
+
+        @if (_loading)
+        {
+            <div class="d-flex justify-center py-12"><MudProgressCircular Indeterminate="true" Color="Color.Primary" /></div>
+        }
+        else if (_noEmployee)
+        {
+            <MudPaper Class="pa-8 text-center" Elevation="2" Style="border-radius:20px;">
+                <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Style="font-size:56px;" />
+                <MudText Typo="Typo.h5" Class="mt-3 mb-2" Style="font-weight:800;">حسابك غير مربوط بسجل موظف</MudText>
+                <MudText Typo="Typo.body1" Color="Color.Secondary">
+                    لا يمكن تقديم طلبات إذن أو مأمورية حتى يتم ربط المستخدم الخاص بك بسجل موظف - راجع مدير الموارد البشرية.
+                </MudText>
+            </MudPaper>
+        }
+        else
+        {
+            @* ═══ HERO ═══ *@
+            <div class="mxr-hero mb-4">
+                <div class="mxr-hero__glow mxr-glow1"></div>
+                <div class="mxr-hero__glow mxr-glow2"></div>
+                <div class="mxr-hero__content">
+                    <div class="d-flex align-center gap-3">
+                        <div class="mxr-hero__avatar">
+                            <MudIcon Icon="@Icons.Material.Filled.HowToReg" Size="Size.Large" />
+                        </div>
+                        <div>
+                            <div class="mxr-hero__titlerow">
+                                <MudText Typo="Typo.h5" Class="font-weight-bold">طلباتي</MudText>
+                                <span class="mxr-hero__tag">إذن / مأمورية</span>
+                            </div>
+                            <MudText Typo="Typo.body2" Style="opacity:.85">
+                                مرحبًا @_myName — قدّم طلبك ويصل إشعار فوري للإدارة، ويصلك إشعار عند الاعتماد أو الرفض
+                            </MudText>
+                        </div>
+                    </div>
+                    <MudButton Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="OpenCreateDialog" type="button" Class="mxr-btn-gold">
+                        <span class="mxr-shine"></span>طلب جديد
+                    </MudButton>
+                </div>
+            </div>
+
+            @* ═══ كروت الحالات (فلاتر سريعة) ═══ *@
+            <MudGrid Spacing="2" Class="mb-3">
+                <MudItem xs="12" sm="4">
+                    <div class="mxr-kpi @(_statusFilter == ExemptionStatus.Pending ? "mxr-kpi--active" : "")"
+                         @onclick='() => FilterByStatus(ExemptionStatus.Pending)'>
+                        <div class="mxr-kpi__ic" style="color:#F59E0B"><MudIcon Icon="@Icons.Material.Filled.HourglassTop" /></div>
+                        <div>
+                            <div class="mxr-kpi__v" style="color:#F59E0B">@_pendingCount</div>
+                            <div class="mxr-kpi__l">قيد الاعتماد</div>
+                        </div>
+                    </div>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <div class="mxr-kpi @(_statusFilter == ExemptionStatus.Approved ? "mxr-kpi--active" : "")"
+                         @onclick='() => FilterByStatus(ExemptionStatus.Approved)'>
+                        <div class="mxr-kpi__ic" style="color:#10B981"><MudIcon Icon="@Icons.Material.Filled.CheckCircle" /></div>
+                        <div>
+                            <div class="mxr-kpi__v" style="color:#10B981">@_approvedCount</div>
+                            <div class="mxr-kpi__l">معتمد</div>
+                        </div>
+                    </div>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <div class="mxr-kpi @(_statusFilter == ExemptionStatus.Rejected ? "mxr-kpi--active" : "")"
+                         @onclick='() => FilterByStatus(ExemptionStatus.Rejected)'>
+                        <div class="mxr-kpi__ic" style="color:#EF4444"><MudIcon Icon="@Icons.Material.Filled.Cancel" /></div>
+                        <div>
+                            <div class="mxr-kpi__v" style="color:#EF4444">@_rejectedCount</div>
+                            <div class="mxr-kpi__l">مرفوض</div>
+                        </div>
+                    </div>
+                </MudItem>
+            </MudGrid>
+
+            @* ═══ جدول طلباتي ═══ *@
+            <div class="mxr-table-shell">
+                <MudTable Items="_filtered" Hover="true" Elevation="0" Dense="true">
+                    <ToolBarContent>
+                        <div class="d-flex align-center justify-space-between w-100 flex-wrap" style="gap:8px;">
+                            <MudText Typo="Typo.h6" Style="font-weight:600;">سجل الطلبات</MudText>
+                            @if (!string.IsNullOrEmpty(_statusFilter))
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined"
+                                         OnClick="() => FilterByStatus(null)">
+                                    @_filtered.Count من @_items.Count - إزالة الفلتر
+                                </MudChip>
+                            }
+                        </div>
+                    </ToolBarContent>
+                    <HeaderContent>
+                        <MudTh>التاريخ</MudTh>
+                        <MudTh>النوع</MudTh>
+                        <MudTh>المدة</MudTh>
+                        <MudTh>الخصم</MudTh>
+                        <MudTh>الحالة</MudTh>
+                        <MudTh>الوصف / الملاحظات</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="item">
+                        <MudTd DataLabel="التاريخ">
+                            <div style="font-weight:600;">@item.DateDisplay</div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@item.DayName</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="النوع">
+                            <MudChip T="string" Color="@GetReasonColor(item.ReasonCode)" Size="Size.Small" Variant="Variant.Outlined">@item.ReasonCode</MudChip>
+                        </MudTd>
+                        <MudTd DataLabel="المدة">@item.DurationDisplay</MudTd>
+                        <MudTd DataLabel="الخصم">
+                            <span style="color:@item.DeductionColor;font-weight:600;">@item.DeductionDisplay</span>
+                        </MudTd>
+                        <MudTd DataLabel="الحالة">
+                            <MudChip T="string" Color="@GetStatusColor(item.Status)" Size="Size.Small">@item.StatusAr</MudChip>
+                            @if (!string.IsNullOrWhiteSpace(item.ApprovedBy))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">بواسطة @item.ApprovedBy</MudText>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="الوصف">
+                            @(string.IsNullOrWhiteSpace(item.Description) ? "-" : item.Description)
+                        </MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Align="Align.Center" Class="py-6" Color="Color.Secondary">
+                            @(string.IsNullOrEmpty(_statusFilter)
+                                ? "لا توجد طلبات بعد - اضغط «طلب جديد» لتقديم إذن أو مأمورية"
+                                : "لا توجد طلبات بهذه الحالة")
+                        </MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            </div>
+        }
+    </MudContainer>
+</div>
+
+@* ═══ دايلوج طلب جديد ═══ *@
+<MudDialog @bind-Visible="_dlgOpen">
+    <DialogContent>
+        <div class="mxr-dlg-head">
+            <div class="mxr-dlg-head__ic"><MudIcon Icon="@Icons.Material.Filled.HowToReg" /></div>
+            <div>
+                <MudText Typo="Typo.h6" Style="font-weight:800;">طلب إذن / مأمورية جديد</MudText>
+                <MudText Typo="Typo.caption" Style="opacity:.8;">يُرسل للإدارة للاعتماد — ويصلك إشعار بالقرار</MudText>
+            </div>
+        </div>
+        <MudGrid Spacing="2">
+            <MudItem xs="12" sm="6">
+                <MudDatePicker Label="التاريخ" Date="_req.Date" DateChanged="OnReqDateChanged" Editable="false" Required="true" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="string" Label="نوع الطلب" Value="_req.Reason" ValueChanged="OnReasonChanged" Required="true">
+                    @foreach (var sg in ExemptionReasonCodes.Suggestions)
+                    {
+                        <MudSelectItem T="string" Value="@sg">@sg</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudSwitch T="bool" Label="يوم كامل" @bind-Checked="_req.IsFullDay" Color="Color.Primary"
+                           Disabled="@_isHourly" HelperText="@(_isHourly ? "بالساعات" : null)" />
+            </MudItem>
+            @if (!_req.IsFullDay)
+            {
+                <MudItem xs="12" sm="4">
+                    <MudNumericField T="decimal?" Label="عدد الساعات" @bind-Value="_req.Hours" Min="0.5m" Max="12m" Step="0.5m" />
+                </MudItem>
+            }
+            <MudItem xs="12">
+                <MudTextField T="string" Label="الوصف / التفاصيل (اختياري)" @bind-Value="_req.Description" Lines="2" />
+            </MudItem>
+        </MudGrid>
+
+        @if (!string.IsNullOrWhiteSpace(_req.Reason))
+        {
+            <MudAlert Severity="@(ExemptionReasonCodes.DefaultIsDeducted(_req.Reason) ? Severity.Error : Severity.Success)" Class="mt-3">
+                @if (ExemptionReasonCodes.IsErrandType(_req.Reason))
+                {
+                    <text>مأمورية / مهمة رسمية - لا يُخصم من الراتب (يُعامل حضور)</text>
+                }
+                else if (ExemptionReasonCodes.IsEarlyLeaveType(_req.Reason))
+                {
+                    <text>انصراف مبكر - لا يُخصم من الراتب (تسجيل فقط)</text>
+                }
+                else
+                {
+                    <text>إذن شخصي - يُخصم من الراتب</text>
+                }
+            </MudAlert>
+        }
+
+        <div class="mxr-confirm">
+            <MudIcon Icon="@Icons.Material.Filled.EventNote" Size="Size.Small" Style="color:#D4A853;" />
+            <MudText Typo="Typo.body2">
+                سيُسجل الطلب بتاريخ: <b>@(_req.Date?.ToString("yyyy/MM/dd"))</b>
+                (@(_req.Date?.ToString("dddd", new System.Globalization.CultureInfo("ar-EG"))))
+                @if (!_req.IsFullDay && _req.Hours.HasValue)
+                {
+                    <text>- لمدة <b>@_req.Hours</b> ساعة</text>
+                }
+            </MudText>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" OnClick="SubmitRequest" Disabled="@_saving" type="button" Class="mxr-btn-gold">
+            @if (_saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            <span class="mxr-shine"></span>إرسال الطلب
+        </MudButton>
+        <MudButton OnClick="() => _dlgOpen = false" type="button">إلغاء</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    /* ═══ HERO — Navy/Gold · نفس الهوية في الوضعين ═══ */
+    .mxr-page { min-height: 60vh; }
+    .mxr-hero { position: relative; border-radius: 20px; overflow: hidden; background: linear-gradient(135deg, #070D1A 0%, #1B2A4A 45%, #2D4A7A 100%); color: #fff; box-shadow: 0 12px 32px rgba(15,26,46,.28); }
+    .mxr-hero__glow { position: absolute; border-radius: 50%; pointer-events: none; }
+    .mxr-glow1 { width: 340px; height: 340px; top: -150px; left: -80px; background: radial-gradient(circle, rgba(212,168,83,.30), transparent 60%); animation: mxrFloat 9s ease-in-out infinite; }
+    .mxr-glow2 { width: 240px; height: 240px; bottom: -110px; right: 8%; background: radial-gradient(circle, rgba(212,168,83,.14), transparent 60%); }
+    .mxr-hero__content { position: relative; z-index: 2; padding: 1.4rem 1.6rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .mxr-hero__avatar { width: 56px; height: 56px; border-radius: 18px; background: linear-gradient(135deg, #D4A853, #B8912A); display: flex; align-items: center; justify-content: center; color: #0F1D36; box-shadow: 0 8px 24px rgba(212,168,83,.35); flex: 0 0 auto; }
+    .mxr-hero__titlerow { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+    .mxr-hero__tag { display: inline-flex; align-items: center; padding: .2rem .7rem; background: linear-gradient(135deg, #D4A853, #B8912A); color: #0F1D36; font-size: .68rem; font-weight: 800; border-radius: 14px; }
+    @@keyframes mxrFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
+    @@keyframes mxrShine { 0% { transform: translateX(-140px); } 55%,100% { transform: translateX(340px); } }
+
+    /* ═══ الأزرار الذهبية بلمعة ═══ */
+    .mxr-btn-gold { background: linear-gradient(135deg, #D4A853, #B8912A) !important; color: #0F1D36 !important; font-weight: 700 !important; border-radius: 12px !important; position: relative; overflow: hidden; box-shadow: 0 8px 20px rgba(212,168,83,.30) !important; text-transform: none !important; }
+    .mxr-btn-gold:hover { box-shadow: 0 10px 26px rgba(212,168,83,.42) !important; }
+    .mxr-shine { position: absolute; top: 0; bottom: 0; width: 60px; background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent); transform: translateX(-140px); animation: mxrShine 3.2s ease-in-out infinite; pointer-events: none; }
+
+    /* ═══ كروت الحالات — تتبع الثيم · اللون في الأيقونة والرقم فقط ═══ */
+    .mxr-kpi { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: 14px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: .15s; box-shadow: 0 1px 3px rgba(15,26,46,.05); height: 100%; }
+    .mxr-kpi:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(15,26,46,.12); }
+    .mxr-kpi--active { border-color: #D4A853; box-shadow: 0 0 0 2px rgba(212,168,83,.25); }
+    .mxr-kpi__ic { width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+    .mxr-kpi__v { font-size: 19px; font-weight: 900; line-height: 1.1; }
+    .mxr-kpi__l { font-size: 11.5px; color: var(--mud-palette-text-secondary); font-weight: 700; }
+
+    /* ═══ الجدول ═══ */
+    .mxr-table-shell { border: 1px solid var(--mud-palette-divider); border-radius: 14px; overflow: hidden; background: var(--mud-palette-surface); }
+
+    /* ═══ الدايلوج ═══ */
+    .mxr-dlg-head { position: relative; overflow: hidden; background: linear-gradient(135deg, #070D1A, #1B2A4A 60%, #2D4A7A); color: #fff; border-radius: 14px; padding: .9rem 1.1rem; display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .mxr-dlg-head__ic { width: 42px; height: 42px; border-radius: 12px; background: linear-gradient(135deg, #D4A853, #B8912A); display: flex; align-items: center; justify-content: center; color: #0F1D36; flex: 0 0 auto; }
+
+    /* ═══ سطر التأكيد — ذهبية شفافة تناسب الوضعين ═══ */
+    .mxr-confirm { background: rgba(212,168,83,.10); border: 1px solid rgba(212,168,83,.40); border-radius: 12px; padding: 10px 14px; margin-top: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .mxr-confirm b { color: #B8912A; }
+
+    @@media (max-width: 600px) {
+        .mxr-hero__content { padding: 1.1rem 1.2rem; }
+        .mxr-hero__avatar { width: 46px; height: 46px; }
+    }
+</style>
+
+@code {
+    private string _userName = "";
+    private string _myName = "";
+    private (int EmployeeId, string FullName)? _me;
+    private bool _noEmployee;
+    private bool _loading = true;
+    private List<ExemptionListDto> _items = new();
+    private ReqForm _req = new();
+    private bool _dlgOpen;
+    private bool _saving;
+    private string? _statusFilter;
+
+    private int _pendingCount => _items.Count(i => i.IsPendingStatus);
+    private int _approvedCount => _items.Count(i => i.IsApprovedStatus);
+    private int _rejectedCount => _items.Count(i => i.IsRejectedStatus);
+
+    private List<ExemptionListDto> _filtered =>
+        string.IsNullOrEmpty(_statusFilter) ? _items : _items.Where(i => i.Status == _statusFilter).ToList();
+
+    private void FilterByStatus(string? status)
+    {
+        _statusFilter = _statusFilter == status ? null : status;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        _userName = authState.User.Identity?.Name ?? "";
+
+        _me = await AttendanceService.GetMyEmployeeInfoAsync(_userName);
+        if (_me == null)
+        {
+            _noEmployee = true;
+            _loading = false;
+            return;
+        }
+
+        _myName = _me.Value.FullName;
+        await LoadData();
+        _loading = false;
+    }
+
+    private async Task LoadData()
+    {
+        if (_me == null) return;
+
+        var res = await AttendanceService.GetExemptionsAsync(new ExemptionFilterDto
+        {
+            EmployeeId = _me.Value.EmployeeId,
+            PageNumber = 1,
+            PageSize = 100
+        });
+
+        _items = res.Items ?? new List<ExemptionListDto>();
+    }
+
+    private void OpenCreateDialog()
+    {
+        _req = new ReqForm { Date = DateTime.Today, IsFullDay = true, Hours = null, Reason = "" };
+        _dlgOpen = true;
+    }
+
+    private void OnReqDateChanged(DateTime? value)
+    {
+        _req.Date = value ?? DateTime.Today;
+    }
+
+    // الإذن والانصراف المبكر بالساعات - وأي سبب تاني (مأمورية/مهمة) يوم كامل افتراضيًا
+    private bool _isHourly => ExemptionReasonCodes.IsPermissionType(_req.Reason)
+                           || ExemptionReasonCodes.IsEarlyLeaveType(_req.Reason);
+
+    private void OnReasonChanged(string? reason)
+    {
+        _req.Reason = reason?.Trim() ?? "";
+
+        if (ExemptionReasonCodes.IsPermissionType(_req.Reason)
+            || ExemptionReasonCodes.IsEarlyLeaveType(_req.Reason))
+        {
+            _req.IsFullDay = false;
+            _req.Hours ??= 1;
+        }
+        else
+        {
+            _req.IsFullDay = true;
+            _req.Hours = null;
+        }
+    }
+
+    private async Task SubmitRequest()
+    {
+        if (_me == null) return;
+
+        if (_req.Date == null)
+        {
+            Snackbar.Add("يرجى اختيار التاريخ", Severity.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_req.Reason))
+        {
+            Snackbar.Add("يرجى اختيار نوع الطلب", Severity.Warning);
+            return;
+        }
+        if (!_req.IsFullDay && (!_req.Hours.HasValue || _req.Hours.Value <= 0))
+        {
+            Snackbar.Add("يرجى تحديد عدد الساعات", Severity.Warning);
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            var dto = new ExemptionCreateDto
+            {
+                EmployeeId = _me.Value.EmployeeId,
+                ExemptionDate = _req.Date.Value,
+                ReasonCode = _req.Reason.Trim(),
+                Description = _req.Description,
+                IsFullDay = _req.IsFullDay,
+                Hours = _req.IsFullDay ? null : _req.Hours
+            };
+
+            var (success, message) = await AttendanceService.CreateExemptionAsync(dto, _userName);
+            Snackbar.Add(success ? $"{message} - بتاريخ {dto.ExemptionDate:yyyy/MM/dd}" : message,
+                success ? Severity.Success : Severity.Error);
+
+            if (success)
+            {
+                _dlgOpen = false;
+                _statusFilter = null;
+                await LoadData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private Color GetStatusColor(string status) =>
+        ExemptionStatus.IsApproved(status) ? Color.Success :
+        ExemptionStatus.IsPending(status) ? Color.Warning :
+        ExemptionStatus.IsRejected(status) ? Color.Error : Color.Default;
+
+    private Color GetReasonColor(string? code) =>
+        ExemptionReasonCodes.IsErrandType(code) ? Color.Info :
+        ExemptionReasonCodes.IsPermissionType(code) ? Color.Warning :
+        ExemptionReasonCodes.IsEarlyLeaveType(code) ? Color.Secondary : Color.Default;
+
+    public class ReqForm
+    {
+        public DateTime? Date { get; set; } = DateTime.Today;
+        public string Reason { get; set; } = "";
+        public bool IsFullDay { get; set; } = true;
+        public decimal? Hours { get; set; }
+        public string? Description { get; set; }
+    }
+}

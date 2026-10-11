@@ -1287,6 +1287,31 @@ public class AttendanceService : IAttendanceService
     // ════════════════════════════════════════════════════════════
     //  بصمتي الشخصية
     // ════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════
+    //  بيانات الموظف المرتبط بالمستخدم الحالي (لصفحة طلباتي)
+    // ════════════════════════════════════════════════════════════
+    public async Task<(int EmployeeId, string FullName)?> GetMyEmployeeInfoAsync(string userName)
+    {
+        if (string.IsNullOrWhiteSpace(userName))
+            return null;
+
+        var appUser = await _db.Users.AsNoTracking()
+            .FirstOrDefaultAsync(u => u.Username == userName);
+
+        if (appUser?.EmployeeId == null)
+            return null;
+
+        var emp = await _db.Employees.AsNoTracking()
+            .Where(e => e.EmployeeId == appUser.EmployeeId.Value)
+            .Select(e => new { e.EmployeeId, e.FullName })
+            .FirstOrDefaultAsync();
+
+        if (emp == null)
+            return null;
+
+        return (emp.EmployeeId, emp.FullName);
+    }
+
     public async Task<List<AttendanceListDto>> GetMyAttendanceAsync(string userName, DateTime? month = null)
     {
         if (string.IsNullOrWhiteSpace(userName))
@@ -2125,6 +2150,8 @@ public class AttendanceService : IAttendanceService
             return (false, "لا يمكن رفض استثناء معتمد. احذفه بدلاً من ذلك.");
 
         exemption.Status = ExemptionStatus.Rejected;
+        // صاحب القرار (اعتماد أو رفض) يتسجل في نفس الحقل ApprovedBy
+        exemption.ApprovedBy = currentUserName;
         // نحفظ سبب الرفض في Notes
         if (!string.IsNullOrWhiteSpace(reason))
             exemption.Notes = string.IsNullOrWhiteSpace(exemption.Notes)
@@ -2305,6 +2332,7 @@ public class AttendanceService : IAttendanceService
         if (string.IsNullOrWhiteSpace(role)) return false;
 
         return role == SystemRoles.Admin
+            || role == SystemRoles.GeneralManager
             || role == SystemRoles.AccountManager
             || role == SystemRoles.HrManager
             || role == "HRManager";
@@ -2325,7 +2353,7 @@ public class AttendanceService : IAttendanceService
 
     private async Task NotifyExemptionManagersAsync(string title, string message, string actor, int exemptionId)
     {
-        var roles = new[] { SystemRoles.Admin, SystemRoles.AccountManager, SystemRoles.HrManager }
+        var roles = new[] { SystemRoles.Admin, SystemRoles.GeneralManager, SystemRoles.AccountManager, SystemRoles.HrManager }
             .Where(r => !string.IsNullOrWhiteSpace(r))
             .Distinct();
 
@@ -2368,7 +2396,7 @@ public class AttendanceService : IAttendanceService
               (!string.IsNullOrWhiteSpace(reason) ? $" سبب الرفض: {reason}" : string.Empty);
 
         await _notify.AddAsync(title, message, exemption.CreatedBy, actor,
-            "frmDailyExemptions", "DailyExemptions", exemption.ExemptionId);
+            "my-exemptions", "DailyExemptions", exemption.ExemptionId);
     }
 
 }
