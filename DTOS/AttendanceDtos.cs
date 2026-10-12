@@ -508,3 +508,27 @@ public class HourlyDistribution
     public int Count { get; set; }
     public string HourDisplay => $"{Hour:D2}:00";
 }
+public class BiometricProcessPreview
+{
+    public bool Ok { get; set; }
+    public string Message { get; set; } = "";
+    public DateTime From { get; set; }
+    public DateTime To { get; set; }
+    public int DayCount { get; set; }
+    public int EmployeeCount { get; set; }
+    public string? EmployeeName { get; set; }
+    public List<string> LockedPayrollMonths { get; set; } = new();
+    public bool NeedsPayrollConfirmation => LockedPayrollMonths.Count > 0;
+}
+
+public class BiometricProcessDayResult
+{
+    public bool Success { get; set; }
+    public bool NeedsPayrollConfirmation { get; set; }
+    public string Message { get; set; } = "";
+    public DateTime Date { get; set; }
+    public int PunchUpdated { get; set; }
+    public int CoverageCreated { get; set; }
+    public int CoverageUpdated { get; set; }
+    public int ManualSkipped { get; set; }
+}

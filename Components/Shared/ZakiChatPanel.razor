@@ -12,6 +12,7 @@
 @inject AuthenticationStateProvider AuthProvider
 @inject IJSRuntime JS
 @inject ZakiNotificationService Notifs
+@inject ZakiReportPdfService PdfReports
 @inject NavigationManager Nav
 
 <div class="zk-panel @(Compact ? "zk-compact" : "")">
@@ -64,7 +65,7 @@
         {
             <div class="zk-row zk-row-bot">
                 <div class="zk-bot-avatar">
-                    <MudIcon Icon="@Icons.Material.Filled.SmartToy" Size="Size.Small" />
+                    <img src="img/zaki-icon.png" class="zk-bot-img" alt="" />
                 </div>
                 <div class="zk-typing">
                     <span></span><span></span><span></span>
@@ -90,7 +91,7 @@
                     </div>
                     <div class="zk-bot-body">
 
-                        <div class="zk-bubble @(item.Ok ? "" : "zk-bubble-error")">@item.Text</div>
+                        <div class="zk-bubble @(item.Ok ? "" : "zk-bubble-error")">@RenderRich(item.Text)</div>
 
                         @if (item.Tools.Count > 0)
                         {
@@ -113,6 +114,10 @@
                                     <button class="zk-export" @onclick="() => ExportExcelAsync(t)">
                                         <MudIcon Icon="@Icons.Material.Filled.Download" Size="Size.Small" />
                                         تصدير Excel
+                                    </button>
+                                    <button class="zk-export zk-export-pdf" @onclick="() => ExportPdfAsync(t)">
+                                        <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Size="Size.Small" />
+                                        تصدير PDF
                                     </button>
                                 </div>
                                 <div class="zk-table-scroll">
@@ -153,6 +158,7 @@
                                         </tbody>
                                     </table>
                                 </div>
+                                <div class="zk-table-stamp">البيانات حتى @item.CreatedAt.ToString("dd/MM/yyyy HH:mm")</div>
                             </div>
                         }
 
@@ -168,11 +174,29 @@
         @if (State.Items.Count == 0)
         {
             <div class="zk-empty">
-                <div class="zk-empty-icon">
-                    <MudIcon Icon="@Icons.Material.Filled.Forum" Size="Size.Large" />
-                </div>
+                <img src="img/zaki-icon.png" class="zk-empty-img" alt="زكي" />
                 <div class="zk-empty-title">اسأل زكي عن شغلك أو عن أي حاجة</div>
-                <div class="zk-empty-sub">اكتب سؤالك، أو اضغط الميكروفون واتكلم</div>
+                <div class="zk-empty-sub">اكتب سؤالك، أو ابدأ بضغطة:</div>
+                <div class="zk-starters">
+                    @foreach (var st in _starters)
+                    {
+                        <button type="button" class="zk-starter" disabled="@State.IsBusy" @onclick="() => AskSuggestion(st.Text)">
+                            <MudIcon Icon="@st.Icon" Size="Size.Small" Class="zk-chip-icon" />
+                            <span>@st.Text</span>
+                        </button>
+                    }
+                </div>
+            </div>
+        }
+
+        @if (!State.IsBusy && Suggestions.Count > 0)
+        {
+            <div class="zk-followup">
+                <span class="zk-followup-label">أسئلة مقترحة:</span>
+                @foreach (var sug in Suggestions)
+                {
+                    <button type="button" class="zk-followup-chip" @onclick="() => AskSuggested(sug)">@sug</button>
+                }
             </div>
         }
     </div>
@@ -226,6 +250,113 @@
     };
 
     private string _question = "";
+
+    // ═══ P5: تنسيق الإجابات ═══
+
+    /// <summary>عرض النص مع **غامق** وأسطر — من غير HTML خام</summary>
+    private RenderFragment RenderRich(string text) => builder =>
+    {
+        if (string.IsNullOrEmpty(text)) return;
+
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        var seq = 0;
+        foreach (var line in lines)
+        {
+            builder.OpenElement(seq++, "div");
+            builder.AddAttribute(seq++, "class", "zk-line");
+
+            var parts = line.Split("**");
+            for (var i = 0; i < parts.Length; i++)
+            {
+                if (parts[i].Length == 0) continue;
+                if (i % 2 == 1)
+                {
+                    builder.OpenElement(seq++, "b");
+                    builder.AddContent(seq++, parts[i]);
+                    builder.CloseElement();
+                }
+                else
+                {
+                    builder.AddContent(seq++, parts[i]);
+                }
+            }
+
+            builder.CloseElement();
+        }
+    };
+
+    /// <summary>أسئلة مقترحة حسب أدوات آخر رد</summary>
+    private List<string> Suggestions
+    {
+        get
+        {
+            if (State.Items.Count == 0) return new List<string>();
+            var last = State.Items[^1];
+            if (last.IsUser) return new List<string>();
+            return SuggestionsFor(last.Tools);
+        }
+    }
+
+    private readonly Suggestion[] _starters =
+    {
+        new("ملخص المبيعات الشهر ده", Icons.Material.Rounded.TrendingUp),
+        new("مديونيات العملاء كام؟", Icons.Material.Rounded.AccountBalanceWallet),
+        new("قيمة المخزون كام؟", Icons.Material.Rounded.Inventory2),
+        new("إيه الأصناف اللي خلصت؟", Icons.Material.Rounded.WarningAmber),
+        new("رصيد الخزينة كام؟", Icons.Material.Rounded.Savings),
+        new("كام فرصة مفتوحة دلوقتي؟", Icons.Material.Rounded.Handshake),
+        new("إيه المهام المتأخرة؟", Icons.Material.Rounded.TaskAlt),
+        new("الحضور النهاردة عامل إزاي؟", Icons.Material.Rounded.Badge)
+    };
+
+    private static readonly string[] GenericSuggestions =
+    {
+        "ملخص المبيعات الشهر ده", "قيمة المخزون كام؟", "مديونيات العملاء كام؟", "إيه المهام المتأخرة؟"
+    };
+
+    private static List<string> SuggestionsFor(List<string> tools)
+    {
+        (string tool, string[] next)[] map =
+        {
+            ("get_open_opportunities", new[] { "ملخص الـ CRM إيه؟", "إيه المهام المتأخرة؟" }),
+            ("get_crm_summary", new[] { "كام فرصة مفتوحة دلوقتي؟", "آخر التواصلات إيه؟" }),
+            ("get_sales_invoices_summary", new[] { "مين أكبر العملاء؟", "إيه الفواتير اللي عليها متبقي؟" }),
+            ("get_top_customers", new[] { "ملخص فواتير البيع", "مديونيات العملاء كام؟" }),
+            ("get_customer_balances", new[] { "رصيد الخزينة كام؟", "حركة الخزينة النهاردة إيه؟" }),
+            ("get_cashbox_summary", new[] { "حركة الخزينة النهاردة إيه؟", "مديونيات العملاء كام؟" }),
+            ("get_stock_value", new[] { "إيه الأصناف اللي خلصت؟", "المخزون موزع إزاي على المخازن؟" }),
+            ("get_low_stock", new[] { "قيمة المخزون كام؟", "آخر حركات المخزون إيه؟" }),
+            ("get_exemptions", new[] { "الحضور النهاردة عامل إزاي؟", "عندي إشعارات جديدة إيه؟" }),
+            ("get_unread_notifications", new[] { "إيه المهام المتأخرة؟", "ملخص المبيعات الشهر ده" })
+        };
+
+        var picks = new List<string>();
+        foreach (var tool in tools)
+        {
+            foreach (var m in map)
+            {
+                if (m.tool != tool) continue;
+                foreach (var next in m.next)
+                    if (!picks.Contains(next)) picks.Add(next);
+            }
+            if (picks.Count >= 3) break;
+        }
+
+        foreach (var g in GenericSuggestions)
+        {
+            if (picks.Count >= 4) break;
+            if (!picks.Contains(g)) picks.Add(g);
+        }
+
+        return picks.Take(4).ToList();
+    }
+
+    private async Task AskSuggested(string question)
+    {
+        if (State.IsBusy) return;
+        _question = question;
+        await SendAsync();
+    }
     private string? _userName;
     private bool _recording;
     private bool _transcribing;
@@ -432,6 +563,24 @@
         var base64 = ZakiExcelExporter.ToBase64(table);
         var fileName = ZakiExcelExporter.SafeFileName(table.Title) + ".xlsx";
         await JS.InvokeVoidAsync("downloadFileFromBase64", base64, fileName);
+    }
+
+    /// <summary>تنزيل الجدول كـ PDF رسمي (قالب ثابت — هيدر الشركة + الجدول + الفوتر)</summary>
+    private async Task ExportPdfAsync(ZakiTable table)
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var userName = auth.User.Identity?.Name ?? "";
+            var bytes = PdfReports.GenerateTablePdf(table, userName);
+            var base64 = Convert.ToBase64String(bytes);
+            var fileName = ZakiExcelExporter.SafeFileName(table.Title) + ".pdf";
+            await JS.InvokeVoidAsync("downloadFile", fileName, "application/pdf", base64);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Zaki PDF export failed: {ex.Message}");
+        }
     }
 
     private static string ToolLabel(string name) => name switch

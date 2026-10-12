@@ -1,0 +1,380 @@
+@page "/assistant/golden-test"
+@using COCOBOLOERPNEW.Services.Assistant
+@using MudBlazor
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.Extensions.Options
+@attribute [Authorize(Roles = "Admin")]
+
+@inject ZakiGoldenSetService GoldenSet
+@inject AuthenticationStateProvider AuthState
+@inject ISnackbar Snackbar
+@inject ZakiAssistantService ZakiService
+@inject IOptions<AssistantOptions> Options
+
+<PageTitle>اختبار زكي</PageTitle>
+
+<div dir="rtl" class="zgt-page">
+    <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4">
+
+        @* ═══ تشخيص حي ═══ *@
+        <div class="zgt-shell mb-4">
+            <div class="pa-4">
+                <div class="d-flex align-center gap-2 mb-2">
+                    <MudIcon Icon="@Icons.Material.Filled.MonitorHeart" Color="Color.Primary" />
+                    <MudText Typo="Typo.h6" Style="font-weight:600;">تشخيص حي — ده اللي زكي شايفه بالظبط في النسخة الشغالة</MudText>
+                </div>
+                <MudText Typo="Typo.body2" Class="mb-2">
+                    النموذج: <b>@_diagModel</b>
+                    · المفتاح: <b>@_diagKey</b>
+                    · عدد الأدوات المتاحة ليك دلوقتي: <b>@_diagTools.Count</b>
+                </MudText>
+                @if (_diagTools.Count > 0)
+                {
+                    <div style="display:flex;gap:4px;flex-wrap:wrap;max-height:120px;overflow:auto;">
+                        @foreach (var t in _diagTools)
+                        {
+                            <span class="zgt-toolchip">@t</span>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Error" Dense="true">مفيش أدوات خالص — فيه مشكلة توصيل في النسخة المنشورة!</MudAlert>
+                }
+            </div>
+        </div>
+
+        @* ═══ HERO ═══ *@
+        <div class="zgt-hero mb-4">
+            <div class="zgt-hero__glow"></div>
+            <div class="zgt-hero__content">
+                <div class="d-flex align-center gap-3">
+                    <div class="zgt-hero__avatar">
+                        <MudIcon Icon="@Icons.Material.Filled.FactCheck" Size="Size.Large" />
+                    </div>
+                    <div>
+                        <div class="zgt-hero__titlerow">
+                            <MudText Typo="Typo.h5" Class="font-weight-bold">اختبار زكي</MudText>
+                            <span class="zgt-hero__tag">Golden Set</span>
+                        </div>
+                        <MudText Typo="Typo.body2" Style="opacity:.85">
+                            @ZakiGoldenSetService.Cases.Length سؤال ثابت — شغّلهم بعد أي تعديل في البرومبت أو الأدوات وقارن النتيجة (على الخطة المجانية بياخد ~15 دقيقة بسبب حدود الطلبات)
+                        </MudText>
+                    </div>
+                </div>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@(_running ? Icons.Material.Filled.HourglassTop : Icons.Material.Filled.PlayArrow)"
+                           OnClick="RunAll" Disabled="@_running" type="button" Class="zgt-btn-gold">
+                    @if (_running)
+                    {
+                        <span>شغال... @_done/@_total</span>
+                    }
+                    else
+                    {
+                        <span>تشغيل الاختبار الكامل</span>
+                    }
+                </MudButton>
+            </div>
+        </div>
+
+        @if (_running)
+        {
+            <MudProgressLinear Value="@(_done * 100.0 / Math.Max(_total, 1))" Color="Color.Primary" Class="mb-2" />
+            <div class="d-flex align-center gap-3 mb-4">
+                @if (!string.IsNullOrEmpty(_status))
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined" Class="flex-grow-1">
+                        @(_status)
+                    </MudAlert>
+                }
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Stop" OnClick="Cancel" type="button">
+                    إلغاء
+                </MudButton>
+            </div>
+        }
+
+        @* ═══ KPI ═══ *@
+        @if (_summary != null)
+        {
+            <MudGrid Spacing="2" Class="mb-3">
+                <MudItem xs="6" sm="3">
+                    <div class="zgt-kpi">
+                        <div class="zgt-kpi__ic" style="color:#10B981"><MudIcon Icon="@Icons.Material.Filled.CheckCircle" /></div>
+                        <div>
+                            <div class="zgt-kpi__v" style="color:#10B981">@_summary.Passed / @_summary.Total</div>
+                            <div class="zgt-kpi__l">ناجح (@(_summary.PassRate)%)</div>
+                        </div>
+                    </div>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <div class="zgt-kpi">
+                        <div class="zgt-kpi__ic" style="color:#EF4444"><MudIcon Icon="@Icons.Material.Filled.Cancel" /></div>
+                        <div>
+                            <div class="zgt-kpi__v" style="color:#EF4444">@(_summary.Total - _summary.Passed)</div>
+                            <div class="zgt-kpi__l">فاشل</div>
+                        </div>
+                    </div>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <div class="zgt-kpi">
+                        <div class="zgt-kpi__ic" style="color:#8B5CF6"><MudIcon Icon="@Icons.Material.Filled.Bolt" /></div>
+                        <div>
+                            <div class="zgt-kpi__v" style="color:#8B5CF6">@_summary.TotalTokens.ToString("N0")</div>
+                            <div class="zgt-kpi__l">توكنز التشغيل</div>
+                        </div>
+                    </div>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <div class="zgt-kpi">
+                        <div class="zgt-kpi__ic" style="color:#F59E0B"><MudIcon Icon="@Icons.Material.Filled.Schedule" /></div>
+                        <div>
+                            <div class="zgt-kpi__v" style="color:#F59E0B">@_summary.RunAt.ToString("HH:mm")</div>
+                            <div class="zgt-kpi__l">توقيت التشغيل</div>
+                        </div>
+                    </div>
+                </MudItem>
+            </MudGrid>
+        }
+
+        @* ═══ النتائج ═══ *@
+        @if (_results.Count > 0)
+        {
+            <div class="zgt-shell">
+                <MudTable Items="_results" Hover="true" Elevation="0" Dense="true">
+                    <ToolBarContent>
+                        <MudText Typo="Typo.h6" Style="font-weight:600;">النتائج @( _running ? "(بتتكمل...)" : "" )</MudText>
+                    </ToolBarContent>
+                    <HeaderContent>
+                        <MudTh Style="width:60px;">الحالة</MudTh>
+                        <MudTh>الكود</MudTh>
+                        <MudTh>السؤال</MudTh>
+                        <MudTh>المتوقع</MudTh>
+                        <MudTh>الأدوات الفعلية</MudTh>
+                        <MudTh>النتيجة</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="r">
+                        <MudTd DataLabel="الحالة">
+                            @if (r.Passed)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Style="color:#10B981;" />
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.Cancel" Style="color:#EF4444;" />
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="الكود" Style="direction:ltr;text-align:right;font-weight:600;">@r.Id</MudTd>
+                        <MudTd DataLabel="السؤال">
+                            <div style="font-weight:600;">@r.Question</div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@r.Description · @(r.DurationMs / 1000.0) ث · @r.Tokens توكن</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="المتوقع">
+                            <MudText Typo="Typo.caption" Style="direction:ltr;text-align:right;">@r.ExpectedDisplay</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="الأدوات الفعلية">
+                            @if (r.ToolsUsed.Count == 0)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                            }
+                            else
+                            {
+                                <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                                    @foreach (var t in r.ToolsUsed)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                                 Style="direction:ltr;">@t</MudChip>
+                                    }
+                                </div>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="النتيجة">
+                            @if (!string.IsNullOrEmpty(r.FailReason))
+                            {
+                                <MudText Typo="Typo.caption" Style="color:#EF4444;">@r.FailReason</MudText>
+                            }
+                            @if (!string.IsNullOrEmpty(r.AnswerPreview))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="max-width:260px;">@r.AnswerPreview</MudText>
+                            }
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </div>
+        }
+
+        @* ═══ تدقيق الصلاحيات حسب الدور ═══ *@
+        <div class="zgt-shell mt-4">
+            <div class="pa-4">
+                <div class="d-flex align-center gap-3 flex-wrap mb-3">
+                    <MudIcon Icon="@Icons.Material.Filled.AdminPanelSettings" Color="Color.Primary" />
+                    <MudText Typo="Typo.h6" Style="font-weight:600;">تدقيق الصلاحيات حسب الدور</MudText>
+                    <MudSpacer />
+                    <MudSelect T="string" @bind-Value="_auditRole" Variant="Variant.Outlined"
+                               Margin="Margin.Dense" Style="width:190px;">
+                        @foreach (var role in ZakiPermissionPolicy.StandardRoles)
+                        {
+                            <MudSelectItem T="string" Value="@role">@role</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Search" OnClick="RunAudit" type="button">
+                        اعرض أدوات الدور
+                    </MudButton>
+                </div>
+
+                @if (_auditDone)
+                {
+                    <MudText Typo="Typo.body2" Class="mb-2">
+                        دور <b>@_auditRole</b> بيشوف <b>@_auditTools.Count</b> أداة
+                        @if (_auditTools.Count == 0)
+                        {
+                            <span style="color:#EF4444;"> — الدور ده ما ينفعش يستخدم زكي (الصفحة مش هتظهر له)</span>
+                        }
+                    </MudText>
+                    @if (_auditTools.Count > 0)
+                    {
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                            @foreach (var t in _auditTools)
+                            {
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                         Style="direction:ltr;">@t</MudChip>
+                            }
+                        </div>
+                    }
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
+                        القائمة حية من الكود (DefinitionsFor) — من غير صلاحيات شاشات إضافية. لو المستخدم عنده صلاحيات frm_* هياخد أدوات أكتر.
+                    </MudText>
+                }
+            </div>
+        </div>
+
+        @if (_results.Count == 0 && !_running)
+        {
+            <MudPaper Class="pa-8 text-center mt-3" Elevation="0" Style="border-radius:14px;border:1px dashed var(--mud-palette-divider);">
+                <MudIcon Icon="@Icons.Material.Filled.PlayLesson" Color="Color.Secondary" Style="font-size:48px;" />
+                <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                    اضغط «تشغيل الاختبار الكامل» — كل سؤال بيتنفذ فعليًا على زكي (بيستغرق دقايق حسب عدد الأسئلة)
+                </MudText>
+            </MudPaper>
+        }
+    </MudContainer>
+</div>
+
+<style>
+    .zgt-page { min-height: 60vh; }
+    .zgt-hero { position: relative; border-radius: 20px; overflow: hidden; background: linear-gradient(135deg, #070D1A 0%, #1B2A4A 45%, #2D4A7A 100%); color: #fff; box-shadow: 0 12px 32px rgba(15,26,46,.28); }
+    .zgt-hero__glow { position: absolute; width: 340px; height: 340px; top: -150px; left: -80px; border-radius: 50%; background: radial-gradient(circle, rgba(212,168,83,.30), transparent 60%); animation: zgtFloat 9s ease-in-out infinite; pointer-events: none; }
+    .zgt-hero__content { position: relative; z-index: 2; padding: 1.4rem 1.6rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .zgt-hero__avatar { width: 56px; height: 56px; border-radius: 18px; background: linear-gradient(135deg, #D4A853, #B8912A); display: flex; align-items: center; justify-content: center; color: #0F1D36; box-shadow: 0 8px 24px rgba(212,168,83,.35); flex: 0 0 auto; }
+    .zgt-hero__titlerow { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+    .zgt-hero__tag { display: inline-flex; align-items: center; padding: .2rem .7rem; background: linear-gradient(135deg, #D4A853, #B8912A); color: #0F1D36; font-size: .68rem; font-weight: 800; border-radius: 14px; }
+    .zgt-btn-gold { background: linear-gradient(135deg, #D4A853, #B8912A) !important; color: #0F1D36 !important; font-weight: 700 !important; border-radius: 12px !important; text-transform: none !important; box-shadow: 0 8px 20px rgba(212,168,83,.30) !important; }
+    @@keyframes zgtFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
+
+    .zgt-kpi { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: 14px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 1px 3px rgba(15,26,46,.05); height: 100%; }
+    .zgt-kpi__ic { width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+    .zgt-kpi__v { font-size: 19px; font-weight: 900; line-height: 1.1; }
+    .zgt-kpi__l { font-size: 11.5px; color: var(--mud-palette-text-secondary); font-weight: 700; }
+
+    .zgt-toolchip { display:inline-block; direction:ltr; font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--mud-palette-divider); color:var(--mud-palette-text-secondary); }
+
+    .zgt-shell { border: 1px solid var(--mud-palette-divider); border-radius: 14px; overflow: hidden; background: var(--mud-palette-surface); }
+
+    @@media (max-width: 600px) {
+        .zgt-hero__content { padding: 1.1rem 1.2rem; }
+        .zgt-hero__avatar { width: 46px; height: 46px; }
+    }
+</style>
+
+@code {
+    private readonly List<GoldenResult> _results = new();
+    private GoldenRunSummary? _summary;
+    private bool _running;
+    private string _status = "";
+    private int _done;
+    private int _total = ZakiGoldenSetService.Cases.Length;
+    private CancellationTokenSource? _cts;
+
+    private string _auditRole = "SalesManager";
+    private List<string> _diagTools = new();
+    private string _diagModel = "";
+    private string _diagKey = "";
+    private List<string> _auditTools = new();
+    private bool _auditDone;
+
+    private void RunAudit()
+    {
+        _auditTools = GoldenSet.ToolsForRole(_auditRole).ToList();
+        _auditDone = true;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var st = await AuthState.GetAuthenticationStateAsync();
+            _diagTools = ZakiService.ToolsFor(st.User).Select(d => d.Name).OrderBy(n => n).ToList();
+            _diagModel = Options.Value.Model ?? "(فاضي)";
+            var key = Options.Value.GroqApiKey ?? "";
+            _diagKey = key.Length > 8 ? key.Substring(0, 4) + "..." + key.Substring(key.Length - 4) : "(مش متظبط!)";
+        }
+        catch { }
+    }
+
+    private async Task RunAll()
+    {
+        if (_running) return;
+
+        _running = true;
+        _done = 0;
+        _status = "";
+        _results.Clear();
+        _summary = null;
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var authState = await AuthState.GetAuthenticationStateAsync();
+
+            _summary = await GoldenSet.RunAllAsync(
+                authState.User,
+                onCaseDone: (result, done, total) =>
+                {
+                    _results.Add(result);
+                    _done = done;
+                    _total = total;
+                    _status = "";
+                    InvokeAsync(StateHasChanged);
+                },
+                onStatus: status =>
+                {
+                    _status = status;
+                    InvokeAsync(StateHasChanged);
+                },
+                ct: _cts.Token);
+
+            Snackbar.Add(
+                $"النتيجة: {_summary.Passed} من {_summary.Total} ناجحة ({_summary.PassRate}%)",
+                _summary.Passed == _summary.Total ? Severity.Success : Severity.Warning);
+        }
+        catch (OperationCanceledException)
+        {
+            _status = "";
+            Snackbar.Add("اتلغى التشغيل", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ في التشغيل: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _running = false;
+            _cts?.Dispose();
+            _cts = null;
+        }
+    }
+
+    private void Cancel() => _cts?.Cancel();
+}

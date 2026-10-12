@@ -135,6 +135,16 @@ builder.Services.AddScoped<ZakiFinanceInvoicesService>();
 builder.Services.AddScoped<ZakiEmployeeTasksService>();
 builder.Services.AddScoped<ZakiApprovalsService>();
 builder.Services.AddScoped<ZakiHrService>();
+builder.Services.AddScoped<ZakiUsageReportService>();
+builder.Services.AddScoped<ZakiGoldenSetService>();
+builder.Services.AddScoped<ZakiBalancesService>();
+builder.Services.AddScoped<ZakiCashboxService>();
+builder.Services.AddScoped<ZakiStockAlertsService>();
+builder.Services.AddScoped<ZakiReturnsAdvancesService>();
+builder.Services.AddScoped<ZakiReportPdfService>();
+builder.Services.AddScoped<ZakiFeedbackService>();
+builder.Services.AddScoped<ZakiFinanceExtraService>();
+builder.Services.AddScoped<ZakiHrExtraService>();
 builder.Services.AddScoped<ZakiChatState>();
 builder.Services.AddHttpClient<ZakiVoiceService>();
 

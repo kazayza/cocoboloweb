@@ -6,6 +6,7 @@
 @inject IAttendanceService AttendanceService
 @inject ISnackbar Snackbar
 @inject AuthenticationStateProvider AuthState
+@inject IEmployeeService EmployeeService
 
 <PageTitle>سجلات البصمة الخام</PageTitle>
 
@@ -43,10 +44,10 @@
                                     استيراد ملف بصمة
                                 </MudButton>
                                 <MudButton Variant="Variant.Filled"
-                                           Color="Color.Warning"
                                            StartIcon="@Icons.Material.Filled.Sync"
                                            OnClick="OpenProcessDialog"
-                                           Disabled="_isProcessing">
+                                           Disabled="_isProcessing"
+                                           Class="bp-open">
                                     @(_isProcessing ? "جاري المعالجة..." : "معالجة البصمات")
                                 </MudButton>
                             }
@@ -308,85 +309,104 @@
             </MudPaper>
         </MudContainer>
 
-        @* ═══════════════ PROCESS DIALOG ═══════════════ *@
-        <MudDialog Visible="_showProcessDialog" VisibleChanged="@(v => _showProcessDialog = v)" 
-                   Options="@_processDialogOptions">
+        <MudDialog Visible="_showProcessDialog" VisibleChanged="@(v => _showProcessDialog = v)"
+                   Options="@_processDialogOptions" Class="bp-dialog">
             <TitleContent>
-                <div class="d-flex align-center gap-3">
-                    <MudAvatar Color="Color.Warning" Variant="Variant.Filled" Size="Size.Medium">
-                        <MudIcon Icon="@Icons.Material.Filled.Sync" />
-                    </MudAvatar>
+                <div class="bp-head">
+                    <div class="bp-head-mark"></div>
                     <div>
-                        <MudText Typo="Typo.h6">معالجة سجلات البصمة</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            تحويل البصمات الخام إلى سجلات حضور
-                        </MudText>
+                        <div class="bp-head-title">معالجة البصمة</div>
+                        <div class="bp-head-sub">تحويل البصمات الخام إلى حضور وانصراف</div>
                     </div>
                 </div>
             </TitleContent>
-            
+
             <DialogContent>
-                <MudPaper Class="pa-4" Elevation="0" 
-                          Style="background: #FFF8E1; border-radius: 12px; border-right: 4px solid #FFC107;">
-                    <div class="d-flex align-center gap-2 mb-2">
-                        <MudIcon Icon="@Icons.Material.Filled.Info" Color="Color.Warning" />
-                        <MudText Typo="Typo.subtitle2" Class="font-weight-bold">كيف تعمل المعالجة؟</MudText>
-                    </div>
-                    <MudText Typo="Typo.body2">
-                        • أول بصمة في اليوم = <strong>وقت الحضور</strong>
-                    </MudText>
-                    <MudText Typo="Typo.body2">
-                        • آخر بصمة في اليوم = <strong>وقت الانصراف</strong>
-                    </MudText>
-                    <MudText Typo="Typo.body2">
-                        • يتم حساب <strong>ساعات العمل والتأخير</strong> تلقائياً
-                    </MudText>
-                    <MudText Typo="Typo.body2">
-                        • في حالة عدم وجود بصمة لموظف: سيتم إنشاء سجل <strong>غياب / راحة / إجازة رسمية</strong> حسب حالته
-                    </MudText>
-                </MudPaper>
+                <div class="bp-scopes">
+                    <button type="button" class="bp-scope @(_scope == "day" ? "is-on" : "")" @onclick="@(() => SetScope("day"))">يوم</button>
+                    <button type="button" class="bp-scope @(_scope == "period" ? "is-on" : "")" @onclick="@(() => SetScope("period"))">فترة</button>
+                    <button type="button" class="bp-scope @(_scope == "month" ? "is-on" : "")" @onclick="@(() => SetScope("month"))">شهر</button>
+                    <button type="button" class="bp-scope @(_scope == "employee" ? "is-on" : "")" @onclick="@(() => SetScope("employee"))">موظف</button>
+                </div>
+                <p class="bp-hint">@ScopeHint</p>
 
-                <MudDatePicker Label="اختر التاريخ المراد معالجته"
-                               @bind-Date="_processDate"
-                               Variant="Variant.Outlined"
-                               Margin="Margin.Dense"
-                               Editable="true"
-                               DateFormat="yyyy/MM/dd"
-                               Class="mt-4" />
-
-                @if (_processResult != null)
+                @if (_scope == "day")
                 {
-                    <MudAlert Severity="@(_processResult.Value.Success ? Severity.Success : Severity.Error)" 
-                              Variant="Variant.Filled" Class="mt-4">
-                        @_processResult.Value.Message
-                    </MudAlert>
+                    <MudDatePicker Label="التاريخ" Date="_processDate" DateChanged="OnProcessDateChanged"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Editable="true"
+                                   DateFormat="yyyy/MM/dd" Class="mt-2" MaxDate="DateTime.Today" />
+                }
+                else if (_scope == "month")
+                {
+                    <MudDatePicker Label="أي يوم في الشهر" Date="_monthAnchor" DateChanged="OnMonthChanged"
+                                   Variant="Variant.Outlined" Margin="Margin.Dense" Editable="true"
+                                   DateFormat="yyyy/MM/dd" Class="mt-2" MaxDate="DateTime.Today" />
+                }
+                else
+                {
+                    <MudGrid Spacing="2" Class="mt-2">
+                        <MudItem xs="6">
+                            <MudDatePicker Label="من" Date="_rangeFrom" DateChanged="OnRangeFromChanged"
+                                           Variant="Variant.Outlined" Margin="Margin.Dense" Editable="true"
+                                           DateFormat="yyyy/MM/dd" MaxDate="DateTime.Today" />
+                        </MudItem>
+                        <MudItem xs="6">
+                            <MudDatePicker Label="إلى" Date="_rangeTo" DateChanged="OnRangeToChanged"
+                                           Variant="Variant.Outlined" Margin="Margin.Dense" Editable="true"
+                                           DateFormat="yyyy/MM/dd" MaxDate="DateTime.Today" />
+                        </MudItem>
+                    </MudGrid>
+                }
+
+                @if (_scope == "employee")
+                {
+                    <MudAutocomplete T="EmployeeListDto" Label="الموظف"
+                                     Value="_selectedEmployee" ValueChanged="OnEmployeeChanged"
+                                     SearchFunc="SearchProcessEmployees"
+                                     ToStringFunc="@(e => e == null ? string.Empty : $"{e.FullName} ({e.BioEmployeeId})")"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-3"
+                                     ResetValueOnEmptyText="true" CoerceText="true" />
+                }
+
+                <label class="bp-check">
+                    <MudCheckBox T="bool" @bind-Value="_includeManual" Color="Color.Primary" Dense="true" />
+                    <span>شمل السجلات المعدلة يدويًا. من غيرها التصحيح اليدوي يفضل زي ما هو.</span>
+                </label>
+
+                @if (!string.IsNullOrWhiteSpace(_payrollWarning))
+                {
+                    <div class="bp-warn">@_payrollWarning</div>
+                    <label class="bp-check">
+                        <MudCheckBox T="bool" @bind-Value="_confirmPayroll" Color="Color.Primary" Dense="true" />
+                        <span>أؤكد المعالجة. جداول الرواتب لن تتغير.</span>
+                    </label>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_previewError))
+                {
+                    <div class="bp-error">@_previewError</div>
+                }
+
+                @if (_isProcessing)
+                {
+                    <MudProgressLinear Color="Color.Primary" Value="_progress" Class="mt-4" />
+                    <p class="bp-progress">@_progressText</p>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_processSummary))
+                {
+                    <div class="bp-done">@_processSummary</div>
                 }
             </DialogContent>
-            
+
             <DialogActions>
-                <MudButton Variant="Variant.Text" 
-                           Color="Color.Default" 
-                           OnClick="@(() => _showProcessDialog = false)"
-                           Disabled="_isProcessing">
-                    إغلاق
-                </MudButton>
-                <MudButton Variant="Variant.Filled" 
-                           Color="Color.Warning"
-                           StartIcon="@(_isProcessing ? null : Icons.Material.Filled.Sync)"
-                           OnClick="ProcessLogs"
-                           Disabled="_isProcessing || !_processDate.HasValue">
-                    @if (_isProcessing)
-                    {
-                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="ml-2" />
-                        <span>جاري المعالجة...</span>
-                    }
-                    else
-                    {
-                        <span>بدء المعالجة</span>
-                    }
+                <MudButton Variant="Variant.Text" OnClick="@(() => _showProcessDialog = false)" Disabled="_isProcessing" Class="bp-close">إغلاق</MudButton>
+                <MudButton Variant="Variant.Filled" OnClick="ProcessLogs" Disabled="@(!CanStartProcess)" Class="bp-start">
+                    @(_isProcessing ? "جاري المعالجة..." : "بدء المعالجة")
                 </MudButton>
             </DialogActions>
         </MudDialog>
+
     </Authorized>
     
     <NotAuthorized>
@@ -402,6 +422,58 @@
         </MudContainer>
     </NotAuthorized>
 </AuthorizeView>
+
+<style>
+    .bp-open {
+        background: var(--navy, #1a2842) !important;
+        color: #fff !important;
+        border-radius: 10px;
+    }
+    .bp-dialog {
+        border-radius: 16px;
+        overflow: hidden;
+    }
+    .bp-head { display: flex; align-items: center; gap: 12px; }
+    .bp-head-mark {
+        width: 4px; height: 36px; border-radius: 4px;
+        background: var(--gold, #d4af37);
+    }
+    .bp-head-title { font-weight: 700; color: var(--navy-dark, #0f1a2e); font-size: 1.05rem; }
+    .bp-head-sub { color: #64748b; font-size: .8rem; }
+    .bp-scopes { display: flex; gap: 8px; flex-wrap: wrap; }
+    .bp-scope {
+        border: 1px solid var(--gold-border, rgba(212,175,55,.35));
+        background: #fff;
+        color: var(--navy, #1a2842);
+        border-radius: 10px;
+        padding: 8px 16px;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .bp-scope.is-on {
+        background: var(--navy, #1a2842);
+        color: #fff;
+        border-color: var(--navy, #1a2842);
+    }
+    .bp-hint { margin: 12px 0 4px; color: #64748b; font-size: .85rem; }
+    .bp-check { display: flex; align-items: flex-start; gap: 4px; margin-top: 10px; color: var(--navy-dark, #0f1a2e); font-size: .88rem; }
+    .bp-warn, .bp-error, .bp-done {
+        margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: .88rem;
+    }
+    .bp-warn { background: var(--gold-subtle, rgba(212,175,55,.12)); color: var(--navy-dark, #0f1a2e); border: 1px solid var(--gold-border, rgba(212,175,55,.35)); }
+    .bp-error { background: #fef2f2; color: #991b1b; }
+    .bp-done { background: #f0fdf4; color: #166534; }
+    .bp-progress { margin: 6px 0 0; color: #64748b; font-size: .8rem; }
+    .bp-start {
+        background: var(--gold, #d4af37) !important;
+        color: var(--navy-dark, #0f1a2e) !important;
+        font-weight: 700;
+        border-radius: 10px;
+    }
+    .bp-close { color: var(--navy, #1a2842) !important; }
+</style>
+
+
 
 @code {
     // State
@@ -432,12 +504,23 @@
     
     // Process Dialog
     private bool _showProcessDialog;
+    private string _scope = "day";
     private DateTime? _processDate = DateTime.Today;
-    private (bool Success, string Message)? _processResult;
+    private DateTime? _monthAnchor = DateTime.Today;
+    private DateTime? _rangeFrom = DateTime.Today.AddDays(-6);
+    private DateTime? _rangeTo = DateTime.Today;
+    private EmployeeListDto? _selectedEmployee;
+    private bool _includeManual;
+    private bool _confirmPayroll;
+    private string? _payrollWarning;
+    private string? _previewError;
+    private string? _processSummary;
+    private double _progress;
+    private string _progressText = "";
     
     private DialogOptions _processDialogOptions = new()
     {
-        MaxWidth = MaxWidth.Small,
+        MaxWidth = MaxWidth.Medium,
         FullWidth = true,
         CloseButton = true,
         BackdropClick = false
@@ -563,41 +646,182 @@
 
     private void OpenProcessDialog()
     {
-        _processDate = DateTime.Today;
-        _processResult = null;
+        _scope = _dateFrom.HasValue && _dateTo.HasValue && _dateFrom.Value.Date != _dateTo.Value.Date ? "period" : "day";
+        _processDate = _dateFrom ?? DateTime.Today;
+        _monthAnchor = _dateFrom ?? DateTime.Today;
+        _rangeFrom = _dateFrom ?? DateTime.Today.AddDays(-6);
+        _rangeTo = _dateTo ?? DateTime.Today;
+        _selectedEmployee = null;
+        _includeManual = false;
+        _confirmPayroll = false;
+        _payrollWarning = null;
+        _previewError = null;
+        _processSummary = null;
         _showProcessDialog = true;
+    }
+
+    private void SetScope(string scope)
+    {
+        _scope = scope;
+        _payrollWarning = null;
+        _confirmPayroll = false;
+        _previewError = null;
+        _processSummary = null;
+    }
+
+    private Task OnProcessDateChanged(DateTime? value) { _processDate = value; ClearProcessNotice(); return Task.CompletedTask; }
+    private Task OnMonthChanged(DateTime? value) { _monthAnchor = value; ClearProcessNotice(); return Task.CompletedTask; }
+    private Task OnRangeFromChanged(DateTime? value) { _rangeFrom = value; ClearProcessNotice(); return Task.CompletedTask; }
+    private Task OnRangeToChanged(DateTime? value) { _rangeTo = value; ClearProcessNotice(); return Task.CompletedTask; }
+    private void OnEmployeeChanged(EmployeeListDto? value) { _selectedEmployee = value; ClearProcessNotice(); }
+
+    private void ClearProcessNotice()
+    {
+        _payrollWarning = null;
+        _confirmPayroll = false;
+        _previewError = null;
+        _processSummary = null;
+    }
+
+    private bool CanStartProcess => !_isProcessing && TryGetScope(out _, out _, out _, out _);
+
+    private string ScopeHint => _scope switch
+    {
+        "day" => "هيعالج اليوم المختار لكل الموظفين المربوطين بالبصمة.",
+        "period" => "هيعالج الفترة دي لكل الموظفين. الحد 31 يوم.",
+        "month" => "هيعالج الشهر من أوله لحد آخر يوم فيه، أو لحد النهاردة لو الشهر لسه شغال.",
+        "employee" => "هيعالج الموظف المختار بس، جوه الفترة اللي فوق.",
+        _ => ""
+    };
+
+    private async Task<IEnumerable<EmployeeListDto>> SearchProcessEmployees(string value, CancellationToken ct)
+    {
+        var list = await EmployeeService.SearchEmployeesAsync(value ?? "", 20);
+        return list.Where(e => e.BioEmployeeId.HasValue);
+    }
+
+    private bool TryGetScope(out DateTime from, out DateTime to, out int? employeeId, out string error)
+    {
+        from = DateTime.Today;
+        to = DateTime.Today;
+        employeeId = null;
+        error = "";
+
+        if (_scope == "day")
+        {
+            if (!_processDate.HasValue) { error = "اختار التاريخ."; return false; }
+            from = to = _processDate.Value.Date;
+        }
+        else if (_scope == "month")
+        {
+            if (!_monthAnchor.HasValue) { error = "اختار الشهر."; return false; }
+            from = new DateTime(_monthAnchor.Value.Year, _monthAnchor.Value.Month, 1);
+            to = from.AddMonths(1).AddDays(-1);
+        }
+        else
+        {
+            if (!_rangeFrom.HasValue || !_rangeTo.HasValue) { error = "اختار من وإلى."; return false; }
+            from = _rangeFrom.Value.Date;
+            to = _rangeTo.Value.Date;
+        }
+
+        if (_scope == "employee")
+        {
+            if (_selectedEmployee?.BioEmployeeId == null)
+            {
+                error = "اختار موظف مربوط بكود بصمة.";
+                return false;
+            }
+            employeeId = _selectedEmployee.EmployeeId;
+        }
+
+        if (to < from) (from, to) = (to, from);
+        if (from > DateTime.Today) { error = "الفترة في المستقبل."; return false; }
+        if (to > DateTime.Today) to = DateTime.Today;
+        if ((to - from).Days + 1 > 31) { error = "الحد 31 يوم في المرة الواحدة."; return false; }
+        return true;
     }
 
     private async Task ProcessLogs()
     {
-        if (!_processDate.HasValue) return;
+        if (!TryGetScope(out var from, out var to, out var employeeId, out var error))
+        {
+            _previewError = error;
+            return;
+        }
+
+        _previewError = null;
+        var preview = await AttendanceService.PreviewBiometricProcessAsync(from, to, employeeId);
+        if (!preview.Ok)
+        {
+            _previewError = preview.Message;
+            return;
+        }
+
+        if (preview.NeedsPayrollConfirmation && !_confirmPayroll)
+        {
+            _payrollWarning = preview.Message;
+            return;
+        }
 
         _isProcessing = true;
+        _processSummary = null;
+        _progress = 0;
         StateHasChanged();
+
+        var punch = 0;
+        var created = 0;
+        var updated = 0;
+        var skipped = 0;
+        var failed = new List<string>();
 
         try
         {
             var authState = await AuthState.GetAuthenticationStateAsync();
             var userName = authState.User.Identity?.Name ?? "System";
+            var days = preview.DayCount;
 
-            _processResult = await AttendanceService.ProcessBiometricLogsAsync(_processDate.Value, userName);
+            for (var i = 0; i < days; i++)
+            {
+                var date = preview.From.AddDays(i);
+                _progressText = $"اليوم {i + 1} من {days} — {date:yyyy/MM/dd}";
+                _progress = (i + 1) * 100d / days;
+                StateHasChanged();
 
-            if (_processResult.Value.Success)
-            {
-                Snackbar.Add(_processResult.Value.Message, Severity.Success);
+                var day = await AttendanceService.ProcessBiometricDayAsync(
+                    date, employeeId, _includeManual, _confirmPayroll || !preview.NeedsPayrollConfirmation, userName);
+                if (!day.Success)
+                {
+                    failed.Add(day.Message);
+                    if (day.NeedsPayrollConfirmation)
+                    {
+                        _payrollWarning = day.Message;
+                        break;
+                    }
+                    continue;
+                }
+
+                punch += day.PunchUpdated;
+                created += day.CoverageCreated;
+                updated += day.CoverageUpdated;
+                skipped += day.ManualSkipped;
             }
-            else
-            {
-                Snackbar.Add(_processResult.Value.Message, Severity.Warning);
-            }
+
+            _processSummary = $"خلصت: {punch} من البصمة، {created} سجل جديد، {updated} محدّث، {skipped} تعديل يدوي متخطى.";
+            if (failed.Count > 0)
+                _processSummary += " تعذر: " + string.Join(" | ", failed.Take(3));
+
+            Snackbar.Add(_processSummary, failed.Count == 0 ? Severity.Success : Severity.Warning);
+            await LoadData();
         }
         catch (Exception ex)
         {
             Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
-            _processResult = (false, ex.Message);
+            _processSummary = ex.Message;
         }
 
         _isProcessing = false;
+        _progress = 100;
         StateHasChanged();
     }
 

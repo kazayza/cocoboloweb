@@ -12,6 +12,7 @@ public static class TableNameTranslator
         ["UserPermissions"]      = "صلاحيات المستخدمين",
         ["Permissions"]          = "الصلاحيات",
         ["Roles"]                = "الأدوار",
+        ["Branches"]             = "الفروع",
 
         // ─── العملاء والمبيعات ───
         ["Parties"]              = "العملاء/الموردين",
@@ -24,6 +25,9 @@ public static class TableNameTranslator
         ["Quotations"]           = "عروض الأسعار",
         ["QuotationDetails"]     = "تفاصيل عروض الأسعار",
         ["AdditionalCharges"]    = "الرسوم الإضافية",
+        ["StockTransactions"]     = "حركات المخزون",
+        ["StockTransactionDetails"] = "تفاصيل حركات المخزون",
+        ["StockTransactionTypes"] = "أنواع حركات المخزون",
 
         // ─── الموظفين والـ HR ───
         ["Employees"]            = "الموظفين",
@@ -35,6 +39,8 @@ public static class TableNameTranslator
         ["LoanInstallments"]     = "أقساط السُلف",
         ["ShortPermissions"]     = "أذونات الانصراف",
         ["BiometricLog"]        = "سجلات البصمة",
+        ["DailyExemption"]        = "استثناءات الحضور اليومية",
+        
 
 
         // ─── CRM ───
@@ -48,6 +54,7 @@ public static class TableNameTranslator
         ["Commissions"]          = "العمولات",
         ["LeadIneractions"]         = "تواصلات العملاء المحتملين",
         ["LeadsCRM"]          = "العملاء المحتملين",
+        ["LeadInteractions"] = "تواصلات العملاء المحتملين",
         
 
         // ─── المالية والخزينة ───

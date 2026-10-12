@@ -20,6 +20,8 @@ public interface IAttendanceService
     // ═══════════════ سجلات البصمة الخام ═══════════════
     Task<PagedResult<BiometricLogDto>> GetBiometricLogsAsync(BiometricLogFilterDto filter);
     Task<(bool Success, string Message)> ProcessBiometricLogsAsync(DateTime date, string currentUserName);
+    Task<BiometricProcessPreview> PreviewBiometricProcessAsync(DateTime from, DateTime to, int? employeeId);
+    Task<BiometricProcessDayResult> ProcessBiometricDayAsync(DateTime date, int? employeeId, bool includeManual, bool payrollConfirmed, string currentUserName);
     Task<BiometricImportResultDto> ImportBiometricLogsAsync(Stream fileStream, string fileName, BiometricImportOptionsDto options, string currentUserName);
     Task<byte[]> GetBiometricImportTemplateAsync();
     

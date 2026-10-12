@@ -9,6 +9,7 @@ public class ZakiChatItem
     public int Tokens { get; init; }
     public List<string> Tools { get; init; } = new();
     public List<ZakiTable> Tables { get; init; } = new();
+    public DateTime CreatedAt { get; init; } = DateTime.Now;
 }
 
 /// <summary>

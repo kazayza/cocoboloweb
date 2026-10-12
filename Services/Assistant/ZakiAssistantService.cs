@@ -52,6 +52,13 @@ public class ZakiAssistantService
     private readonly ZakiEmployeeTasksService _employeeTasks;
     private readonly ZakiApprovalsService _approvals;
     private readonly ZakiHrService _hr;
+    private readonly ZakiBalancesService _balances;
+    private readonly ZakiCashboxService _cashbox;
+    private readonly ZakiStockAlertsService _stockAlerts;
+    private readonly ZakiReturnsAdvancesService _returnsAdvances;
+    private readonly ZakiFeedbackService _feedback;
+    private readonly ZakiFinanceExtraService _financeExtra;
+    private readonly ZakiHrExtraService _hrExtra;
     private readonly ZakiUserContext _userContext;
     private readonly ZakiLogService _log;
     private readonly AssistantOptions _opt;
@@ -70,6 +77,13 @@ public class ZakiAssistantService
         ZakiEmployeeTasksService employeeTasks,
         ZakiApprovalsService approvals,
         ZakiHrService hr,
+        ZakiBalancesService balances,
+        ZakiCashboxService cashbox,
+        ZakiStockAlertsService stockAlerts,
+        ZakiReturnsAdvancesService returnsAdvances,
+        ZakiFeedbackService feedback,
+        ZakiFinanceExtraService financeExtra,
+        ZakiHrExtraService hrExtra,
         ZakiUserContext userContext,
         ZakiLogService log,
         IOptions<AssistantOptions> options,
@@ -87,6 +101,13 @@ public class ZakiAssistantService
         _employeeTasks = employeeTasks;
         _approvals = approvals;
         _hr = hr;
+        _balances = balances;
+        _cashbox = cashbox;
+        _stockAlerts = stockAlerts;
+        _returnsAdvances = returnsAdvances;
+        _feedback = feedback;
+        _financeExtra = financeExtra;
+        _hrExtra = hrExtra;
         _userContext = userContext;
         _log = log;
         _opt = options.Value;
@@ -105,6 +126,13 @@ public class ZakiAssistantService
         list.AddRange(_employeeTasks.DefinitionsFor(user));
         list.AddRange(_approvals.DefinitionsFor(user));
         list.AddRange(_hr.DefinitionsFor(user));
+        list.AddRange(_balances.DefinitionsFor(user));
+        list.AddRange(_cashbox.DefinitionsFor(user));
+        list.AddRange(_stockAlerts.DefinitionsFor(user));
+        list.AddRange(_returnsAdvances.DefinitionsFor(user));
+        list.AddRange(_feedback.DefinitionsFor(user));
+        list.AddRange(_financeExtra.DefinitionsFor(user));
+        list.AddRange(_hrExtra.DefinitionsFor(user));
         if (ZakiEmployeeActivityService.CanView(user))
             list.Add(ZakiEmployeeActivityService.Definition());
         return list;
@@ -113,6 +141,9 @@ public class ZakiAssistantService
     /// <summary>هل المستخدم عنده أي أداة من أدوات زكي؟ (يتحكم في ظهور الصفحة)</summary>
     public bool CanUse(ClaimsPrincipal user) => DefinitionsFor(user).Count > 0;
 
+    /// <summary>قائمة أدوات المستخدم — للتدقيق الحي في صفحة اختبار زكي (P2)</summary>
+    public IReadOnlyList<AiToolDefinition> ToolsFor(ClaimsPrincipal user) => DefinitionsFor(user);
+
     /// <param name="conversationId">رقم المحادثة الحالية. لو null بنفتح محادثة جديدة.</param>
     /// <param name="history">الرسائل السابقة في نفس المحادثة (سؤال/رد بس) عشان الأسئلة المتابعة.</param>
     public async Task<ZakiAnswer> AskAsync(
@@ -120,7 +151,8 @@ public class ZakiAssistantService
         string question,
         long? conversationId = null,
         IReadOnlyList<AiMessage>? history = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool isTest = false)
     {
         var sw = Stopwatch.StartNew();
         var userName = user.Identity?.Name ?? "";
@@ -135,16 +167,19 @@ public class ZakiAssistantService
         var info = await _userContext.ResolveAsync(user, ct);
         var isSales = ZakiToolExecutor.IsSalesOnly(user);
 
-        conversationId ??= await _log.StartConversationAsync(userName, info.EmployeeId, question, ct);
+        // أسئلة الاختبار (golden set) بتتعلم في اللوج وما بتحسبش في الحد اليومي
+        var loggedQuestion = isTest ? $"[اختبار] {question}" : question;
+
+        conversationId ??= await _log.StartConversationAsync(userName, info.EmployeeId, loggedQuestion, ct);
 
         // ── الحد اليومي (الـ Admin معفي) ──
-        if (!user.IsInRole("Admin") && _opt.DailyQuestionLimitPerUser > 0)
+        if (!isTest && !user.IsInRole("Admin") && _opt.DailyQuestionLimitPerUser > 0)
         {
             var askedToday = await _log.GetTodayQuestionCountAsync(userName, ct);
             if (askedToday >= _opt.DailyQuestionLimitPerUser)
             {
                 var limitText = $"وصلت للحد اليومي ({_opt.DailyQuestionLimitPerUser} سؤال). تقدر تكمل بكرة.";
-                await LogAsync(conversationId, question, limitText, false, "DAILY_LIMIT", 0, 0, 0, sw, toolLogs, userName, ct);
+                await LogAsync(conversationId, loggedQuestion, limitText, false, "DAILY_LIMIT", 0, 0, 0, sw, toolLogs, userName, ct, isTest);
                 return new ZakiAnswer(false, limitText, 0, toolsUsed, tables, conversationId);
             }
         }
@@ -169,7 +204,7 @@ public class ZakiAssistantService
 
             if (!result.Success)
             {
-                await LogAsync(conversationId, question, result.ErrorMessage, false, result.ErrorCode, 0, 0, 0, sw, toolLogs, userName, ct);
+                await LogAsync(conversationId, loggedQuestion, result.ErrorMessage, false, result.ErrorCode, 0, 0, 0, sw, toolLogs, userName, ct, isTest);
                 return new ZakiAnswer(false, result.ErrorMessage ?? "حصل خطأ.", totalTokens, toolsUsed, tables, conversationId);
             }
 
@@ -180,7 +215,7 @@ public class ZakiAssistantService
             // رد نهائي
             if (result.ToolCalls.Count == 0)
             {
-                await LogAsync(conversationId, question, result.Content, true, null, promptTokens, completionTokens, totalTokens, sw, toolLogs, userName, ct);
+                await LogAsync(conversationId, loggedQuestion, result.Content, true, null, promptTokens, completionTokens, totalTokens, sw, toolLogs, userName, ct, isTest);
                 return new ZakiAnswer(true, result.Content ?? "", totalTokens, toolsUsed, tables, conversationId);
             }
 
@@ -192,7 +227,20 @@ public class ZakiAssistantService
                 toolsUsed.Add(call.Name);
 
                 var toolSw = Stopwatch.StartNew();
-                var outcome = await RunToolAsync(user, call.Name, call.ArgumentsJson, info, isSales, ct);
+                ZakiToolOutcome outcome;
+                try
+                {
+                    outcome = await RunToolAsync(user, call.Name, call.ArgumentsJson, info, isSales, ct);
+                }
+                catch (InvalidOperationException ex)
+                    when (ex.Message.Contains("second operation", StringComparison.OrdinalIgnoreCase))
+                {
+                    // استعلام تاني في نفس اللحظة (بولينج إشعارات مثلًا) لمس نفس الـ DbContext —
+                    // ندي اللحظة تعدي ونعيد الأداة مرة واحدة
+                    _logger.LogWarning("Zaki tool {Tool} hit DbContext concurrency — retrying once", call.Name);
+                    await Task.Delay(500, ct);
+                    outcome = await RunToolAsync(user, call.Name, call.ArgumentsJson, info, isSales, ct);
+                }
                 toolSw.Stop();
 
                 var rows = outcome.Table?.Rows.Count ?? 0;
@@ -207,7 +255,7 @@ public class ZakiAssistantService
 
         _logger.LogWarning("Zaki reached max tool rounds");
         const string maxText = "ما قدرتش أكمل الإجابة، جرّب سؤال أبسط.";
-        await LogAsync(conversationId, question, maxText, false, "MAX_ROUNDS", promptTokens, completionTokens, totalTokens, sw, toolLogs, userName, ct);
+        await LogAsync(conversationId, loggedQuestion, maxText, false, "MAX_ROUNDS", promptTokens, completionTokens, totalTokens, sw, toolLogs, userName, ct, isTest);
         return new ZakiAnswer(false, maxText, totalTokens, toolsUsed, tables, conversationId);
     }
 
@@ -235,6 +283,27 @@ public class ZakiAssistantService
 
         if (ZakiHrService.Handles(toolName))
             return await _hr.ExecuteAsync(user, toolName, argumentsJson, ct);
+
+        if (ZakiBalancesService.Handles(toolName))
+            return await _balances.ExecuteAsync(user, toolName, argumentsJson, ct);
+
+        if (ZakiCashboxService.Handles(toolName))
+            return await _cashbox.ExecuteAsync(user, toolName, argumentsJson, ct);
+
+        if (ZakiStockAlertsService.Handles(toolName))
+            return await _stockAlerts.ExecuteAsync(user, toolName, argumentsJson, ct);
+
+        if (ZakiReturnsAdvancesService.Handles(toolName))
+            return await _returnsAdvances.ExecuteAsync(user, toolName, argumentsJson, ct);
+
+        if (ZakiFeedbackService.Handles(toolName))
+            return await _feedback.ExecuteAsync(user, toolName, argumentsJson, ct);
+
+        if (ZakiFinanceExtraService.Handles(toolName))
+            return await _financeExtra.ExecuteAsync(user, toolName, argumentsJson, ct);
+
+        if (ZakiHrExtraService.Handles(toolName))
+            return await _hrExtra.ExecuteAsync(user, toolName, argumentsJson, ct);
 
         if (ZakiApprovalsService.Handles(toolName))
             return await _approvals.ExecuteAsync(user, toolName, argumentsJson, ct);
@@ -276,7 +345,8 @@ public class ZakiAssistantService
         Stopwatch sw,
         List<ToolLog> toolLogs,
         string userName,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool isTest = false)
     {
         if (conversationId.HasValue)
         {
@@ -291,7 +361,8 @@ public class ZakiAssistantService
             }
         }
 
-        await _log.AddUsageAsync(userName, totalTokens, ct);
+        if (!isTest)
+            await _log.AddUsageAsync(userName, totalTokens, ct);
     }
 
     private static string Truncate(string? text, int max)
@@ -315,7 +386,9 @@ public class ZakiAssistantService
 - ماتبدأش الرد باسم المستخدم ولا بكلمة ترحيب. ابدأ بالإجابة مباشرة، وماتكررش الاسم في الرد.
 - اكتب عربي واضح وطبيعي، من غير كلام حشو أو كلمات زي «يا» و«وبعدين» في أول الرد.
 - أنت للقراءة فقط: لا تنفذ ولا تعد بتنفيذ أي تعديل أو حذف.
-- لو السؤال عن بيانات النظام (عملاء، فرص، مهام، مخزون، شكاوى، أرقام الشركة): اعتمد فقط على نتائج الأدوات، ولا تخترع أرقام أو أسماء أو تواريخ.
+- لو السؤال عن بيانات النظام (عملاء، فرص، مهام، مخزون، شكاوى، فيدباك العملاء، مصروفات، تدفق نقدي، ذمم وحسابات شخصية، سلف، ملخص رواتب، خزينة، أرقام الشركة): اعتمد فقط على نتائج الأدوات، ولا تخترع أرقام أو أسماء أو تواريخ.
+- ملخص الرواتب إجماليات شهرية فقط. متذكرش راتب أي موظف بالاسم حتى لو اتسألت، وقول إن التفاصيل الفردية خارج نطاقك.
+- أسئلة الفيدباك والمصروفات والتدفق النقدي والذمم والسلف: استخدم الأداة المناسبة لو ظاهرة ليك، ومتقولش إنك مش قادر تتحقق قبل ما تجربها.
 - لو السؤال عن الإشعارات: قول عددها الكلي وأهم اللي فوق في نقطتين أو تلاتة. الجدول تحت ردك فيه زرار فتح لكل إشعار، فماتكتبش روابط.
 - لو السؤال عن مهام موظف بالاسم غير المستخدم الحالي: استخدم get_employee_tasks واكتب اسم الموظف زي ما المستخدم كتبه بالظبط. ماتقولش إنك مش قادر تتحقق قبل ما تجرب الأداة دي.
 - لو السؤال عن الفواتير أو المبيعات المفوترة أو عروض الأسعار: اذكر الأرقام الأساسية (العدد، المتبقي، المتأخر) في نقطتين أو تلاتة، والجدول تحت الرد بيعرض التفاصيل.
@@ -326,6 +399,9 @@ public class ZakiAssistantService
 - ماتقولش إن حاجة حصلت (زي إرسال عرض أو اتصال) إلا لو مسجلة في البيانات.
 - لو السؤال عن بيانات ومفيش أداة اتنادت لجلبها، ماتقولش ""مفيش بيانات""، قول إنك مش قادر تتحقق منها دلوقتي.
 - لو السؤال متابعة لرد قبله، استخدم سياق المحادثة السابقة.
+- اكتب المبالغ بفواصل الآلاف واسم العملة (مثال: **12,500 ج.م**)، وغلّف أهم الأرقام (بحد أقصى 3 في الرد) بعلامتين نجميتين **هكذا** عشان تظهر غامقة.
+- اكتب التواريخ بصيغة يوم/شهر/سنة (مثال: 05/10/2026).
+- لو نتائج الأدوات فيها فترة أو تاريخحد للبيانات، اذكره بإيجاز في أول الرد.
 {toolNote}";
     }
 

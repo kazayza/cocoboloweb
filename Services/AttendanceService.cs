@@ -923,202 +923,351 @@ public class AttendanceService : IAttendanceService
 
     // ════════════════════════════════════════════════════════════
     //  معالجة سجلات البصمة (تحويل الخام إلى حضور)
+    //  يوم واحد لكل الموظفين — مسار الاستيراد والمعالجة القديمة
     // ════════════════════════════════════════════════════════════
-    public async Task<(bool Success, string Message)>
-    ProcessBiometricLogsAsync(DateTime date, string currentUserName)
-{
-    try
+    public async Task<(bool Success, string Message)> ProcessBiometricLogsAsync(DateTime date, string currentUserName)
     {
-        // ── 1. جيب سجلات البصمة الخام لليوم ──────────────────
-        var logs = await _db.BiometricLogs.AsNoTracking()
-            .Where(b => b.LogDate.Date == date.Date)
-            .OrderBy(b => b.BiometricCode)
-            .ThenBy(b => b.LogTime)
-            .ToListAsync();
+        var day = await ProcessDayCoreAsync(date, null, includeManual: false, generateCoverage: true, payrollConfirmed: false, currentUserName);
+        return (day.Success, day.Message);
+    }
 
-        // ── 2. جيب الشيفتات الفعالة دفعة واحدة ───────────────
-        var shifts = await _db.EmployeeShifts.AsNoTracking()
-            .Where(s => s.BiometricCode.HasValue
-                     && s.EffectiveFrom <= date
-                     && (s.EffectiveTo == null || s.EffectiveTo >= date))
-            .Select(s => new
-            {
-                s.EmployeeId,
-                s.BiometricCode,
-                s.StartTime,
-                s.EndTime,
-                s.OffDay1,
-                s.OffDay2
-            })
-            .ToListAsync();
+    public async Task<BiometricProcessPreview> PreviewBiometricProcessAsync(DateTime from, DateTime to, int? employeeId)
+    {
+        var range = NormalizeProcessRange(from, to);
+        if (!range.Ok)
+            return new BiometricProcessPreview { Ok = false, Message = range.Message };
 
-        // ── 3. جميع الموظفين النشطين الذين لديهم كود بصمة ────
-        var trackedEmployees = await _db.Employees.AsNoTracking()
-            .Where(e => (e.Status == "نشط" || e.Status == "Active") && e.BioEmployeeId.HasValue)
-            .Select(e => new
-            {
-                e.EmployeeId,
-                BioEmployeeId = e.BioEmployeeId!.Value,
-                e.FullName
-            })
-            .ToListAsync();
+        var employees = await LoadTrackedEmployeesAsync(employeeId);
+        if (!string.IsNullOrEmpty(employees.Error))
+            return new BiometricProcessPreview { Ok = false, Message = employees.Error };
 
-        if (!trackedEmployees.Any())
-            return (false, "لا يوجد موظفون مرتبطون بالبصمة لمعالجة هذا اليوم.");
+        var locked = await GetLockedPayrollMonthsAsync(range.From, range.To, employeeId);
 
-        // ── 4. الاستثناءات المعتمدة لليوم (مع دعم البيانات القديمة) ────
-        var approvedExemptions = await _db.DailyExemptions
-            .Where(x => x.ExemptionDate.Date == date.Date)
-            .ToListAsync();
-
-        approvedExemptions = approvedExemptions
-            .Where(x => ExemptionStatus.InferStatus(x.Status, x.ApprovedBy) == ExemptionStatus.Approved)
-            .ToList();
-
-        // ── 5. جيب السجلات الموجودة دفعة واحدة للـ Upsert ────
-        var trackedBioCodes = trackedEmployees.Select(e => e.BioEmployeeId).Distinct().ToList();
-        var existingRecords = await _db.Attendances
-            .Where(a => a.LogDate.Date == date.Date && trackedBioCodes.Contains(a.BiometricCode))
-            .ToListAsync();
-
-        // ── 6. معالجة من لديه بصمة فعلاً ─────────────────────
-        var toAdd = new List<Attendance>();
-        int processed = 0;
-
-        foreach (var group in logs.GroupBy(l => l.BiometricCode))
+        return new BiometricProcessPreview
         {
-            var bioCode = group.Key;
+            Ok = true,
+            From = range.From,
+            To = range.To,
+            DayCount = range.DayCount,
+            EmployeeCount = employees.Items.Count,
+            EmployeeName = employees.Items.Count == 1 && employeeId.HasValue ? employees.Items[0].FullName : null,
+            LockedPayrollMonths = locked,
+            Message = locked.Count == 0
+                ? $"المعاينة: {range.DayCount} يوم، {employees.Items.Count} موظف."
+                : $"فيه مسير رواتب في: {string.Join("، ", locked)}. جداول الرواتب لن تتغير، لكن لازم تأكيد قبل المعالجة."
+        };
+    }
 
-            var dayLogs = group.OrderBy(l => l.LogTime).ToList();
-            var timeIn = dayLogs.First().LogTime;
-            var timeOut = dayLogs.Count > 1
-                ? dayLogs.Last().LogTime
-                : (TimeOnly?)null;
+    public Task<BiometricProcessDayResult> ProcessBiometricDayAsync(
+        DateTime date, int? employeeId, bool includeManual, bool payrollConfirmed, string currentUserName)
+        => ProcessDayCoreAsync(date, employeeId, includeManual, generateCoverage: true, payrollConfirmed, currentUserName);
 
-            decimal? totalHours = null;
-            if (timeOut.HasValue)
+    private async Task<BiometricProcessDayResult> ProcessDayCoreAsync(
+        DateTime date,
+        int? employeeId,
+        bool includeManual,
+        bool generateCoverage,
+        bool payrollConfirmed,
+        string currentUserName,
+        IReadOnlyCollection<int>? onlyBioCodes = null)
+    {
+        var result = new BiometricProcessDayResult { Date = date.Date };
+        if (date.Date > DateTime.Today)
+        {
+            result.Message = "لا يمكن معالجة تاريخ في المستقبل.";
+            return result;
+        }
+
+        var month = date.ToString("yyyy-MM");
+        if (!payrollConfirmed && await IsPayrollMonthLockedAsync(month, employeeId))
+        {
+            result.NeedsPayrollConfirmation = true;
+            result.Message = $"شهر {month} له مسير رواتب. المعالجة تقف لحد التأكيد، وجداول الرواتب لم تتغير.";
+            return result;
+        }
+
+        try
+        {
+            var tracked = await LoadTrackedEmployeesAsync(employeeId);
+            if (!string.IsNullOrEmpty(tracked.Error))
             {
-                var dur = timeOut.Value.ToTimeSpan() - timeIn.ToTimeSpan();
-                if (dur < TimeSpan.Zero) dur += TimeSpan.FromHours(24);
-                totalHours = (decimal)dur.TotalHours;
+                result.Message = tracked.Error;
+                return result;
             }
 
-            var shift = shifts.FirstOrDefault(s => s.BiometricCode == bioCode);
-            var expectedIn = shift?.StartTime ?? new TimeOnly(8, 0);
-            var expectedOut = shift?.EndTime ?? new TimeOnly(17, 0);
-
-            int lateMinutes = timeIn > expectedIn
-                ? (int)(timeIn - expectedIn).TotalMinutes
-                : 0;
-
-            int earlyLeaveMinutes = timeOut.HasValue && timeOut.Value < expectedOut
-                ? (int)(expectedOut - timeOut.Value).TotalMinutes
-                : 0;
-
-            var status = lateMinutes > 0 ? AttendanceStatus.Late : AttendanceStatus.Present;
-
-            var existing = existingRecords.FirstOrDefault(a => a.BiometricCode == bioCode);
-            if (existing != null)
+            var employees = tracked.Items;
+            if (onlyBioCodes is { Count: > 0 })
             {
+                var set = onlyBioCodes.ToHashSet();
+                employees = employees.Where(e => set.Contains(e.BioEmployeeId)).ToList();
+            }
+
+            if (employees.Count == 0)
+            {
+                result.Success = true;
+                result.Message = "لا يوجد موظفون مرتبطون بالبصمة في هذا النطاق.";
+                return result;
+            }
+
+            var bioCodes = employees.Select(e => e.BioEmployeeId).Distinct().ToList();
+
+            var logs = await _db.BiometricLogs.AsNoTracking()
+                .Where(b => b.LogDate.Date == date.Date && bioCodes.Contains(b.BiometricCode))
+                .OrderBy(b => b.BiometricCode)
+                .ThenBy(b => b.LogTime)
+                .ToListAsync();
+
+            var shifts = await _db.EmployeeShifts.AsNoTracking()
+                .Where(s => s.BiometricCode.HasValue
+                         && bioCodes.Contains(s.BiometricCode.Value)
+                         && s.EffectiveFrom <= date
+                         && (s.EffectiveTo == null || s.EffectiveTo >= date))
+                .Select(s => new { s.BiometricCode, s.StartTime, s.EndTime, s.OffDay1, s.OffDay2 })
+                .ToListAsync();
+
+            var approvedExemptions = (await _db.DailyExemptions
+                    .Where(x => x.ExemptionDate.Date == date.Date && bioCodes.Contains(x.BioEmployeeId))
+                    .ToListAsync())
+                .Where(x => ExemptionStatus.InferStatus(x.Status, x.ApprovedBy) == ExemptionStatus.Approved)
+                .ToList();
+            var exemptionCodes = approvedExemptions.Select(x => x.BioEmployeeId).ToHashSet();
+
+            var existingRecords = await _db.Attendances
+                .Where(a => a.LogDate.Date == date.Date && bioCodes.Contains(a.BiometricCode))
+                .ToListAsync();
+            var existingByCode = existingRecords.ToDictionary(a => a.BiometricCode, a => a);
+            var manualIds = includeManual
+                ? new HashSet<int>()
+                : await GetManualAttendanceIdsAsync(existingRecords.Select(a => a.AttendanceId));
+
+            var punched = new HashSet<int>();
+
+            foreach (var group in logs.GroupBy(l => l.BiometricCode))
+            {
+                var bioCode = group.Key;
+                existingByCode.TryGetValue(bioCode, out var existing);
+                if (existing != null && manualIds.Contains(existing.AttendanceId))
+                {
+                    result.ManualSkipped++;
+                    punched.Add(bioCode);
+                    continue;
+                }
+
+                var dayLogs = group.OrderBy(l => l.LogTime).ToList();
+                var timeIn = dayLogs.First().LogTime;
+                var timeOut = dayLogs.Count > 1 ? dayLogs.Last().LogTime : (TimeOnly?)null;
+                var shift = shifts.FirstOrDefault(s => s.BiometricCode == bioCode);
+                var expectedIn = shift?.StartTime ?? new TimeOnly(8, 0);
+                var expectedOut = shift?.EndTime ?? new TimeOnly(17, 0);
+                var lateMinutes = timeIn > expectedIn ? (int)(timeIn - expectedIn).TotalMinutes : 0;
+                var earlyLeaveMinutes = timeOut.HasValue && timeOut.Value < expectedOut
+                    ? (int)(expectedOut - timeOut.Value).TotalMinutes
+                    : 0;
+                decimal? totalHours = null;
+                if (timeOut.HasValue)
+                {
+                    var dur = timeOut.Value.ToTimeSpan() - timeIn.ToTimeSpan();
+                    if (dur < TimeSpan.Zero) dur += TimeSpan.FromHours(24);
+                    totalHours = (decimal)dur.TotalHours;
+                }
+
+                if (existing == null)
+                {
+                    existing = new Attendance { BiometricCode = bioCode, LogDate = date.Date };
+                    _db.Attendances.Add(existing);
+                    existingByCode[bioCode] = existing;
+                }
+
                 existing.TimeIn = timeIn;
                 existing.TimeOut = timeOut;
                 existing.TotalHours = totalHours;
                 existing.LateMinutes = lateMinutes;
                 existing.EarlyLeaveMinutes = earlyLeaveMinutes;
-                existing.Status = status;
+                existing.Status = lateMinutes > 0 ? AttendanceStatus.Late : AttendanceStatus.Present;
+                result.PunchUpdated++;
+                punched.Add(bioCode);
             }
-            else
+
+            if (generateCoverage)
             {
-                toAdd.Add(new Attendance
+                var isHoliday = await _db.Calendars.AsNoTracking()
+                    .AnyAsync(c => c.CalendarDate.Date == date.Date && c.IsHoliday == true);
+
+                foreach (var employee in employees)
                 {
-                    BiometricCode = bioCode,
-                    LogDate = date.Date,
-                    TimeIn = timeIn,
-                    TimeOut = timeOut,
-                    TotalHours = totalHours,
-                    LateMinutes = lateMinutes,
-                    EarlyLeaveMinutes = earlyLeaveMinutes,
-                    Status = status
-                });
+                    if (punched.Contains(employee.BioEmployeeId))
+                        continue;
+
+                    existingByCode.TryGetValue(employee.BioEmployeeId, out var existing);
+                    if (existing != null && manualIds.Contains(existing.AttendanceId))
+                    {
+                        result.ManualSkipped++;
+                        continue;
+                    }
+
+                    if (existing != null && exemptionCodes.Contains(employee.BioEmployeeId)
+                        && existing.Status is AttendanceStatus.Errand or AttendanceStatus.Permission or AttendanceStatus.EarlyLeave)
+                    {
+                        continue;
+                    }
+
+                    var shift = shifts.FirstOrDefault(s => s.BiometricCode == employee.BioEmployeeId);
+                    var isOffDay = IsEmployeeOffDay(date, shift?.OffDay1, shift?.OffDay2);
+                    var status = isHoliday
+                        ? AttendanceStatus.Holiday
+                        : isOffDay ? AttendanceStatus.OffDay : AttendanceStatus.Absent;
+
+                    if (existing == null)
+                    {
+                        existing = new Attendance
+                        {
+                            BiometricCode = employee.BioEmployeeId,
+                            LogDate = date.Date
+                        };
+                        _db.Attendances.Add(existing);
+                        existingByCode[employee.BioEmployeeId] = existing;
+                        result.CoverageCreated++;
+                    }
+                    else
+                    {
+                        result.CoverageUpdated++;
+                    }
+
+                    existing.TimeIn = null;
+                    existing.TimeOut = null;
+                    existing.TotalHours = null;
+                    existing.LateMinutes = 0;
+                    existing.EarlyLeaveMinutes = 0;
+                    existing.PenaltyHours = 0;
+                    existing.Status = status;
+                }
             }
 
-            processed++;
-        }
-
-        if (toAdd.Any())
-            _db.Attendances.AddRange(toAdd);
-
-        await _db.SaveChangesAsync();
-
-        // ── 7. طبّق الاستثناءات المعتمدة على السجلات الموجودة/المفقودة ────
-        foreach (var exemption in approvedExemptions)
-            await CreateOrUpdateExemptionAttendanceAsync(exemption);
-
-        await _db.SaveChangesAsync();
-
-        // ── 8. أكمل التغطية اليومية: راحة / إجازة / غياب ─────────
-        var isHoliday = await _db.Calendars.AsNoTracking()
-            .AnyAsync(c => c.CalendarDate.Date == date.Date && c.IsHoliday == true);
-
-        var finalRecords = await _db.Attendances
-            .Where(a => a.LogDate.Date == date.Date && trackedBioCodes.Contains(a.BiometricCode))
-            .ToListAsync();
-
-        var attendanceByCode = finalRecords.ToDictionary(a => a.BiometricCode, a => a);
-        int generatedCoverage = 0;
-
-        foreach (var employee in trackedEmployees)
-        {
-            if (attendanceByCode.ContainsKey(employee.BioEmployeeId))
-                continue;
-
-            var shift = shifts.FirstOrDefault(s => s.BiometricCode == employee.BioEmployeeId);
-            var isOffDay = IsEmployeeOffDay(date, shift?.OffDay1, shift?.OffDay2);
-
-            var status = isHoliday
-                ? AttendanceStatus.Holiday
-                : isOffDay
-                    ? AttendanceStatus.OffDay
-                    : AttendanceStatus.Absent;
-
-            _db.Attendances.Add(new Attendance
-            {
-                BiometricCode = employee.BioEmployeeId,
-                LogDate = date.Date,
-                TimeIn = null,
-                TimeOut = null,
-                TotalHours = null,
-                LateMinutes = 0,
-                EarlyLeaveMinutes = 0,
-                Status = status
-            });
-
-            generatedCoverage++;
-        }
-
-        if (generatedCoverage > 0)
             await _db.SaveChangesAsync();
 
-        await _audit.LogAsync("Attendance", "Process",
-            date.ToString("yyyy-MM-dd"), null,
-            new
+            foreach (var exemption in approvedExemptions)
             {
-                ProcessedCount = processed,
-                GeneratedCoverage = generatedCoverage,
-                RawLogs = logs.Count,
-                Date = date
-            },
-            currentUserName);
+                if (existingByCode.TryGetValue(exemption.BioEmployeeId, out var row)
+                    && manualIds.Contains(row.AttendanceId))
+                    continue;
+                await CreateOrUpdateExemptionAttendanceAsync(exemption);
+            }
 
-        return (true,
-            $"✅ تمت معالجة {processed} موظف من البصمة" +
-            (generatedCoverage > 0 ? $" + إنشاء {generatedCoverage} سجل (غياب/راحة/إجازة)" : string.Empty));
+            await _db.SaveChangesAsync();
+
+            await _audit.LogAsync("Attendance", "Process", date.ToString("yyyy-MM-dd"), null, new
+            {
+                result.PunchUpdated,
+                result.CoverageCreated,
+                result.CoverageUpdated,
+                result.ManualSkipped,
+                EmployeeId = employeeId,
+                Date = date.Date
+            }, currentUserName);
+
+            result.Success = true;
+            result.Message =
+                $"تمت معالجة {date:yyyy/MM/dd}: {result.PunchUpdated} من البصمة، " +
+                $"{result.CoverageCreated} سجل جديد، {result.CoverageUpdated} محدّث (غياب/راحة/إجازة)" +
+                (result.ManualSkipped > 0 ? $"، وتخطي {result.ManualSkipped} تعديل يدوي" : "");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            result.Message = $"حدث خطأ في {date:yyyy/MM/dd}: {ex.Message}";
+            return result;
+        }
     }
-    catch (Exception ex)
+
+    private static (bool Ok, string Message, DateTime From, DateTime To, int DayCount) NormalizeProcessRange(DateTime from, DateTime to)
     {
-        return (false, $"حدث خطأ: {ex.Message}");
+        var start = from.Date;
+        var end = to.Date;
+        if (end < start)
+            (start, end) = (end, start);
+        if (start > DateTime.Today)
+            return (false, "الفترة كلها في المستقبل.", start, end, 0);
+        if (end > DateTime.Today)
+            end = DateTime.Today;
+        var days = (end - start).Days + 1;
+        if (days > 31)
+            return (false, "الحد 31 يوم في المرة الواحدة. قسّم الفترة أو اختار شهر واحد.", start, end, days);
+        return (true, "", start, end, days);
     }
-}
+
+    private async Task<List<string>> GetLockedPayrollMonthsAsync(DateTime from, DateTime to, int? employeeId)
+    {
+        var months = new List<string>();
+        for (var cursor = new DateTime(from.Year, from.Month, 1); cursor <= to; cursor = cursor.AddMonths(1))
+            months.Add(cursor.ToString("yyyy-MM"));
+
+        var locked = new List<string>();
+        foreach (var month in months.Distinct())
+        {
+            if (await IsPayrollMonthLockedAsync(month, employeeId))
+                locked.Add(month);
+        }
+        return locked;
+    }
+
+    private async Task<bool> IsPayrollMonthLockedAsync(string month, int? employeeId)
+    {
+        var closed = new[] { PayrollPaymentStatuses.Cancelled, PayrollPaymentStatuses.Rejected };
+        var payrolls = _db.Payrolls.AsNoTracking().Where(p => p.PayrollMonth == month);
+        if (employeeId.HasValue)
+            payrolls = payrolls.Where(p => p.EmployeeId == employeeId.Value);
+
+        var hasPayroll = await payrolls.AnyAsync(p => p.PaymentStatus == null || !closed.Contains(p.PaymentStatus));
+        if (hasPayroll)
+            return true;
+
+        if (employeeId.HasValue)
+            return false;
+
+        return await _db.PayrollRuns.AsNoTracking().AnyAsync(r =>
+            r.PayrollMonth == month && r.Status != "Cancelled" && r.Status != "Rejected");
+    }
+
+    private async Task<(List<(int EmployeeId, int BioEmployeeId, string FullName)> Items, string? Error)> LoadTrackedEmployeesAsync(int? employeeId)
+    {
+        var query = _db.Employees.AsNoTracking()
+            .Where(e => (e.Status == "نشط" || e.Status == "Active") && e.BioEmployeeId.HasValue);
+        if (employeeId.HasValue)
+            query = query.Where(e => e.EmployeeId == employeeId.Value);
+
+        var items = await query
+            .Select(e => new { e.EmployeeId, Bio = e.BioEmployeeId!.Value, e.FullName })
+            .ToListAsync();
+
+        if (employeeId.HasValue && items.Count == 0)
+            return (new(), "الموظف غير موجود، أو غير نشط، أو غير مربوط بكود بصمة.");
+
+        return (items.Select(e => (e.EmployeeId, e.Bio, e.FullName)).ToList(), null);
+    }
+
+    private async Task<HashSet<int>> GetManualAttendanceIdsAsync(IEnumerable<int> attendanceIds)
+    {
+        var ids = attendanceIds.Where(id => id > 0).Distinct().ToList();
+        if (ids.Count == 0)
+            return new HashSet<int>();
+
+        var keys = ids.Select(id => id.ToString()).ToList();
+        var logged = await _db.AuditLogs.AsNoTracking()
+            .Where(a => a.TableName == "Attendance"
+                     && a.PrimaryKeyValue != null
+                     && keys.Contains(a.PrimaryKeyValue)
+                     && (a.ActionType == "Update" || a.ActionType == "Insert"))
+            .Select(a => a.PrimaryKeyValue)
+            .ToListAsync();
+
+        var manual = new HashSet<int>();
+        foreach (var key in logged)
+        {
+            if (int.TryParse(key, out var id))
+                manual.Add(id);
+        }
+        return manual;
+    }
 
     public async Task<BiometricImportResultDto> ImportBiometricLogsAsync(Stream fileStream, string fileName, BiometricImportOptionsDto options, string currentUserName)
     {
@@ -1214,10 +1363,16 @@ public class AttendanceService : IAttendanceService
                 {
                     foreach (var dateGroup in toInsert.GroupBy(x => x.LogDate.Date))
                     {
-                        await ProcessBiometricLogsForBiometricCodesAsync(
+                        var partial = await ProcessDayCoreAsync(
                             dateGroup.Key,
-                            dateGroup.Select(x => x.BiometricCode).Distinct().ToList(),
-                            currentUserName);
+                            employeeId: null,
+                            includeManual: false,
+                            generateCoverage: false,
+                            payrollConfirmed: false,
+                            currentUserName,
+                            onlyBioCodes: dateGroup.Select(x => x.BiometricCode).Distinct().ToList());
+                        if (!partial.Success)
+                            result.Warnings.Add(partial.Message);
                     }
                 }
             }
@@ -1556,78 +1711,7 @@ public class AttendanceService : IAttendanceService
         };
     }
 
-    private async Task ProcessBiometricLogsForBiometricCodesAsync(DateTime date, IReadOnlyCollection<int> biometricCodes, string currentUserName)
-    {
-        if (!biometricCodes.Any()) return;
 
-        var logs = await _db.BiometricLogs.AsNoTracking()
-            .Where(b => b.LogDate.Date == date.Date && biometricCodes.Contains(b.BiometricCode))
-            .OrderBy(b => b.BiometricCode)
-            .ThenBy(b => b.LogTime)
-            .ToListAsync();
-
-        var shifts = await _db.EmployeeShifts.AsNoTracking()
-            .Where(s => s.BiometricCode.HasValue
-                     && biometricCodes.Contains(s.BiometricCode.Value)
-                     && s.EffectiveFrom <= date
-                     && (s.EffectiveTo == null || s.EffectiveTo >= date))
-            .Select(s => new { s.BiometricCode, s.StartTime, s.EndTime })
-            .ToListAsync();
-
-        var exemptions = await _db.DailyExemptions
-            .Where(x => x.ExemptionDate.Date == date.Date && biometricCodes.Contains(x.BioEmployeeId))
-            .ToListAsync();
-        exemptions = exemptions.Where(x => ExemptionStatus.InferStatus(x.Status, x.ApprovedBy) == ExemptionStatus.Approved).ToList();
-
-        var existingRecords = await _db.Attendances
-            .Where(a => a.LogDate.Date == date.Date && biometricCodes.Contains(a.BiometricCode))
-            .ToListAsync();
-
-        foreach (var group in logs.GroupBy(l => l.BiometricCode))
-        {
-            var bioCode = group.Key;
-            var dayLogs = group.OrderBy(l => l.LogTime).ToList();
-            var timeIn = dayLogs.First().LogTime;
-            var timeOut = dayLogs.Count > 1 ? dayLogs.Last().LogTime : (TimeOnly?)null;
-
-            var shift = shifts.FirstOrDefault(s => s.BiometricCode == bioCode);
-            var expectedIn = shift?.StartTime ?? new TimeOnly(8, 0);
-            var expectedOut = shift?.EndTime ?? new TimeOnly(17, 0);
-            int lateMinutes = timeIn > expectedIn ? (int)(timeIn - expectedIn).TotalMinutes : 0;
-            int earlyLeaveMinutes = timeOut.HasValue && timeOut.Value < expectedOut ? (int)(expectedOut - timeOut.Value).TotalMinutes : 0;
-
-            decimal? totalHours = null;
-            if (timeOut.HasValue)
-            {
-                var duration = timeOut.Value.ToTimeSpan() - timeIn.ToTimeSpan();
-                if (duration < TimeSpan.Zero) duration += TimeSpan.FromHours(24);
-                totalHours = (decimal)duration.TotalHours;
-            }
-
-            var status = lateMinutes > 0 ? AttendanceStatus.Late : AttendanceStatus.Present;
-            var existing = existingRecords.FirstOrDefault(a => a.BiometricCode == bioCode);
-            if (existing == null)
-            {
-                existing = new Attendance { BiometricCode = bioCode, LogDate = date.Date };
-                _db.Attendances.Add(existing);
-                existingRecords.Add(existing);
-            }
-
-            existing.TimeIn = timeIn;
-            existing.TimeOut = timeOut;
-            existing.TotalHours = totalHours;
-            existing.LateMinutes = lateMinutes;
-            existing.EarlyLeaveMinutes = earlyLeaveMinutes;
-            existing.Status = status;
-        }
-
-        await _db.SaveChangesAsync();
-
-        foreach (var exemption in exemptions)
-            await CreateOrUpdateExemptionAttendanceAsync(exemption);
-
-        await _db.SaveChangesAsync();
-    }
 
     private async Task<(TimeOnly StartTime, TimeOnly EndTime)> GetExpectedShiftWindowAsync(int biometricCode, DateTime date)
     {

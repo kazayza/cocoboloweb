@@ -139,3 +139,126 @@ window.idleLogout = {
         this.dotNetRef = null;
     }
 };
+
+// ═══════════════ Zaki FAB — سحب وحفظ المكان (P4) ═══════════════
+
+window.zakiFabDragged = false;
+
+window.zakiInitFab = function () {
+    const btn = document.getElementById('zakiFab');
+    if (!btn || btn.dataset.zakiInit === '1') return;
+    btn.dataset.zakiInit = '1';
+
+    const MARGIN = 12;
+
+    // حمّل المكان المحفوظ
+    try {
+        const saved = localStorage.getItem('zakiFabPos');
+        if (saved) {
+            const p = saved.split('|');
+            const right = parseFloat(p[0]);
+            const bottom = parseFloat(p[1]);
+            if (!isNaN(right) && !isNaN(bottom)) {
+                btn.style.right = Math.max(MARGIN, Math.min(right, window.innerWidth - btn.offsetWidth - MARGIN)) + 'px';
+                btn.style.bottom = Math.max(MARGIN, Math.min(bottom, window.innerHeight - btn.offsetHeight - MARGIN)) + 'px';
+            }
+        }
+    } catch (e) { }
+
+    let dragging = false, moved = false;
+    let startX = 0, startY = 0, startRight = 0, startBottom = 0;
+
+    btn.addEventListener('pointerdown', function (e) {
+        dragging = true;
+        moved = false;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = btn.getBoundingClientRect();
+        startRight = window.innerWidth - rect.right;
+        startBottom = window.innerHeight - rect.bottom;
+        try { btn.setPointerCapture(e.pointerId); } catch (ex) { }
+        e.preventDefault();
+    });
+
+    btn.addEventListener('pointermove', function (e) {
+        if (!dragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        if (!moved && Math.abs(dx) + Math.abs(dy) < 8) return;
+        moved = true;
+        btn.classList.add('zk-dragging');
+
+        const maxRight = window.innerWidth - btn.offsetWidth - MARGIN;
+        const maxBottom = window.innerHeight - btn.offsetHeight - MARGIN;
+        btn.style.right = Math.max(MARGIN, Math.min(startRight - dx, maxRight)) + 'px';
+        btn.style.bottom = Math.max(MARGIN, Math.min(startBottom - dy, maxBottom)) + 'px';
+    });
+
+    function endDrag() {
+        if (!dragging) return;
+        dragging = false;
+        btn.classList.remove('zk-dragging');
+        if (moved) {
+            window.zakiFabDragged = true;
+            setTimeout(function () { window.zakiFabDragged = false; }, 300);
+            try {
+                const rect = btn.getBoundingClientRect();
+                localStorage.setItem('zakiFabPos',
+                    (window.innerWidth - rect.right) + '|' + (window.innerHeight - rect.bottom));
+            } catch (e) { }
+        }
+    }
+
+    // الصور جوّه الزرار ممنوع المتصفح يسحبها سحب أصلي
+    btn.addEventListener('dragstart', function (e) { e.preventDefault(); });
+
+    btn.addEventListener('pointerup', endDrag);
+    btn.addEventListener('pointercancel', endDrag);
+
+    // لما المقاس يتغير نرجع الزرار جوه الشاشة
+    window.addEventListener('resize', function () {
+        const rect = btn.getBoundingClientRect();
+        const right = window.innerWidth - rect.right;
+        const bottom = window.innerHeight - rect.bottom;
+        const maxRight = window.innerWidth - btn.offsetWidth - MARGIN;
+        const maxBottom = window.innerHeight - btn.offsetHeight - MARGIN;
+        btn.style.right = Math.max(MARGIN, Math.min(right, maxRight)) + 'px';
+        btn.style.bottom = Math.max(MARGIN, Math.min(bottom, maxBottom)) + 'px';
+        window.zakiAnchorPanel();
+    });
+};
+
+window.zakiFabWasDragged = function () {
+    return window.zakiFabDragged === true;
+};
+
+// يثبت النافذة الصغيرة جنب الزرار (بتتنادى بعد كل رسم)
+window.zakiAnchorPanel = function () {
+    const btn = document.getElementById('zakiFab');
+    const panel = document.getElementById('zakiMiniPanel');
+    if (!btn || !panel) return;
+
+    const MARGIN = 12;
+    const rect = btn.getBoundingClientRect();
+    const right = window.innerWidth - rect.right;
+    const bottom = window.innerHeight - rect.bottom;
+
+    const maxPanelRight = Math.max(MARGIN, window.innerWidth - panel.offsetWidth - MARGIN);
+    panel.style.right = Math.max(MARGIN, Math.min(right, maxPanelRight)) + 'px';
+    panel.style.bottom = (bottom + rect.height + 12) + 'px';
+};
+
+
+// احتياطي: لو Blazor مناداش zakiInitFab (كاش قديم مثلًا) — نشغله لوحده أول ما الزرار يظهر
+(function zakiFabAutoInit() {
+    let tries = 0;
+    const timer = setInterval(function () {
+        tries++;
+        if (document.getElementById('zakiFab')) {
+            clearInterval(timer);
+            if (window.zakiInitFab) window.zakiInitFab();
+        } else if (tries > 40) {
+            clearInterval(timer);
+        }
+    }, 500);
+})();

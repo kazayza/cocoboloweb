@@ -94,6 +94,8 @@ public class EmployeeShiftService : IEmployeeShiftService
                 EndTime = s.EndTime,
                 EffectiveFrom = s.EffectiveFrom,
                 EffectiveTo = s.EffectiveTo,
+                OffDay1 = s.OffDay1,
+                OffDay2 = s.OffDay2,
                 CreatedBy = s.CreatedBy,
                 CreatedAt = s.CreatedAt
             })
@@ -372,7 +374,7 @@ public class EmployeeShiftService : IEmployeeShiftService
         using var workbook = new XLWorkbook();
         var ws = workbook.Worksheets.Add("شيفتات الموظفين");
 
-        var headers = new[] { "م", "اسم الموظف", "القسم", "كود البصمة", "نوع الشيفت", "وقت البدء", "وقت الانتهاء", "المدة", "تاريخ البدء", "تاريخ الانتهاء", "الحالة" };
+        var headers = new[] { "م", "اسم الموظف", "القسم", "كود البصمة", "نوع الشيفت", "وقت البدء", "وقت الانتهاء", "المدة", "أيام الراحة", "تاريخ البدء", "تاريخ الانتهاء", "الحالة" };
 
         for (int i = 0; i < headers.Length; i++)
         {
@@ -396,9 +398,10 @@ public class EmployeeShiftService : IEmployeeShiftService
             ws.Cell(row, 6).Value = item.StartTimeDisplay;
             ws.Cell(row, 7).Value = item.EndTimeDisplay;
             ws.Cell(row, 8).Value = item.DurationDisplay;
-            ws.Cell(row, 9).Value = item.EffectiveFromDisplay;
-            ws.Cell(row, 10).Value = item.EffectiveToDisplay ?? "مستمر";
-            ws.Cell(row, 11).Value = item.IsActive ? "نشط" : "منتهي";
+            ws.Cell(row, 9).Value = item.OffDaysDisplay;
+            ws.Cell(row, 10).Value = item.EffectiveFromDisplay;
+            ws.Cell(row, 11).Value = item.EffectiveToDisplay ?? "مستمر";
+            ws.Cell(row, 12).Value = item.IsActive ? "نشط" : "منتهي";
 
             for (int col = 1; col <= headers.Length; col++)
                 ws.Cell(row, col).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
