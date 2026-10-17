@@ -8,6 +8,7 @@
 @inject ZakiAssistantService ZakiService
 @inject ZakiChatState State
 @inject ZakiLogService LogService
+@inject ISnackbar Snackbar
 @inject ZakiVoiceService VoiceService
 @inject AuthenticationStateProvider AuthProvider
 @inject IJSRuntime JS
@@ -92,6 +93,24 @@
                     <div class="zk-bot-body">
 
                         <div class="zk-bubble @(item.Ok ? "" : "zk-bubble-error")">@RenderRich(item.Text)</div>
+
+                        @if (item.MessageId.HasValue)
+                        {
+                            <div class="zk-feedback">
+                                <MudIconButton Icon="@(item.Useful == true ? Icons.Material.Filled.ThumbUp : Icons.Material.Outlined.ThumbUp)"
+                                               Size="Size.Small" Title="مفيد"
+                                               Color="@(item.Useful == true ? Color.Success : Color.Default)"
+                                               OnClick="@(() => GiveFeedbackAsync(item, true))" />
+                                <MudIconButton Icon="@(item.Useful == false ? Icons.Material.Filled.ThumbDown : Icons.Material.Outlined.ThumbDown)"
+                                               Size="Size.Small" Title="مش مفيد"
+                                               Color="@(item.Useful == false ? Color.Error : Color.Default)"
+                                               OnClick="@(() => GiveFeedbackAsync(item, false))" />
+                                @if (item.Useful != null)
+                                {
+                                    <span class="zk-feedback-note">@(item.Useful == true ? "اتسجل: مفيد ✓" : "اتسجل: مش مفيد. هنحسّن الرد ده")</span>
+                                }
+                            </div>
+                        }
 
                         @if (item.Tools.Count > 0)
                         {
@@ -234,6 +253,27 @@
 </div>
 
 @code {
+    /// <summary>بيسجل 👍 / 👎 على رد زكي</summary>
+    private async Task GiveFeedbackAsync(ZakiChatItem item, bool useful)
+    {
+        if (item.MessageId is not { } messageId)
+            return;
+
+        // المستخدم يقدر يغيّر رأيه: الحفظ بيحدّث التقييم القديم
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var userName = auth.User.Identity?.Name ?? "";
+
+        if (await LogService.SaveFeedbackAsync(messageId, userName, useful))
+        {
+            item.Useful = useful;
+            Snackbar.Add(useful ? "شكراً، اتسجل إنه مفيد" : "شكراً، اتسجل إنه مش مفيد", Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add("ماقدرتش أسجل التقييم دلوقتي", Severity.Warning);
+        }
+    }
+
     /// <summary>وضع النافذة الصغيرة (الزر العائم)</summary>
     [Parameter] public bool Compact { get; set; }
 
@@ -413,7 +453,8 @@
             Ok = result.Success,
             Tokens = result.TotalTokens,
             Tools = result.ToolsUsed.ToList(),
-            Tables = result.Tables.ToList()
+            Tables = result.Tables.ToList(),
+            MessageId = result.MessageId
         });
 
         State.SetBusy(false);
@@ -583,50 +624,7 @@
         }
     }
 
-    private static string ToolLabel(string name) => name switch
-    {
-        "get_open_opportunities" => "الفرص المفتوحة",
-        "get_open_tasks" => "المهام المفتوحة",
-        "get_overdue_tasks" => "المهام المتأخرة",
-        "get_crm_summary" => "ملخص CRM",
-        "get_recent_interactions" => "التواصلات",
-        "get_leads" => "العملاء المحتملين",
-        "get_marketing_summary" => "التسويق",
-        "get_executive_summary" => "المؤشرات التنفيذية",
-        "get_employee_activity" => "نشاط الموظف",
-        "get_product_stock" => "رصيد الصنف",
-        "get_stock_movements" => "حركات المخزون",
-        "get_stock_value" => "قيمة المخزون",
-        "get_open_complaints" => "الشكاوى المفتوحة",
-        "get_customer_care_summary" => "خدمة العملاء",
-        "get_unread_notifications" => "الإشعارات",
-        "get_sales_invoices_summary" => "ملخص الفواتير",
-        "get_open_sales_invoices" => "الفواتير المفتوحة",
-        "get_open_quotations" => "عروض الأسعار",
-        "get_largest_sales_invoices" => "أعلى الفواتير",
-        "get_undelivered_sales_invoices" => "فواتير لم تُسلَّم",
-        "get_top_customers" => "أعلى العملاء",
-        "get_top_products" => "أعلى المنتجات",
-        "get_sales_breakdown" => "تفصيل المبيعات",
-        "get_sales_invoice_details" => "تفاصيل فاتورة",
-        "get_customer_invoices" => "فواتير عميل",
-        "get_purchase_invoices_summary" => "ملخص المشتريات",
-        "get_open_purchase_invoices" => "مستحقات الموردين",
-        "get_purchase_invoice_details" => "تفاصيل فاتورة شراء",
-        "get_payments_summary" => "المدفوعات",
-        "get_employee_tasks" => "مهام موظف",
-        "get_invoice_edit_history" => "سجل تعديلات الفاتورة",
-        "get_pending_invoice_edit_requests" => "طلبات التعديل المعلقة",
-        "get_price_change_requests" => "طلبات تعديل الأسعار",
-        "get_pending_delivery_permissions" => "إذن التسليم المعلق",
-        "get_attendance_today" => "الحضور اليوم",
-        "get_employee_attendance" => "حضور موظف",
-        "get_employees_overview" => "الموظفين",
-        "get_exemptions" => "الاستثناءات والإذونات",
-        "get_my_schedule" => "شيفتاتي",
-        "get_sales_by_employee" => "ترتيب البائعين",
-        _ => name
-    };
+    private static string ToolLabel(string name) => ZakiLabels.Tool(name);
 
     private static string ToolIcon(string name) => name switch
     {
@@ -651,6 +649,9 @@
         "get_largest_sales_invoices" => Icons.Material.Filled.EmojiEvents,
         "get_sales_by_employee" => Icons.Material.Filled.Leaderboard,
         "get_undelivered_sales_invoices" => Icons.Material.Filled.LocalShipping,
+        "get_job_orders" => Icons.Material.Filled.Build,
+        "get_world_news" => Icons.Material.Filled.Newspaper,
+        "get_exchange_rate" => Icons.Material.Filled.CurrencyExchange,
         "get_top_customers" => Icons.Material.Filled.Groups,
         "get_top_products" => Icons.Material.Filled.Inventory2,
         "get_sales_breakdown" => Icons.Material.Filled.PieChart,
@@ -670,6 +671,10 @@
         "get_employees_overview" => Icons.Material.Filled.Badge,
         "get_exemptions" => Icons.Material.Filled.EventBusy,
         "get_my_schedule" => Icons.Material.Filled.Schedule,
+        "find_screen" => Icons.Material.Filled.Search,
+        "get_income_statement" => Icons.Material.Filled.Assessment,
+        "get_balance_sheet" => Icons.Material.Filled.AccountBalance,
+        "get_branches_comparison" => Icons.Material.Filled.Store,
         _ => Icons.Material.Filled.Hub
     };
 }

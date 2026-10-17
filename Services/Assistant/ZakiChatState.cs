@@ -10,6 +10,12 @@ public class ZakiChatItem
     public List<string> Tools { get; init; } = new();
     public List<ZakiTable> Tables { get; init; } = new();
     public DateTime CreatedAt { get; init; } = DateTime.Now;
+
+    /// <summary>رقم الرسالة في قاعدة البيانات (عشان التقييم 👍/👎)</summary>
+    public long? MessageId { get; set; }
+
+    /// <summary>التقييم اللي اتسجل: true = مفيد، false = مش مفيد، null = لسه</summary>
+    public bool? Useful { get; set; }
 }
 
 /// <summary>
@@ -113,7 +119,8 @@ public class ZakiChatState
             {
                 IsUser = false,
                 Text = r.AnswerText ?? "—",
-                Ok = r.IsSuccess
+                Ok = r.IsSuccess,
+                MessageId = r.MessageId
             });
         }
     }

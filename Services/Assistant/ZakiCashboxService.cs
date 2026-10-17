@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using COCOBOLOERPNEW.DTOs;
+using COCOBOLOERPNEW.Models;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using static COCOBOLOERPNEW.Services.Assistant.ZakiInvoiceQueries;
 
@@ -18,11 +20,16 @@ public class ZakiCashboxService
     public const string GetCashboxTransactions = "get_cashbox_transactions";
 
     private readonly ICashBoxService _cashbox;
+    private readonly IDbContextFactory<db24804Context> _dbFactory;
     private readonly ILogger<ZakiCashboxService> _logger;
 
-    public ZakiCashboxService(ICashBoxService cashbox, ILogger<ZakiCashboxService> logger)
+    public ZakiCashboxService(
+        ICashBoxService cashbox,
+        IDbContextFactory<db24804Context> dbFactory,
+        ILogger<ZakiCashboxService> logger)
     {
         _cashbox = cashbox;
+        _dbFactory = dbFactory;
         _logger = logger;
     }
 
@@ -58,8 +65,8 @@ public class ZakiCashboxService
         try
         {
             return name == GetCashboxSummary
-                ? await SummaryAsync(args, ct)
-                : await TransactionsAsync(args, ct);
+                ? await SummaryAsync(user, args, ct)
+                : await TransactionsAsync(user, args, ct);
         }
         catch (Exception ex)
         {
@@ -69,11 +76,34 @@ public class ZakiCashboxService
     }
 
     // ── ملخص الخزن: أرصدة + وارد/صادر ──
-    private async Task<ZakiToolOutcome> SummaryAsync(System.Text.Json.JsonElement args, CancellationToken ct)
+    private async Task<ZakiToolOutcome> SummaryAsync(
+        ClaimsPrincipal user, System.Text.Json.JsonElement args, CancellationToken ct)
     {
         var (start, label) = PeriodRange(ReadString(args, "period", "all"), DateTime.Today);
 
         var boxes = await _cashbox.GetSummaryAsync(start, null);
+
+        // فلتر الفرع اختياري: الخزينة مربوطة بالفرع (CashBox.BranchId)
+        var branchSearch = ReadRawString(args, "branch_name");
+        if (branchSearch.Length > 0)
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var (branchId, branchName, branchError) = await ResolveBranchAsync(db, user, branchSearch, ct);
+            if (branchError != null)
+                return branchError;
+
+            var branchBoxIds = await db.CashBoxes.AsNoTracking()
+                .Where(c => c.BranchId == branchId)
+                .Select(c => c.CashBoxId)
+                .ToListAsync(ct);
+
+            boxes = boxes.Where(b => branchBoxIds.Contains(b.CashBoxId)).ToList();
+            label = label + " — " + branchName;
+
+            if (boxes.Count == 0)
+                return Message("مفيش خزن مربوطة بالفرع ده.");
+        }
+
         if (boxes.Count == 0)
             return Message("مفيش خزن معرّفة في النظام.");
 
@@ -107,28 +137,73 @@ public class ZakiCashboxService
     }
 
     // ── حركات الخزينة (وارد/صادر) لفترة ──
-    private async Task<ZakiToolOutcome> TransactionsAsync(System.Text.Json.JsonElement args, CancellationToken ct)
+    private async Task<ZakiToolOutcome> TransactionsAsync(
+        ClaimsPrincipal user, System.Text.Json.JsonElement args, CancellationToken ct)
     {
         var (start, label) = PeriodRange(ReadString(args, "period", "today"), DateTime.Today);
         var typeRaw = ReadString(args, "type", "all").ToLowerInvariant();
         var limit = ReadInt(args, "limit", 20, 1, 50);
+        var typeFilter = typeRaw == "in" ? "In" : typeRaw == "out" ? "Out" : null;
 
-        var filter = new CashBoxTransactionFilterDto
+        // فلتر الفرع اختياري: الخزينة مربوطة بالفرع (CashBox.BranchId).
+        // الخدمة بتقرأ خزينة واحدة في المرة، فبنجيب حركات كل خزن الفرع ونجمعهم ونرتبهم.
+        var branchSearch = ReadRawString(args, "branch_name");
+        List<int>? branchBoxIds = null;
+        if (branchSearch.Length > 0)
         {
-            DateFrom = start,
-            TransactionType = typeRaw == "in" ? "In" : typeRaw == "out" ? "Out" : null,
-            PageNumber = 1,
-            PageSize = limit
-        };
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var (branchId, branchName, branchError) = await ResolveBranchAsync(db, user, branchSearch, ct);
+            if (branchError != null)
+                return branchError;
 
-        var page = await _cashbox.GetTransactionsAsync(filter);
-        var (totalIn, totalOut) = await _cashbox.GetTransactionsTotalsAsync(filter);
+            branchBoxIds = await db.CashBoxes.AsNoTracking()
+                .Where(c => c.BranchId == branchId)
+                .Select(c => c.CashBoxId)
+                .ToListAsync(ct);
 
-        if (page.Items.Count == 0)
+            if (branchBoxIds.Count == 0)
+                return Message("مفيش خزن مربوطة بالفرع ده.");
+
+            label = label + " — " + branchName;
+        }
+
+        var filters = branchBoxIds == null
+            ? new List<CashBoxTransactionFilterDto>
+            {
+                new() { DateFrom = start, TransactionType = typeFilter, PageNumber = 1, PageSize = limit }
+            }
+            : branchBoxIds.Select(id => new CashBoxTransactionFilterDto
+            {
+                CashBoxId = id,
+                DateFrom = start,
+                TransactionType = typeFilter,
+                PageNumber = 1,
+                PageSize = limit
+            }).ToList();
+
+        var items = new List<CashBoxTransactionDto>();
+        decimal totalIn = 0m;
+        decimal totalOut = 0m;
+        var totalCount = 0;
+
+        foreach (var filter in filters)
+        {
+            var page = await _cashbox.GetTransactionsAsync(filter);
+            var (inSum, outSum) = await _cashbox.GetTransactionsTotalsAsync(filter);
+
+            items.AddRange(page.Items);
+            totalIn += inSum;
+            totalOut += outSum;
+            totalCount += page.TotalCount;
+        }
+
+        items = items.OrderByDescending(t => t.TransactionDate).Take(limit).ToList();
+
+        if (items.Count == 0)
             return Message($"مفيش حركات خزينة في الفترة دي ({label}).");
 
         var headers = new[] { "التاريخ", "الخزينة", "النوع", "المبلغ", "البيان", "بواسطة" };
-        var rows = page.Items.Select(t => (IReadOnlyList<string>)new[]
+        var rows = items.Select(t => (IReadOnlyList<string>)new[]
         {
             Date(t.TransactionDate),
             t.CashBoxName,
@@ -145,8 +220,8 @@ public class ZakiCashboxService
             ["إجمالي الوارد"] = Money(totalIn),
             ["إجمالي الصادر"] = Money(totalOut),
             ["صافي الفترة"] = Money(totalIn - totalOut),
-            ["عدد الحركات المعروضة"] = page.Items.Count,
-            ["إجمالي عدد الحركات"] = page.TotalCount,
+            ["عدد الحركات المعروضة"] = items.Count,
+            ["إجمالي عدد الحركات"] = totalCount,
             ["حركات الخزينة"] = ToObjects(headers, rows)
         });
 
@@ -161,7 +236,8 @@ public class ZakiCashboxService
             type = "object",
             properties = new
             {
-                period = PeriodSchema("الافتراضي all — الوارد/صادر بيتحسب من بداية الفترة")
+                period = PeriodSchema("الافتراضي all — الوارد/صادر بيتحسب من بداية الفترة"),
+                branch_name = new { type = "string", description = "اسم الفرع (اختياري). فاضي = كل الفروع. «فرعي» = فرع المستخدم." }
             }
         });
 
@@ -175,7 +251,8 @@ public class ZakiCashboxService
             {
                 period = PeriodSchema("الافتراضي today"),
                 type = new { type = "string", description = "in / out / all (الافتراضي all)", @enum = new[] { "in", "out", "all" } },
-                limit = new { type = "integer", description = "عدد الصفوف (1-50، الافتراضي 20)" }
+                limit = new { type = "integer", description = "عدد الصفوف (1-50، الافتراضي 20)" },
+                branch_name = new { type = "string", description = "اسم الفرع (اختياري). فاضي = كل الفروع. «فرعي» = فرع المستخدم." }
             }
         });
 

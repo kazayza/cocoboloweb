@@ -3,6 +3,8 @@ using System.Security.Claims;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using COCOBOLOERPNEW.DTOs;
+using COCOBOLOERPNEW.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services.Assistant;
 
@@ -59,6 +61,7 @@ public class ZakiToolExecutor
     private readonly ICrmDashboardService _dashboard;
     private readonly IInteractionService _interactions;
     private readonly ILeadsCrmService _leads;
+    private readonly IDbContextFactory<db24804Context> _dbFactory;
     private readonly IMarketingDashboardService _marketing;
     private readonly IExecutiveCockpitService _cockpit;
     private readonly ILogger<ZakiToolExecutor> _logger;
@@ -69,6 +72,7 @@ public class ZakiToolExecutor
         ICrmDashboardService dashboard,
         IInteractionService interactions,
         ILeadsCrmService leads,
+        IDbContextFactory<db24804Context> dbFactory,
         IMarketingDashboardService marketing,
         IExecutiveCockpitService cockpit,
         ILogger<ZakiToolExecutor> logger)
@@ -78,6 +82,7 @@ public class ZakiToolExecutor
         _dashboard = dashboard;
         _interactions = interactions;
         _leads = leads;
+        _dbFactory = dbFactory;
         _marketing = marketing;
         _cockpit = cockpit;
         _logger = logger;
@@ -144,7 +149,7 @@ public class ZakiToolExecutor
             GetOverdueTasks => await TasksAsync(args, overdueOnly: true, own),
             GetCrmSummary => await SummaryAsync(user),
             GetRecentInteractions => await InteractionsAsync(args, own),
-            GetLeads => await LeadsAsync(args, own),
+            GetLeads => await LeadsAsync(args, own, ct),
             GetMarketingSummary => await MarketingAsync(args),
             GetExecutiveSummary => await ExecutiveAsync(args),
             _ => new ZakiToolOutcome(
@@ -332,9 +337,15 @@ public class ZakiToolExecutor
     // ════════════════════════════════════════════════════════════
     // 5) العملاء المحتملين (ملخص، أو المتابعات المتأخرة)
     // ════════════════════════════════════════════════════════════
-    private async Task<ZakiToolOutcome> LeadsAsync(JsonElement args, int? own)
+    private async Task<ZakiToolOutcome> LeadsAsync(JsonElement args, int? own, CancellationToken ct)
     {
         var view = ReadString(args, "view") ?? "summary";
+
+        if (view == "upcoming_followups")
+            return await UpcomingFollowUpsAsync(args, own, ct);
+
+        if (view is "by_source" or "by_campaign" or "by_form")
+            return await LeadBreakdownAsync(view, own, ct);
 
         if (view == "late_followups")
         {
@@ -394,6 +405,136 @@ public class ZakiToolExecutor
         });
 
         return new ZakiToolOutcome(summaryJson, new ZakiTable("ملخص العملاء المحتملين", summaryHeaders, summaryRows));
+    }
+
+    // ── المتابعات القادمة للعملاء المحتملين (من جدول تفاعلات الـ Leads) ──
+    private sealed record UpcomingRow(
+        string FullName, string? LeadStatus, string? Platform, string? CampaignName,
+        DateTime? NextFollowUpDate, string? Summary, int? AssignedEmployeeId);
+
+    private async Task<ZakiToolOutcome> UpcomingFollowUpsAsync(JsonElement args, int? own, CancellationToken ct)
+    {
+        var days = ReadInt(args, "days", 7, 1, 60);
+        var limit = ReadInt(args, "limit", 20, 1, 50);
+        var now = DateTime.Now;
+        var until = now.AddDays(days);
+
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+
+        // نفس شروط الشاشة: متابعة مفتوحة، والليد مش محوّل ولا مرفوض
+        var open = from i in db.LeadInteractions.AsNoTracking()
+                   join l in db.LeadsCRMs.AsNoTracking() on i.LeadId equals l.LeadId
+                   where i.NextFollowUpDate != null && !i.IsCompleted
+                         && !l.IsConverted && l.LeadStatus != "محول" && l.LeadStatus != "مرفوض"
+                   select new { i, l };
+
+        if (own.HasValue)
+            open = open.Where(x => x.l.AssignedEmployeeId == own.Value);
+
+        var overdue = await open.CountAsync(x => x.i.NextFollowUpDate < now, ct);
+
+        var upcoming = open.Where(x => x.i.NextFollowUpDate >= now && x.i.NextFollowUpDate < until);
+        var upcomingCount = await upcoming.CountAsync(ct);
+
+        var items = await upcoming
+            .OrderBy(x => x.i.NextFollowUpDate)
+            .Take(limit)
+            .Select(x => new UpcomingRow(
+                x.l.FullName, x.l.LeadStatus, x.l.Platform, x.l.CampaignName,
+                x.i.NextFollowUpDate, x.i.Summary, x.l.AssignedEmployeeId))
+            .ToListAsync(ct);
+
+        var empNames = await ZakiInvoiceQueries.EmployeeNamesAsync(db,
+            items.Where(i => i.AssignedEmployeeId.HasValue).Select(i => i.AssignedEmployeeId!.Value), ct);
+
+        var headers = new[] { "العميل", "الحالة", "المصدر", "الحملة", "موعد المتابعة", "الموظف", "آخر ملاحظة" };
+        var rows = items.Select(i => (IReadOnlyList<string>)new[]
+        {
+            i.FullName,
+            i.LeadStatus ?? "—",
+            i.Platform ?? "—",
+            i.CampaignName ?? "—",
+            i.NextFollowUpDate.HasValue ? i.NextFollowUpDate.Value.ToString("yyyy-MM-dd HH:mm", Culture) : "—",
+            i.AssignedEmployeeId.HasValue ? ZakiInvoiceQueries.NameOf(i.AssignedEmployeeId.Value, empNames) : "—",
+            string.IsNullOrWhiteSpace(i.Summary) ? "—" : (i.Summary.Length > 80 ? i.Summary[..80] + "…" : i.Summary)
+        }).ToList();
+
+        var title = $"المتابعات القادمة خلال {days} يوم";
+        var json = ToJson(new Dictionary<string, object?>
+        {
+            ["متابعات متأخرة (فاتت ميعادها ولسه مفتوحة)"] = overdue,
+            [$"متابعات قادمة خلال {days} يوم"] = upcomingCount,
+            ["المتابعات القادمة"] = ToObjects(headers, rows)
+        });
+
+        return new ZakiToolOutcome(json, rows.Count == 0 ? null : new ZakiTable(title, headers, rows));
+    }
+
+    // ── تحليل المصادر / الحملات / الفورم: عدد العملاء ونسبة التحويل ──
+    private sealed record LeadGroupRow(string? Key, int Total, int Converted, int Rejected);
+
+    private async Task<ZakiToolOutcome> LeadBreakdownAsync(string view, int? own, CancellationToken ct)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+
+        // العملاء المكررين مابيتحسبوش (زي الشاشة)
+        var leads = db.LeadsCRMs.AsNoTracking().Where(l => !l.IsDuplicate);
+        if (own.HasValue)
+            leads = leads.Where(l => l.AssignedEmployeeId == own.Value);
+
+        List<LeadGroupRow> groups = view switch
+        {
+            "by_source" => await leads.GroupBy(l => l.Platform)
+                .Select(g => new LeadGroupRow(g.Key, g.Count(), g.Count(x => x.IsConverted), g.Count(x => x.LeadStatus == "مرفوض")))
+                .ToListAsync(ct),
+            "by_campaign" => await leads.GroupBy(l => l.CampaignName)
+                .Select(g => new LeadGroupRow(g.Key, g.Count(), g.Count(x => x.IsConverted), g.Count(x => x.LeadStatus == "مرفوض")))
+                .ToListAsync(ct),
+            _ => await leads.GroupBy(l => l.FormLanguage)
+                .Select(g => new LeadGroupRow(g.Key, g.Count(), g.Count(x => x.IsConverted), g.Count(x => x.LeadStatus == "مرفوض")))
+                .ToListAsync(ct)
+        };
+
+        if (groups.Count == 0)
+            return new ZakiToolOutcome(ToJson(new Dictionary<string, object?> { ["ملاحظة"] = "مفيش عملاء محتملين في نطاقك." }), null);
+
+        var label = view switch
+        {
+            "by_source" => "المصدر",
+            "by_campaign" => "الحملة",
+            _ => "الفورم"
+        };
+
+        var ordered = groups
+            .OrderByDescending(g => g.Converted)
+            .ThenByDescending(g => g.Total == 0 ? 0 : (double)g.Converted / g.Total)
+            .Take(15)
+            .ToList();
+
+        var headers = new[] { label, "عدد العملاء", "تم تحويلهم", "نسبة التحويل", "مرفوضين" };
+        var rows = ordered.Select(g => (IReadOnlyList<string>)new[]
+        {
+            string.IsNullOrWhiteSpace(g.Key) ? "غير محدد" : g.Key!,
+            g.Total.ToString(Culture),
+            g.Converted.ToString(Culture),
+            g.Total == 0 ? "—" : Math.Round(100.0 * g.Converted / g.Total, 1).ToString("0.#", Culture) + "%",
+            g.Rejected.ToString(Culture)
+        }).ToList();
+
+        var title = view switch
+        {
+            "by_source" => "أداء مصادر العملاء المحتملين",
+            "by_campaign" => "أداء الحملات",
+            _ => "أداء الفورمات"
+        };
+
+        var json = ToJson(new Dictionary<string, object?>
+        {
+            ["ملاحظة"] = "المرتب بعدد اللي اتحولوا. النسبة على عينات صغيرة مش دقيقة، فركّز على اللي عنده 10 عملاء فأكتر.",
+            ["التفصيل"] = ToObjects(headers, rows)
+        });
+
+        return new ZakiToolOutcome(json, new ZakiTable(title, headers, rows));
     }
 
     // ════════════════════════════════════════════════════════════
@@ -536,14 +677,15 @@ public class ZakiToolExecutor
 
     private static AiToolDefinition LeadsDefinition() => new(
         GetLeads,
-        "ترجع ملخص العملاء المحتملين (Leads) أو قائمة المتابعات المتأخرة لهم. استخدم view = summary للأرقام، و late_followups لقائمة المتابعات المتأخرة.",
+        "ملخص العملاء المحتملين (Leads)، والمتابعات المتأخرة والقادمة، وأداء المصادر والحملات والفورمات (عدد العملاء ونسبة التحويل). summary للأرقام، late_followups للمتأخرة، upcoming_followups للقادمة، by_source / by_campaign / by_form للتحليل.",
         new
         {
             type = "object",
             properties = new
             {
-                view = new { type = "string", @enum = new[] { "summary", "late_followups" }, description = "summary أو late_followups" },
-                limit = new { type = "integer", description = "عدد العملاء في القائمة من 1 إلى 20", minimum = 1, maximum = 20 }
+                view = new { type = "string", @enum = new[] { "summary", "late_followups", "upcoming_followups", "by_source", "by_campaign", "by_form" }, description = "summary / late_followups / upcoming_followups / by_source / by_campaign / by_form" },
+                days = new { type = "integer", description = "عدد الأيام القادمة للمتابعات (1 إلى 60، الافتراضي 7)", minimum = 1, maximum = 60 },
+                limit = new { type = "integer", description = "عدد الصفوف (1 إلى 20، والمتابعات حتى 50)", minimum = 1, maximum = 50 }
             }
         });
 

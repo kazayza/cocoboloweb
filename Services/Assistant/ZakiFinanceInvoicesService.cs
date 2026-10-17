@@ -77,6 +77,17 @@ public class ZakiFinanceInvoicesService
             await using var db = await _dbFactory.CreateDbContextAsync(ct);
             var scope = await BuildScopeAsync(db, user, null);
 
+            // فلتر الفرع اختياري لفواتير الشراء (الفاتورة ↔ المخزن ↔ Warehouse.BranchId)
+            var branchSearch = name == GetPaymentsSummary ? "" : ReadRawString(args, "branch_name");
+            if (branchSearch.Length > 0)
+            {
+                var (branchId, _, branchError) = await ResolveBranchAsync(db, user, branchSearch, ct);
+                if (branchError != null)
+                    return branchError;
+
+                scope = scope with { BranchId = branchId };
+            }
+
             return name switch
             {
                 GetPurchaseInvoicesSummary => await PurchaseSummaryAsync(db, scope, args, ct),
@@ -128,6 +139,20 @@ public class ZakiFinanceInvoicesService
             new[] { "فواتير متأخرة السداد", overdueCount.ToString(Culture) },
             new[] { "المتأخر المتبقي", Money(overdueRemaining) }
         };
+
+        // مقارنة بنفس المدة من الفترة اللي قبلها (لو الفترة محددة)
+        var prevPeriod = PreviousPeriodRange(ReadString(args, "period", "month"), today);
+        if (prevPeriod is { } pp)
+        {
+            var prevPurchases = PurchaseQuery(db, scope, customerIds)
+                .Where(t => t.TransactionDate >= pp.Start && t.TransactionDate < pp.End);
+            var prevCount = await prevPurchases.CountAsync(ct);
+            var prevTotal = await prevPurchases.SumAsync(t => (decimal?)t.GrandTotal, ct) ?? 0m;
+
+            rows.Add(new[] { "عدد فواتير الشراء — " + pp.Label, prevCount.ToString(Culture) });
+            rows.Add(new[] { "إجمالي المشتريات — " + pp.Label, Money(prevTotal) });
+            rows.Add(new[] { "تغيير إجمالي المشتريات", ChangePercent(total, prevTotal) });
+        }
 
         // المرتجعات بتتعرض لو مفيش فلتر عميل (مفيش ربط واضح بالعميل في المرتجع)
         if (customerIds is null)
@@ -438,6 +463,13 @@ public class ZakiFinanceInvoicesService
     // ════════════════════════════════════════════════════════════
     // تعريفات الأدوات (وصف قصير عشان نوفر التوكنز)
     // ════════════════════════════════════════════════════════════
+    /// <summary>فلتر الفرع اختياري (اسم الفرع، أو «فرعي» لفرع المستخدم)</summary>
+    private static object BranchSchema() => new
+    {
+        type = "string",
+        description = "اسم الفرع (اختياري). فاضي = كل الفروع. «فرعي» = فرع المستخدم."
+    };
+
     private static object PeriodSchema(string description) => new
     {
         type = "string",
@@ -453,6 +485,7 @@ public class ZakiFinanceInvoicesService
             type = "object",
             properties = new
             {
+                branch_name = BranchSchema(),
                 period = PeriodSchema("الافتراضي month"),
                 customer_name = new { type = "string", description = "اسم العميل المرتبط (اختياري)" }
             }
@@ -466,6 +499,7 @@ public class ZakiFinanceInvoicesService
             type = "object",
             properties = new
             {
+                branch_name = BranchSchema(),
                 limit = new { type = "integer", minimum = 1, maximum = 20 },
                 overdue_only = new { type = "boolean" },
                 customer_name = new { type = "string", description = "اسم العميل المرتبط (اختياري)" }

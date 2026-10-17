@@ -120,12 +120,55 @@ public class ZakiReturnsAdvancesService
     }
 
     // ── دفعات عميل مقدمة ──
+    /// <summary>
+    /// من غير اسم عميل: أعلى العملاء برصيد دفعات مقدمة متاح (نفس منطق GetCustomerAdvanceBalanceAsync:
+    /// AdditionalCharges بعملية مش مرتبطة بفاتورة TransactionId = null).
+    /// </summary>
+    private static async Task<ZakiToolOutcome> UnappliedAdvancesOverviewAsync(
+        db24804Context db, CancellationToken ct)
+    {
+        var grandTotal = await db.AdditionalCharges.AsNoTracking()
+            .Where(c => c.PartyId != null && c.TransactionId == null)
+            .SumAsync(c => (decimal?)(c.ChargeAmount ?? 0), ct) ?? 0m;
+
+        var byCustomer = await db.AdditionalCharges.AsNoTracking()
+            .Where(c => c.PartyId != null && c.TransactionId == null)
+            .GroupBy(c => c.PartyId ?? 0)
+            .Select(g => new { PartyId = g.Key, Count = g.Count(), Total = g.Sum(c => c.ChargeAmount ?? 0) })
+            .Where(x => x.Total > 0)
+            .OrderByDescending(x => x.Total)
+            .Take(15)
+            .ToListAsync(ct);
+
+        if (byCustomer.Count == 0)
+            return Message("مفيش دفعات مقدمة متاحة (غير مخصومة) لأي عميل.");
+
+        var names = await PartyNamesAsync(db, byCustomer.Select(x => x.PartyId), ct);
+
+        var headers = new[] { "العميل", "الرصيد المتاح", "عدد الدفعات المتاحة" };
+        var rows = byCustomer.Select(x => (IReadOnlyList<string>)new[]
+        {
+            NameOf(x.PartyId, names),
+            Money(x.Total),
+            x.Count.ToString(Culture)
+        }).ToList();
+
+        var json = ToJson(new Dictionary<string, object?>
+        {
+            ["إجمالي الدفعات المتاحة لكل العملاء"] = Money(grandTotal),
+            ["أعلى العملاء برصيد متاح"] = ToObjects(headers, rows),
+            ["ملاحظة"] = "لتفاصيل عميل معين اكتب اسمه."
+        });
+
+        return new ZakiToolOutcome(json, new ZakiTable("الدفعات المقدمة المتاحة — كل العملاء", headers, rows));
+    }
+
     private async Task<ZakiToolOutcome> AdvancesAsync(
         db24804Context db, System.Text.Json.JsonElement args, CancellationToken ct)
     {
         var search = ReadRawString(args, "customer_name");
         if (search.Length == 0)
-            return Message("محتاج اسم العميل — قوللي اسم العميل اللي عايز دفعاته المقدمة.");
+            return await UnappliedAdvancesOverviewAsync(db, ct);
 
         var unappliedOnly = ReadBool(args, "unapplied_only", false);
 
@@ -197,13 +240,13 @@ public class ZakiReturnsAdvancesService
 
     private static AiToolDefinition AdvancesDefinition() => new(
         GetCustomerAdvances,
-        "الدفعات المقدمة لعميل بالاسم (عربون/رسوم معاينة/دفعة مقدمة) ورصيده المتاح منها. لازم customer_name.",
+        "الدفعات المقدمة (عربون/رسوم معاينة/دفعة مقدمة) ورصيدها المتاح. لعميل بالاسم: تفاصيل دفعاته. من غير اسم: أعلى العملاء برصيد متاح.",
         new
         {
             type = "object",
             properties = new
             {
-                customer_name = new { type = "string", description = "اسم العميل (مطلوب)" },
+                customer_name = new { type = "string", description = "اسم العميل (اختياري). فاضي = أعلى العملاء برصيد متاح" },
                 unapplied_only = new { type = "boolean", description = "true للدفعات المتاحة (غير المخصومة) فقط" }
             }
         });

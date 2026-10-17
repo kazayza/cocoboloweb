@@ -107,6 +107,17 @@ public class ZakiSalesDocumentsService
             // نفس نطاق الشاشات: تاريخ الاطلاع + فواتير مديري الحسابات المخفية (الكل زي الشاشة)
             var scope = await BuildScopeAsync(db, user, null);
 
+            // فلتر الفرع اختياري: لو مش مكتوب = كل الفروع (نفس شاشة الفواتير)
+            var branchSearch = ReadRawString(args, "branch_name");
+            if (branchSearch.Length > 0)
+            {
+                var (branchId, _, branchError) = await ResolveBranchAsync(db, user, branchSearch, ct);
+                if (branchError != null)
+                    return branchError;
+
+                scope = scope with { BranchId = branchId };
+            }
+
             return name switch
             {
                 GetSalesInvoicesSummary => await SummaryAsync(db, scope, args, ct),
@@ -181,6 +192,20 @@ public class ZakiSalesDocumentsService
             new[] { "مرتجعات البيع (قيمة)", Money(returnsTotal) },
             new[] { "طلبات تعديل فواتير معلقة الآن", pendingEdits.ToString(Culture) }
         };
+
+        // مقارنة بنفس المدة من الفترة اللي قبلها (لو الفترة محددة)
+        var prevPeriod = PreviousPeriodRange(ReadString(args, "period", "month"), today);
+        if (prevPeriod is { } pp)
+        {
+            var prevSales = Base(db, scope, TransactionTypes.Sale)
+                .Where(t => t.TransactionDate >= pp.Start && t.TransactionDate < pp.End);
+            var prevCount = await prevSales.CountAsync(ct);
+            var prevTotal = await prevSales.SumAsync(t => (decimal?)t.GrandTotal, ct) ?? 0m;
+
+            rows.Add(new[] { "عدد الفواتير — " + pp.Label, prevCount.ToString(Culture) });
+            rows.Add(new[] { "إجمالي المبيعات — " + pp.Label, Money(prevTotal) });
+            rows.Add(new[] { "تغيير إجمالي المبيعات", ChangePercent(total, prevTotal) });
+        }
 
         var json = ToJson(new Dictionary<string, object?>
         {
@@ -417,23 +442,36 @@ public class ZakiSalesDocumentsService
     // ════════════════════════════════════════════════════════════
     // 6) أعلى العملاء شراءً لفترة
     // ════════════════════════════════════════════════════════════
-    private static async Task<ZakiToolOutcome> TopCustomersAsync(
+    private async Task<ZakiToolOutcome> TopCustomersAsync(
         db24804Context db, ZakiInvoiceScope scope, JsonElement args, CancellationToken ct)
     {
         var limit = ReadInt(args, "limit", 10, 1, 20);
         var (start, label) = PeriodRange(ReadString(args, "period", PeriodAll), DateTime.Today);
 
-        var groups = await Base(db, scope, TransactionTypes.Sale)
+        // نجيب الأعمدة المطلوبة بس ونجمع في الذاكرة: أبسط وأسهل في التشخيص من GroupBy على الداتابيز
+        var invoices = await Base(db, scope, TransactionTypes.Sale)
             .FromDate(start)
-            .GroupBy(t => t.PartyId)
-            .Select(g => new CustomerRow(
-                g.Key,
-                g.Count(),
-                g.Sum(t => t.GrandTotal),
-                g.Sum(t => t.PaidAmount)))
-            .OrderByDescending(x => x.Total)
-            .Take(limit)
+            .Select(t => new CustomerInvoiceRow(t.PartyId, t.GrandTotal, t.PaidAmount))
             .ToListAsync(ct);
+
+        var groups = SummarizeCustomers(invoices, limit);
+        var scopeInvoices = invoices.Count;
+
+        // لو الفترة فاضية: نعرض كل الفترات بدل ما نقول "مفيش بيانات"
+        if (groups.Count == 0 && start.HasValue)
+        {
+            var all = await Base(db, scope, TransactionTypes.Sale)
+                .Select(t => new CustomerInvoiceRow(t.PartyId, t.GrandTotal, t.PaidAmount))
+                .ToListAsync(ct);
+
+            groups = SummarizeCustomers(all, limit);
+            scopeInvoices = all.Count;
+            label = label + " (مفيش فواتير في الفترة دي، دي النتايج لكل الفترات)";
+        }
+
+        _logger.LogInformation(
+            "Zaki top customers: period={Period} invoicesInScope={Invoices} groups={Groups}",
+            label, scopeInvoices, groups.Count);
 
         var names = await PartyNamesAsync(db, groups.Select(g => g.PartyId), ct);
 
@@ -462,6 +500,14 @@ public class ZakiSalesDocumentsService
         return new ZakiToolOutcome(json,
             rows.Count == 0 ? null : new ZakiTable("أعلى العملاء شراءً — " + label, headers, rows));
     }
+
+    private static List<CustomerRow> SummarizeCustomers(List<CustomerInvoiceRow> invoices, int limit) =>
+        invoices
+            .GroupBy(i => i.PartyId)
+            .Select(g => new CustomerRow(g.Key, g.Count(), g.Sum(x => x.GrandTotal), g.Sum(x => x.PaidAmount)))
+            .OrderByDescending(x => x.Total)
+            .Take(limit)
+            .ToList();
 
     // ════════════════════════════════════════════════════════════
     // 7) أعلى المنتجات مبيعاً لفترة (حسب القيمة)
@@ -1052,13 +1098,20 @@ public class ZakiSalesDocumentsService
         @enum = new[] { "today", "week", "month", "year", "all" }
     };
 
+    /// <summary>فلتر الفرع اختياري (اسم الفرع، أو «فرعي» لفرع المستخدم)</summary>
+    private static object BranchSchema() => new
+    {
+        type = "string",
+        description = "اسم الفرع (اختياري). فاضي = كل الفروع. «فرعي» = فرع المستخدم."
+    };
+
     private static AiToolDefinition SummaryDefinition() => new(
         GetSalesInvoicesSummary,
         "ملخص فواتير المبيعات لفترة: العدد والإجمالي والمحصّل والمتبقي والمتأخر والملغي والمرتجعات ومتوسط الفاتورة.",
         new
         {
             type = "object",
-            properties = new { period = PeriodSchema("الافتراضي month") }
+            properties = new { period = PeriodSchema("الافتراضي month"), branch_name = BranchSchema() }
         });
 
     private static AiToolDefinition OpenInvoicesDefinition() => new(
@@ -1069,6 +1122,7 @@ public class ZakiSalesDocumentsService
             type = "object",
             properties = new
             {
+                branch_name = BranchSchema(),
                 limit = new { type = "integer", minimum = 1, maximum = 20 },
                 overdue_only = new { type = "boolean" }
             }
@@ -1080,7 +1134,7 @@ public class ZakiSalesDocumentsService
         new
         {
             type = "object",
-            properties = new { limit = new { type = "integer", minimum = 1, maximum = 20 } }
+            properties = new { limit = new { type = "integer", minimum = 1, maximum = 20 }, branch_name = BranchSchema() }
         });
 
     private static AiToolDefinition LargestInvoicesDefinition() => new(
@@ -1091,6 +1145,7 @@ public class ZakiSalesDocumentsService
             type = "object",
             properties = new
             {
+                branch_name = BranchSchema(),
                 period = PeriodSchema("الافتراضي all"),
                 limit = new { type = "integer", minimum = 1, maximum = 20 }
             }
@@ -1104,6 +1159,7 @@ public class ZakiSalesDocumentsService
             type = "object",
             properties = new
             {
+                branch_name = BranchSchema(),
                 period = PeriodSchema("الافتراضي all"),
                 limit = new { type = "integer", minimum = 1, maximum = 20 }
             }
@@ -1117,6 +1173,7 @@ public class ZakiSalesDocumentsService
             type = "object",
             properties = new
             {
+                branch_name = BranchSchema(),
                 period = PeriodSchema("الافتراضي all"),
                 limit = new { type = "integer", minimum = 1, maximum = 20 }
             }
@@ -1130,6 +1187,7 @@ public class ZakiSalesDocumentsService
             type = "object",
             properties = new
             {
+                branch_name = BranchSchema(),
                 period = PeriodSchema("الافتراضي all"),
                 limit = new { type = "integer", minimum = 1, maximum = 20 }
             }
@@ -1143,6 +1201,7 @@ public class ZakiSalesDocumentsService
             type = "object",
             properties = new
             {
+                branch_name = BranchSchema(),
                 by = new { type = "string", @enum = new[] { "warehouse", "payment_method", "month" } },
                 period = PeriodSchema("الافتراضي all"),
                 limit = new { type = "integer", minimum = 1, maximum = 24 }
@@ -1228,6 +1287,8 @@ public class ZakiSalesDocumentsService
     private sealed record EmpRow(int? EmpId, int Count, decimal Total, decimal Paid, decimal Largest);
 
     private sealed record CustomerRow(int PartyId, int Count, decimal Total, decimal Paid);
+
+    private sealed record CustomerInvoiceRow(int PartyId, decimal GrandTotal, decimal PaidAmount);
 
     private sealed record ProductRow(int ProductId, decimal Quantity, decimal Amount);
 

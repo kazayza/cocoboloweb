@@ -31,6 +31,9 @@ public class AiChatResult
     public string? ErrorMessage { get; init; }
 
     public int PromptTokens { get; init; }
+
+    /// <summary>التوكنز اللي اتقرت من الـ cache (مش بتحسب في حدود الدقيقة)</summary>
+    public int CachedPromptTokens { get; init; }
     public int CompletionTokens { get; init; }
     public int TotalTokens { get; init; }
 

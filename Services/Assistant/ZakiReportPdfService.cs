@@ -42,6 +42,7 @@ public class ZakiReportPdfService
                 page.Size(PageSizes.A4.Landscape());
                 page.Margin(26);
                 page.PageColor(Colors.White);
+                page.ContentFromRightToLeft(); // ترتيب الأعمدة والعناصر من اليمين لليسار
 
                 page.DefaultTextStyle(t =>
                 {

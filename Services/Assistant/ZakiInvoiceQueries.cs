@@ -15,7 +15,9 @@ namespace COCOBOLOERPNEW.Services.Assistant;
 /// - EmployeeId: لو البائع (Sales) بيشوف مستنداته هو بس. null = مفيش فلتر بائع.
 /// - ProtectedCreators: مديرو الحسابات اللي فواتيرهم مخفية عن غير المسموح لهم (SalesInvoiceAccess).
 /// </summary>
-public sealed record ZakiInvoiceScope(DateTime? AccessFrom, int? EmployeeId, List<string> ProtectedCreators);
+/// BranchId: فلتر فرع اختياري (الفاتورة ↔ المخزن ↔ Warehouse.BranchId). null = كل الفروع.
+public sealed record ZakiInvoiceScope(
+    DateTime? AccessFrom, int? EmployeeId, List<string> ProtectedCreators, int? BranchId = null);
 
 /// <summary>
 /// أساسيات مشتركة لأدوات الفواتير (المبيعات والمشتريات والمدفوعات).
@@ -55,10 +57,21 @@ public static class ZakiInvoiceQueries
         var q = db.Transactions.AsNoTracking().Where(t => t.TransactionType == txType);
 
         if (!includeCancelled)
-            q = q.Where(t => t.InvoiceStatus != CancelledStatus);
+            q = q.Where(t => t.InvoiceStatus == null || t.InvoiceStatus != CancelledStatus);
 
         if (scope.AccessFrom.HasValue)
             q = q.Where(t => t.TransactionDate >= scope.AccessFrom.Value);
+
+        // فلتر الفرع: الفاتورة بتتربط بالفرع من خلال المخزن (Warehouse.BranchId)
+        if (scope.BranchId.HasValue)
+        {
+            var branchWarehouses = db.Warehouses
+                .AsNoTracking()
+                .Where(w => w.BranchId == scope.BranchId.Value)
+                .Select(w => w.WarehouseId);
+
+            q = q.Where(t => branchWarehouses.Contains(t.WarehouseId));
+        }
 
         // زي شاشة فواتير البيع: فواتير مديري الحسابات مخفية عن غير المسموح لهم
         if ((txType == TransactionTypes.Sale || txType == TransactionTypes.SaleReturn)
@@ -70,6 +83,80 @@ public static class ZakiInvoiceQueries
         // فواتير الشراء المرآة (MirrorOf:) داخلة في الأرقام زي شاشة فواتير الشراء
 
         return q;
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // الفروع (نفس منطق ZakiFinancialStatementsService: اسم الفرع / «فرعي» / تفضيل مش تقييد)
+    // ════════════════════════════════════════════════════════════
+    private sealed record BranchLite(int Id, string Name);
+
+    /// <summary>
+    /// يحوّل اسم الفرع لرقم. فاضي = كل الفروع. «فرعي» = فرع المستخدم.
+    /// لو الاسم مش موجود أو أكتر من فرع بيطابقه بيرجع رسالة للموديل.
+    /// </summary>
+    public static async Task<(int? Id, string? Name, ZakiToolOutcome? Error)> ResolveBranchAsync(
+        db24804Context db, ClaimsPrincipal user, string search, CancellationToken ct)
+    {
+        if (search.Length == 0)
+            return (null, null, null);
+
+        if (search.NormalizeArabic() == "فرعي".NormalizeArabic())
+        {
+            var myId = await MyBranchIdAsync(db, user, ct);
+            if (!myId.HasValue)
+                return (null, null, Message("حسابك مش مربوط بفرع. اكتب اسم الفرع اللي عايزه."));
+
+            var myName = await db.Branches.AsNoTracking()
+                .Where(b => b.BranchId == myId.Value)
+                .Select(b => b.BranchNameAr)
+                .FirstOrDefaultAsync(ct);
+
+            return (myId, myName ?? "فرعي", null);
+        }
+
+        var branches = await db.Branches
+            .AsNoTracking()
+            .Select(b => new BranchLite(b.BranchId, b.BranchNameAr))
+            .ToListAsync(ct);
+
+        var matched = branches.Where(b => (b.Name ?? "").ContainsArabic(search)).ToList();
+
+        if (matched.Count == 0)
+            return (null, null, Message("مالقيتش فرع بالاسم ده."));
+
+        if (matched.Count > 1)
+        {
+            return (null, null, new ZakiToolOutcome(ToJson(new Dictionary<string, object?>
+            {
+                ["ملاحظة"] = "في أكتر من فرع بالاسم ده. اطلب من المستخدم يكتب اسم الفرع بالكامل.",
+                ["الفروع المطابقة"] = matched.Select(m => m.Name).ToList()
+            }), null));
+        }
+
+        return (matched[0].Id, matched[0].Name, null);
+    }
+
+    /// <summary>فرع المستخدم: الفرع الافتراضي في الحساب، ولو فاضي فرع الموظف المربوط بيه</summary>
+    public static async Task<int?> MyBranchIdAsync(db24804Context db, ClaimsPrincipal user, CancellationToken ct)
+    {
+        var username = user.Identity?.Name ?? "";
+        if (username.Length == 0) return null;
+
+        var account = await db.Users
+            .AsNoTracking()
+            .Where(u => u.Username == username)
+            .Select(u => new { u.DefaultBranchId, u.EmployeeId })
+            .FirstOrDefaultAsync(ct);
+
+        if (account == null) return null;
+        if (account.DefaultBranchId.HasValue) return account.DefaultBranchId;
+        if (!account.EmployeeId.HasValue) return null;
+
+        return await db.Employees
+            .AsNoTracking()
+            .Where(e => e.EmployeeId == account.EmployeeId.Value)
+            .Select(e => e.BranchId)
+            .FirstOrDefaultAsync(ct);
     }
 
     /// <summary>فلتر الفترة من تاريخ البداية (null = كل الفترات)</summary>
@@ -88,6 +175,46 @@ public static class ZakiInvoiceQueries
             default: return (new DateTime(today.Year, today.Month, 1), "الشهر ده");
         }
     }
+
+    /// <summary>
+    /// نفس المدة من الفترة اللي قبلها بنفس عدد الأيام (للمقارنة). null لو الفترة all أو مش معروفة.
+    /// - today: أمس بس. week: الـ 7 أيام اللي قبلها. month: نفس عدد الأيام من الشهر اللي فات.
+    /// - year: نفس عدد الأيام من السنة اللي فاتت.
+    /// </summary>
+    public static (DateTime Start, DateTime End, string Label)? PreviousPeriodRange(string period, DateTime today)
+    {
+        switch (period)
+        {
+            case "today":
+                return (today.AddDays(-1), today, "نفس اليوم اللي فات");
+            case "week":
+                return (today.AddDays(-13), today.AddDays(-6), "الـ 7 أيام اللي قبلها");
+            case "month":
+            {
+                var first = new DateTime(today.Year, today.Month, 1);
+                var prevFirst = first.AddMonths(-1);
+                var prevEnd = prevFirst.AddDays(today.Day);
+                if (prevEnd > first) prevEnd = first;
+                return (prevFirst, prevEnd, "نفس المدة من الشهر اللي فات");
+            }
+            case "year":
+            {
+                var yearStart = new DateTime(today.Year, 1, 1);
+                var prevStart = yearStart.AddYears(-1);
+                var prevEnd = prevStart.AddDays(today.DayOfYear);
+                if (prevEnd > yearStart) prevEnd = yearStart;
+                return (prevStart, prevEnd, "نفس المدة من السنة اللي فاتت");
+            }
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>نسبة التغيير بين الحالي والسابق (+/-). لو السابق صفر مابنحسبش.</summary>
+    public static string ChangePercent(decimal current, decimal previous) =>
+        previous == 0m
+            ? "—"
+            : ((current - previous) / previous * 100m).ToString("+0.##;-0.##;0", Culture) + "%";
 
     /// <summary>حالة الفاتورة زي الشاشة: مسددة / متأخرة / مفتوحة</summary>
     public static string InvoiceState(decimal total, decimal paid, DateTime? dueDate, DateTime today)

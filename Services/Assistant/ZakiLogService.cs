@@ -6,6 +6,23 @@ using Microsoft.Extensions.Options;
 
 namespace COCOBOLOERPNEW.Services.Assistant;
 
+/// <summary>عدد أخطاء بكود معين</summary>
+public sealed record ZakiErrorCount(string ErrorCode, int Count);
+
+/// <summary>رد اتعلّم عليه 👎</summary>
+public sealed record ZakiBadAnswer(DateTime CreatedAt, string UserName, string? QuestionText, string? ErrorCode);
+
+/// <summary>نظرة الجودة للأدمن</summary>
+public sealed record ZakiQualityOverview(
+    int Days,
+    int Questions,
+    int Failed,
+    int Errors24h,
+    int ThumbsUp,
+    int ThumbsDown,
+    IReadOnlyList<ZakiErrorCount> ErrorCodes,
+    IReadOnlyList<ZakiBadAnswer> RecentThumbsDown);
+
 /// <summary>صف من جدول الرسائل (سؤال + رد) عشان نرجّع المحادثة بعد الـ Refresh</summary>
 public class ZakiHistoryRow
 {
@@ -312,6 +329,96 @@ public class ZakiLogService
         }
     }
 
+    /// <summary>إجمالي التوكنز اللي اتصرفت النهارده على كل المستخدمين (ميزانية الحساب)</summary>
+    /// <summary>توكنز المستخدم النهارده (عشان ميزانية المستخدم)</summary>
+    public async Task<long> GetTodayTotalTokensForUserAsync(string userName, CancellationToken ct = default)
+    {
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var conn = await OpenAsync(db, ct);
+
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT ISNULL(SUM(CAST(TotalTokens AS BIGINT)), 0)
+                FROM dbo.AssistantUsage
+                WHERE UsageDate = CAST(SYSDATETIME() AS DATE) AND UserName = @UserName;";
+            AddParam(cmd, "@UserName", userName);
+
+            var result = await cmd.ExecuteScalarAsync(ct);
+            return result is null or DBNull ? 0 : Convert.ToInt64(result);
+        }
+        catch (Exception ex)
+        {
+            // لو فشل القراءة ما نقفلش على المستخدم
+            _logger.LogError(ex, "Zaki log: user tokens read failed");
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// حجز التوكنز للسؤال الواحد = متوسط الأسئلة الفعلية في آخر 7 أيام،
+    /// محدود بين 4,000 و 30,000. لو مفيش بيانات بنرجع 12,000.
+    /// </summary>
+    public async Task<int> GetReserveTokensPerQuestionAsync(CancellationToken ct = default)
+    {
+        const int fallback = 12000;
+        const int min = 4000;
+        const int max = 30000;
+
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var conn = await OpenAsync(db, ct);
+
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT ISNULL(SUM(CAST(TotalTokens AS BIGINT)), 0), ISNULL(SUM(CAST(QuestionCount AS BIGINT)), 0)
+                FROM dbo.AssistantUsage
+                WHERE UsageDate >= DATEADD(DAY, -7, CAST(SYSDATETIME() AS DATE));";
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+                return fallback;
+
+            var tokens = reader.GetInt64(0);
+            var questions = reader.GetInt64(1);
+            if (questions <= 0)
+                return fallback;
+
+            var avg = (int)(tokens / questions);
+            return Math.Clamp(avg, min, max);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Zaki log: reserve read failed");
+            return fallback;
+        }
+    }
+
+    public async Task<long> GetTodayTotalTokensAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var conn = await OpenAsync(db, ct);
+
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT ISNULL(SUM(CAST(TotalTokens AS BIGINT)), 0)
+                FROM dbo.AssistantUsage
+                WHERE UsageDate = CAST(SYSDATETIME() AS DATE);";
+
+            var result = await cmd.ExecuteScalarAsync(ct);
+            return (result is null || result is DBNull) ? 0 : Convert.ToInt64(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Zaki log: GetTodayTotalTokens failed");
+            return 0;
+        }
+    }
+
     /// <summary>عدد أسئلة المستخدم النهارده (للحد اليومي)</summary>
     public async Task<int> GetTodayQuestionCountAsync(string userName, CancellationToken ct = default)
     {
@@ -337,6 +444,148 @@ public class ZakiLogService
         {
             _logger.LogError(ex, "Zaki log: GetTodayQuestionCount failed");
             return 0;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // 👍 / 👎 على الردود + نظرة الجودة للأدمن
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>يسجل 👍 (true) أو 👎 (false) على رد. بيتحقق إن الرسالة تبع المستخدم. بيحدّث التقييم لو اتسجل قبل كده.</summary>
+    public async Task<bool> SaveFeedbackAsync(long messageId, string userName, bool isUseful, CancellationToken ct = default)
+    {
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var conn = await OpenAsync(db, ct);
+
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                IF EXISTS (SELECT 1 FROM dbo.AssistantFeedback WHERE MessageId = @MessageId AND UserName = @UserName)
+                    UPDATE dbo.AssistantFeedback
+                    SET IsUseful = @IsUseful, CreatedAt = SYSDATETIME()
+                    WHERE MessageId = @MessageId AND UserName = @UserName;
+                ELSE
+                    INSERT INTO dbo.AssistantFeedback (MessageId, UserName, IsUseful, CreatedAt)
+                    SELECT m.MessageId, @UserName, @IsUseful, SYSDATETIME()
+                    FROM dbo.AssistantMessages AS m
+                    JOIN dbo.AssistantConversations AS c ON c.ConversationId = m.ConversationId
+                    WHERE m.MessageId = @MessageId AND c.UserName = @UserName;";
+
+            AddParam(cmd, "@MessageId", messageId);
+            AddParam(cmd, "@UserName", userName);
+            AddParam(cmd, "@IsUseful", isUseful);
+
+            var affected = await cmd.ExecuteNonQueryAsync(ct);
+            return affected > 0;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Zaki log: SaveFeedback failed");
+            return false;
+        }
+    }
+
+    /// <summary>نظرة جودة على آخر N يوم: الأسئلة، الأخطاء، 👍/👎، وأكثر أكواد الخطأ تكراراً.</summary>
+    public async Task<ZakiQualityOverview?> GetQualityOverviewAsync(int days, CancellationToken ct = default)
+    {
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var conn = await OpenAsync(db, ct);
+            var from = DateTime.Today.AddDays(-days);
+
+            var questions = 0;
+            var failed = 0;
+            var errors24h = 0;
+            var thumbsUp = 0;
+            var thumbsDown = 0;
+            var errorCodes = new List<ZakiErrorCount>();
+            var recentDown = new List<ZakiBadAnswer>();
+
+            // 1) أرقام الأسئلة والأخطاء
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT COUNT(*),
+                           ISNULL(SUM(CASE WHEN IsSuccess = 0 THEN 1 ELSE 0 END), 0),
+                           ISNULL(SUM(CASE WHEN IsSuccess = 0 AND CreatedAt >= DATEADD(HOUR, -24, SYSDATETIME()) THEN 1 ELSE 0 END), 0)
+                    FROM dbo.AssistantMessages
+                    WHERE CreatedAt >= @From;";
+                AddParam(cmd, "@From", from);
+
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                if (await r.ReadAsync(ct))
+                {
+                    questions = r.GetInt32(0);
+                    failed = r.GetInt32(1);
+                    errors24h = r.GetInt32(2);
+                }
+            }
+
+            // 2) أكواد الخطأ الأكثر تكراراً
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT ISNULL(ErrorCode, 'UNKNOWN'), COUNT(*)
+                    FROM dbo.AssistantMessages
+                    WHERE CreatedAt >= @From AND IsSuccess = 0
+                    GROUP BY ISNULL(ErrorCode, 'UNKNOWN')
+                    ORDER BY COUNT(*) DESC;";
+                AddParam(cmd, "@From", from);
+
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                while (await r.ReadAsync(ct))
+                    errorCodes.Add(new ZakiErrorCount(r.GetString(0), r.GetInt32(1)));
+            }
+
+            // 3) التقييمات
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT ISNULL(SUM(CASE WHEN IsUseful = 1 THEN 1 ELSE 0 END), 0),
+                           ISNULL(SUM(CASE WHEN IsUseful = 0 THEN 1 ELSE 0 END), 0)
+                    FROM dbo.AssistantFeedback
+                    WHERE CreatedAt >= @From;";
+                AddParam(cmd, "@From", from);
+
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                if (await r.ReadAsync(ct))
+                {
+                    thumbsUp = r.GetInt32(0);
+                    thumbsDown = r.GetInt32(1);
+                }
+            }
+
+            // 4) آخر الردود اللي اتعلّم عليها مش مفيد
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT TOP (10) f.CreatedAt, f.UserName, m.QuestionText, m.ErrorCode
+                    FROM dbo.AssistantFeedback AS f
+                    JOIN dbo.AssistantMessages AS m ON m.MessageId = f.MessageId
+                    WHERE f.IsUseful = 0 AND f.CreatedAt >= @From
+                    ORDER BY f.CreatedAt DESC;";
+                AddParam(cmd, "@From", from);
+
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                while (await r.ReadAsync(ct))
+                {
+                    recentDown.Add(new ZakiBadAnswer(
+                        r.GetDateTime(0),
+                        r.IsDBNull(1) ? "—" : r.GetString(1),
+                        r.IsDBNull(2) ? null : r.GetString(2),
+                        r.IsDBNull(3) ? null : r.GetString(3)));
+                }
+            }
+
+            return new ZakiQualityOverview(days, questions, failed, errors24h, thumbsUp, thumbsDown, errorCodes, recentDown);
+        }
+        catch (Exception ex)
+        {
+            // غالباً جدول AssistantFeedback لسه ماتعملش (شغّل Database/ZakiAssistant_Feedback.sql)
+            _logger.LogError(ex, "Zaki log: quality overview failed");
+            return null;
         }
     }
 

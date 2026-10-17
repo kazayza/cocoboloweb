@@ -80,13 +80,6 @@ public class ZakiSalesDataService
             _ => Message("أداة غير معروفة.")
         };
 
-        // تشخيص مؤقت: لو النتيجة فاضية، بنعرض جدول يوضح السبب تحت الرد
-        if (outcome.Table == null)
-        {
-            var diag = await DiagnosticAsync(db, emp, username, info.DisplayName, crmFrom, ct);
-            return new ZakiToolOutcome(outcome.Json, diag);
-        }
-
         return outcome;
 
     }
@@ -268,43 +261,6 @@ public class ZakiSalesDataService
     // ════════════════════════════════════════════════════════════
     // مساعدات
     // ════════════════════════════════════════════════════════════
-    /// <summary>جدول تشخيص مؤقت: بيوضح ليه البائع مش شايف بياناته (هيتشال بعد ما نحدد السبب)</summary>
-    private static async Task<ZakiTable> DiagnosticAsync(
-        db24804Context db, int emp, string username, string displayName, DateTime? crmFrom, CancellationToken ct)
-    {
-        var byEmployee = await db.SalesOpportunities.AsNoTracking()
-            .CountAsync(o => o.IsActive && o.EmployeeId == emp, ct);
-
-        var byUsername = await db.SalesOpportunities.AsNoTracking()
-            .CountAsync(o => o.IsActive && o.CreatedBy == username, ct);
-
-        var byDisplayName = await db.SalesOpportunities.AsNoTracking()
-            .CountAsync(o => o.IsActive && o.CreatedBy == displayName, ct);
-
-        var afterDate = crmFrom.HasValue
-            ? await db.SalesOpportunities.AsNoTracking()
-                .CountAsync(o => o.IsActive && o.EmployeeId == emp && o.CreatedAt >= crmFrom.Value, ct)
-            : byEmployee;
-
-        var myTasks = await db.VwCrmTasks.AsNoTracking()
-            .CountAsync(t => t.AssignedTo == emp && t.Status != "Completed" && t.Status != "Cancelled", ct);
-
-        var headers = new[] { "البند", "القيمة" };
-        var rows = new List<IReadOnlyList<string>>
-        {
-            new[] { "رقم الموظف المربوط بحسابك", emp.ToString(Culture) },
-            new[] { "اسم دخولك", username },
-            new[] { "تاريخ بداية الاطلاع", crmFrom?.ToString("yyyy-MM-dd", Culture) ?? "بدون تحديد" },
-            new[] { "فرص مربوطة برقم موظفك", byEmployee.ToString(Culture) },
-            new[] { "فرص باسم دخولك في عمود المنشئ", byUsername.ToString(Culture) },
-            new[] { "فرص باسمك الكامل في عمود المنشئ", byDisplayName.ToString(Culture) },
-            new[] { "فرص موظفك بعد تاريخ الاطلاع", afterDate.ToString(Culture) },
-            new[] { "مهام متعينة لموظفك (مش مكتملة)", myTasks.ToString(Culture) }
-        };
-
-        return new ZakiTable("تشخيص مؤقت (لتحديد السبب)", headers, rows);
-    }
-
     private static ZakiToolOutcome Message(string text) =>
         new(ToJson(new Dictionary<string, object?> { ["ملاحظة"] = text }), null);
 

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
 
 namespace COCOBOLOERPNEW.Services.Assistant;
@@ -39,15 +40,21 @@ public class GroqAiProvider : IAiProvider
         {
             ["model"] = _opt.Model,
             ["temperature"] = _opt.Temperature,
+            // حد صريح للرد: Groq بيحسب حد الدقيقة على الحد المعلن مش على الرد الفعلي
+            ["max_completion_tokens"] = 1500,
             ["messages"] = messages.Select(ToWire).ToArray()
         };
+
+        // موديلات gpt-oss بتفكر داخلياً (وبتستهلك توكنز). الإعداد ده بيقلل التفكير للأسئلة العادية
+        if (_opt.Model.StartsWith("openai/gpt-oss", StringComparison.OrdinalIgnoreCase))
+            payload["reasoning_effort"] = "low";
 
         if (tools is { Count: > 0 })
         {
             payload["tools"] = tools.Select(t => new
             {
                 type = "function",
-                function = new { name = t.Name, description = t.Description, parameters = t.ParametersSchema }
+                function = new { name = t.Name, description = t.Description, parameters = ToToolParameters(t.ParametersSchema) }
             }).ToArray();
             payload["tool_choice"] = "auto";
         }
@@ -65,12 +72,16 @@ public class GroqAiProvider : IAiProvider
 
             if (!resp.IsSuccessStatusCode)
             {
-                _logger.LogWarning("Groq API returned HTTP {Status}", (int)resp.StatusCode);
+                var detail = body.Length > 300 ? body[..300] : body;
+                _logger.LogWarning("Groq API returned HTTP {Status}: {Detail}", (int)resp.StatusCode, detail);
 
                 return resp.StatusCode switch
                 {
-                    HttpStatusCode.TooManyRequests => AiChatResult.Fail("RATE_LIMITED", "وصلنا للحد المسموح من الطلبات، حاول بعد دقيقة."),
+                    HttpStatusCode.TooManyRequests => ZakiRateLimit.Build(body),
                     HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => AiChatResult.Fail("AUTH_FAILED", "مفتاح الذكاء الاصطناعي غير صالح."),
+                    HttpStatusCode.RequestEntityTooLarge => AiChatResult.Fail(
+                        "REQUEST_TOO_LARGE",
+                        "السؤال ده محتاج بيانات أكتر من اللي الحساب يستوعبه دلوقتي. جرّب سؤال أضيق (فترة أقصر، أو عدد أقل)."),
                     _ => AiChatResult.Fail("PROVIDER_ERROR", "حصل خطأ من خدمة الذكاء الاصطناعي، حاول لاحقاً.")
                 };
             }
@@ -104,6 +115,10 @@ public class GroqAiProvider : IAiProvider
                 Content = content.Trim(),
                 ToolCalls = calls,
                 PromptTokens = ReadInt(usage, "prompt_tokens"),
+                CachedPromptTokens = usage.ValueKind == JsonValueKind.Object
+                    && usage.TryGetProperty("prompt_tokens_details", out var details)
+                        ? ReadInt(details, "cached_tokens")
+                        : 0,
                 CompletionTokens = ReadInt(usage, "completion_tokens"),
                 TotalTokens = ReadInt(usage, "total_tokens")
             };
@@ -150,4 +165,26 @@ public class GroqAiProvider : IAiProvider
         && v.ValueKind == JsonValueKind.Number
             ? v.GetInt32()
             : 0;
+
+    /// <summary>
+    /// بيختصر الـ schema قبل الإرسال: بيشيل وصف كل معامل (الـ enum والاسم بيكفوا).
+    /// الوصف العام للأداة بيفضل. ده بيقلل توكنز كل طلب من غير ما نغيّر معنى الأدوات.
+    /// لو CompactToolSchemas = false بيرجع الـ schema زي ما هو.
+    /// </summary>
+    private object? ToToolParameters(object schema)
+    {
+        if (!_opt.CompactToolSchemas)
+            return schema;
+
+        var node = JsonSerializer.SerializeToNode(schema);
+        if (node is JsonObject root && root["properties"] is JsonObject props)
+        {
+            foreach (var prop in props)
+            {
+                if (prop.Value is JsonObject p)
+                    p.Remove("description");
+            }
+        }
+        return node;
+    }
 }

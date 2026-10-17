@@ -65,9 +65,9 @@ public class ZakiFinanceExtraService
         try
         {
             if (name == GetExpensesSummary)
-                return CanViewExpenses(user) ? await ExpensesAsync(args, ct) : Denied();
+                return CanViewExpenses(user) ? await ExpensesAsync(user, args, ct) : Denied();
             if (name == GetCashflowSummary)
-                return CanViewCashflow(user) ? await CashflowAsync(args, ct) : Denied();
+                return CanViewCashflow(user) ? await CashflowAsync(user, args, ct) : Denied();
             return CanViewPersonal(user) ? await PersonalAsync(args, ct) : Denied();
         }
         catch (Exception ex)
@@ -78,13 +78,26 @@ public class ZakiFinanceExtraService
     }
 
     // ── المصروفات بالمجموعات ──
-    private async Task<ZakiToolOutcome> ExpensesAsync(System.Text.Json.JsonElement args, CancellationToken ct)
+    private async Task<ZakiToolOutcome> ExpensesAsync(
+        ClaimsPrincipal user, System.Text.Json.JsonElement args, CancellationToken ct)
     {
         var (start, label) = PeriodRange(ReadString(args, "period", "month"), DateTime.Today);
 
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
 
+        // فلتر الفرع اختياري: Expense.BranchId مباشرة (فاضي = كل الفروع)
         var q = db.Expenses.AsNoTracking().Where(e => start == null || e.ExpenseDate >= start);
+
+        var branchSearch = ReadRawString(args, "branch_name");
+        if (branchSearch.Length > 0)
+        {
+            var (branchId, branchName, branchError) = await ResolveBranchAsync(db, user, branchSearch, ct);
+            if (branchError != null)
+                return branchError;
+
+            q = q.Where(e => e.BranchId == branchId);
+            label = label + " — " + branchName;
+        }
 
         var groups = await q
             .GroupBy(e => e.ExpenseGroup.ExpenseGroupName)
@@ -116,18 +129,55 @@ public class ZakiFinanceExtraService
         return new ZakiToolOutcome(json, new ZakiTable("المصروفات — " + label, headers, rows));
     }
 
-    // ── التدفق النقدي ──
-    private async Task<ZakiToolOutcome> CashflowAsync(System.Text.Json.JsonElement args, CancellationToken ct)
+    // ── التدفق النقدي (نفس خدمة صفحة /financial/cash-flow وبنفس الأرقام) ──
+    private async Task<ZakiToolOutcome> CashflowAsync(
+        ClaimsPrincipal user, System.Text.Json.JsonElement args, CancellationToken ct)
     {
-        var (start, label) = PeriodRange(ReadString(args, "period", "month"), DateTime.Today);
+        var period = ReadString(args, "period", "month");
+        var (start, _) = PeriodRange(period, DateTime.Today);
+
+        // فلتر الفرع اختياري: الحركات بتتنسب للفرع عن طريق فرع الخزينة (CashFlowFilterDto.BranchId)
+        int? branchId = null;
+        string? branchName = null;
+        var branchSearch = ReadRawString(args, "branch_name");
+        if (branchSearch.Length > 0)
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var (id, name, branchError) = await ResolveBranchAsync(db, user, branchSearch, ct);
+            if (branchError != null)
+                return branchError;
+
+            branchId = id;
+            branchName = name;
+        }
 
         var statement = await _cashflow.GetCashFlowStatementAsync(new CashFlowFilterDto
         {
             FromDate = start ?? new DateTime(2000, 1, 1),
             ToDate = DateTime.Today,
             IncludeForecast = false,
-            IncludeMonthlyTrend = false
+            IncludeMonthlyTrend = false,
+            BranchId = branchId
         });
+
+        // مقارنة بنفس المدة من الفترة اللي قبلها
+        var prevPeriod = PreviousPeriodRange(period, DateTime.Today);
+        CashFlowStatementDto? prevStatement = null;
+        if (prevPeriod is { } pp)
+        {
+            prevStatement = await _cashflow.GetCashFlowStatementAsync(new CashFlowFilterDto
+            {
+                FromDate = pp.Start,
+                ToDate = pp.End.AddDays(-1),
+                IncludeForecast = false,
+                IncludeMonthlyTrend = false,
+                BranchId = branchId
+            });
+        }
+
+        var periodLabel = branchName == null
+            ? statement.PeriodLabel
+            : statement.PeriodLabel + " — " + branchName;
 
         var headers = new[] { "البند", "القيمة" };
         var rows = new List<IReadOnlyList<string>>
@@ -139,14 +189,48 @@ public class ZakiFinanceExtraService
             new[] { "رصيد نهاية الفترة", Money(statement.ClosingBalance) }
         };
 
+        if (prevPeriod is { } pp2 && prevStatement != null)
+        {
+            rows.Add(new[] { "صافي التدفق — " + pp2.Label, Money(prevStatement.NetCashFlow) });
+            rows.Add(new[] { "فرق صافي التدفق عن الفترة السابقة", Money(statement.NetCashFlow - prevStatement.NetCashFlow) });
+        }
+
+        // أكبر 5 بنود داخلة وخارجة (زي الشاشة) عشان الرد يشرح الأرقام
+        var inflows = statement.Inflows.OrderByDescending(c => c.Amount).Take(5).ToList();
+        var outflows = statement.Outflows.OrderByDescending(c => c.Amount).Take(5).ToList();
+
+        foreach (var c in inflows)
+            rows.Add(new[] { "داخل — " + c.CategoryName, Money(c.Amount) });
+        foreach (var c in outflows)
+            rows.Add(new[] { "خارج — " + c.CategoryName, Money(c.Amount) });
+
         var json = ToJson(new Dictionary<string, object?>
         {
-            ["الفترة"] = statement.PeriodLabel,
+            ["الفترة"] = periodLabel,
             ["صافي التدفق"] = Money(statement.NetCashFlow),
-            ["بيان التدفق النقدي"] = ToObjects(headers, rows)
+            ["بيان التدفق النقدي"] = ToObjects(headers, rows),
+            ["أكبر البنود الداخلة"] = inflows.Select(c => new Dictionary<string, object?>
+            {
+                ["البند"] = c.CategoryName,
+                ["المبلغ"] = Money(c.Amount),
+                ["النسبة"] = c.Percentage.ToString("0.##", Culture) + "%"
+            }).ToList(),
+            ["أكبر البنود الخارجة"] = outflows.Select(c => new Dictionary<string, object?>
+            {
+                ["البند"] = c.CategoryName,
+                ["المبلغ"] = Money(c.Amount),
+                ["النسبة"] = c.Percentage.ToString("0.##", Culture) + "%"
+            }).ToList(),
+            ["حسب الخزينة"] = statement.ByCashBox
+                .Select(b => new Dictionary<string, object?>
+                {
+                    ["الخزينة"] = b.CashBoxName,
+                    ["داخل"] = Money(b.Inflows),
+                    ["خارج"] = Money(b.Outflows)
+                }).ToList()
         });
 
-        return new ZakiToolOutcome(json, new ZakiTable("التدفق النقدي — " + statement.PeriodLabel, headers, rows));
+        return new ZakiToolOutcome(json, new ZakiTable("التدفق النقدي — " + periodLabel, headers, rows));
     }
 
     // ── الذمم / الحسابات الشخصية ──
@@ -189,13 +273,29 @@ public class ZakiFinanceExtraService
 
     private static AiToolDefinition ExpensesDefinition() => new(
         GetExpensesSummary,
-        "ملخص المصروفات لفترة: إجمالي وعدد ومقسمة بالمجموعات.",
-        new { type = "object", properties = new { period = PeriodSchema("الافتراضي month") } });
+        "ملخص المصروفات لفترة: إجمالي وعدد ومقسمة بالمجموعات. ممكن تحدد فرع.",
+        new
+        {
+            type = "object",
+            properties = new
+            {
+                period = PeriodSchema("الافتراضي month"),
+                branch_name = new { type = "string", description = "اسم الفرع (اختياري). فاضي = كل الفروع. «فرعي» = فرع المستخدم." }
+            }
+        });
 
     private static AiToolDefinition CashflowDefinition() => new(
         GetCashflowSummary,
-        "بيان التدفق النقدي لفترة: داخلي وخارجي وصافي وأرصدة بداية ونهاية.",
-        new { type = "object", properties = new { period = PeriodSchema("الافتراضي month") } });
+        "بيان التدفق النقدي لفترة: داخلي وخارجي وصافي وأرصدة بداية ونهاية، وأكبر البنود والخزائن. ممكن تحدد فرع.",
+        new
+        {
+            type = "object",
+            properties = new
+            {
+                period = PeriodSchema("الافتراضي month"),
+                branch_name = new { type = "string", description = "اسم الفرع (اختياري). فاضي = كل الفروع. «فرعي» = فرع المستخدم." }
+            }
+        });
 
     private static AiToolDefinition PersonalDefinition() => new(
         GetPersonalAccounts,
