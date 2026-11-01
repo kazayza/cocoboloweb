@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
 using Microsoft.AspNetCore.Http;
@@ -789,6 +789,53 @@ if (canViewCost && quoteIds.Any())
     }
 
     // ============================================================
+    //  للطباعة العامة (روابط التوكن) — بدون فحص صلاحية مستخدم
+    //  ⭐ دفعة 1: مصدر البيانات هو التحميل العام المخصص (بدون أسعار شراء)
+    // ============================================================
+    public async Task<QuotationPrintDto?> GetQuotationForPrintPublicAsync(int quotationId)
+    {
+        var form = await GetQuotationPublicAsync(quotationId);
+        if (form == null) return null;
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        var party = await db.Parties.AsNoTracking()
+            .Where(p => p.PartyId == form.PartyId)
+            .Select(p => new { p.Address, p.Email, p.Phone, p.City })
+            .FirstOrDefaultAsync();
+
+        var dto = new QuotationPrintDto
+        {
+            Quotation = form,
+            CustomerAddress = party?.Address,
+            CustomerEmail = party?.Email,
+            CustomerPhone = party?.Phone,
+            CustomerCity = party?.City,
+            CompanyName = "COCOBOLO"
+        };
+
+        try
+        {
+            var company = await db.CompanyInfos.AsNoTracking().FirstOrDefaultAsync();
+            if (company != null)
+            {
+                dto.CompanyName = GetStringProperty(company, "CompanyName")
+                    ?? GetStringProperty(company, "Name") ?? "COCOBOLO";
+                dto.CompanyPhone = GetStringProperty(company, "Phone");
+                dto.CompanyAddress = GetStringProperty(company, "Address");
+                dto.CompanyTaxNumber = GetStringProperty(company, "TaxNumber");
+                dto.CompanyLogo = GetStringProperty(company, "LogoPath");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "CompanyInfo read failed - using defaults");
+        }
+
+        return dto;
+    }
+
+    // ============================================================
     //  الإحصائيات (تحترم الفلاتر الحالية بالكامل)
     // ============================================================
     public async Task<QuotationStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null)
@@ -914,6 +961,9 @@ if (canViewCost && quoteIds.Any())
     var alternativeValidation = await ValidateSelectedAlternativesAsync(dto.Items);
     if (!alternativeValidation.IsValid) return (false, alternativeValidation.Message, null);
 
+    // ⭐ (دفعة 2 — 2-5) أسعار القاعدة من قاعدة البيانات قبل حساب سقف الخصم
+    await RefreshBasePricesFromDbAsync(dto);
+
     var discountValidation = ValidateDiscountPermission(dto);
     if (!discountValidation.IsValid) return (false, discountValidation.Message, null);
 
@@ -1036,6 +1086,15 @@ if (canViewCost && quoteIds.Any())
         if (quotation.InvoiceId != null)
             return (false, "لا يمكن تعديل عرض سعر تم تحويله لفاتورة.");
 
+        // ⭐ (دفعة 2 — 2-3) الحالة المخزنة + لقطة البنود المخزنة: أساس كشف
+        //    «التعديل المالي على عرض مقبول» بعد التحقق من الخصم أدناه.
+        var storedStatus = string.IsNullOrWhiteSpace(quotation.Status)
+            ? QuotationStatuses.Draft : quotation.Status;
+        var storedDetailSignatures = await _db.QuotationDetails.AsNoTracking()
+            .Where(d => d.QuotationId == quotation.QuotationId)
+            .Select(d => new { d.ProductId, d.Quantity, d.UnitPrice, d.SelectedAlternativeId, d.PricingTier })
+            .ToListAsync();
+
         var validation = ValidateQuotation(dto);
         if (!validation.IsValid) return (false, validation.Message);
 
@@ -1045,13 +1104,43 @@ if (canViewCost && quoteIds.Any())
         var existingDiscountAmount = quotation.DiscountAmount ?? 0m;
         var oldTotalAmount = quotation.TotalAmount;
         var oldOpportunityId = quotation.OpportunityId;
-        var discountValidation = ValidateDiscountPermission(dto, existingDiscountAmount);
+        // ⭐ (دفعة 2 — 2-5) أسعار القاعدة من قاعدة البيانات قبل حساب سقف الخصم
+        await RefreshBasePricesFromDbAsync(dto);
+
+        var discountValidation = ValidateDiscountPermission(dto, existingDiscountAmount, oldTotalAmount);
         if (!discountValidation.IsValid) return (false, discountValidation.Message);
+
+        // ⭐ (دفعة 2 — 2-3) كشف التعديل المالي على عرض «مقبول»: أي تغيير في البنود
+        //    (منتج/كمية/سعر وحدة/بديل/باقة) أو الخصم أو الإجمالي يجعل قبول العميل
+        //    السابق على أرقام لم تعد موجودة ⇒ يُبطل القبول عند الحفظ (أدناه).
+        //    التعديلات غير المالية (الملاحظات/الصلاحية/المخزن/الموظف) لا تُبطل القبول.
+        var acceptanceVoided = false;
+        if (storedStatus == QuotationStatuses.Accepted)
+        {
+            var incomingSignatures = dto.Items
+                .Select(i => (i.ProductId, i.Quantity, UnitPrice: Math.Round(i.UnitPrice, 2),
+                    Alt: i.SelectedAlternativeId ?? 0, Tier: NormalizePricingTier(i.PricingTier, i.Notes)))
+                .OrderBy(x => x.ProductId).ThenBy(x => x.Alt).ThenBy(x => x.UnitPrice)
+                .ThenBy(x => x.Quantity).ThenBy(x => x.Tier)
+                .ToList();
+            var storedSignatures = storedDetailSignatures
+                .Select(d => (d.ProductId, d.Quantity, UnitPrice: Math.Round(d.UnitPrice, 2),
+                    Alt: d.SelectedAlternativeId ?? 0, Tier: NormalizePricingTier(d.PricingTier)))
+                .OrderBy(x => x.ProductId).ThenBy(x => x.Alt).ThenBy(x => x.UnitPrice)
+                .ThenBy(x => x.Quantity).ThenBy(x => x.Tier)
+                .ToList();
+
+            var itemsChanged = !incomingSignatures.SequenceEqual(storedSignatures);
+            var requestedDiscount = ResolveRequestedDiscountAmount(dto);
+            var discountChanged = Math.Round(requestedDiscount, 2) != Math.Round(existingDiscountAmount, 2);
+            var totalChanged = Math.Round(dto.TotalAmount, 2) != Math.Round(oldTotalAmount, 2);
+            acceptanceVoided = itemsChanged || discountChanged || totalChanged;
+        }
 
         await using var tx = await _db.Database.BeginTransactionAsync();
         try
         {
-            CalculateTotals(dto, existingDiscountAmount);
+            CalculateTotals(dto);
 
             var quotationPricingType = ResolveQuotationPricingType(dto.Items.Select(i => i.PricingTier), dto.PricingType);
 
@@ -1067,6 +1156,20 @@ if (canViewCost && quoteIds.Any())
             quotation.GrandTotal = dto.GrandTotal;
             quotation.Notes = dto.Notes;
             quotation.Status = string.IsNullOrWhiteSpace(dto.Status) ? QuotationStatuses.Draft : dto.Status;
+
+            // ⭐ (دفعة 2 — 2-3) تعديل مالي على عرض مقبول ⇒ إبطال القبول: إعادة
+            //    للحالة «مسودة» ومسح بيانات القبول/الرفض، ولا يُقبل الحفظ على أنه
+            //    ما زال مقبولًا بالأرقام الجديدة. إعادة الإرسال وقبول جديد لازمة
+            //    قبل أي تحويل لفاتورة (بوابة 2-1).
+            if (acceptanceVoided)
+            {
+                quotation.Status = QuotationStatuses.Draft;
+                quotation.AcceptedAt = null;
+                quotation.AcceptedBy = null;
+                quotation.RejectedAt = null;
+                quotation.RejectedBy = null;
+                quotation.RejectionReason = null;
+            }
 
             var existing = await _db.QuotationDetails
                 .Where(d => d.QuotationId == quotation.QuotationId)
@@ -1146,6 +1249,7 @@ if (canViewCost && quoteIds.Any())
                     quotation.InvoiceId,
                     quotation.Status,
                     quotation.ValidUntil,
+                    AcceptanceVoided = acceptanceVoided,
                     ItemsCount = quotation.QuotationDetails?.Count ?? 0
                 },
                 currentUserName);
@@ -1165,6 +1269,31 @@ if (canViewCost && quoteIds.Any())
                     currentUserName);
             }
 
+            // ⭐ (دفعة 2 — 2-3) تنبيه المنشئ عند إبطال قبول بسبب تعديل مالي من غيره
+            if (acceptanceVoided)
+            {
+                if (!string.IsNullOrWhiteSpace(quotation.CreatedBy)
+                    && !string.Equals(quotation.CreatedBy, currentUserName, StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var reference = quotation.ReferenceNumber
+                            ?? $"QT-{quotation.QuotationDate.Year}-{quotation.QuotationId:D5}";
+                        await _notify.AddAsync(
+                            "↩️ أُلغي قبول عرض سعر — تعديل مالي",
+                            $"تم تعديل بنود/أسعار/خصم عرض السعر {reference} وهو بحالة «مقبول» بواسطة {currentUserName}، فأُعيد تلقائيًا إلى «مسودة» وأُلغي قبول العميل السابق. يلزم إعادة الإرسال وقبول العميل من جديد قبل التحويل لفاتورة.",
+                            quotation.CreatedBy!, currentUserName,
+                            "quotations", "Quotations", quotation.QuotationId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to notify creator about voided acceptance for quotation {Id}", quotation.QuotationId);
+                    }
+                }
+
+                return (true, "تم تحديث عرض السعر بنجاح. تنبيه: كان العرض «مقبولًا» والتعديل مالي، فأُعيد إلى «مسودة» وأُلغي قبول العميل السابق — أعد إرساله وانتظر قبولًا جديدًا قبل التحويل لفاتورة.");
+            }
+
             return (true, "تم تحديث عرض السعر بنجاح.");
         }
         catch (Exception ex)
@@ -1178,12 +1307,42 @@ if (canViewCost && quoteIds.Any())
     // ============================================================
     //  تغيير الحالة
     // ============================================================
+    /// <summary>
+    /// ⭐ من يحق له تسجيل رد العميل (قبول/رفض) بالنيابة عنه داخليًا (هاتفيًا):
+    ///    منشئ العرض نفسه، أو Admin، أو مدير الحسابات، أو المدير العام.
+    ///    صلاحية المدير العام المستمدة من هذه القاعدة مقصورة على تسجيل
+    ///    القبول/الرفض فقط، ولا تمتد لأي إجراء آخر على عروض الأسعار.
+    /// </summary>
+    private bool CanRecordCustomerResponse(Quotation quotation, string currentUserName)
+    {
+        var user = CurrentUser;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+
+        if (user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole(SystemRoles.AccountManager)
+            || user.IsInRole(SystemRoles.GeneralManager))
+            return true;
+
+        // منشئ العرض نفسه (CreatedBy يخزّن اسم مستخدم المنشئ)
+        var loginName = user.Identity?.Name;
+        return !string.IsNullOrWhiteSpace(quotation.CreatedBy)
+            && (string.Equals(quotation.CreatedBy, loginName, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(quotation.CreatedBy, currentUserName, StringComparison.OrdinalIgnoreCase));
+    }
+
     public async Task<(bool Success, string Message)> ChangeStatusAsync(
-    int quotationId, string newStatus, string currentUserName, bool isPublic = false)
+    int quotationId, string newStatus, string currentUserName, bool isPublic = false,
+    string? rejectionReason = null)
 {
-    // ✅ تخطي permission check لو الاستدعاء من الصفحة العامة
+    // ⭐ الانتقال إلى Accepted/Rejected هو تسجيل لرد العميل — وله قاعدة صلاحية خاصة
+    var isCustomerResponse = newStatus == QuotationStatuses.Accepted
+                          || newStatus == QuotationStatuses.Rejected;
+
+    // ✅ تخطي فحص صلاحية المستخدم لو الاستدعاء من مسار التوكن العام (متحقق منه بالتوكن)
     // ⭐ مشاهدو التكلفة المقيّدون لا يغيّرون الحالة أبدًا
-    if (!isPublic && (!HasPermission("Edit") || IsRestrictedCostViewer()))
+    // ⭐ الانتقالات العادية تشترط صلاحية Edit العامة، أما تسجيل رد العميل فيخضع
+    //    لقاعدته الخاصة أدناه (بعد تحميل العرض لمعرفة منشئه)
+    if (!isPublic && (IsRestrictedCostViewer() || (!isCustomerResponse && !HasPermission("Edit"))))
         return (false, "ليس لديك صلاحية تغيير حالة عرض السعر.");
 
         var quotation = await _db.Quotations
@@ -1192,6 +1351,23 @@ if (canViewCost && quoteIds.Any())
         if (quotation == null) return (false, "عرض السعر غير موجود.");
         if (quotation.InvoiceId != null)
             return (false, "لا يمكن تغيير حالة عرض سعر تم تحويله لفاتورة.");
+
+        // ⭐ قاعدة تسجيل رد العميل (قرار صاحب النظام — دفعة 1) + تحديد مصدر الرد للتدقيق
+        string responseSource;
+        if (isPublic)
+        {
+            responseSource = "PublicLink";
+        }
+        else if (isCustomerResponse)
+        {
+            if (!CanRecordCustomerResponse(quotation, currentUserName))
+                return (false, "تسجيل موافقة/رفض العميل من صلاحية منشئ العرض أو الأدمن أو مدير الحسابات أو المدير العام فقط.");
+            responseSource = "PhoneByStaff";
+        }
+        else
+        {
+            responseSource = "Internal";
+        }
 
         if (!QuotationStatuses.All.ContainsKey(newStatus))
             return (false, "حالة غير صحيحة.");
@@ -1212,6 +1388,24 @@ if (canViewCost && quoteIds.Any())
         try
         {
             quotation.Status = newStatus;
+
+            // ⭐ (دفعة 2 — 2-7) نظافة بيانات القبول/الرفض: عند الانتقال خارج حالة
+            //    «مقبول» أو «مرفوض» إلى أي حالة أخرى تُمسح بيانات تلك الحالة من
+            //    سجل العرض الحالي (من ردّ/متى/سبب الرفض) حتى لا تعرض الشاشات
+            //    والتقارير بيانات قديمة كاذبة — التاريخ الكامل محفوظ في سجل
+            //    التدقيق (ChangeStatus يُسجَّل فيه بكل انتقال).
+            if (oldStatus == QuotationStatuses.Accepted && newStatus != QuotationStatuses.Accepted)
+            {
+                quotation.AcceptedAt = null;
+                quotation.AcceptedBy = null;
+            }
+            if (oldStatus == QuotationStatuses.Rejected && newStatus != QuotationStatuses.Rejected)
+            {
+                quotation.RejectedAt = null;
+                quotation.RejectedBy = null;
+                quotation.RejectionReason = null;
+            }
+
             // ⭐ تسجيل تفاصيل الرد
     if (newStatus == QuotationStatuses.Accepted)
     {
@@ -1229,12 +1423,21 @@ if (canViewCost && quoteIds.Any())
     {
         quotation.RejectedAt = DateTime.Now;
         quotation.RejectedBy = currentUserName;
-        // RejectionReason بيتسجل في method منفصلة
+        // ⭐ (دفعة 2 — 2-8) سبب الرفض يُحفظ هنا، في نفس SaveChanges الخاصة
+        //    بتغيير الحالة (عملية واحدة ذرّية) — لا خطوة منفصلة لاحقة يمكن
+        //    أن تفشل أو تُستدعى بلا صلاحية كما كان من قبل.
+        if (!string.IsNullOrWhiteSpace(rejectionReason))
+            quotation.RejectionReason = rejectionReason.Trim();
     }
             await _db.SaveChangesAsync();
             await _audit.LogAsync<object>("Quotations", "ChangeStatus",
                 quotationId.ToString(), new { OldStatus = oldStatus },
-                new { NewStatus = newStatus }, currentUserName);
+                new
+                {
+                    NewStatus = newStatus,
+                    Source = responseSource,
+                    RejectionReason = newStatus == QuotationStatuses.Rejected ? quotation.RejectionReason : null
+                }, currentUserName);
             return (true, $"تم تغيير الحالة إلى: {QuotationStatuses.All[newStatus]}");
         }
         catch (Exception ex)
@@ -1257,6 +1460,20 @@ if (canViewCost && quoteIds.Any())
         if (quotation == null) return (false, "عرض السعر غير موجود.");
         if (quotation.InvoiceId != null)
             return (false, "لا يمكن حذف عرض سعر تم تحويله لفاتورة.");
+
+        // ⭐ (دفعة 2 — 2-6) قواعد الحذف: العروض المُرسلة والمقبولة والمحوّلة لا
+        //    تُحذف نهائيًا (لها أثر عند العميل أو في الحسابات). الحذف يبقى متاحًا
+        //    للمسودات والمرفوضة والمنتهية كما كان.
+        var deleteStatus = string.IsNullOrWhiteSpace(quotation.Status)
+            ? QuotationStatuses.Draft : quotation.Status;
+        if (deleteStatus == QuotationStatuses.Sent
+            || deleteStatus == QuotationStatuses.Accepted
+            || deleteStatus == QuotationStatuses.Converted)
+        {
+            var statusText = QuotationStatuses.All.TryGetValue(deleteStatus, out var dt)
+                ? dt : deleteStatus;
+            return (false, $"لا يمكن حذف عرض سعر بحالة «{statusText}». الحذف متاح فقط للمسودات والمرفوضة والمنتهية.");
+        }
 
         await using var tx = await _db.Database.BeginTransactionAsync();
         try
@@ -1291,7 +1508,8 @@ if (canViewCost && quoteIds.Any())
     //  تحويل لفاتورة
     // ============================================================
     // ============================================================
-//  تحويل لفاتورة (بدون transaction خارجية)
+//  تحويل لفاتورة — (دفعة 2) بوابة «مقبول» فقط + معاملة واحدة محيطة
+//  ينضم لها CreateInvoiceAsync على نفس السياق المشترك
 // ============================================================
 public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
     int quotationId, List<int>? selectedAdvanceChargeIds,
@@ -1313,6 +1531,20 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
             return (false, 
                 $"تم تحويل هذا العرض من قبل للفاتورة #{quotation.InvoiceId}.", 
                 quotation.InvoiceId);
+
+        // ⭐ (دفعة 2 — 2-1) بوابة حالة صريحة: التحويل من «مقبول» فقط (قرار صاحب النظام).
+        //    أي حالة أخرى (مسودة/مُرسل/مرفوض/منتهٍ) تُرفض — سجّل قبول العميل أولًا
+        //    (من رابط التوكن أو هاتفيًا وفق قاعدة الدفعة 1) ثم أعد المحاولة.
+        var currentStatus = string.IsNullOrWhiteSpace(quotation.Status)
+            ? QuotationStatuses.Draft : quotation.Status;
+        if (currentStatus != QuotationStatuses.Accepted)
+        {
+            var statusText = QuotationStatuses.All.TryGetValue(currentStatus, out var st)
+                ? st : currentStatus;
+            return (false,
+                $"لا يمكن تحويل عرض السعر لفاتورة إلا إذا كانت حالته «مقبول». الحالة الحالية: «{statusText}».",
+                null);
+        }
 
         // جلب الأصناف مع بيانات المنتج
         var dRows = await _db.QuotationDetails.AsNoTracking()
@@ -1391,10 +1623,11 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
             Notes = $"تحويل من عرض السعر QT-{quotation.QuotationDate.Year}-{quotation.QuotationId:D5}" +
                     (string.IsNullOrEmpty(quotation.Notes) ? "" : $"\n{quotation.Notes}"),
 
-            // ✅ عند التحويل نحافظ على قيمة الخصم كما أُدخلت في عرض السعر
-            // ولا نعيد اشتقاقها من نسبة حتى لا يحدث فرق بسبب التقريب.
+            // ✅ (دفعة 2 — 2-2) عند التحويل نحافظ على قيمة الخصم كما اعتمدها العميل
+            // في عرض السعر تمامًا (خانتان عشريتان، بلا تقريب لأقرب جنيه)،
+            // ولا نعيد اشتقاقها من نسبة — حتى يطابق إجمالي الفاتورة صافي العرض.
             DiscountAmount = quotation.DiscountAmount.HasValue
-                ? Math.Round(quotation.DiscountAmount.Value, 0, MidpointRounding.AwayFromZero)
+                ? Math.Round(quotation.DiscountAmount.Value, 2)
                 : null,
             DiscountPercentage = null,
 
@@ -1418,7 +1651,10 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
                     ProductName = p?.ProductName,
                     ProductDescription = alt?.SpecificationSummary ?? p?.ProductDescription,
                     Quantity = d.Quantity,
-                    UnitPrice = Math.Round(d.UnitPrice, 0, MidpointRounding.AwayFromZero),
+                    // ⭐ (دفعة 2 — 2-2) سعر الوحدة كما هو في العرض بخانتين عشريتين —
+                    // أُلغي تقريب سعر الوحدة لأقرب جنيه الذي كان يجعل الفاتورة
+                    // تختلف عما وافق عليه العميل في العرض المعتمد.
+                    UnitPrice = Math.Round(d.UnitPrice, 2),
                     Notes = StripTierTag(d.Notes),
                     SelectedAlternativeId = d.SelectedAlternativeId,
                     SelectedAlternativeName = alt?.AlternativeName,
@@ -1442,15 +1678,24 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
             }).ToList()
         };
 
-        // ⭐ استدعاء InvoiceService - هو بيدير الـ transaction بنفسه
+        // ⭐ (دفعة 2 — 2-1) معاملة واحدة على السياق المشترك: كلا الخدمتين
+        //    (QuotationService وInvoiceService وNotificationService) تعمل على نفس
+        //    الـ DbContext الـ Scoped داخل نفس الـ Circuit/الطلب، فنفتح المعاملة هنا
+        //    وCreateInvoiceAsync ينضم لها (لا يفتح معاملته الخاصة)، وبذلك تشمل
+        //    المعاملة الواحدة: رأس الفاتورة وبنودها والمرآة وقيود المخزون والدفعات
+        //    والإشعارات وربط العرض وتحديث الفرصة — إما أن تُثبَّت كلها أو تُراجَع كلها.
+        await using var tx = await _db.Database.BeginTransactionAsync();
+
         var (ok, msg, invoiceId, mirrorId) = 
             await _invoiceService.CreateInvoiceAsync(invoiceForm, currentUserName);
 
         if (!ok || invoiceId == null)
+        {
+            await tx.RollbackAsync();
             return (false, msg, null);
+        }
 
-        // ⭐ بعد ما الفاتورة اتعملت بنجاح، نربط عرض السعر بيها
-        // (مفيش transaction هنا - مجرد update واحد)
+        // ⭐ ربط عرض السعر بالفاتورة داخل نفس المعاملة
         quotation.InvoiceId = invoiceId.Value;
         quotation.Status = QuotationStatuses.Converted;
 
@@ -1508,6 +1753,28 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
 
         await _db.SaveChangesAsync();
 
+        // ⭐ (دفعة 2 — 2-2) تحقق رقمي قبل التثبيت: إجمالي الفاتورة المنشأة يجب أن
+        //    يساوي صافي عرض السعر المعتمد (GrandTotal) تمامًا بخانتين عشريتين.
+        //    أي انحراف ⇒ تراجع كامل برسالة واضحة بدل حفظ فاتورة تختلف عما
+        //    وافق عليه العميل. (حساب الطرفين متماثل: مجموع Round(الكمية × السعر، 2)
+        //    ناقص الخصم المنقول كما هو، والفاتورة بلا رسوم إضافية عند التحويل.)
+        var createdInvoiceGrandTotal = await _db.Transactions
+            .Where(t => t.TransactionId == invoiceId.Value)
+            .Select(t => t.GrandTotal)
+            .FirstOrDefaultAsync();
+
+        if (Math.Round(createdInvoiceGrandTotal, 2) != Math.Round(quotation.GrandTotal ?? 0m, 2))
+        {
+            await tx.RollbackAsync();
+            return (false,
+                $"تم إيقاف التحويل: إجمالي الفاتورة ({createdInvoiceGrandTotal:N2} ج) لا يطابق صافي عرض السعر المعتمد ({quotation.GrandTotal:N2} ج). لم تُحفظ أي تغييرات — راجع بنود العرض وأسعاره ثم أعد المحاولة.",
+                null);
+        }
+
+        // ⭐ تثبيت المعاملة الواحدة: الفاتورة + المخزون + الربط + الفرصة معًا.
+        //    أي استثناء قبل هذا السطر يُراجَع تلقائيًا عند التخلص من المعاملة.
+        await tx.CommitAsync();
+
         await _audit.LogAsync("Quotations", "ConvertToInvoice",
             quotationId.ToString(), null,
             new { InvoiceId = invoiceId.Value, MirrorId = mirrorId }, 
@@ -1533,8 +1800,11 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
 // ============================================================
 public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
 {
-    // ✅ نفس الـ logic بتاع GetQuotationForEditAsync لكن بدون permission
-    var rawData = await _db.Quotations.AsNoTracking()
+    // ⭐ تحميل عام مخصص (دفعة 1): بدون أي فحص صلاحية مستخدم، وبـ DbContextFactory
+    //    (لا يعتمد على الـ DbContext المشترك في الـ Circuit)، ولا يُحمّل أسعار الشراء إطلاقًا.
+
+    await using var db = await _dbFactory.CreateDbContextAsync();
+    var rawData = await db.Quotations.AsNoTracking()
         .Where(x => x.QuotationId == quotationId)
         .Select(x => new
         {
@@ -1564,12 +1834,12 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
     var qdate = rawData.QuotationDate ?? DateTime.Today;
     var total = rawData.TotalAmount ?? 0m;
 
-    var party = await _db.Parties.AsNoTracking()
+    var party = await db.Parties.AsNoTracking()
         .Where(p => p.PartyId == pid)
         .Select(p => new { p.PartyName, p.Phone })
         .FirstOrDefaultAsync();
 
-        var detailRows = await _db.QuotationDetails.AsNoTracking()
+        var detailRows = await db.QuotationDetails.AsNoTracking()
         .Where(d => d.QuotationId == qid)
         .Select(d => new
         {
@@ -1591,7 +1861,7 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
     var productsDict = new Dictionary<int, (string? Name, string? Desc, decimal? SaleC, decimal? SaleP, decimal? SaleE, decimal? PurchC, decimal? PurchP, decimal? PurchE, int? Period)>();
     if (productIds.Any())
     {
-        var prods = await _db.Products.AsNoTracking()
+        var prods = await db.Products.AsNoTracking()
             .Where(p => productIds.Contains(p.ProductId))
             .Select(p => new {
                 p.ProductId,
@@ -1600,19 +1870,16 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
                 p.SuggestedSalePriceCClass,
                 p.SuggestedSalePrice,
                 p.SuggestedSalePriceElite,
-                p.PurchasePriceCClass,
-                p.PurchasePrice,
-                p.PurchasePriceElite,
                 p.Period })
             .ToListAsync();
         foreach (var p in prods)
-            productsDict[p.ProductId] = (p.ProductName, p.ProductDescription, p.SuggestedSalePriceCClass, p.SuggestedSalePrice, p.SuggestedSalePriceElite, p.PurchasePriceCClass, p.PurchasePrice, p.PurchasePriceElite, p.Period);
+            productsDict[p.ProductId] = (p.ProductName, p.ProductDescription, p.SuggestedSalePriceCClass, p.SuggestedSalePrice, p.SuggestedSalePriceElite, null, null, null, p.Period);
     }
 
     var alternativesDict = new Dictionary<int, ProductFactoryAlternative>();
     if (selectedAlternativeIds.Any())
     {
-        alternativesDict = await _db.ProductFactoryAlternatives.AsNoTracking()
+        alternativesDict = await db.ProductFactoryAlternatives.AsNoTracking()
             .Where(a => selectedAlternativeIds.Contains(a.AlternativeId))
             .ToDictionaryAsync(a => a.AlternativeId);
     }
@@ -1644,9 +1911,9 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
             AlternativeSalePriceCClass = alt?.SuggestedSalePriceCClass,
             AlternativeSalePricePremium = alt?.SuggestedSalePricePremium,
             AlternativeSalePriceElite = alt?.SuggestedSalePriceElite,
-            AlternativePurchasePriceCClass = alt?.PurchasePriceCClass,
-            AlternativePurchasePricePremium = alt?.PurchasePricePremium,
-            AlternativePurchasePriceElite = alt?.PurchasePriceElite,
+            AlternativePurchasePriceCClass = null,
+            AlternativePurchasePricePremium = null,
+            AlternativePurchasePriceElite = null,
             AlternativePeriod = alt?.Period
         };
     }).ToList();
@@ -1918,14 +2185,23 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
         return 0m;
     }
 
-    private decimal GetRoleDiscountCap(QuotationFormDto dto, decimal existingDiscountAmount = 0m)
+    // ⭐ (دفعة 2 — 2-4) سقف «الخصم المحفوظ» عند التعديل: يُحسب كنسبة فعّالة من
+    //    الإجمالي الجديد — (الخصم القائم ÷ الإجمالي قبل الخصم عند الاعتماد) ×
+    //    الإجمالي الجديد قبل الخصم — لا كمبلغ مطلق قديم. بهذا يستحيل أن يحتفظ
+    //    محرِّر بلا صلاحية بنسبة خصم أعلى من التي اعتُمدت له أصلًا عند تصغير
+    //    البنود. إجمالي قديم صفر/غائب ⇒ لا خصم محفوظ.
+    private static decimal GetPreservedDiscountCap(
+        decimal existingDiscountAmount, decimal existingTotalAmount, decimal newTotalAmount)
     {
-        var preservedDiscount = Math.Min(Math.Max(existingDiscountAmount, 0m), dto.TotalAmount);
-        var calculatedRoleCap = Math.Min(dto.TotalAmount, GetIncreaseDiscountCap(dto) + GetRoleBaseDiscountCap(dto));
-        return Math.Max(preservedDiscount, calculatedRoleCap);
+        if (existingDiscountAmount <= 0 || existingTotalAmount <= 0 || newTotalAmount <= 0)
+            return 0m;
+
+        var preserved = Math.Round(
+            (existingDiscountAmount / existingTotalAmount) * newTotalAmount, 2);
+        return Math.Min(preserved, newTotalAmount);
     }
 
-    private (bool IsValid, string Message) ValidateDiscountPermission(QuotationFormDto dto, decimal existingDiscountAmount = 0m)
+    private (bool IsValid, string Message) ValidateDiscountPermission(QuotationFormDto dto, decimal existingDiscountAmount = 0m, decimal existingTotalAmount = 0m)
     {
         var requestedDiscount = ResolveRequestedDiscountAmount(dto);
         if (requestedDiscount <= 0)
@@ -1935,7 +2211,7 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
             return (false, $"لا يمكن أن يتجاوز الخصم إجمالي عرض السعر الحالي ({dto.TotalAmount:N2} ج).");
 
         var increaseCap = GetIncreaseDiscountCap(dto);
-        var preservedDiscount = Math.Min(Math.Max(existingDiscountAmount, 0m), dto.TotalAmount);
+        var preservedDiscount = GetPreservedDiscountCap(existingDiscountAmount, existingTotalAmount, dto.TotalAmount);
 
         if (requestedDiscount <= increaseCap || requestedDiscount <= preservedDiscount)
             return (true, "");
@@ -1958,15 +2234,19 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
             : (false, "هذا الخصم من صلاحية مدير الحسابات أو الأدمن.");
     }
 
-    private void CalculateTotals(QuotationFormDto dto, decimal existingDiscountAmount = 0m)
+    // ⭐ (دفعة 2 — 2-5) آلية خصم واحدة: لا قصّ صامت عند سقف الدور هنا بعد الآن.
+    //    ValidateDiscountPermission هو السلطة الوحيدة ويرفض برسالة واضحة قبل
+    //    الحفظ؛ وهذه الدالة تحسب فقط ما تم التحقق منه. قاعدة العمل الوحيدة
+    //    المتبقية هنا هي تقريب مبلغ الخصم لأقرب 100 ج — وهي نفس الصيغة التي
+    //    يقارن بها التحقق (ResolveRequestedDiscountAmount) حرفيًا، فلا يمكن
+    //    أن ينحرف المحسوب عن المتحقق منه بعد اليوم.
+    private void CalculateTotals(QuotationFormDto dto)
     {
         dto.TotalAmount = Math.Round(dto.Items.Sum(i => i.TotalAmount), 2);
 
-        var maxDiscount = GetRoleDiscountCap(dto, existingDiscountAmount);
-
         if (dto.DiscountAmount.HasValue && dto.DiscountAmount.Value > 0)
         {
-            dto.DiscountAmount = Math.Min(Math.Round(dto.DiscountAmount.Value / 100m, 0) * 100m, maxDiscount);
+            dto.DiscountAmount = Math.Round(dto.DiscountAmount.Value / 100m, 0) * 100m;
             dto.DiscountPercentage = dto.TotalAmount > 0
                 ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100, 2)
                 : 0;
@@ -1974,7 +2254,7 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
         else if (dto.DiscountPercentage.HasValue && dto.DiscountPercentage.Value > 0)
         {
             var rawAmount = dto.TotalAmount * (dto.DiscountPercentage.Value / 100m);
-            dto.DiscountAmount = Math.Min(Math.Round(rawAmount / 100m, 0) * 100m, maxDiscount);
+            dto.DiscountAmount = Math.Round(rawAmount / 100m, 0) * 100m;
             dto.DiscountPercentage = dto.TotalAmount > 0
                 ? Math.Round((dto.DiscountAmount.Value / dto.TotalAmount) * 100, 2)
                 : 0;
@@ -1987,6 +2267,73 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
 
         dto.NetTotalAmount = dto.TotalAmount - (dto.DiscountAmount ?? 0);
         dto.GrandTotal = dto.NetTotalAmount ?? 0;
+    }
+
+    // ⭐ (دفعة 2 — 2-5) إعادة جلب أسعار البيع الأساسية من قاعدة البيانات قبل
+    //    حساب سقف الخصم: أسعار باقات المنتج إلى SalePrice* وأسعار باقات البديل
+    //    المختار إلى AlternativeSalePrice* — بنفس دلالات الحقول الحالية تمامًا —
+    //    بدل الثقة بالأسعار المحمولة في الـ DTO. منتج/بديل غير موجود في القاعدة
+    //    تُترك قيمه كما هي (تكشفه تحققات الحفظ الأخرى).
+    private async Task RefreshBasePricesFromDbAsync(QuotationFormDto dto)
+    {
+        var productIds = dto.Items.Select(i => i.ProductId).Distinct().ToList();
+        var alternativeIds = dto.Items.Where(i => i.SelectedAlternativeId.HasValue)
+            .Select(i => i.SelectedAlternativeId!.Value).Distinct().ToList();
+        if (!productIds.Any() && !alternativeIds.Any()) return;
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+
+        var productPrices = new Dictionary<int, (decimal? CClass, decimal? Premium, decimal? Elite)>();
+        if (productIds.Any())
+        {
+            var rows = await db.Products.AsNoTracking()
+                .Where(p => productIds.Contains(p.ProductId))
+                .Select(p => new
+                {
+                    p.ProductId,
+                    p.SuggestedSalePriceCClass,
+                    p.SuggestedSalePrice,
+                    p.SuggestedSalePriceElite
+                })
+                .ToListAsync();
+            foreach (var r in rows)
+                productPrices[r.ProductId] = (r.SuggestedSalePriceCClass, r.SuggestedSalePrice, r.SuggestedSalePriceElite);
+        }
+
+        var alternativePrices = new Dictionary<int, (decimal? CClass, decimal? Premium, decimal? Elite)>();
+        if (alternativeIds.Any())
+        {
+            var rows = await db.ProductFactoryAlternatives.AsNoTracking()
+                .Where(a => alternativeIds.Contains(a.AlternativeId))
+                .Select(a => new
+                {
+                    a.AlternativeId,
+                    a.SuggestedSalePriceCClass,
+                    a.SuggestedSalePricePremium,
+                    a.SuggestedSalePriceElite
+                })
+                .ToListAsync();
+            foreach (var r in rows)
+                alternativePrices[r.AlternativeId] = (r.SuggestedSalePriceCClass, r.SuggestedSalePricePremium, r.SuggestedSalePriceElite);
+        }
+
+        foreach (var item in dto.Items)
+        {
+            if (productPrices.TryGetValue(item.ProductId, out var prod))
+            {
+                item.SalePriceCClass = prod.CClass;
+                item.SalePricePremium = prod.Premium;
+                item.SalePriceElite = prod.Elite;
+            }
+
+            if (item.SelectedAlternativeId.HasValue
+                && alternativePrices.TryGetValue(item.SelectedAlternativeId.Value, out var alt))
+            {
+                item.AlternativeSalePriceCClass = alt.CClass;
+                item.AlternativeSalePricePremium = alt.Premium;
+                item.AlternativeSalePriceElite = alt.Elite;
+            }
+        }
     }
 
     private static string NormalizePricingTier(string? tier, string? notes = null)
@@ -2059,17 +2406,31 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
         return prop?.GetValue(obj)?.ToString();
     }
     /// <summary>تسجيل سبب رفض العميل</summary>
+    // ⭐ (دفعة 2 — 2-8) المسار الموحّد الآن هو ChangeStatusAsync(rejectionReason)
+    //    الذي يحفظ السبب ذرّيًا مع تغيير الحالة، وقد هُجّر مستدعيه الوحيد
+    //    (نقطة رد التوكن العامة) إليه. تبقى هذه الدالة للتوافق فقط، مُحصّنة:
+    //    لا تقبل سببًا إلا لعرض حالته «مرفوض» فعلًا (فلا يمكن حقن سبب في عرض
+    //    لم يُرفض)، وتُسجَّل في التدقيق.
 public async Task<bool> SaveRejectionReasonAsync(int quotationId, string reason)
 {
     try
     {
         var quotation = await _db.Quotations
             .FirstOrDefaultAsync(q => q.QuotationId == quotationId);
-        
+
         if (quotation == null) return false;
-        
+
+        var status = string.IsNullOrWhiteSpace(quotation.Status)
+            ? QuotationStatuses.Draft : quotation.Status;
+        if (status != QuotationStatuses.Rejected) return false;
+
         quotation.RejectionReason = reason;
         await _db.SaveChangesAsync();
+
+        await _audit.LogAsync<object>("Quotations", "SaveRejectionReason",
+            quotationId.ToString(), null,
+            new { RejectionReason = reason },
+            CurrentUser?.Identity?.Name ?? "Public");
         
         _logger.LogInformation(
             "Rejection reason saved for quotation {Id}: {Reason}", 

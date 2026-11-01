@@ -48,9 +48,9 @@
         </div>
     }
 
-    <!-- ═══ أسئلة سريعة ═══ -->
+    <!-- ═══ أسئلة سريعة (متفلترة حسب صلاحيات المستخدم) ═══ -->
     <div class="zk-suggest">
-        @foreach (var s in Compact ? _suggestions.Take(4) : _suggestions)
+        @foreach (var s in Compact ? VisibleChips.Take(4) : VisibleChips)
         {
             <button class="zk-chip" disabled="@State.IsBusy" @onclick="() => AskSuggestion(s.Text)">
                 <MudIcon Icon="@s.Icon" Size="Size.Small" Class="zk-chip-icon" />
@@ -71,6 +71,10 @@
                 <div class="zk-typing">
                     <span></span><span></span><span></span>
                 </div>
+                @if (!string.IsNullOrEmpty(_statusText))
+                {
+                    <div class="zk-status">@_statusText</div>
+                }
             </div>
         }
 
@@ -94,20 +98,27 @@
 
                         <div class="zk-bubble @(item.Ok ? "" : "zk-bubble-error")">@RenderRich(item.Text)</div>
 
-                        @if (item.MessageId.HasValue)
+                        @if (!string.IsNullOrWhiteSpace(item.Text))
                         {
                             <div class="zk-feedback">
-                                <MudIconButton Icon="@(item.Useful == true ? Icons.Material.Filled.ThumbUp : Icons.Material.Outlined.ThumbUp)"
-                                               Size="Size.Small" Title="مفيد"
-                                               Color="@(item.Useful == true ? Color.Success : Color.Default)"
-                                               OnClick="@(() => GiveFeedbackAsync(item, true))" />
-                                <MudIconButton Icon="@(item.Useful == false ? Icons.Material.Filled.ThumbDown : Icons.Material.Outlined.ThumbDown)"
-                                               Size="Size.Small" Title="مش مفيد"
-                                               Color="@(item.Useful == false ? Color.Error : Color.Default)"
-                                               OnClick="@(() => GiveFeedbackAsync(item, false))" />
-                                @if (item.Useful != null)
+                                <MudIconButton Icon="@(_copiedItem == item ? Icons.Material.Filled.Check : Icons.Material.Outlined.ContentCopy)"
+                                               Size="Size.Small" Title="نسخ الرد"
+                                               Color="@(_copiedItem == item ? Color.Success : Color.Default)"
+                                               OnClick="@(() => CopyAnswerAsync(item))" />
+                                @if (item.MessageId.HasValue)
                                 {
-                                    <span class="zk-feedback-note">@(item.Useful == true ? "اتسجل: مفيد ✓" : "اتسجل: مش مفيد. هنحسّن الرد ده")</span>
+                                    <MudIconButton Icon="@(item.Useful == true ? Icons.Material.Filled.ThumbUp : Icons.Material.Outlined.ThumbUp)"
+                                                   Size="Size.Small" Title="مفيد"
+                                                   Color="@(item.Useful == true ? Color.Success : Color.Default)"
+                                                   OnClick="@(() => GiveFeedbackAsync(item, true))" />
+                                    <MudIconButton Icon="@(item.Useful == false ? Icons.Material.Filled.ThumbDown : Icons.Material.Outlined.ThumbDown)"
+                                                   Size="Size.Small" Title="مش مفيد"
+                                                   Color="@(item.Useful == false ? Color.Error : Color.Default)"
+                                                   OnClick="@(() => GiveFeedbackAsync(item, false))" />
+                                    @if (item.Useful != null)
+                                    {
+                                        <span class="zk-feedback-note">@(item.Useful == true ? "اتسجل: مفيد ✓" : "اتسجل: مش مفيد. هنحسّن الرد ده")</span>
+                                    }
                                 }
                             </div>
                         }
@@ -196,15 +207,50 @@
                 <img src="img/zaki-icon.png" class="zk-empty-img" alt="زكي" />
                 <div class="zk-empty-title">اسأل زكي عن شغلك أو عن أي حاجة</div>
                 <div class="zk-empty-sub">اكتب سؤالك، أو ابدأ بضغطة:</div>
-                <div class="zk-starters">
-                    @foreach (var st in _starters)
-                    {
-                        <button type="button" class="zk-starter" disabled="@State.IsBusy" @onclick="() => AskSuggestion(st.Text)">
-                            <MudIcon Icon="@st.Icon" Size="Size.Small" Class="zk-chip-icon" />
-                            <span>@st.Text</span>
-                        </button>
-                    }
-                </div>
+                @{
+                    RenderFragment<Suggestion> starterBtn = st =>
+                    @<button type="button" class="zk-starter" disabled="@State.IsBusy" @onclick="() => AskSuggestion(st.Text)">
+                        <MudIcon Icon="@st.Icon" Size="Size.Small" Class="zk-chip-icon" />
+                        <span>@st.Text</span>
+                    </button>;
+                }
+                @if (Compact)
+                {
+                    @* الوضع المضغوط: صف مسطّح من غير عناوين أقسام (المساحة ضيقة) *@
+                    <div class="zk-starters">
+                        @foreach (var st in VisibleStartersFlat)
+                        {
+                            @starterBtn(st)
+                        }
+                    </div>
+                }
+                else if (VisibleStarterSections.Count > 0)
+                {
+                    @* الصفحة الكاملة: الأزرار مجمعة في أقسام بعناوين صغيرة *@
+                    <div class="zk-starter-groups">
+                        @foreach (var sec in VisibleStarterSections)
+                        {
+                            <div class="zk-starter-group">
+                                <div class="zk-starter-title">@sec.Title</div>
+                                <div class="zk-starters">
+                                    @foreach (var st in sec.Items)
+                                    {
+                                        @starterBtn(st)
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="zk-starters">
+                        @foreach (var st in SafeSuggestions)
+                        {
+                            @starterBtn(st)
+                        }
+                    </div>
+                }
             </div>
         }
 
@@ -231,17 +277,21 @@
                       OnKeyDown="HandleKey"
                       Class="zk-input-field" />
 
-        <MudIconButton Icon="@(_recording ? Icons.Material.Filled.Stop : Icons.Material.Filled.Mic)"
-                       Class="@(_recording ? "zk-mic zk-mic-rec" : "zk-mic")"
-                       Variant="Variant.Text"
-                       OnClick="ToggleVoiceAsync"
-                       Disabled="@(State.IsBusy || _transcribing)" />
+        @if (_micAvailable)
+        {
+            <MudIconButton Icon="@((_recording || _speechActive) ? Icons.Material.Filled.Stop : Icons.Material.Filled.Mic)"
+                           Class="@((_recording || _speechActive) ? "zk-mic zk-mic-rec" : "zk-mic")"
+                           Variant="Variant.Text"
+                           Title="إملاء صوتي"
+                           OnClick="ToggleVoiceAsync"
+                           Disabled="@(State.IsBusy || _transcribing)" />
+        }
 
         <MudIconButton Icon="@Icons.Material.Filled.Send"
                        Variant="Variant.Filled"
                        Class="zk-send"
                        OnClick="SendAsync"
-                       Disabled="@(State.IsBusy || _recording || string.IsNullOrWhiteSpace(_question))" />
+                       Disabled="@(State.IsBusy || _recording || _speechActive || string.IsNullOrWhiteSpace(_question))" />
     </div>
 
     @if (!string.IsNullOrWhiteSpace(_voiceStatus))
@@ -253,6 +303,32 @@
 </div>
 
 @code {
+    /// <summary>بينسخ نص الرد (بنفس طريقة النسخ في باقي التطبيق: حافظة المتصفح عبر JS)
+    /// والأيقونة بتتحول لعلامة صح حوالي ثانية ونص تأكيداً بصرياً</summary>
+    private async Task CopyAnswerAsync(ZakiChatItem item)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", item.Text);
+            _copiedItem = item;
+            StateHasChanged();
+
+            _ = InvokeAsync(async () =>
+            {
+                await Task.Delay(1500);
+                if (_copiedItem == item)
+                {
+                    _copiedItem = null;
+                    StateHasChanged();
+                }
+            });
+        }
+        catch (Exception)
+        {
+            Snackbar.Add("ماقدرتش أنسخ الرد", Severity.Warning);
+        }
+    }
+
     /// <summary>بيسجل 👍 / 👎 على رد زكي</summary>
     private async Task GiveFeedbackAsync(ZakiChatItem item, bool useful)
     {
@@ -277,29 +353,96 @@
     /// <summary>وضع النافذة الصغيرة (الزر العائم)</summary>
     [Parameter] public bool Compact { get; set; }
 
-    private sealed record Suggestion(string Text, string Icon);
+    /// <summary>جملة جاهزة + الأدوات اللي بتفعّلها (واحدة منهم على الأقل لازم تكون مسموحة للمستخدم عشان الجملة تظهر — نفس منطق ExpectedToolsAny في حالات الاختبار الذهبية)</summary>
+    private sealed record Suggestion(string Text, string Icon, string[] Tools);
+
+    /// <summary>أدوات زكي المسموحة للمستخدم الحالي — مرجع فلترة كل الجمل الجاهزة في اللوحة</summary>
+    private HashSet<string> _allowedTools = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool CanShow(Suggestion s) => s.Tools.Any(t => _allowedTools.Contains(t));
+
+    private bool Allowed(string[] tools) => tools.Any(t => _allowedTools.Contains(t));
 
     private readonly Suggestion[] _suggestions =
     {
-        new("عندي كام فرصة مفتوحة؟", Icons.Material.Filled.TrendingUp),
-        new("المهام المتأخرة عندي", Icons.Material.Filled.AlarmOn),
-        new("اعرض ملخص أرقامي", Icons.Material.Filled.Dashboard),
-        new("ملخص العملاء المحتملين", Icons.Material.Filled.PersonSearch),
-        new("مؤشرات التسويق للشهر ده", Icons.Material.Filled.Campaign),
-        new("المؤشرات التنفيذية للشهر ده", Icons.Material.Filled.AccountBalance)
+        new("عندي كام فرصة مفتوحة؟", Icons.Material.Filled.TrendingUp, new[] { "get_open_opportunities" }),
+        new("المهام المتأخرة عندي", Icons.Material.Filled.AlarmOn, new[] { "get_overdue_tasks", "get_open_tasks" }),
+        new("اعرض ملخص أرقامي", Icons.Material.Filled.Dashboard, new[] { "get_executive_summary", "get_marketing_summary" }),
+        new("ملخص العملاء المحتملين", Icons.Material.Filled.PersonSearch, new[] { "get_leads" }),
+        new("مؤشرات التسويق للشهر ده", Icons.Material.Filled.Campaign, new[] { "get_marketing_summary" }),
+        new("المؤشرات التنفيذية للشهر ده", Icons.Material.Filled.AccountBalance, new[] { "get_executive_summary" }),
+        new("إيه تسليمات النهاردة؟", Icons.Material.Filled.LocalShipping, new[] { "get_today_deliveries_summary", "get_deliveries_schedule" }),
+        new("إيه التسليمات المتأخرة؟", Icons.Material.Filled.Schedule, new[] { "get_overdue_deliveries" }),
+        new("حمل مناديب التسليم عامل إزاي؟", Icons.Material.Filled.Groups, new[] { "get_delivery_loads" })
     };
+
+    /// <summary>جمل آمنة لأي مستخدم مسجل دخول — أدواتها (إشعاراتي + البحث عن شاشة) متاحة للجميع أصلاً،
+    /// وبتتكمل بيها قايمة الشيبسات، ولو القايمة فضيت خالص بتبقى هي البديلة عشان محدش يواجه منطقة اقتراحات فاضية</summary>
+    private static readonly Suggestion[] SafeSuggestions =
+    {
+        new("إيه إشعاراتي الجديدة؟", Icons.Material.Filled.Notifications, new[] { "get_unread_notifications" }),
+        new("ألاقي شاشة الفواتير فين؟", Icons.Material.Filled.Search, new[] { "find_screen" })
+    };
+
+    /// <summary>الشيبسات السريعة الظاهرة للمستخدم الحالي: المتفلترة حسب أدواته + الجمل الآمنة، ولو مفيش حاجة خالص بنرجع للآمنة</summary>
+    private List<Suggestion> VisibleChips
+    {
+        get
+        {
+            var list = _suggestions.Where(CanShow).ToList();
+            foreach (var s in SafeSuggestions)
+                if (!list.Any(x => x.Text == s.Text)) list.Add(s);
+            return list.Count > 0 ? list : SafeSuggestions.ToList();
+        }
+    }
 
     private string _question = "";
 
     // ═══ P5: تنسيق الإجابات ═══
 
-    /// <summary>عرض النص مع **غامق** وأسطر — من غير HTML خام</summary>
+    /// <summary>عرض النص مع **غامق** وأسطر — من غير HTML خام.
+    /// روابط ماركداون داخلية [نص](/مسار) بتتعرض كرابط فعلي (أسطر «المصدر» اللي بترجع من الأدوات).</summary>
     private RenderFragment RenderRich(string text) => builder =>
     {
         if (string.IsNullOrEmpty(text)) return;
 
         var lines = text.Replace("\r\n", "\n").Split('\n');
         var seq = 0;
+
+        void EmitText(string s)
+        {
+            var i = 0;
+            while (i < s.Length)
+            {
+                var open = s.IndexOf('[', i);
+                var mid = open < 0 ? -1 : s.IndexOf("](", open, StringComparison.Ordinal);
+                var close = mid < 0 ? -1 : s.IndexOf(')', mid + 2);
+                if (open < 0 || mid < 0 || close < 0)
+                {
+                    builder.AddContent(seq++, s[i..]);
+                    return;
+                }
+
+                var url = s[(mid + 2)..close];
+                if (!url.StartsWith('/'))
+                {
+                    builder.AddContent(seq++, s[i..]);
+                    return;
+                }
+
+                if (open > i)
+                    builder.AddContent(seq++, s[i..open]);
+
+                builder.OpenElement(seq++, "a");
+                builder.AddAttribute(seq++, "href", url);
+                builder.AddAttribute(seq++, "style", "text-decoration: underline;");
+                builder.AddContent(seq++, s[(open + 1)..mid]);
+                builder.CloseElement();
+
+                i = close + 1;
+            }
+        }
+
         foreach (var line in lines)
         {
             builder.OpenElement(seq++, "div");
@@ -312,12 +455,12 @@
                 if (i % 2 == 1)
                 {
                     builder.OpenElement(seq++, "b");
-                    builder.AddContent(seq++, parts[i]);
+                    EmitText(parts[i]);
                     builder.CloseElement();
                 }
                 else
                 {
-                    builder.AddContent(seq++, parts[i]);
+                    EmitText(parts[i]);
                 }
             }
 
@@ -337,37 +480,82 @@
         }
     }
 
-    private readonly Suggestion[] _starters =
-    {
-        new("ملخص المبيعات الشهر ده", Icons.Material.Rounded.TrendingUp),
-        new("مديونيات العملاء كام؟", Icons.Material.Rounded.AccountBalanceWallet),
-        new("قيمة المخزون كام؟", Icons.Material.Rounded.Inventory2),
-        new("إيه الأصناف اللي خلصت؟", Icons.Material.Rounded.WarningAmber),
-        new("رصيد الخزينة كام؟", Icons.Material.Rounded.Savings),
-        new("كام فرصة مفتوحة دلوقتي؟", Icons.Material.Rounded.Handshake),
-        new("إيه المهام المتأخرة؟", Icons.Material.Rounded.TaskAlt),
-        new("الحضور النهاردة عامل إزاي؟", Icons.Material.Rounded.Badge)
-    };
+    /// <summary>قسم أزرار بداية (عنوان + جمل) — بيظهر بعنوانه في الصفحة الكاملة بس، وبيختفي لو كل جمله اتفلترت</summary>
+    private sealed record StarterSection(string Title, Suggestion[] Items);
 
-    private static readonly string[] GenericSuggestions =
+    private readonly StarterSection[] _starterSections =
     {
-        "ملخص المبيعات الشهر ده", "قيمة المخزون كام؟", "مديونيات العملاء كام؟", "إيه المهام المتأخرة؟"
-    };
-
-    private static List<string> SuggestionsFor(List<string> tools)
-    {
-        (string tool, string[] next)[] map =
+        new("مبيعات وعملاء", new Suggestion[]
         {
-            ("get_open_opportunities", new[] { "ملخص الـ CRM إيه؟", "إيه المهام المتأخرة؟" }),
-            ("get_crm_summary", new[] { "كام فرصة مفتوحة دلوقتي؟", "آخر التواصلات إيه؟" }),
-            ("get_sales_invoices_summary", new[] { "مين أكبر العملاء؟", "إيه الفواتير اللي عليها متبقي؟" }),
-            ("get_top_customers", new[] { "ملخص فواتير البيع", "مديونيات العملاء كام؟" }),
-            ("get_customer_balances", new[] { "رصيد الخزينة كام؟", "حركة الخزينة النهاردة إيه؟" }),
-            ("get_cashbox_summary", new[] { "حركة الخزينة النهاردة إيه؟", "مديونيات العملاء كام؟" }),
-            ("get_stock_value", new[] { "إيه الأصناف اللي خلصت؟", "المخزون موزع إزاي على المخازن؟" }),
-            ("get_low_stock", new[] { "قيمة المخزون كام؟", "آخر حركات المخزون إيه؟" }),
-            ("get_exemptions", new[] { "الحضور النهاردة عامل إزاي؟", "عندي إشعارات جديدة إيه؟" }),
-            ("get_unread_notifications", new[] { "إيه المهام المتأخرة؟", "ملخص المبيعات الشهر ده" })
+            new("ملخص المبيعات الشهر ده", Icons.Material.Rounded.TrendingUp, new[] { "get_sales_invoices_summary", "get_open_sales_invoices" }),
+            new("مديونيات العملاء كام؟", Icons.Material.Rounded.AccountBalanceWallet, new[] { "get_customer_balances" }),
+            new("كام فرصة مفتوحة دلوقتي؟", Icons.Material.Rounded.Handshake, new[] { "get_open_opportunities" })
+        }),
+        new("تسليمات", new Suggestion[]
+        {
+            new("إيه تسليمات النهاردة؟", Icons.Material.Rounded.LocalShipping, new[] { "get_today_deliveries_summary", "get_deliveries_schedule" }),
+            new("إيه التسليمات المتأخرة؟", Icons.Material.Rounded.Schedule, new[] { "get_overdue_deliveries" }),
+            new("حمل مناديب التسليم عامل إزاي؟", Icons.Material.Rounded.Groups, new[] { "get_delivery_loads" })
+        }),
+        new("مخزون ومالية", new Suggestion[]
+        {
+            new("قيمة المخزون كام؟", Icons.Material.Rounded.Inventory2, new[] { "get_stock_value" }),
+            new("إيه الأصناف اللي خلصت؟", Icons.Material.Rounded.WarningAmber, new[] { "get_low_stock", "get_product_stock" }),
+            new("رصيد الخزينة كام؟", Icons.Material.Rounded.Savings, new[] { "get_cashbox_summary" })
+        }),
+        new("مهام وموارد بشرية", new Suggestion[]
+        {
+            new("إيه المهام المتأخرة؟", Icons.Material.Rounded.TaskAlt, new[] { "get_overdue_tasks", "get_open_tasks" }),
+            new("الحضور النهاردة عامل إزاي؟", Icons.Material.Rounded.Badge, new[] { "get_attendance_today" })
+        })
+    };
+
+    /// <summary>أقسام البداية بعد فلترتها حسب أدوات المستخدم — القسم اللي جمله كلها اتفلترت بيختفي خالص</summary>
+    private List<(string Title, List<Suggestion> Items)> VisibleStarterSections =>
+        _starterSections
+            .Select(sec => (sec.Title, Items: sec.Items.Where(CanShow).ToList()))
+            .Where(x => x.Items.Count > 0)
+            .ToList();
+
+    /// <summary>أزرار البداية مسطّحة من غير عناوين (للوضع المضغوط) — ولو مفيش أقسام خالص بنرجع للجمل الآمنة</summary>
+    private List<Suggestion> VisibleStartersFlat
+    {
+        get
+        {
+            var flat = VisibleStarterSections.SelectMany(x => x.Items).ToList();
+            return flat.Count > 0 ? flat : SafeSuggestions.ToList();
+        }
+    }
+
+    /// <summary>سؤال متابعة مقترح + الأدوات اللي بيحتاجها</summary>
+    private sealed record FollowUp(string Text, string[] Tools);
+
+    /// <summary>أسئلة عامة بتكمل اقتراحات المتابعة — بتتفلتر هي كمان حسب أدوات المستخدم</summary>
+    private static readonly FollowUp[] GenericSuggestions =
+    {
+        new("ملخص المبيعات الشهر ده", new[] { "get_sales_invoices_summary", "get_open_sales_invoices" }),
+        new("قيمة المخزون كام؟", new[] { "get_stock_value" }),
+        new("مديونيات العملاء كام؟", new[] { "get_customer_balances" }),
+        new("إيه المهام المتأخرة؟", new[] { "get_overdue_tasks", "get_open_tasks" })
+    };
+
+    private List<string> SuggestionsFor(List<string> tools)
+    {
+        (string Tool, FollowUp[] Next)[] map =
+        {
+            ("get_open_opportunities", new FollowUp[] { new("ملخص الـ CRM إيه؟", new[] { "get_crm_summary" }), new("إيه المهام المتأخرة؟", new[] { "get_overdue_tasks", "get_open_tasks" }) }),
+            ("get_crm_summary", new FollowUp[] { new("كام فرصة مفتوحة دلوقتي؟", new[] { "get_open_opportunities" }), new("آخر التواصلات إيه؟", new[] { "get_recent_interactions" }) }),
+            ("get_sales_invoices_summary", new FollowUp[] { new("مين أكبر العملاء؟", new[] { "get_top_customers" }), new("إيه الفواتير اللي عليها متبقي؟", new[] { "get_open_sales_invoices" }) }),
+            ("get_top_customers", new FollowUp[] { new("ملخص فواتير البيع", new[] { "get_sales_invoices_summary" }), new("مديونيات العملاء كام؟", new[] { "get_customer_balances" }) }),
+            ("get_customer_balances", new FollowUp[] { new("رصيد الخزينة كام؟", new[] { "get_cashbox_summary" }), new("حركة الخزينة النهاردة إيه؟", new[] { "get_cashbox_transactions" }) }),
+            ("get_cashbox_summary", new FollowUp[] { new("حركة الخزينة النهاردة إيه؟", new[] { "get_cashbox_transactions" }), new("مديونيات العملاء كام؟", new[] { "get_customer_balances" }) }),
+            ("get_stock_value", new FollowUp[] { new("إيه الأصناف اللي خلصت؟", new[] { "get_low_stock", "get_product_stock" }), new("المخزون موزع إزاي على المخازن؟", new[] { "get_stock_by_warehouse" }) }),
+            ("get_low_stock", new FollowUp[] { new("قيمة المخزون كام؟", new[] { "get_stock_value" }), new("آخر حركات المخزون إيه؟", new[] { "get_stock_movements" }) }),
+            ("get_exemptions", new FollowUp[] { new("الحضور النهاردة عامل إزاي؟", new[] { "get_attendance_today" }), new("عندي إشعارات جديدة إيه؟", new[] { "get_unread_notifications" }) }),
+            ("get_unread_notifications", new FollowUp[] { new("إيه المهام المتأخرة؟", new[] { "get_overdue_tasks", "get_open_tasks" }), new("ملخص المبيعات الشهر ده", new[] { "get_sales_invoices_summary", "get_open_sales_invoices" }) }),
+            ("get_today_deliveries_summary", new FollowUp[] { new("إيه التسليمات المتأخرة؟", new[] { "get_overdue_deliveries" }), new("حمل مناديب التسليم عامل إزاي؟", new[] { "get_delivery_loads" }) }),
+            ("get_overdue_deliveries", new FollowUp[] { new("إيه تسليمات النهاردة؟", new[] { "get_today_deliveries_summary", "get_deliveries_schedule" }), new("نسبة الالتزام بمواعيد التسليم كام؟", new[] { "get_delivery_performance" }) }),
+            ("get_deliveries_schedule", new FollowUp[] { new("إيه التسليمات المتأخرة؟", new[] { "get_overdue_deliveries" }) })
         };
 
         var picks = new List<string>();
@@ -375,9 +563,9 @@
         {
             foreach (var m in map)
             {
-                if (m.tool != tool) continue;
-                foreach (var next in m.next)
-                    if (!picks.Contains(next)) picks.Add(next);
+                if (m.Tool != tool) continue;
+                foreach (var next in m.Next)
+                    if (Allowed(next.Tools) && !picks.Contains(next.Text)) picks.Add(next.Text);
             }
             if (picks.Count >= 3) break;
         }
@@ -385,7 +573,7 @@
         foreach (var g in GenericSuggestions)
         {
             if (picks.Count >= 4) break;
-            if (!picks.Contains(g)) picks.Add(g);
+            if (Allowed(g.Tools) && !picks.Contains(g.Text)) picks.Add(g.Text);
         }
 
         return picks.Take(4).ToList();
@@ -403,6 +591,19 @@
     private string? _voiceStatus;
     private ClaimsPrincipal? _user;
 
+    // سطر حالة التنفيذ أثناء الرد (بيفكر… / بيجيب أداة… / بيكتب الرد…)
+    private string? _statusText;
+
+    // الرسالة اللي اتنسخ نصها آخر مرة — أيقونة النسخ بتتحول لعلامة صح لحظياً
+    private ZakiChatItem? _copiedItem;
+
+    // الإملاء الصوتي بالمتصفح (Web Speech) — طبقة أولى، والتسجيل+التحويل الحالي بديلها
+    private bool _micAvailable = true;
+    private bool _speechSupported;
+    private bool _speechActive;
+    private string _speechBase = "";
+    private DotNetObjectReference<ZakiChatPanel>? _speechRef;
+
     protected override async Task OnInitializedAsync()
     {
         State.Changed += OnStateChanged;
@@ -411,13 +612,48 @@
         _userName = auth.User.Identity?.Name ?? "";
         _user = auth.User;
 
+        // قايمة أدوات المستخدم المسموحة — كل الجمل الجاهزة (شيبسات/بداية/متابعة) بتتفلتر عليها
+        _allowedTools = ZakiService.ToolsFor(_user)
+            .Select(d => d.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         // بيحمّل آخر محادثة من قاعدة البيانات (مرة واحدة بس)
         await State.EnsureLoadedAsync(LogService, _userName);
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // كشف دعم الصوت من المتصفح نفسه: الإملاء الحي (Web Speech) أو على الأقل التسجيل والتحويل.
+        // لو الاتنين مش متاحين، زرار المايك بيختفي خالص بدل ما يفضل زرار ميت.
+        try { _speechSupported = await JS.InvokeAsync<bool>("zakiSpeech.supported"); }
+        catch { _speechSupported = false; }
+
+        var recorderSupported = true;
+        try { recorderSupported = await JS.InvokeAsync<bool>("zakiVoice.supported"); }
+        catch { recorderSupported = true; } // ملف الصوت ماتحمّلش: نفترض الدعم ونسيب مسار التسجيل يجرب
+
+        _micAvailable = _speechSupported || recorderSupported;
+        if (!_micAvailable) StateHasChanged();
+    }
+
     private void OnStateChanged() => InvokeAsync(StateHasChanged);
 
-    public void Dispose() => State.Changed -= OnStateChanged;
+    public void Dispose()
+    {
+        State.Changed -= OnStateChanged;
+        _sendCts?.Cancel();
+        _sendCts?.Dispose();
+
+        // إنهاء أي إملاء شغال وتنظيف مرجع الـ JS
+        if (_speechActive)
+        {
+            _speechActive = false;
+            try { _ = JS.InvokeVoidAsync("zakiSpeech.stop"); } catch { }
+        }
+        _speechRef?.Dispose();
+    }
 
     private Task AskSuggestion(string text)
     {
@@ -431,32 +667,84 @@
             await SendAsync();
     }
 
+    /// <summary>إلغاء البثّ الجاري (بيتفعل لما المكوّن يتشال/الصفحة تتقفل)</summary>
+    private CancellationTokenSource? _sendCts;
+
     private async Task SendAsync()
     {
         var question = _question.Trim();
-        if (State.IsBusy || _recording || question.Length == 0)
+        if (State.IsBusy || _recording || _speechActive || question.Length == 0)
             return;
 
         var history = BuildHistory();
         State.Items.Add(new ZakiChatItem { IsUser = true, Text = question });
         _question = "";
         State.SetBusy(true);
+        _statusText = "بيفكر…";
 
         var auth = await AuthProvider.GetAuthenticationStateAsync();
-        var result = await ZakiService.AskAsync(auth.User, question, State.ConversationId, history);
+
+        // فقاعة الرد: بتتخلق كسولاً مع أول جزء من البثّ وبتكبر مع كل جزء،
+        // وفي الآخر بتتثبت عليها النتيجة النهائية كاملة (نص/أدوات/جداول/تقييم)
+        ZakiChatItem? botItem = null;
+        ZakiChatItem BotItem() => botItem ??= AddBotItem();
+        ZakiChatItem AddBotItem()
+        {
+            var item = new ZakiChatItem { IsUser = false, Text = "" };
+            State.Items.Add(item);
+            return item;
+        }
+
+        _sendCts = new CancellationTokenSource();
+        ZakiAnswer result;
+        try
+        {
+            result = await ZakiService.AskStreamingAsync(auth.User, question, State.ConversationId, history,
+                partial =>
+                {
+                    BotItem().Text = partial;
+                    if (!string.IsNullOrEmpty(partial))
+                        _statusText = "بيكتب الرد…";
+                    State.NotifyChanged();
+                },
+                _sendCts.Token,
+                toolName =>
+                {
+                    // سطر الحالة بيعرض اسم الأداة الجاري تنفيذها بلابلها العربي الجاهز (ZakiLabels)
+                    _statusText = $"بيجيب {ToolLabel(toolName)}…";
+                    State.NotifyChanged();
+                });
+        }
+        catch (OperationCanceledException)
+        {
+            // المكوّن اتشال أثناء البثّ: نسيب الجزء اللي وصل ونعلّم إنه اتوقف
+            if (botItem != null)
+            {
+                botItem.Ok = false;
+                botItem.Text += "\n(اتوقف الرد.)";
+                State.NotifyChanged();
+            }
+            _statusText = null;
+            State.SetBusy(false);
+            return;
+        }
+        catch (Exception)
+        {
+            // البثّ وقع لأي سبب: الطريق العادي المضمون هو البديل — الشاشة لازم تفضل شغالة
+            result = await ZakiService.AskAsync(auth.User, question, State.ConversationId, history);
+        }
+
         State.ConversationId = result.ConversationId ?? State.ConversationId;
 
-        State.Items.Add(new ZakiChatItem
-        {
-            IsUser = false,
-            Text = result.Text,
-            Ok = result.Success,
-            Tokens = result.TotalTokens,
-            Tools = result.ToolsUsed.ToList(),
-            Tables = result.Tables.ToList(),
-            MessageId = result.MessageId
-        });
+        var finalItem = BotItem();
+        finalItem.Text = result.Text;
+        finalItem.Ok = result.Success;
+        finalItem.Tokens = result.TotalTokens;
+        finalItem.Tools = result.ToolsUsed.ToList();
+        finalItem.Tables = result.Tables.ToList();
+        finalItem.MessageId = result.MessageId;
 
+        _statusText = null;
         State.SetBusy(false);
     }
 
@@ -469,14 +757,94 @@
             .ToList();
 
     // ════════════════════════════════════════════════════════════
-    // الميكروفون
+    // الميكروفون — طبقتين: إملاء حي بالمتصفح (Web Speech) لو مدعوم،
+    // وغير كده التسجيل والتحويل الخادمي الحالي زي ما هو (بديل بيغطي Firefox)
     // ════════════════════════════════════════════════════════════
     private async Task ToggleVoiceAsync()
     {
+        if (_speechActive)
+        {
+            await StopSpeechAsync();
+            return;
+        }
+
         if (_recording)
+        {
             await StopVoiceAsync();
-        else
-            await StartVoiceAsync();
+            return;
+        }
+
+        if (_speechSupported && await StartSpeechAsync())
+            return;
+
+        await StartVoiceAsync();
+    }
+
+    private async Task<bool> StartSpeechAsync()
+    {
+        _voiceStatus = null;
+        _speechRef ??= DotNetObjectReference.Create(this);
+
+        bool ok;
+        try { ok = await JS.InvokeAsync<bool>("zakiSpeech.start", _speechRef); }
+        catch { ok = false; }
+
+        if (!ok) return false;
+
+        _speechBase = _question.Trim();
+        _speechActive = true;
+        _voiceStatus = "بيسمع… اتكلم، واضغط المايك تاني للإيقاف.";
+        return true;
+    }
+
+    private async Task StopSpeechAsync()
+    {
+        try { await JS.InvokeVoidAsync("zakiSpeech.stop"); }
+        catch { }
+
+        _speechActive = false;
+        if (_voiceStatus?.StartsWith("بيسمع") == true) _voiceStatus = null;
+    }
+
+    /// <summary>النص المُملَى (نهائي + مؤقت) من المتصفح — بيتحط في صندوق السؤال ورا أي نص مكتوب قبله</summary>
+    [JSInvokable]
+    public Task OnSpeechText(string text)
+    {
+        if (_speechActive)
+        {
+            _question = string.IsNullOrEmpty(_speechBase) ? text : _speechBase + " " + text;
+            return InvokeAsync(StateHasChanged);
+        }
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task OnSpeechEnd()
+    {
+        if (_speechActive)
+        {
+            _speechActive = false;
+            if (_voiceStatus?.StartsWith("بيسمع") == true) _voiceStatus = null;
+            return InvokeAsync(StateHasChanged);
+        }
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task OnSpeechError(string code)
+    {
+        if (!_speechActive) return Task.CompletedTask;
+
+        _speechActive = false;
+        _voiceStatus = code switch
+        {
+            "not-allowed" or "service-not-allowed" => MicErrorText("denied"),
+            "audio-capture" => MicErrorText("notfound"),
+            "no-speech" => "ماسمعتش كلام واضح. حاول تاني.",
+            "aborted" => null,
+            _ => "الإملاء الصوتي وقف. حاول تاني."
+        };
+        return InvokeAsync(StateHasChanged);
     }
 
     private async Task StartVoiceAsync()

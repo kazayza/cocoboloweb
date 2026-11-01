@@ -1,4 +1,4 @@
-using COCOBOLOERPNEW.Components;
+﻿using COCOBOLOERPNEW.Components;
 using COCOBOLOERPNEW.Models;
 using COCOBOLOERPNEW.Services;
 using COCOBOLOERPNEW.DTOs;
@@ -114,7 +114,24 @@ builder.Services.AddOptions<CookieAuthenticationOptions>(CookieAuthenticationDef
         options.SessionStore = new MemoryCacheTicketStore(cache);
     });
 
-builder.Services.AddAuthorization();
+// 🔐 F-02: سياسات تفويض حقيقية للـ endpoints الحساسة (كانت RequireAuthorization فقط،
+// فأي مستخدم مُصادَق — بما فيه مستخدم بوابة B2B بنفس الكوكي — كان يصل إليها).
+// القواعد نفسها في AppAuthorization وتُستخدم أيضًا كحرّاس في طبقة الخدمات.
+// ⚠️ لا توجد أي سياسة احتياطية شاملة: كل endpoint بلا سياسة صريحة يبقى على سلوكه
+// الحالي (العام يبقى عامًا: الدخول/بوابة B2B/روابط العروض/نقل Blazor لا يُمسّ).
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(AppAuthorization.InternalUserPolicy, policy =>
+        policy.RequireAssertion(context => AppAuthorization.IsInternalUser(context.User)));
+    options.AddPolicy(AppAuthorization.CompanyAddPolicy, policy =>
+        policy.RequireAssertion(context => AppAuthorization.CanWriteCompany(context.User, "Add")));
+    options.AddPolicy(AppAuthorization.CompanyEditPolicy, policy =>
+        policy.RequireAssertion(context => AppAuthorization.CanWriteCompany(context.User, "Edit")));
+    options.AddPolicy(AppAuthorization.CompanyDeletePolicy, policy =>
+        policy.RequireAssertion(context => AppAuthorization.CanWriteCompany(context.User, "Delete")));
+    options.AddPolicy(AppAuthorization.QuotationExportPolicy, policy =>
+        policy.RequireAssertion(context => AppAuthorization.CanExportQuotations(context.User)));
+});
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient();
 
@@ -133,6 +150,7 @@ builder.Services.AddScoped<ZakiNotificationService>();
 builder.Services.AddScoped<ZakiSalesDocumentsService>();
 builder.Services.AddScoped<ZakiFinanceInvoicesService>();
 builder.Services.AddScoped<ZakiEmployeeTasksService>();
+builder.Services.AddScoped<ZakiGeneralTasksService>();
 builder.Services.AddScoped<ZakiApprovalsService>();
 builder.Services.AddScoped<ZakiHrService>();
 builder.Services.AddScoped<ZakiKnowledgeService>();
@@ -140,6 +158,8 @@ builder.Services.AddScoped<ZakiFinancialStatementsService>();
 builder.Services.AddHostedService<ZakiRetentionService>();
 builder.Services.AddSingleton<ZakiDigestPreferences>();
 builder.Services.AddHostedService<ZakiDailyDigestService>();
+builder.Services.AddHostedService<DeliveryReminderService>(); // ⏰ تنبيه التسليم قبل الموعد بأسبوع (حسب فئة التاريخ)
+builder.Services.AddHostedService<GeneralTaskReminderService>(); // ⏰ تذكير التكليفات العامة قبل الموعد + تنبيه التأخر + تصعيد ٣ أيام للمدير العام
 builder.Services.AddScoped<ZakiUsageReportService>();
 builder.Services.AddScoped<ZakiGoldenSetService>();
 builder.Services.AddScoped<ZakiBalancesService>();
@@ -150,6 +170,7 @@ builder.Services.AddScoped<ZakiReportPdfService>();
 builder.Services.AddScoped<ZakiFeedbackService>();
 builder.Services.AddScoped<ZakiFinanceExtraService>();
 builder.Services.AddScoped<ZakiJobOrdersService>();
+builder.Services.AddScoped<ZakiDeliveriesService>();
 builder.Services.AddScoped<ZakiWebInfoService>();
 builder.Services.AddScoped<ZakiHrExtraService>();
 builder.Services.AddScoped<ZakiChatState>();
@@ -165,6 +186,7 @@ builder.Services.AddScoped<IInvoiceService,           InvoiceService>();
 builder.Services.AddScoped<IPaymentService,           PaymentService>();
 builder.Services.AddScoped<IAdditionalChargeService,  AdditionalChargeService>();
 builder.Services.AddScoped<ICashBoxService,           CashBoxService>();
+builder.Services.AddScoped<CashBoxReviewService>(); // 🔎 مراجعة الخزينة — أختام خفيفة بكشف تغيير (بلا قفل)
 builder.Services.AddScoped<IPersonalAccountService,   PersonalAccountService>();
 builder.Services.AddScoped<IExpenseService,           ExpenseService>();
 builder.Services.AddScoped<IFinancialReportsService,  FinancialReportsService>();
@@ -175,10 +197,12 @@ builder.Services.AddScoped<IEmployeeService, EmployeeService>();
 builder.Services.AddScoped<IEmployeeShiftService, EmployeeShiftService>();
 builder.Services.AddScoped<IAttendanceService, AttendanceService>();
 builder.Services.AddScoped<IPayrollService, PayrollService>();
+builder.Services.AddScoped<IEmployeePenaltyService, EmployeePenaltyService>();
 builder.Services.AddScoped<IQuotationService, QuotationService>();
 builder.Services.AddSingleton<ShareTokenService>();
 builder.Services.AddScoped<IQuotationExportService, QuotationExportService>();
 builder.Services.AddScoped<ISalesDeliveryStatusService, SalesDeliveryStatusService>();
+builder.Services.AddScoped<IDeliveryMaintenanceService, DeliveryMaintenanceService>();
 builder.Services.AddScoped<IComplaintService, ComplaintService>();
 builder.Services.AddScoped<ICustomerCareService, CustomerCareService>(); // 🎧 خدمة العملاء (فيدباك ما بعد البيع)
 builder.Services.AddScoped<B2bCrmService>(); // 🏢 B2B CRM (شاشات /crm/b2b/* المنفصلة)
@@ -193,6 +217,7 @@ builder.Services.AddScoped<GlobalSearchService>();
 builder.Services.AddScoped<ICrmDashboardService, CrmDashboardService>();
 builder.Services.AddScoped<IMarketingDashboardService, MarketingDashboardService>();
 builder.Services.AddScoped<IExecutiveCockpitService, ExecutiveCockpitService>();
+builder.Services.AddScoped<ExecutiveCockpitSnapshotService>();
 builder.Services.AddScoped<ISalesAnalyticsService, SalesAnalyticsService>();
 builder.Services.AddScoped<IOpportunityService, OpportunityService>();
 builder.Services.AddScoped<IInteractionService, InteractionService>();
@@ -232,7 +257,7 @@ app.MapGet("/api/company-info", async (ICompanyInfoService service) =>
 {
     var info = await service.GetCompanyInfoAsync();
     return info is not null ? Results.Ok(info) : Results.NotFound("لا توجد بيانات للشركة");
-}).RequireAuthorization();
+}).RequireAuthorization(AppAuthorization.InternalUserPolicy);
 
 // تحديث بيانات الشركة
 app.MapPut("/api/company-info", async (
@@ -252,7 +277,7 @@ app.MapPut("/api/company-info", async (
     {
         return Results.BadRequest(ex.Message);
     }
-}).RequireAuthorization();
+}).RequireAuthorization(AppAuthorization.CompanyEditPolicy);
 
 // رفع شعار الشركة
 app.MapPost("/api/company-info/logo", async (
@@ -273,14 +298,14 @@ app.MapPost("/api/company-info/logo", async (
     {
         return Results.BadRequest(ex.Message);
     }
-}).RequireAuthorization();
+}).RequireAuthorization(AppAuthorization.CompanyEditPolicy);
 
 // جلب فروع الشركة
 app.MapGet("/api/company-locations", async (ICompanyInfoService service) =>
 {
     var locations = await service.GetLocationsAsync();
     return Results.Ok(locations);
-}).RequireAuthorization();
+}).RequireAuthorization(AppAuthorization.InternalUserPolicy);
 
 // إضافة فرع جديد
 app.MapPost("/api/company-locations", async (
@@ -296,7 +321,7 @@ app.MapPost("/api/company-locations", async (
     {
         return Results.BadRequest(ex.Message);
     }
-}).RequireAuthorization();
+}).RequireAuthorization(AppAuthorization.CompanyAddPolicy);
 
 // تعديل فرع
 app.MapPut("/api/company-locations", async (
@@ -316,7 +341,7 @@ app.MapPut("/api/company-locations", async (
     {
         return Results.BadRequest(ex.Message);
     }
-}).RequireAuthorization();
+}).RequireAuthorization(AppAuthorization.CompanyEditPolicy);
 
 // حذف فرع
 app.MapDelete("/api/company-locations/{locationId:int}", async (
@@ -325,7 +350,7 @@ app.MapDelete("/api/company-locations/{locationId:int}", async (
 {
     var success = await service.DeleteLocationAsync(locationId);
     return success ? Results.Ok(new { message = "تم الحذف بنجاح" }) : Results.NotFound("لم يتم العثور على الفرع");
-}).RequireAuthorization();
+}).RequireAuthorization(AppAuthorization.CompanyDeletePolicy);
 
 
 app.MapRazorComponents<COCOBOLOERPNEW.Components.App>()
@@ -714,7 +739,7 @@ app.MapPost("/api/quotations/export-excel", async (
     return Results.File(xlsx,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         fileName);
-}).RequireAuthorization();
+}).RequireAuthorization(AppAuthorization.QuotationExportPolicy);
 
 app.MapPost("/api/quotations/export-pdf", async (
     QuotationFilterDto filter,
@@ -723,21 +748,32 @@ app.MapPost("/api/quotations/export-pdf", async (
     var (ok, error, pdf, fileName) = await export.ExportQuotationsToPdfAsync(filter);
     if (!ok || pdf == null) return Results.NotFound(new { error });
     return Results.File(pdf, "application/pdf", fileName);
-}).RequireAuthorization();
+}).RequireAuthorization(AppAuthorization.QuotationExportPolicy);
 
 
 
 // ============ Single Quotation Endpoints + Public Share ============
 
 // ============================================================
-// ⭐ Customer Response Endpoint (للصفحة العامة - بدون login)
+// ⭐ Customer Response Endpoint (للصفحة العامة - بتوكن موقّع فقط)
+//    دفعة 1: أُلغي مسار الرقم الخام نهائيًا. الرد مسموح فقط لعرض
+//    حالته "مُرسل"، واسم المستجيب يُؤخذ من سجل العميل المرتبط
+//    بالعرض — لا يُقبل أي اسم من جسم الطلب.
 // ============================================================
-app.MapPost("/api/public/quotations/{quotationId:int}/respond", async (
-    int quotationId,
+app.MapPost("/api/public/quotations/{token}/respond", async (
+    string token,
     [FromBody] CustomerResponseDto request,
     IQuotationService quotationService,
-    NotificationService notify) => 
+    ShareTokenService tokens,
+    NotificationService notify) =>
 {
+    // ✅ التحقق من التوكن (التوقيع + انتهاء الصلاحية)
+    var payload = tokens.ValidateToken(token);
+    if (payload == null || payload.Type != "quotation")
+        return Results.NotFound(new { error = "الرابط غير صحيح أو منتهي الصلاحية." });
+
+    var quotationId = payload.Id;
+
     // ✅ Validation
     if (request == null)
         return Results.BadRequest(new { error = "بيانات غير صحيحة" });
@@ -749,158 +785,104 @@ app.MapPost("/api/public/quotations/{quotationId:int}/respond", async (
     if (request.Response != "Accepted" && request.Response != "Rejected")
         return Results.BadRequest(new { error = "الرد يجب أن يكون Accepted أو Rejected" });
 
-    // ✅ تأكد من أن العرض موجود
+    // ✅ تحميل العرض بالمسار العام المخصص (بدون فحص صلاحية مستخدم)
     var quote = await quotationService.GetQuotationPublicAsync(quotationId);
     if (quote == null)
         return Results.NotFound(new { error = "عرض السعر غير موجود" });
 
-    // ✅ منع التعديل لو العرض متحول لفاتورة
+    // ✅ منع الرد لو العرض متحول لفاتورة
     if (quote.IsConverted)
         return Results.BadRequest(new { error = "هذا العرض تم تحويله لفاتورة بالفعل" });
 
-    // ✅ منع التعديل لو العرض رد عليه مسبقاً
+    // ✅ منع الرد المكرر
     if (quote.Status == "Accepted" || quote.Status == "Rejected")
-        return Results.BadRequest(new { 
-            error = $"تم تسجيل ردك مسبقاً ({(quote.Status == "Accepted" ? "موافقة" : "رفض")})" 
+        return Results.BadRequest(new {
+            error = $"تم تسجيل ردك مسبقاً ({(quote.Status == "Accepted" ? "موافقة" : "رفض")})"
         });
 
-    // ✅ تحديد اسم المسجل (اسم اللي دخل من اللينك أو اسم العميل من DB)
-var responderName = !string.IsNullOrWhiteSpace(request.CustomerName)
-    ? $"{request.CustomerName.Trim()} (Public Link)"
-    : $"{quote.PartyName ?? "العميل"} (Public Link)";
+    // ⭐ الرد مسموح فقط لعرض حالته "مُرسل" (Sent)
+    if (quote.Status != QuotationStatuses.Sent)
+        return Results.BadRequest(new { error = "هذا العرض غير متاح للرد حالياً." });
 
-// ✅ تحديث الحالة
-var (ok, msg) = await quotationService.ChangeStatusAsync(
-    quotationId, request.Response, responderName, isPublic: true);
+    // ✅ منع الرد بعد انتهاء الصلاحية
+    if (quote.IsExpired)
+        return Results.BadRequest(new { error = "انتهت صلاحية هذا العرض." });
+
+    // ⭐ اسم المستجيب من بيانات العميل المرتبط بالعرض نفسه — أبدًا من جسم الطلب
+    var responderName = $"{quote.PartyName ?? "العميل"} (Public Link)";
+
+    // ✅ تحديث الحالة — وسبب الرفض يُمرَّر معها فيُحفظ في نفس العملية
+    //    ذرّيًا (دفعة 2 — 2-8)؛ لا حفظ منفصل لاحق يمكن أن يفشل بصمت.
+    var (ok, msg) = await quotationService.ChangeStatusAsync(
+        quotationId, request.Response, responderName, isPublic: true,
+        rejectionReason: string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim());
 
     if (!ok)
         return Results.BadRequest(new { error = msg });
 
-    // ✅ Logging الرفض مع السبب (لو فيه)
-    // ✅ حفظ سبب الرفض لو موجود
-if (request.Response == "Rejected" && !string.IsNullOrWhiteSpace(request.Reason))
-{
-    var savedReason = await quotationService.SaveRejectionReasonAsync(
-        quotationId, request.Reason.Trim());
-    
-    if (!savedReason)
+    // ⭐ إشعار للموظف اللي عمل العرض + للأدمن + لمدير المبيعات
+    try
     {
-        // الحالة اتغيرت بس السبب ما اتسجلش - log warning
-        Console.WriteLine($"[WARN] Quote {quotationId} rejected but reason save FAILED. Reason: {request.Reason}");
-    }
-}
-// ⭐ إشعار للموظف اللي عمل العرض + للأدمن
-try
-{
-    var actionEmoji = request.Response == "Accepted" ? "✅" : "❌";
-    var actionText = request.Response == "Accepted" ? "وافق على" : "رفض";
-    var customerLabel = !string.IsNullOrWhiteSpace(request.CustomerName)
-        ? request.CustomerName.Trim()
-        : (quote.PartyName ?? "العميل");
+        var actionEmoji = request.Response == "Accepted" ? "✅" : "❌";
+        var actionText = request.Response == "Accepted" ? "وافق على" : "رفض";
+        var customerLabel = quote.PartyName ?? "العميل";
 
-    var title = $"{actionEmoji} {actionText} العميل: {customerLabel}";
-    
-    var message = $"العميل {customerLabel} {actionText} عرض السعر {quote.ReferenceNumber} " +
-                  $"بقيمة {quote.GrandTotal:N2} ج";
-    
-    if (request.Response == "Rejected" && !string.IsNullOrWhiteSpace(request.Reason))
-    {
-        message += $"\nالسبب: {request.Reason.Trim()}";
-    }
+        var title = $"{actionEmoji} {actionText} العميل: {customerLabel}";
 
-    // إشعار للموظف اللي عمل العرض
-    if (!string.IsNullOrWhiteSpace(quote.CreatedBy))
-    {
-        await notify.AddAsync(
+        var message = $"العميل {customerLabel} {actionText} عرض السعر {quote.ReferenceNumber} " +
+                      $"بقيمة {quote.GrandTotal:N2} ج";
+
+        if (request.Response == "Rejected" && !string.IsNullOrWhiteSpace(request.Reason))
+        {
+            message += $"\nالسبب: {request.Reason.Trim()}";
+        }
+
+        // إشعار للموظف اللي عمل العرض
+        if (!string.IsNullOrWhiteSpace(quote.CreatedBy))
+        {
+            await notify.AddAsync(
+                title: title,
+                message: message,
+                recipientUser: quote.CreatedBy,
+                createdBy: "Customer",
+                formName: "quotations",
+                relatedTable: "Quotations",
+                relatedId: quotationId);
+        }
+
+        // إشعار للأدمن
+        await notify.NotifyRoleAsync(
             title: title,
             message: message,
-            recipientUser: quote.CreatedBy,
+            role: "Admin",
+            createdBy: "Customer",
+            formName: "quotations",
+            relatedTable: "Quotations",
+            relatedId: quotationId);
+
+        // إشعار لمدير المبيعات
+        await notify.NotifyRoleAsync(
+            title: title,
+            message: message,
+            role: "SalesManager",
             createdBy: "Customer",
             formName: "quotations",
             relatedTable: "Quotations",
             relatedId: quotationId);
     }
+    catch (Exception notifyEx)
+    {
+        // مش بنفشل العملية لو الإشعار فشل
+        Console.WriteLine($"[WARN] Failed to send notification: {notifyEx.Message}");
+    }
 
-    // إشعار للأدمن
-    await notify.NotifyRoleAsync(
-        title: title,
-        message: message,
-        role: "Admin",
-        createdBy: "Customer",
-        formName: "quotations",
-        relatedTable: "Quotations",
-        relatedId: quotationId);
-
-    // إشعار لمدير المبيعات
-    await notify.NotifyRoleAsync(
-        title: title,
-        message: message,
-        role: "SalesManager",
-        createdBy: "Customer",
-        formName: "quotations",
-        relatedTable: "Quotations",
-        relatedId: quotationId);
-}
-catch (Exception notifyEx)
-{
-    // مش بنفشل العملية لو الإشعار فشل
-    Console.WriteLine($"[WARN] Failed to send notification: {notifyEx.Message}");
-}
-
-
-    return Results.Ok(new { 
-        success = true, 
-        message = request.Response == "Accepted" 
-            ? "تم تسجيل موافقتك بنجاح. سيتم التواصل معك قريباً." 
+    return Results.Ok(new {
+        success = true,
+        message = request.Response == "Accepted"
+            ? "تم تسجيل موافقتك بنجاح. سيتم التواصل معك قريباً."
             : "تم تسجيل ردك. شكراً لاهتمامك."
     });
 });
-
-// ============================================================
-// ⭐ Track Customer Viewing (تتبع المشاهدة)
-// ============================================================
-app.MapPost("/api/public/quotations/{quotationId:int}/viewed", async (
-    int quotationId,
-    HttpContext http,
-    IQuotationService quotationService) =>
-{
-    var quote = await quotationService.GetQuotationPublicAsync(quotationId);
-    if (quote == null) return Results.NotFound();
-
-    // ✅ سجل المشاهدة (يمكن إضافة جدول QuotationViews لاحقاً)
-    var ip = http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-    var userAgent = http.Request.Headers.UserAgent.ToString();
-    
-    Console.WriteLine($"[Quote {quotationId}] Viewed by customer. IP: {ip}");
-
-    return Results.Ok(new { tracked = true });
-});
-// ⭐ Public PDF endpoint (بدون auth - للعميل من الصفحة العامة)
-app.MapGet("/api/public/quotations/{id:int}/pdf-view", async (
-    int id,
-    IQuotationExportService export) =>
-{
-    var (ok, error, pdf, fileName) = await export.GeneratePdfAsync(id);
-    if (!ok || pdf == null) return Results.NotFound();
-    
-    // ⭐ inline display بدل download
-    return Results.File(pdf, "application/pdf", 
-        fileDownloadName: null, // null = inline
-        enableRangeProcessing: true);
-});
-// ⭐ Public Excel endpoint
-app.MapGet("/api/public/quotations/{id:int}/excel-view", async (
-    int id,
-    IQuotationExportService export) =>
-{
-    var (ok, error, xlsx, fileName) = await export.GenerateExcelAsync(id);
-    if (!ok || xlsx == null) return Results.NotFound();
-    return Results.File(xlsx,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        fileName);
-});
-
-
 app.MapQuotationExports();
 app.MapLeadImportEndpoints();
 app.Run();

@@ -1,0 +1,385 @@
+@page "/my-tasks"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using MudColor = MudBlazor.Color
+@using MudVariant = MudBlazor.Variant
+
+@attribute [Authorize]
+
+@inject ITaskService TaskService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+
+<PageTitle>مهامي</PageTitle>
+
+<style>
+    /* هوية المشروع: كحلي #1B2A4A + ذهبي #D4A853 + أبيض */
+    .mt-hero {
+        background: linear-gradient(135deg, #0F1D36 0%, #1B2A4A 55%, #2D4A7A 100%) !important;
+        border: none !important; border-bottom: 3px solid #D4A853 !important; border-radius: 18px;
+    }
+    .mt-hero .mud-typography { color: #fff !important; }
+    .mt-hero .mud-typography-body2 { color: rgba(255,255,255,.75) !important; }
+    .mt-tab-active { box-shadow: inset 0 -3px 0 #D4A853 !important; border-radius: 8px 8px 0 0; }
+    .mt-card {
+        background: #fff; transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+        animation: mtFadeUp .45s ease both;
+    }
+    .mt-card:hover { transform: translateY(-4px); box-shadow: 0 12px 28px rgba(15,29,54,.14); border-color: #D4A853 !important; }
+    .mt-link-chip {
+        background: #FEFBF3 !important; color: #B8912A !important;
+        border: 1px solid #D4A853 !important; cursor: pointer; font-weight: 700;
+    }
+    .mt-link-chip:hover { background: #F0DBA8 !important; }
+    .mt-overdue-pulse { animation: mtPulse 1.8s ease-in-out infinite; }
+    @@keyframes mtFadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+    @@keyframes mtPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,.35); } 50% { box-shadow: 0 0 0 6px rgba(220,38,38,0); } }
+    @@media (prefers-reduced-motion: reduce) {
+        .mt-card { animation: none; transition: none; }
+        .mt-card:hover { transform: none; }
+        .mt-overdue-pulse { animation: none; }
+    }
+</style>
+
+@if (_loading)
+{
+    <MudPaper Class="pa-6 ma-4" Elevation="0">
+        <MudStack AlignItems="AlignItems.Center" Spacing="2">
+            <MudProgressCircular Indeterminate="true" Color="MudColor.Primary" />
+            <MudText Typo="Typo.h6">جاري تحميل مهامك...</MudText>
+        </MudStack>
+    </MudPaper>
+}
+else
+{
+    <MudContainer MaxWidth="MaxWidth.False" Class="pa-4" Style="direction:rtl;">
+        <MudStack Spacing="3">
+            <MudPaper Class="pa-4 mt-hero" Elevation="0">
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2">
+                    <div>
+                        <MudText Typo="Typo.h4" Style="font-weight:800;">مهامي</MudText>
+                        <MudText Typo="Typo.body2" Class="mt-1">صندوقك الموحد: كل التكليفات الواردة إليك أو الصادرة منك، أيًا كان مصدرها في النظام.</MudText>
+                    </div>
+                    @if (_canCreate)
+                    {
+                        <MudButton Variant="MudVariant.Filled" Style="background:linear-gradient(135deg,#D4A853,#B8912A);color:#0F1D36;font-weight:800;" StartIcon="@Icons.Material.Rounded.AddTask" OnClick="OpenCreateDialogAsync">
+                            تكليف جديد
+                        </MudButton>
+                    }
+                </MudStack>
+                <MudStack Row="true" Class="mt-4" Spacing="2" Wrap="Wrap.Wrap">
+                    <MudChip T="string" Style="background:rgba(212,168,83,.2);color:#F0DBA8;border:1px solid rgba(212,168,83,.5);">وارد مفتوح: @OpenAssigned.Count()</MudChip>
+                    <MudChip T="string" Color="MudColor.Error" Variant="Variant.Filled" Class="@(OverdueAssigned.Any() ? "mt-overdue-pulse" : "")">متأخرة: @OverdueAssigned.Count()</MudChip>
+                    <MudChip T="string" Style="background:rgba(255,255,255,.12);color:#fff;">صادر مفتوح: @OpenCreated.Count()</MudChip>
+                </MudStack>
+            </MudPaper>
+
+            <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #e5e7eb;border-radius:18px;">
+                <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+                    <MudButton Variant="@(IsTab("inbox") ? MudVariant.Filled : MudVariant.Outlined)" Color="MudColor.Warning" Class="@(IsTab("inbox") ? "mt-tab-active" : "")" OnClick='() => SetTab("inbox")'>وارد (@OpenAssigned.Count())</MudButton>
+                    <MudButton Variant="@(IsTab("overdue") ? MudVariant.Filled : MudVariant.Outlined)" Color="MudColor.Error" Class="@(IsTab("overdue") ? "mt-tab-active" : "")" OnClick='() => SetTab("overdue")'>متأخرة (@OverdueAssigned.Count())</MudButton>
+                    <MudButton Variant="@(IsTab("sent") ? MudVariant.Filled : MudVariant.Outlined)" Color="MudColor.Info" Class="@(IsTab("sent") ? "mt-tab-active" : "")" OnClick='() => SetTab("sent")'>صادر (@OpenCreated.Count())</MudButton>
+                    <MudButton Variant="@(IsTab("completed") ? MudVariant.Filled : MudVariant.Outlined)" Color="MudColor.Success" Class="@(IsTab("completed") ? "mt-tab-active" : "")" OnClick='() => SetTab("completed")'>مكتملة (@CompletedMine.Count())</MudButton>
+                    <MudButton Variant="@(IsTab("mentions") ? MudVariant.Filled : MudVariant.Outlined)" Color="MudColor.Secondary" Class="@(IsTab("mentions") ? "mt-tab-active" : "")" OnClick='() => SetTab("mentions")'>إشاراتي (@_data.Mentioned.Count)</MudButton>
+                    <MudSpacer />
+                    <MudTextField T="string" Label="بحث" Variant="MudVariant.Outlined" Dense="true" Style="min-width:220px" @bind-Value="_searchText" />
+                </MudStack>
+            </MudPaper>
+
+            @{ var list = CurrentList.ToList(); }
+            @if (!list.Any())
+            {
+                <MudPaper Class="pa-6" Elevation="0" Style="border:1px dashed #cbd5e1;border-radius:18px;text-align:center;">
+                    <MudIcon Icon="@Icons.Material.Rounded.AssignmentTurnedIn" Size="MudBlazor.Size.Large" Color="MudColor.Success" />
+                    <MudText Typo="Typo.h6" Class="mt-2">@(IsTab("completed") ? "لا توجد تكليفات مكتملة بعد" : "لا توجد مهام هنا — صندوقك نظيف")</MudText>
+                </MudPaper>
+            }
+            else
+            {
+                <MudGrid Spacing="2">
+                    @for (var idx = 0; idx < list.Count; idx++)
+                    {
+                        var task = list[idx];
+                        <MudItem xs="12" md="6" lg="4">
+                            <MudPaper Class="pa-4 mt-card" Elevation="0" Style="@($"height:100%;border:1px solid #e5e7eb;border-radius:18px;animation-delay:{Math.Min(idx, 12) * 45}ms;")">
+                                <MudStack Spacing="2">
+                                    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Start">
+                                        <MudText Typo="Typo.h6" Style="font-weight:800;line-height:1.5;">@(string.IsNullOrWhiteSpace(task.TaskDescription) ? "مهمة" : task.TaskDescription)</MudText>
+                                        <MudChip T="string" Color="@GetStatusColor(task)" Variant="Variant.Filled">@GetStatusText(task.Status)</MudChip>
+                                    </MudStack>
+
+                                    <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+                                        <MudChip T="string" Size="Size.Small" Color="@GetPriorityColor(task.Priority)" Variant="Variant.Outlined">@GetPriorityText(task.Priority)</MudChip>
+                                        <MudChip T="string" Size="Size.Small" Color="MudColor.Secondary" Variant="Variant.Outlined">@GetScopeText(task)</MudChip>
+                                        @if (!string.IsNullOrWhiteSpace(task.TaskTypeNameAr) || !string.IsNullOrWhiteSpace(task.TaskTypeName))
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="MudColor.Info" Variant="Variant.Outlined">@(task.TaskTypeNameAr ?? task.TaskTypeName)</MudChip>
+                                        }
+                                    </MudStack>
+
+                                    @if (!string.IsNullOrWhiteSpace(task.LinkedEntityTitle))
+                                    {
+                                        <MudStack Row="true" Spacing="1">
+                                            <MudChip T="string" Size="Size.Small" Class="mt-link-chip" Icon="@Icons.Material.Rounded.Link"
+                                                     OnClick="@(() => OpenLinked(task))">@task.LinkedEntityTitle</MudChip>
+                                        </MudStack>
+                                    }
+
+                                    <MudDivider />
+
+                                    <MudText Typo="Typo.body2"><b>المكلف:</b> @(task.AssignedToName ?? "غير محدد")</MudText>
+                                    <MudText Typo="Typo.body2"><b>من:</b> @(task.CreatedBy ?? "—")</MudText>
+                                    <MudText Typo="Typo.body2"><b>التنفيذ خلال:</b> @task.DueDate.ToString("yyyy/MM/dd") @if (task.DueTime.HasValue) { <span>— @task.DueTime.Value.ToString("HH:mm")</span> }</MudText>
+
+                                    <MudStack Row="true" Spacing="1" Justify="Justify.SpaceBetween">
+                                        <MudButton Variant="MudVariant.Text" Color="MudColor.Warning" StartIcon="@Icons.Material.Filled.Forum" OnClick="@(() => OpenTaskDetailAsync(task.TaskId))">التفاصيل والنقاش</MudButton>
+                                        @if (IsTab("inbox") || IsTab("overdue"))
+                                        {
+                                            <MudStack Row="true" Spacing="1">
+                                                @if (task.Status == "Pending")
+                                                {
+                                                    <MudButton Variant="MudVariant.Outlined" Color="MudColor.Info" OnClick="@(() => OpenActionDialog(task.TaskId, false))">بدء التنفيذ</MudButton>
+                                                }
+                                                @if (task.Status == "Pending" || task.Status == "In Progress")
+                                                {
+                                                    <MudButton Variant="MudVariant.Filled" Color="MudColor.Success" OnClick="@(() => OpenActionDialog(task.TaskId, true))">تم التنفيذ</MudButton>
+                                                }
+                                            </MudStack>
+                                        }
+                                    </MudStack>
+                                </MudStack>
+                            </MudPaper>
+                        </MudItem>
+                    }
+                </MudGrid>
+            }
+        </MudStack>
+    </MudContainer>
+}
+
+<MudDialog @bind-Visible="_showActionDialog"
+           Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true })">
+    <TitleContent>
+        <MudText Typo="Typo.h6">@(_actionIsComplete ? "إتمام تنفيذ المهمة" : "بدء تنفيذ المهمة")</MudText>
+    </TitleContent>
+    <DialogContent>
+        <div dir="rtl" style="display:flex;flex-direction:column;gap:1rem;">
+            <MudTextField T="string"
+                          Label="@(_actionIsComplete ? "اكتب ما الذي تم تنفيذه *" : "اكتب ماذا ستبدأ تنفيذه *")"
+                          Variant="MudVariant.Outlined"
+                          @bind-Value="_actionNotes"
+                          Dense="true"
+                          Lines="4" />
+            @if (_actionIsComplete)
+            {
+                <MudTextField T="string" Label="رابط دليل الإتمام (اختياري)" Variant="MudVariant.Outlined" @bind-Value="_actionLink" Dense="true" />
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="MudVariant.Text" OnClick="() => _showActionDialog = false">إلغاء</MudButton>
+        <MudButton Variant="MudVariant.Filled" Color="@(_actionIsComplete ? MudColor.Success : MudColor.Info)" OnClick="SubmitActionAsync">حفظ</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    // رابط عميق: /my-tasks?taskId=123 — يفتح حوار التكليف تلقائيًا (نفس معاملة صفحة التكليفات العامة)
+    [Parameter][SupplyParameterFromQuery(Name = "taskId")] public int? TaskIdFromQuery { get; set; }
+    private bool _deepLinkHandled;
+
+    private bool _loading = true;
+    private bool _canCreate;
+    private string _userName = "system";
+    private string _activeTab = "inbox";
+    private string _searchText = string.Empty;
+    private MyTasksDto _data = new();
+    private bool _showActionDialog;
+    private bool _actionIsComplete;
+    private int _actionTaskId;
+    private string _actionNotes = string.Empty;
+    private string _actionLink = string.Empty;
+
+    private IEnumerable<TaskListDto> OpenAssigned => _data.Assigned.Where(t => t.Status != "Completed" && t.Status != "Cancelled");
+    private IEnumerable<TaskListDto> OverdueAssigned => OpenAssigned.Where(t => t.DueDate.Date < DateTime.Today);
+    private IEnumerable<TaskListDto> OpenCreated => _data.Created.Where(t => t.Status != "Completed" && t.Status != "Cancelled");
+
+    // «مكتملة»: وارد ∪ صادر المكتمل، بلا تكرار، الأحدث إتمامًا أولًا
+    private IEnumerable<TaskListDto> CompletedMine => _data.Assigned.Concat(_data.Created)
+        .Where(t => t.Status == "Completed")
+        .GroupBy(t => t.TaskId)
+        .Select(g => g.First())
+        .OrderByDescending(t => t.CompletedDate ?? t.CreatedAt);
+
+    private IEnumerable<TaskListDto> CurrentList
+    {
+        get
+        {
+            IEnumerable<TaskListDto> query = _activeTab switch
+            {
+                "overdue" => OverdueAssigned,
+                "sent" => OpenCreated,
+                "completed" => CompletedMine,
+                "mentions" => _data.Mentioned,
+                _ => OpenAssigned
+            };
+
+            if (!string.IsNullOrWhiteSpace(_searchText))
+            {
+                var s = _searchText.Trim();
+                query = query.Where(t =>
+                    (t.TaskDescription?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (t.AssignedToName?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (t.CreatedBy?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (t.LinkedEntityTitle?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false));
+            }
+
+            // «إشاراتي» تحتفظ بترتيب الخدمة (الأحدث ذكرًا أولًا) و«مكتملة» بترتيب الأحدث إتمامًا
+            return _activeTab is "mentions" or "completed"
+                ? query
+                : query.OrderBy(t => t.DueDate).ThenBy(t => t.DueTime ?? new TimeOnly(23, 59));
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            _userName = auth.User.Identity?.Name ?? "system";
+            _canCreate = GeneralTaskPermissions.CanCreate(auth.User);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("خطأ: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _deepLinkHandled) return;
+        _deepLinkHandled = true;
+
+        if (!TaskIdFromQuery.HasValue || TaskIdFromQuery.Value <= 0) return;
+
+        var exists = _data.Assigned.Concat(_data.Created).Concat(_data.Mentioned)
+            .Any(t => t.TaskId == TaskIdFromQuery.Value);
+        if (!exists)
+        {
+            Snackbar.Add("التكليف غير موجود أو لا تملك صلاحية عرضه", Severity.Warning);
+            return;
+        }
+
+        await OpenTaskDetailAsync(TaskIdFromQuery.Value);
+    }
+
+    private async Task LoadAsync() => _data = await TaskService.GetMyTasksAsync(_userName);
+
+    private async Task OpenTaskDetailAsync(int taskId)
+    {
+        var parameters = new DialogParameters { ["TaskId"] = taskId };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<GeneralTaskDetailDialog>("تفاصيل التكليف", parameters, options);
+        var result = await dialog.Result;
+        if (result is not null) await LoadAsync();
+    }
+
+    private void SetTab(string key) => _activeTab = key;
+    private bool IsTab(string key) => string.Equals(_activeTab, key, StringComparison.OrdinalIgnoreCase);
+
+    private async Task OpenCreateDialogAsync()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+        var dialog = await DialogService.ShowAsync<CreateGeneralTaskDialog>("تكليف جديد", options);
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled)
+            await LoadAsync();
+    }
+
+    private void OpenLinked(TaskListDto task)
+    {
+        var route = GeneralTaskLinks.RouteFor(task.LinkedEntityType, task.LinkedEntityId);
+        if (!string.IsNullOrWhiteSpace(route))
+            Nav.NavigateTo(route);
+    }
+
+    private void OpenActionDialog(int taskId, bool isComplete)
+    {
+        _actionTaskId = taskId;
+        _actionIsComplete = isComplete;
+        _actionNotes = string.Empty;
+        _actionLink = string.Empty;
+        _showActionDialog = true;
+    }
+
+    private async Task SubmitActionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_actionNotes))
+        {
+            Snackbar.Add(_actionIsComplete ? "اكتب ما الذي تم تنفيذه" : "اكتب ماذا ستبدأ تنفيذه", Severity.Warning);
+            return;
+        }
+
+        var (ok, msg) = _actionIsComplete
+            ? await TaskService.CompleteAsync(_actionTaskId, _actionNotes, _userName, string.IsNullOrWhiteSpace(_actionLink) ? null : _actionLink)
+            : await TaskService.StartAsync(_actionTaskId, _actionNotes, _userName);
+
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+        {
+            _showActionDialog = false;
+            await LoadAsync();
+        }
+    }
+
+    private static MudColor GetStatusColor(TaskListDto task) => task.Status switch
+    {
+        "Completed" => MudColor.Success,
+        "In Progress" => MudColor.Info,
+        _ when task.DueDate.Date < DateTime.Today => MudColor.Error,
+        _ => MudColor.Warning
+    };
+
+    private static string GetStatusText(string? status) => status switch
+    {
+        "Completed" => "مكتملة",
+        "In Progress" => "جاري التنفيذ",
+        "Cancelled" => "ملغية",
+        _ => "معلقة"
+    };
+
+    private static MudColor GetPriorityColor(string? priority) => priority switch
+    {
+        "High" => MudColor.Error,
+        "Low" => MudColor.Info,
+        _ => MudColor.Warning
+    };
+
+    private static string GetPriorityText(string? priority) => priority switch
+    {
+        "High" => "عاجلة",
+        "Low" => "منخفضة",
+        _ => "متوسطة"
+    };
+
+    private static string GetScopeText(TaskListDto task)
+    {
+        if (!string.IsNullOrWhiteSpace(task.LinkedEntityType))
+            return GeneralTaskLinks.LabelFor(task.LinkedEntityType);
+        return task.TaskScope switch
+        {
+            TaskScopes.General => "تكليف عام",
+            TaskScopes.Lead => "ليد",
+            TaskScopes.Opportunity => "فرصة بيعية",
+            _ => "مهمة"
+        };
+    }
+}

@@ -411,8 +411,14 @@ public class TaskService : ITaskService
                 query = query.Where(t => t.CreatedBy == userName);
         }
 
+        return await ProjectTasksAsync(query);
+    }
+
+    /// <summary>إسقاط موحّد CrmTask ← TaskListDto لمسارات التكليفات (العامة + «مهامي»)</summary>
+    private static async Task<List<TaskListDto>> ProjectTasksAsync(IQueryable<CrmTask> query)
+    {
         return await query
-            .OrderBy(t => t.Status == "Completed" ? 1 : 0)
+            .OrderBy(t => (t.Status == "Completed" || t.Status == "Cancelled") ? 1 : 0)
             .ThenBy(t => t.DueDate)
             .ThenBy(t => t.DueTime)
             .Select(t => new TaskListDto
@@ -445,10 +451,235 @@ public class TaskService : ITaskService
                 CreatedAt = t.CreatedAt,
                 AssignmentSource = t.AssignmentSource,
                 TaskScope = t.TaskScope,
+                CancelledAt = t.CancelledAt,
+                CancelledBy = t.CancelledBy,
+                CancellationReason = t.CancellationReason,
+                AcknowledgedAt = t.AcknowledgedAt,
+                AcknowledgedBy = t.AcknowledgedBy,
+                ReturnedAt = t.ReturnedAt,
+                ReturnedBy = t.ReturnedBy,
+                ReturnReason = t.ReturnReason,
+                CompletionLink = t.CompletionLink,
+                LinkedEntityType = t.LinkedEntityType,
+                LinkedEntityId = t.LinkedEntityId,
+                LinkedEntityTitle = t.LinkedEntityTitle,
                 TaskDueStatus = t.Status == "Completed" ? "Completed" : (t.DueDate.Date < DateTime.Today ? "Overdue" : (t.DueDate.Date == DateTime.Today ? "Today" : "Upcoming")),
                 DaysUntilDue = (t.DueDate.Date - DateTime.Today).Days
             })
             .ToListAsync();
+    }
+
+    // ─── تطوير التكليفات العامة: الربط بالمستندات + «مهامي» ─────────────────────
+
+    /// <summary>صلاحية إنشاء التكليفات العامة: الأدوار الثلاثة أو Claim الإنشاء</summary>
+    private bool CanCreateGeneralTasks()
+        => GeneralTaskPermissions.CanCreate(_http.HttpContext?.User);
+
+    /// <summary>
+    /// التحقق من مستند مرتبط وحسم عنوانه الرسمي (يُستخدم من حوار الإنشاء
+    /// للمعاينة، ومن الإنشاء نفسه قبل الحفظ — العنوان لقطة لا تتغير لاحقًا).
+    /// </summary>
+    public async Task<LinkedEntityLookupDto?> ResolveLinkedEntityAsync(string entityType, int entityId)
+        => await ResolveLinkedEntityCoreAsync(entityType, entityId);
+
+    private async Task<LinkedEntityLookupDto?> ResolveLinkedEntityCoreAsync(string? entityType, int entityId)
+    {
+        if (!GeneralTaskLinks.IsValidType(entityType) || entityId <= 0) return null;
+
+        string? title = entityType switch
+        {
+            GeneralTaskLinks.Customer => await _db.Parties.AsNoTracking()
+                .Where(p => p.PartyId == entityId)
+                .Select(p => new { Name = p.PartyName })
+                .FirstOrDefaultAsync() is { } cust ? $"العميل {cust.Name}" : null,
+
+            GeneralTaskLinks.Invoice => await TransactionTitleAsync(entityId, "فاتورة"),
+            GeneralTaskLinks.Delivery => await TransactionTitleAsync(entityId, "تسليمة فاتورة"),
+            GeneralTaskLinks.JobOrder => await TransactionTitleAsync(entityId, "أمر تشغيل"),
+
+            GeneralTaskLinks.Quotation => await _db.Quotations.AsNoTracking()
+                .Where(q => q.QuotationId == entityId)
+                .Select(q => new { q.ReferenceNumber, q.PartyId })
+                .FirstOrDefaultAsync() is { } quo
+                ? $"عرض سعر {quo.ReferenceNumber ?? $"#{entityId}"} — {await PartyNameAsync(quo.PartyId)}"
+                : null,
+
+            GeneralTaskLinks.Maintenance => await _db.DeliveryMaintenanceItems.AsNoTracking()
+                .Where(m => m.MaintenanceId == entityId)
+                .Select(m => new { m.MaintenanceId, m.IssueDescription })
+                .FirstOrDefaultAsync() is { } mnt
+                ? $"صيانة تسليم #{mnt.MaintenanceId} — {mnt.IssueDescription}"
+                : null,
+
+            _ => null
+        };
+
+        if (string.IsNullOrWhiteSpace(title)) return null;
+        if (title.Length > 250) title = title[..250];
+
+        return new LinkedEntityLookupDto { EntityType = entityType!, EntityId = entityId, Title = title };
+    }
+
+    private async Task<string?> TransactionTitleAsync(int transactionId, string prefix)
+    {
+        var row = await _db.Transactions.AsNoTracking()
+            .Where(t => t.TransactionId == transactionId)
+            .Select(t => new { t.ReferenceNumber, t.PartyId })
+            .FirstOrDefaultAsync();
+        if (row == null) return null;
+        return $"{prefix} {row.ReferenceNumber ?? $"#{transactionId}"} — {await PartyNameAsync(row.PartyId)}";
+    }
+
+    private async Task<string> PartyNameAsync(int partyId)
+        => await _db.Parties.AsNoTracking()
+            .Where(p => p.PartyId == partyId)
+            .Select(p => p.PartyName)
+            .FirstOrDefaultAsync() ?? "غير محدد";
+
+    /// <summary>
+    /// قوائم «مهامي»: التكليفات العامة فقط (TaskScope = General) بقرار المالك —
+    /// مهام الـCRM والليدز والفرص لها شاشاتها المستقلة ولا تظهر هنا نهائيًا.
+    /// وارد = ما هو مُسند إليّ من التكليفات العامة، صادر = ما أنشأته منها.
+    /// </summary>
+    public async Task<MyTasksDto> GetMyTasksAsync(string userName)
+    {
+        var result = new MyTasksDto();
+        var empId = await ResolveEmployeeIdAsync(userName);
+
+        var baseQuery = _db.CrmTasks.AsNoTracking()
+            .Include(t => t.AssignedToNavigation)
+            .Include(t => t.TaskType)
+            .Where(t => t.IsActive && t.TaskScope == TaskScopes.General);
+
+        if (empId.HasValue)
+            result.Assigned = await ProjectTasksAsync(baseQuery.Where(t => t.AssignedTo == empId.Value));
+
+        result.Created = await ProjectTasksAsync(baseQuery.Where(t => t.CreatedBy == userName));
+
+        if (empId.HasValue)
+            result.Mentioned = await GetMyMentionedTasksAsync(empId.Value);
+
+        return result;
+    }
+
+    /// <summary>
+    /// تكليفات ذُكر فيها الموظف (@) في أي تعليق — الأحدث ذكرًا أولًا.
+    /// تتحلل بأمان لقائمة فارغة عند غياب جدولي الخيط (قبل تشغيل سكربت المنصة).
+    /// </summary>
+    private async Task<List<TaskListDto>> GetMyMentionedTasksAsync(int employeeId)
+    {
+        try
+        {
+            var latestByTask = await _db.TaskCommentMentions.AsNoTracking()
+                .Where(m => m.MentionedEmployeeId == employeeId)
+                .GroupBy(m => m.Comment.TaskId)
+                .Select(g => new { TaskId = g.Key, Latest = g.Max(m => m.Comment.CreatedAt) })
+                .OrderByDescending(x => x.Latest)
+                .Take(50)
+                .ToListAsync();
+
+            if (latestByTask.Count == 0) return new();
+
+            var ids = latestByTask.Select(x => x.TaskId).ToList();
+            var tasks = await ProjectTasksAsync(_db.CrmTasks.AsNoTracking()
+                .Include(t => t.AssignedToNavigation)
+                .Include(t => t.TaskType)
+                .Where(t => t.IsActive && t.TaskScope == TaskScopes.General && ids.Contains(t.TaskId)));
+
+            var order = ids.Select((id, i) => (id, i)).ToDictionary(x => x.id, x => x.i);
+            return tasks.OrderBy(t => order.TryGetValue(t.TaskId, out var i) ? i : int.MaxValue).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Mentioned-tasks query degraded (TaskComments tables may be missing).");
+            return new();
+        }
+    }
+
+    /// <summary>عدّادات «مهامي» لشريط الصفحة الرئيسية</summary>
+    public async Task<MyTasksSummaryDto> GetMyTasksSummaryAsync(string userName)
+    {
+        var dto = new MyTasksSummaryDto();
+        var today = DateTime.Today;
+        var empId = await ResolveEmployeeIdAsync(userName);
+
+        if (empId.HasValue)
+        {
+            var mine = _db.CrmTasks.AsNoTracking()
+                .Where(t => t.IsActive && t.TaskScope == TaskScopes.General && t.AssignedTo == empId.Value
+                            && t.Status != "Completed" && t.Status != "Cancelled");
+            dto.OpenAssigned = await mine.CountAsync();
+            dto.OverdueAssigned = await mine.CountAsync(t => t.DueDate < today);
+        }
+
+        dto.OpenCreated = await _db.CrmTasks.AsNoTracking()
+            .CountAsync(t => t.IsActive && t.TaskScope == TaskScopes.General && t.CreatedBy == userName
+                             && t.Status != "Completed" && t.Status != "Cancelled");
+
+        if (empId.HasValue)
+        {
+            try
+            {
+                dto.MentionedTasks = await _db.TaskCommentMentions.AsNoTracking()
+                    .Where(m => m.MentionedEmployeeId == empId.Value && m.Comment.Task.TaskScope == TaskScopes.General)
+                    .Select(m => m.Comment.TaskId)
+                    .Distinct()
+                    .CountAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Mentioned count degraded (TaskComments tables may be missing).");
+            }
+        }
+
+        return dto;
+    }
+
+    /// <summary>
+    /// ملخص إدارة التكليفات العامة لكل موظف (استعلام تجميعي واحد) —
+    /// لمن يرى الكل فقط (أدوار الإدارة)؛ غيرهم قائمة فارغة.
+    /// </summary>
+    public async Task<List<EmployeeTaskLoadDto>> GetGeneralTasksManagerSummaryAsync(string userName)
+    {
+        if (!CanManageGeneralTasks()) return new();
+
+        var today = DateTime.Today;
+        var grouped = await _db.CrmTasks.AsNoTracking()
+            .Where(t => t.IsActive && t.TaskScope == TaskScopes.General)
+            .GroupBy(t => t.AssignedTo)
+            .Select(g => new
+            {
+                EmployeeId = g.Key,
+                Open = g.Count(t => t.Status == "Pending" || t.Status == "In Progress"),
+                InProgress = g.Count(t => t.Status == "In Progress"),
+                Overdue = g.Count(t => (t.Status == "Pending" || t.Status == "In Progress") && t.DueDate < today),
+                Completed = g.Count(t => t.Status == "Completed"),
+                ReturnedPending = g.Count(t => t.Status == "Pending" && t.ReturnedAt != null)
+            })
+            .ToListAsync();
+
+        if (grouped.Count == 0) return new();
+
+        var ids = grouped.Select(g => g.EmployeeId).ToList();
+        var names = await _db.Employees.AsNoTracking()
+            .Where(e => ids.Contains(e.EmployeeId))
+            .Select(e => new { e.EmployeeId, e.FullName })
+            .ToDictionaryAsync(e => e.EmployeeId, e => e.FullName);
+
+        return grouped
+            .Select(g => new EmployeeTaskLoadDto
+            {
+                EmployeeId = g.EmployeeId,
+                EmployeeName = names.TryGetValue(g.EmployeeId, out var n) ? n : $"موظف #{g.EmployeeId}",
+                OpenCount = g.Open,
+                InProgressCount = g.InProgress,
+                OverdueCount = g.Overdue,
+                CompletedCount = g.Completed,
+                ReturnedPendingCount = g.ReturnedPending
+            })
+            .OrderByDescending(r => r.OverdueCount)
+            .ThenByDescending(r => r.OpenCount)
+            .ToList();
     }
 
     /// <summary>🏢 هل يمكن للمستخدم الحالي إضافة صفوف على فرصة/عميل B2B؟</summary>
@@ -605,7 +836,7 @@ public class TaskService : ITaskService
 
     public async Task<(bool Success, string Message, int? TaskId)> AddGeneralEmployeeTaskAsync(GeneralEmployeeTaskDto dto, string userName)
     {
-        if (!CanManageGeneralTasks())
+        if (!CanCreateGeneralTasks())
             return (false, "ليست لديك صلاحية إنشاء مهام عامة للموظفين.", null);
 
         if (dto.AssignedTo <= 0)
@@ -614,6 +845,9 @@ public class TaskService : ITaskService
         if (string.IsNullOrWhiteSpace(dto.TaskDescription))
             return (false, "اكتب وصف المهمة.", null);
 
+        if (dto.DueDate.Date < DateTime.Today)
+            return (false, "تاريخ التنفيذ لا يمكن أن يكون في الماضي.", null);
+
         var assignee = await _db.Employees.AsNoTracking()
             .Where(e => e.EmployeeId == dto.AssignedTo && (e.Status == "نشط" || e.Status == "Active"))
             .Select(e => new { e.EmployeeId, e.FullName })
@@ -621,6 +855,15 @@ public class TaskService : ITaskService
 
         if (assignee == null)
             return (false, "الموظف غير موجود أو غير نشط.", null);
+
+        // ربط اختياري بمستند: العنوان يُحسم هنا خادميًا (لا يُوثق بعنوان العميل)
+        LinkedEntityLookupDto? link = null;
+        if (!string.IsNullOrWhiteSpace(dto.LinkedEntityType) && dto.LinkedEntityId.HasValue)
+        {
+            link = await ResolveLinkedEntityCoreAsync(dto.LinkedEntityType, dto.LinkedEntityId.Value);
+            if (link == null)
+                return (false, "المستند المرتبط غير موجود — تحقق من النوع والرقم.", null);
+        }
 
         var now = DateTime.Now;
         var assignmentSource = ResolveGeneralTaskAssignmentSource();
@@ -635,9 +878,13 @@ public class TaskService : ITaskService
             Priority = NormalizePriority(dto.Priority),
             Status = "Pending",
             ReminderEnabled = true,
+            ReminderMinutes = dto.ReminderMinutes is > 0 ? dto.ReminderMinutes : null,
             IsActive = true,
             AssignmentSource = assignmentSource,
             TaskScope = TaskScopes.General,
+            LinkedEntityType = link?.EntityType,
+            LinkedEntityId = link?.EntityId,
+            LinkedEntityTitle = link?.Title,
             CreatedBy = userName,
             CreatedAt = now
         };
@@ -656,10 +903,14 @@ public class TaskService : ITaskService
                 task.DueTime,
                 task.Priority,
                 task.AssignmentSource,
-                task.TaskScope
+                task.TaskScope,
+                task.LinkedEntityType,
+                task.LinkedEntityId,
+                task.LinkedEntityTitle
             }, userName);
 
         var assignmentNotificationWarning = await NotifyGeneralEmployeeTaskAssignedToEmployeeAsync(
+            task.TaskId,
             assignee.EmployeeId,
             assignee.FullName ?? "غير محدد",
             task.TaskDescription ?? "",
@@ -794,16 +1045,23 @@ public class TaskService : ITaskService
         var task = await _db.CrmTasks.FirstOrDefaultAsync(t => t.TaskId == taskId && t.IsActive);
         if (task == null) return (false, "المهمة غير موجودة");
         if (task.Status == "Completed") return (false, "تم إكمال المهمة بالفعل");
+        if (task.Status == "Cancelled") return (false, "المهمة ملغية ولا يمكن بدء تنفيذها");
         if (task.Status == "In Progress") return (true, "المهمة بالفعل قيد التنفيذ");
         if (string.IsNullOrWhiteSpace(notes)) return (false, "برجاء كتابة ماذا ستبدأ تنفيذه قبل بدء المهمة.");
+
+        // ⭐ حارس الملكية (التكليفات العامة): البدء للمكلَّف نفسه أو لمدير فقط —
+        //    الحارس في الخدمة هو مصدر الحقيقة، لا إخفاء الأزرار في الواجهة.
+        if (string.Equals(task.TaskScope, TaskScopes.General, StringComparison.OrdinalIgnoreCase)
+            && !await CanActOnGeneralTaskAsync(task, userName))
+            return (false, "لا يمكنك بدء تنفيذ تكليف غير مُسند إليك.");
 
         task.Status = "In Progress";
         task.StartedAt = DateTime.Now;
         task.StartedBy = userName;
         task.StartNotes = notes.Trim();
 
-        await _db.SaveChangesAsync();
-
+        // ⭐ الحفظ ذرّي: تغيير الحالة وسجل التفاعل في SaveChanges واحد لكل مسار
+        //    (كانا حفظين منفصلين — فشل الثاني يترك الحالة متغيرة بلا سجلها).
         if (string.Equals(task.AssignmentSource, "GeneralManager", StringComparison.OrdinalIgnoreCase) && task.OpportunityId.HasValue)
         {
             var assigneeName = await _db.Employees.AsNoTracking().Where(e => e.EmployeeId == task.AssignedTo).Select(e => e.FullName).FirstOrDefaultAsync() ?? "الموظف";
@@ -839,6 +1097,8 @@ public class TaskService : ITaskService
                 .Where(e => e.EmployeeId == task.AssignedTo)
                 .Select(e => e.FullName)
                 .FirstOrDefaultAsync() ?? "الموظف";
+
+            await _db.SaveChangesAsync();
 
             await _audit.LogAsync("CRM_Tasks", "GeneralEmployeeTaskStart", task.TaskId.ToString(), null,
                 new { task.AssignedTo, StartedBy = userName, Notes = notes, task.TaskDescription }, userName);
@@ -876,11 +1136,16 @@ public class TaskService : ITaskService
 
             await NotifyLeadTaskActionAsync(task, assigneeName, leadName, false, userName, notes);
         }
+        else
+        {
+            // نطاقات أخرى (مهام فرص عادية): حفظ تغيير الحالة فقط
+            await _db.SaveChangesAsync();
+        }
 
         return (true, "تم تحويل المهمة إلى جاري التنفيذ");
     }
 
-    public async Task<(bool Success, string Message)> CompleteAsync(int taskId, string notes, string userName)
+    public async Task<(bool Success, string Message)> CompleteAsync(int taskId, string notes, string userName, string? completionLink = null)
     {
         try
         {
@@ -910,15 +1175,27 @@ public class TaskService : ITaskService
                 return (true, "تم إتمام متابعة الـ Lead بنجاح");
             }
 
-            var task = await _db.CrmTasks.FindAsync(taskId);
+            // ⭐ FindAsync القديم كان يتجاوز IsActive وبلا أي حارس حالة — مهمة
+            //    محذوفة ناعمًا كانت تُستكمل، ومكتملة كانت تُعاد كتابة إتمامها بصمت.
+            var task = await _db.CrmTasks.FirstOrDefaultAsync(t => t.TaskId == taskId && t.IsActive);
             if (task == null) return (false, "المهمة غير موجودة");
             if (string.IsNullOrWhiteSpace(notes)) return (false, "برجاء كتابة ما الذي تم تنفيذه قبل إكمال المهمة.");
+            if (task.Status == "Completed") return (false, "تم إكمال المهمة بالفعل ولا يمكن إعادة إتمامها.");
+            if (task.Status == "Cancelled") return (false, "المهمة ملغية ولا يمكن إتمامها.");
+
+            // ⭐ حارس الملكية (التكليفات العامة): الإتمام للمكلَّف نفسه أو لمدير فقط.
+            if (string.Equals(task.TaskScope, TaskScopes.General, StringComparison.OrdinalIgnoreCase)
+                && !await CanActOnGeneralTaskAsync(task, userName))
+                return (false, "لا يمكنك إتمام تكليف غير مُسند إليك.");
+
             task.Status = "Completed";
             task.CompletedDate = DateTime.Now;
             task.CompletedBy = userName;
             task.CompletionNotes = notes.Trim();
-            await _db.SaveChangesAsync();
+            if (!string.IsNullOrWhiteSpace(completionLink))
+                task.CompletionLink = completionLink.Trim();
 
+            // ⭐ الحفظ ذرّي: الحالة وسجل التفاعل في SaveChanges واحد لكل مسار.
             if (string.Equals(task.AssignmentSource, "GeneralManager", StringComparison.OrdinalIgnoreCase) && task.OpportunityId.HasValue)
             {
                 var assigneeName = await _db.Employees.AsNoTracking().Where(e => e.EmployeeId == task.AssignedTo).Select(e => e.FullName).FirstOrDefaultAsync() ?? "الموظف";
@@ -954,6 +1231,8 @@ public class TaskService : ITaskService
                     .Where(e => e.EmployeeId == task.AssignedTo)
                     .Select(e => e.FullName)
                     .FirstOrDefaultAsync() ?? "الموظف";
+
+                await _db.SaveChangesAsync();
 
                 await _audit.LogAsync("CRM_Tasks", "GeneralEmployeeTaskComplete", task.TaskId.ToString(), null,
                     new { task.AssignedTo, CompletedBy = userName, Notes = notes, task.TaskDescription }, userName);
@@ -991,6 +1270,11 @@ public class TaskService : ITaskService
 
                 await NotifyLeadTaskActionAsync(task, assigneeName, leadName, true, userName, notes);
             }
+            else
+            {
+                // نطاقات أخرى (مهام فرص عادية): حفظ تغيير الحالة فقط
+                await _db.SaveChangesAsync();
+            }
 
             return (true, "تم إكمال المهمة");
         }
@@ -1013,6 +1297,435 @@ public class TaskService : ITaskService
         catch (Exception ex)
         {
             return (false, $"خطأ: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// إلغاء تكليف عام (منشئ التكليف أو مدير) بسبب إلزامي — من Pending/In Progress فقط.
+    /// حالة "Cancelled" لم يكن أي كود يكتبها قبل الآن؛ الإلغاء موثّق
+    /// (CancelledAt/By/Reason) وبيُشعر المكلَّف وبيُدقَّق.
+    /// </summary>
+    public async Task<(bool Success, string Message)> CancelGeneralTaskAsync(int taskId, string reason, string userName)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(reason))
+                return (false, "برجاء كتابة سبب إلغاء التكليف.");
+
+            var task = await _db.CrmTasks.FirstOrDefaultAsync(t => t.TaskId == taskId && t.IsActive);
+            if (task == null) return (false, "المهمة غير موجودة");
+            if (!string.Equals(task.TaskScope, TaskScopes.General, StringComparison.OrdinalIgnoreCase))
+                return (false, "الإلغاء الموثّق متاح للتكليفات العامة فقط.");
+            if (!CanAdministerGeneralTask(task, userName))
+                return (false, "لا يمكنك إلغاء تكليف لم تنشئه.");
+            if (task.Status == "Completed") return (false, "لا يمكن إلغاء تكليف مكتمل.");
+            if (task.Status == "Cancelled") return (false, "التكليف ملغى بالفعل.");
+            if (task.Status != "Pending" && task.Status != "In Progress")
+                return (false, "لا يمكن إلغاء التكليف في حالته الحالية.");
+
+            task.Status = "Cancelled";
+            task.CancelledAt = DateTime.Now;
+            task.CancelledBy = userName;
+            task.CancellationReason = reason.Trim();
+            await _db.SaveChangesAsync();
+
+            await _audit.LogAsync("CRM_Tasks", "GeneralEmployeeTaskCancel", task.TaskId.ToString(), null,
+                new { task.AssignedTo, CancelledBy = userName, Reason = reason.Trim(), task.TaskDescription }, userName);
+
+            await NotifyTaskEmployeeAsync(task.AssignedTo,
+                "🚫 تم إلغاء تكليف",
+                $"ألغى {userName} تكليفًا كان مُسندًا إليك.\nالمهمة: {task.TaskDescription}\nسبب الإلغاء: {reason.Trim()}",
+                userName, task.TaskId);
+
+            return (true, "تم إلغاء التكليف وإشعار المكلَّف.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"خطأ: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// تعديل تكليف عام (منشئ التكليف أو مدير): المكلَّف/النوع/الوصف/التاريخ/الأولوية.
+    /// ممنوع على المكتمل والملغى. إعادة الإسناد تُصفّر الاستلام وتُشعر الطرفين،
+    /// والتعديل الجوهري يُشعر المكلَّف — الكل بتدقيق قبل/بعد.
+    /// </summary>
+    public async Task<(bool Success, string Message)> UpdateGeneralTaskAsync(UpdateGeneralTaskDto dto, string userName)
+    {
+        try
+        {
+            var task = await _db.CrmTasks.FirstOrDefaultAsync(t => t.TaskId == dto.TaskId && t.IsActive);
+            if (task == null) return (false, "المهمة غير موجودة");
+            if (!string.Equals(task.TaskScope, TaskScopes.General, StringComparison.OrdinalIgnoreCase))
+                return (false, "التعديل متاح للتكليفات العامة فقط.");
+            if (!CanAdministerGeneralTask(task, userName))
+                return (false, "لا يمكنك تعديل تكليف لم تنشئه.");
+            if (task.Status == "Completed" || task.Status == "Cancelled")
+                return (false, "لا يمكن تعديل تكليف مكتمل أو ملغى.");
+            if (string.IsNullOrWhiteSpace(dto.TaskDescription))
+                return (false, "اكتب وصف المهمة.");
+            if (dto.DueDate.Date < DateTime.Today)
+                return (false, "تاريخ التنفيذ لا يمكن أن يكون في الماضي.");
+
+            var before = new
+            {
+                task.AssignedTo,
+                task.TaskTypeId,
+                task.TaskDescription,
+                task.DueDate,
+                task.DueTime,
+                task.Priority
+            };
+
+            var oldAssigneeId = task.AssignedTo;
+            var reassigned = dto.AssignedTo != oldAssigneeId;
+            string? newAssigneeName = null;
+
+            if (reassigned)
+            {
+                var emp = await _db.Employees.AsNoTracking()
+                    .Where(e => e.EmployeeId == dto.AssignedTo && (e.Status == "نشط" || e.Status == "Active"))
+                    .Select(e => new { e.EmployeeId, e.FullName })
+                    .FirstOrDefaultAsync();
+                if (emp == null) return (false, "الموظف الجديد غير موجود أو غير نشط.");
+                newAssigneeName = emp.FullName;
+            }
+
+            task.AssignedTo = dto.AssignedTo;
+            task.TaskTypeId = dto.TaskTypeId;
+            task.TaskDescription = dto.TaskDescription.Trim();
+            task.DueDate = dto.DueDate;
+            task.DueTime = dto.DueTime;
+            task.Priority = NormalizePriority(dto.Priority);
+            if (reassigned)
+            {
+                // مكلَّف جديد = استلام جديد: يُصفَّر تأكيد الاستلام السابق
+                task.AcknowledgedAt = null;
+                task.AcknowledgedBy = null;
+            }
+            await _db.SaveChangesAsync();
+
+            await _audit.LogAsync<object>("CRM_Tasks", "GeneralEmployeeTaskUpdate", task.TaskId.ToString(),
+                before,
+                new
+                {
+                    task.AssignedTo,
+                    task.TaskTypeId,
+                    task.TaskDescription,
+                    task.DueDate,
+                    task.DueTime,
+                    task.Priority,
+                    UpdatedBy = userName
+                }, userName);
+
+            if (reassigned)
+            {
+                await NotifyTaskEmployeeAsync(oldAssigneeId,
+                    "↩️ تم نقل تكليف منك",
+                    $"نقل {userName} تكليفًا كان مُسندًا إليك إلى موظف آخر.\nالمهمة: {task.TaskDescription}",
+                    userName, task.TaskId);
+
+                var warning = await NotifyGeneralEmployeeTaskAssignedToEmployeeAsync(
+                    task.TaskId,
+                    dto.AssignedTo, newAssigneeName ?? "غير محدد", task.TaskDescription ?? "",
+                    task.DueDate, task.DueTime, task.Priority, task.AssignmentSource ?? "GeneralTask", userName);
+
+                var msg = "تم نقل التكليف إلى المكلَّف الجديد وإشعار الطرفين.";
+                return (true, string.IsNullOrWhiteSpace(warning) ? msg : $"{msg} لكن {warning}");
+            }
+
+            await NotifyTaskEmployeeAsync(task.AssignedTo,
+                "✏️ تم تعديل تكليفك",
+                $"عدّل {userName} تكليفًا مُسندًا إليك.\nالمهمة: {task.TaskDescription}\nالمطلوب قبل: {task.DueDate:yyyy/MM/dd}",
+                userName, task.TaskId);
+
+            return (true, "تم تحديث التكليف وإشعار المكلَّف.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"خطأ: {ex.Message}");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ⭐ مرحلة النقاش: خيط التعليقات + المناداة + الاستلام/الإرجاع
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>هل المستخدم طرف في التكليف؟ مكلَّف/منشئ/مدير/مذكور في خيطه — شرط التعليق والعرض</summary>
+    private async Task<bool> IsTaskParticipantAsync(CrmTask task, string userName)
+    {
+        if (CanAdministerGeneralTask(task, userName)) return true;
+        var empId = await ResolveEmployeeIdAsync(userName);
+        if (!empId.HasValue) return false;
+        if (empId.Value == task.AssignedTo) return true;
+        try
+        {
+            return await _db.TaskCommentMentions.AsNoTracking()
+                .AnyAsync(m => m.MentionedEmployeeId == empId.Value && m.Comment.TaskId == task.TaskId);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>تفاصيل تكليف + خيط نقاشه + صلاحيات العارض (الخيط يتحلل فارغًا عند غياب جداوله)</summary>
+    public async Task<TaskDetailDto?> GetTaskDetailAsync(int taskId, string userName)
+    {
+        var taskDto = (await ProjectTasksAsync(_db.CrmTasks.AsNoTracking()
+            .Include(t => t.AssignedToNavigation)
+            .Include(t => t.TaskType)
+            .Where(t => t.IsActive && t.TaskId == taskId))).FirstOrDefault();
+        if (taskDto is null) return null;
+
+        var detail = new TaskDetailDto { Task = taskDto };
+        var empId = await ResolveEmployeeIdAsync(userName);
+        detail.ViewerEmployeeId = empId;
+        detail.ViewerIsAssignee = empId.HasValue && empId.Value == taskDto.AssignedTo;
+        detail.ViewerCanManage = CanManageGeneralTasks();
+        detail.ViewerCanAdminister = detail.ViewerCanManage
+            || string.Equals(taskDto.CreatedBy, userName, StringComparison.OrdinalIgnoreCase);
+
+        try
+        {
+            detail.Comments = await _db.TaskComments.AsNoTracking()
+                .Where(c => c.TaskId == taskId)
+                .OrderBy(c => c.CreatedAt)
+                .Select(c => new TaskCommentDto
+                {
+                    Id = c.Id,
+                    TaskId = c.TaskId,
+                    AuthorUserName = c.AuthorUserName,
+                    AuthorEmployeeId = c.AuthorEmployeeId,
+                    AuthorName = c.AuthorName,
+                    Body = c.Body,
+                    Kind = c.Kind,
+                    CreatedAt = c.CreatedAt,
+                    MentionedEmployeeIds = c.Mentions.Select(m => m.MentionedEmployeeId).ToList(),
+                    MentionedNames = c.Mentions.Select(m => m.MentionedEmployee.FullName).ToList()
+                })
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Task thread degraded for task {TaskId} (TaskComments table may be missing).", taskId);
+        }
+
+        return detail;
+    }
+
+    /// <summary>
+    /// إضافة تعليق/تحديث تقدم — المشاركون فقط (مكلَّف/منشئ/مدير/مذكور).
+    /// المناداة تصل صراحة من الواجهة (بلا تحليل نصي هش) وتُشعر أصحابها.
+    /// </summary>
+    public async Task<(bool Success, string Message)> AddTaskCommentAsync(AddTaskCommentDto dto, string userName)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dto.Body))
+                return (false, "برجاء كتابة نص التعليق أولًا.");
+            if (dto.Body.Trim().Length > 2000)
+                return (false, "نص التعليق أطول من الحد المسموح (2000 حرف).");
+
+            var task = await _db.CrmTasks.FirstOrDefaultAsync(t => t.TaskId == dto.TaskId && t.IsActive);
+            if (task == null) return (false, "المهمة غير موجودة");
+            if (!await IsTaskParticipantAsync(task, userName))
+                return (false, "التعليق متاح لأطراف التكليف فقط (المكلَّف والمنشئ والإدارة والمذكورون).");
+
+            var authorEmpId = await ResolveEmployeeIdAsync(userName);
+            var authorName = authorEmpId.HasValue
+                ? await _db.Employees.AsNoTracking()
+                    .Where(e => e.EmployeeId == authorEmpId.Value)
+                    .Select(e => e.FullName)
+                    .FirstOrDefaultAsync()
+                : null;
+
+            var comment = new TaskComment
+            {
+                TaskId = task.TaskId,
+                AuthorUserName = userName,
+                AuthorEmployeeId = authorEmpId,
+                AuthorName = authorName,
+                Body = dto.Body.Trim(),
+                Kind = dto.Kind == TaskCommentKinds.Progress ? TaskCommentKinds.Progress : TaskCommentKinds.Comment,
+                CreatedAt = DateTime.Now
+            };
+
+            var mentionIds = (dto.MentionedEmployeeIds ?? new())
+                .Where(id => id > 0 && id != authorEmpId)
+                .Distinct()
+                .ToList();
+            foreach (var mid in mentionIds)
+                comment.Mentions.Add(new TaskCommentMention { MentionedEmployeeId = mid });
+
+            _db.TaskComments.Add(comment);
+            try
+            {
+                await _db.SaveChangesAsync();
+            }
+            catch (Exception ex) when (IsMissingThreadTable(ex))
+            {
+                return (false, "خيط النقاش غير مفعّل بعد — برجاء تشغيل سكربت المنصة (general-tasks-2-platform.sql) على قاعدة البيانات أولًا.");
+            }
+
+            foreach (var mid in mentionIds)
+            {
+                await NotifyTaskEmployeeAsync(mid,
+                    "📣 ذُكرت في تكليف",
+                    $"ذكرك {authorName ?? userName} في تكليف «{task.TaskDescription}».\nافتح الإشعار لعرض التكليف والرد على الخيط.",
+                    userName, task.TaskId);
+            }
+
+            return (true, "تمت إضافة تعليقك إلى خيط التكليف.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"خطأ: {ex.Message}");
+        }
+    }
+
+    /// <summary>استلام التكليف: المكلَّف يؤكد الاستلام — يُختم ويُشعر المنشئ</summary>
+    public async Task<(bool Success, string Message)> AcknowledgeTaskAsync(int taskId, string userName)
+    {
+        try
+        {
+            var task = await _db.CrmTasks.FirstOrDefaultAsync(t => t.TaskId == taskId && t.IsActive);
+            if (task == null) return (false, "المهمة غير موجودة");
+            if (!string.Equals(task.TaskScope, TaskScopes.General, StringComparison.OrdinalIgnoreCase))
+                return (false, "الاستلام الموثّق متاح للتكليفات العامة فقط.");
+            var empId = await ResolveEmployeeIdAsync(userName);
+            if (!empId.HasValue || empId.Value != task.AssignedTo)
+                return (false, "استلام التكليف متاح للمكلَّف به فقط.");
+            if (task.Status == "Completed" || task.Status == "Cancelled")
+                return (false, "لا يمكن استلام تكليف منتهٍ أو ملغى.");
+            if (task.AcknowledgedAt.HasValue)
+                return (true, "التكليف مُستلم بالفعل.");
+
+            task.AcknowledgedAt = DateTime.Now;
+            task.AcknowledgedBy = userName;
+            await _db.SaveChangesAsync();
+
+            await _audit.LogAsync("CRM_Tasks", "GeneralEmployeeTaskAcknowledge", task.TaskId.ToString(), null,
+                new { task.AssignedTo, AcknowledgedBy = userName, task.TaskDescription }, userName);
+
+            await NotifyTaskCreatorAsync(task,
+                "👀 تم استلام تكليفك",
+                $"استلم {userName} التكليف «{task.TaskDescription}».",
+                userName);
+
+            return (true, "تم تأكيد استلام التكليف وإشعار المنشئ.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"خطأ: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// إرجاع التكليف: المكلَّف يعيده بسبب إلزامي — يعود Pending ويُصفّر الاستلام
+    /// ويُشعر المنشئ ليقرر (تعديل/إعادة إسناد/إلغاء).
+    /// </summary>
+    public async Task<(bool Success, string Message)> ReturnTaskAsync(int taskId, string reason, string userName)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(reason))
+                return (false, "برجاء كتابة سبب إرجاع التكليف.");
+            var task = await _db.CrmTasks.FirstOrDefaultAsync(t => t.TaskId == taskId && t.IsActive);
+            if (task == null) return (false, "المهمة غير موجودة");
+            if (!string.Equals(task.TaskScope, TaskScopes.General, StringComparison.OrdinalIgnoreCase))
+                return (false, "الإرجاع الموثّق متاح للتكليفات العامة فقط.");
+            var empId = await ResolveEmployeeIdAsync(userName);
+            if (!empId.HasValue || empId.Value != task.AssignedTo)
+                return (false, "إرجاع التكليف متاح للمكلَّف به فقط.");
+            if (task.Status == "Completed" || task.Status == "Cancelled")
+                return (false, "لا يمكن إرجاع تكليف منتهٍ أو ملغى.");
+
+            task.Status = "Pending";
+            task.StartedAt = null;
+            task.StartedBy = null;
+            task.StartNotes = null;
+            task.ReturnedAt = DateTime.Now;
+            task.ReturnedBy = userName;
+            task.ReturnReason = reason.Trim();
+            task.AcknowledgedAt = null;
+            task.AcknowledgedBy = null;
+            await _db.SaveChangesAsync();
+
+            await _audit.LogAsync("CRM_Tasks", "GeneralEmployeeTaskReturn", task.TaskId.ToString(), null,
+                new { task.AssignedTo, ReturnedBy = userName, Reason = reason.Trim(), task.TaskDescription }, userName);
+
+            await NotifyTaskCreatorAsync(task,
+                "↩️ أُرجع تكليف أنشأته",
+                $"أرجع {userName} التكليف «{task.TaskDescription}».\nسبب الإرجاع: {reason.Trim()}\nيمكنك تعديله أو إعادة إسناده أو إلغاءه من صفحة التكليفات.",
+                userName);
+
+            return (true, "تم إرجاع التكليف وإشعار المنشئ.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"خطأ: {ex.Message}");
+        }
+    }
+
+    /// <summary>إشعار منشئ التكليف بحسابه (إن وُجد وكان نشطًا) — صامت عند الغياب</summary>
+    private async Task NotifyTaskCreatorAsync(CrmTask task, string title, string message, string actor)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(task.CreatedBy)) return;
+            var creatorActive = await _db.Users.AsNoTracking()
+                .AnyAsync(u => u.Username == task.CreatedBy && u.IsActive == true);
+            if (!creatorActive) return;
+            await _notify.AddAsync(
+                title: title,
+                message: message,
+                recipientUser: task.CreatedBy,
+                createdBy: actor,
+                formName: "crm/general-tasks",
+                relatedTable: "CRM_Tasks",
+                relatedId: task.TaskId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to notify creator of task {TaskId}.", task.TaskId);
+        }
+    }
+
+    /// <summary>هل الخطأ ناتج عن غياب جدولي خيط النقاش؟ (رسالة واضحة بدل خطأ SQL خام)</summary>
+    private static bool IsMissingThreadTable(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+            if (e.Message.Contains("Invalid object name") && e.Message.Contains("TaskComment"))
+                return true;
+        return false;
+    }
+
+    /// <summary>إشعار موظف بحسابه المرتبط (صامت عند غياب الحساب — يُسجَّل تحذير فقط)</summary>
+    private async Task NotifyTaskEmployeeAsync(int employeeId, string title, string message, string actor, int taskId)
+    {
+        try
+        {
+            var user = await _db.Users.AsNoTracking()
+                .Where(u => u.EmployeeId == employeeId && u.IsActive == true)
+                .Select(u => u.Username)
+                .FirstOrDefaultAsync();
+
+            if (string.IsNullOrWhiteSpace(user))
+            {
+                _logger.LogWarning("Task notification skipped: employee {EmployeeId} has no active linked user. Title={Title}", employeeId, title);
+                return;
+            }
+
+            await _notify.AddAsync(
+                title: title,
+                message: message,
+                recipientUser: user,
+                createdBy: actor,
+                formName: "crm/general-tasks",
+                relatedTable: "CRM_Tasks",
+                relatedId: taskId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to notify employee {EmployeeId} about a general task event.", employeeId);
         }
     }
 
@@ -1191,7 +1904,7 @@ public class TaskService : ITaskService
         }
     }
 
-    private async Task<string?> NotifyGeneralEmployeeTaskAssignedToEmployeeAsync(int assignedEmployeeId, string assignedEmployeeName, string taskDescription, DateTime dueDate, TimeOnly? dueTime, string priority, string assignmentSource, string actor)
+    private async Task<string?> NotifyGeneralEmployeeTaskAssignedToEmployeeAsync(int taskId, int assignedEmployeeId, string assignedEmployeeName, string taskDescription, DateTime dueDate, TimeOnly? dueTime, string priority, string assignmentSource, string actor)
     {
         try
         {
@@ -1220,7 +1933,8 @@ public class TaskService : ITaskService
                 recipientUser: user,
                 createdBy: actor,
                 formName: "crm/general-tasks",
-                relatedTable: "CRM_Tasks");
+                relatedTable: "CRM_Tasks",
+                relatedId: taskId);
 
             return null;
         }
@@ -1258,7 +1972,8 @@ public class TaskService : ITaskService
                 recipientUser: task.CreatedBy,
                 createdBy: actor,
                 formName: "crm/general-tasks",
-                relatedTable: "CRM_Tasks");
+                relatedTable: "CRM_Tasks",
+                relatedId: task.TaskId);
         }
         catch (Exception ex)
         {
@@ -1330,6 +2045,33 @@ public class TaskService : ITaskService
             || user?.IsInRole(SystemRoles.Admin) == true
             || user?.IsInRole("Admin") == true;
     }
+
+    /// <summary>رقم الموظف المرتبط بحساب المستخدم (null لو الحساب غير مربوط بموظف)</summary>
+    private async Task<int?> ResolveEmployeeIdAsync(string? userName)
+    {
+        if (string.IsNullOrWhiteSpace(userName)) return null;
+        return await _db.Users.AsNoTracking()
+            .Where(u => u.Username == userName && u.EmployeeId != null)
+            .Select(u => u.EmployeeId)
+            .FirstOrDefaultAsync();
+    }
+
+    /// <summary>
+    /// ⭐ من يحق له بدء/إتمام تكليف عام: المكلَّف نفسه (حسابه مربوط بموظف التكليف)
+    /// أو مدير بأدوار CanManageGeneralTasks. الحارس هنا في الخدمة هو مصدر
+    /// الحقيقة — قبل هذا الإصلاح كان البدء/الإتمام محميين بإخفاء الأزرار فقط.
+    /// </summary>
+    private async Task<bool> CanActOnGeneralTaskAsync(CrmTask task, string userName)
+    {
+        if (CanManageGeneralTasks()) return true;
+        var empId = await ResolveEmployeeIdAsync(userName);
+        return empId.HasValue && empId.Value == task.AssignedTo;
+    }
+
+    /// <summary>من يحق له إلغاء/تعديل تكليف عام بعينه: منشؤه أو مدير.</summary>
+    private bool CanAdministerGeneralTask(CrmTask task, string userName)
+        => CanManageGeneralTasks()
+           || string.Equals(task.CreatedBy, userName, StringComparison.OrdinalIgnoreCase);
 
     private bool CanManageLeadTasks()
     {

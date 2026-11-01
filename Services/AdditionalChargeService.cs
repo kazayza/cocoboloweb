@@ -12,6 +12,7 @@ public class AdditionalChargeService : IAdditionalChargeService
     private readonly IAuditService _audit;
     private readonly IPaymentService _paymentService;
     private readonly IHttpContextAccessor _http;
+    private readonly NotificationService _notify;
 
     private async Task<int> GetDefaultCashBoxIdAsync()
     {
@@ -19,12 +20,13 @@ public class AdditionalChargeService : IAdditionalChargeService
         return cashBox?.CashBoxId ?? 1;
     }
 
-    public AdditionalChargeService(db24804Context db, IAuditService audit, IPaymentService paymentService, IHttpContextAccessor http)
+    public AdditionalChargeService(db24804Context db, IAuditService audit, IPaymentService paymentService, IHttpContextAccessor http, NotificationService notify)
     {
         _db = db;
         _audit = audit;
         _paymentService = paymentService;
         _http = http;
+        _notify = notify;
     }
 
     public async Task<PagedResult<AdditionalChargeListDto>> GetChargesAsync(AdditionalChargeFilterDto filter)
@@ -74,6 +76,7 @@ public class AdditionalChargeService : IAdditionalChargeService
                              PartyPhone = p != null ? p.Phone : null,
                              TransactionId = c.TransactionId,
                              TransactionRef = t != null ? t.ReferenceNumber : null,
+                             SourceDeliveryId = c.SourceDeliveryId,
                              AppliedToTransactionId = c.AppliedToTransactionId,
                              AppliedToTransactionRef = at != null ? at.ReferenceNumber : null,
                              Notes = c.Notes,
@@ -161,8 +164,20 @@ public class AdditionalChargeService : IAdditionalChargeService
         return dto;
     }
 
+    // ⭐ بوابة إيصال الرسوم الإضافية — صلاحية عرض الوحدة: frmInspectionCharge:View أو Admin
+    private bool CanViewChargeReceipt()
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+        if (user.IsInRole(SystemRoles.Admin)) return true;
+        return user.HasClaim("Permission", "frmInspectionCharge:View");
+    }
+
     public async Task<AdditionalChargeReceiptDto?> GetChargeReceiptAsync(int chargeId)
     {
+        // ⛔ دفاع في العمق لصفحة الإيصال (تُستخدم أيضًا كمعاينة داخل نموذج التعديل الداخلي المصرّح)
+        if (!CanViewChargeReceipt()) return null;
+
         var charge = await _db.AdditionalCharges.AsNoTracking()
             .FirstOrDefaultAsync(c => c.ChargeId == chargeId);
         if (charge == null) return null;
@@ -450,6 +465,182 @@ public class AdditionalChargeService : IAdditionalChargeService
 
     return (true, "تم تحديد الرسوم كغير مستردة.");
 }
+
+    // ═══════════════════════════════════════════════════════════
+    //  رسوم تعديل العميل المعلّقة (القسم 11.4): اعتماد/رفض/تحصيل
+    //  المسار مقصور على رسوم مصدرها حدث تسليم (SourceDeliveryId != null)
+    //  من نوع Modification — الرسوم اليدوية لا تُمسّ إطلاقًا.
+    // ═══════════════════════════════════════════════════════════
+
+    private bool CanApproveModificationCharge()
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+        return user.IsInRole(SystemRoles.Admin)
+               || user.IsInRole(SystemRoles.AccountManager);
+    }
+
+    private bool CanCollectModificationCharge()
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+        return user.IsInRole(SystemRoles.Admin)
+               || user.IsInRole(SystemRoles.AccountManager)
+               || user.IsInRole(SystemRoles.Account);
+    }
+
+    private static bool IsDeliveryModificationCharge(AdditionalCharge charge)
+        => charge.ChargeType == ChargeTypes.Modification && charge.SourceDeliveryId.HasValue;
+
+    /// <summary>
+    /// اعتماد رسم تعديل معلّق وتسعيره نهائيًا (D8): الاعتماد بلا مبلغ نهائي
+    /// مستحيل — إن كان مبلغ التسليم المتفق عليه غائبًا وجب إدخاله هنا، وللمعتمِد
+    /// تعديل مبلغ متفق عليه (يُدقَّق قبل/بعد). الحالة تصبح Approved (معتمدة —
+    /// غير محصّلة) وبلا أي حركة خزينة حتى التحصيل.
+    /// </summary>
+    public async Task<(bool Success, string Message)> ApproveModificationChargeAsync(
+        int chargeId, decimal? amount, string currentUserName)
+    {
+        if (!CanApproveModificationCharge())
+            return (false, "اعتماد رسوم التعديل متاح للمدير ومدير الحسابات فقط.");
+
+        var charge = await _db.AdditionalCharges.FirstOrDefaultAsync(c => c.ChargeId == chargeId);
+        if (charge == null) return (false, "الرسوم غير موجودة.");
+        if (!IsDeliveryModificationCharge(charge))
+            return (false, "هذا الإجراء خاص برسوم التعديل المولّدة من تسليمات فقط.");
+        if (charge.Status != ChargeStatuses.PendingApproval)
+            return (false, "الرسم ليس بانتظار الاعتماد.");
+
+        var finalAmount = amount ?? charge.ChargeAmount;
+        if (finalAmount is null or <= 0)
+            return (false, "لا يمكن الاعتماد بلا مبلغ نهائي — أدخل مبلغ التعديل.");
+
+        var oldData = new { charge.ChargeAmount, charge.Status };
+        charge.ChargeAmount = finalAmount;
+        charge.Status = ChargeStatuses.Approved;
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync<object>("AdditionalCharges", "ModificationChargeApproved",
+            chargeId.ToString(), oldData,
+            new { charge.ChargeAmount, charge.Status }, currentUserName);
+
+        // إشعار مسجّل حدث التسليم: التسعير تم ويمكن التحصيل (11.6)
+        if (!string.IsNullOrWhiteSpace(charge.CreatedBy)
+            && !string.Equals(charge.CreatedBy, currentUserName, StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                await _notify.AddAsync("💰 اعتُمدت رسوم تعديل",
+                    $"اعتُمدت رسوم التعديل على الفاتورة #{charge.TransactionId} بمبلغ {finalAmount:N2} ج بواسطة {currentUserName} — يمكن تحصيلها الآن من قائمة الرسوم.",
+                    charge.CreatedBy, currentUserName,
+                    "additional-charges", "AdditionalCharges", chargeId);
+            }
+            catch { /* الإشعار لا يُسقط الاعتماد */ }
+        }
+
+        return (true, $"تم اعتماد رسوم التعديل بمبلغ {finalAmount:N2} ج — بانتظار التحصيل.");
+    }
+
+    /// <summary>
+    /// رفض رسم تعديل معلّق بسبب إلزامي: منتهٍ بلا أي حركة خزينة أبدًا، ويُلغي
+    /// سجل صيانة التعديل المرتبط تلقائيًا في نفس العملية (11.4 خطوة 2).
+    /// </summary>
+    public async Task<(bool Success, string Message)> RejectModificationChargeAsync(
+        int chargeId, string reason, string currentUserName)
+    {
+        if (!CanApproveModificationCharge())
+            return (false, "رفض رسوم التعديل متاح للمدير ومدير الحسابات فقط.");
+        if (string.IsNullOrWhiteSpace(reason))
+            return (false, "سبب الرفض إلزامي.");
+
+        var charge = await _db.AdditionalCharges.FirstOrDefaultAsync(c => c.ChargeId == chargeId);
+        if (charge == null) return (false, "الرسوم غير موجودة.");
+        if (!IsDeliveryModificationCharge(charge))
+            return (false, "هذا الإجراء خاص برسوم التعديل المولّدة من تسليمات فقط.");
+        if (charge.Status != ChargeStatuses.PendingApproval)
+            return (false, "الرسم ليس بانتظار الاعتماد.");
+
+        var oldData = new { charge.ChargeAmount, charge.Status };
+        charge.Status = ChargeStatuses.Rejected;
+        charge.Notes = string.IsNullOrWhiteSpace(charge.Notes)
+            ? $"مرفوضة: {reason.Trim()}"
+            : $"{charge.Notes} | مرفوضة: {reason.Trim()}";
+
+        // إلغاء سجل/سجلات صيانة التعديل المرتبطة (غير المنتهية) في نفس العملية
+        var linked = await _db.DeliveryMaintenanceItems
+            .Where(m => m.AdditionalChargeId == chargeId && !m.IsVoided)
+            .ToListAsync();
+        var cancelledIds = new List<int>();
+        foreach (var rec in linked)
+        {
+            if (DeliveryMaintenanceStatuses.IsTerminal(rec.Status)) continue;
+            rec.Status = DeliveryMaintenanceStatuses.Cancelled;
+            rec.ClosedAt = DateTime.Now;
+            rec.StatusBy = currentUserName;
+            rec.ResolutionNotes = "أُلغي طلب التعديل — رُفض رسم التعديل";
+            cancelledIds.Add(rec.MaintenanceId);
+        }
+
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync<object>("AdditionalCharges", "ModificationChargeRejected",
+            chargeId.ToString(), oldData,
+            new { charge.Status, Reason = reason.Trim(), CancelledMaintenanceIds = cancelledIds },
+            currentUserName);
+
+        return (true, "تم رفض رسوم التعديل وإلغاء طلب التعديل المرتبط — لم تُسجَّل أي حركة خزينة.");
+    }
+
+    /// <summary>
+    /// تحصيل رسم تعديل معتمَد: يكتب حركة خزينة «قبض» بنفس بناء CreateChargeAsync
+    /// حرفيًا (ReferenceType = "Charge") وينقل الحالة إلى Paid — ليُطبَّق بعدها
+    /// بـ ApplyToInvoiceAsync القائمة كما هي.
+    /// </summary>
+    public async Task<(bool Success, string Message)> CollectModificationChargeAsync(
+        int chargeId, int? cashBoxId, string currentUserName)
+    {
+        if (!CanCollectModificationCharge())
+            return (false, "تحصيل رسوم التعديل متاح للإدارة ومدير الحسابات والحسابات.");
+
+        var charge = await _db.AdditionalCharges.FirstOrDefaultAsync(c => c.ChargeId == chargeId);
+        if (charge == null) return (false, "الرسوم غير موجودة.");
+        if (!IsDeliveryModificationCharge(charge))
+            return (false, "هذا الإجراء خاص برسوم التعديل المولّدة من تسليمات فقط.");
+        if (charge.Status != ChargeStatuses.Approved)
+            return (false, "التحصيل من حالة «معتمدة» فقط — الرسم لم يُعتمد بعد أو حُصّل/رُفض.");
+        if (charge.ChargeAmount is null or <= 0)
+            return (false, "لا يمكن تحصيل رسم بلا مبلغ نهائي معتمد.");
+
+        var partyName = charge.PartyId.HasValue
+            ? await _db.Parties.Where(p => p.PartyId == charge.PartyId.Value)
+                .Select(p => p.PartyName).FirstOrDefaultAsync() ?? "غير محدد"
+            : "غير محدد";
+
+        var boxId = cashBoxId ?? await GetDefaultCashBoxIdAsync();
+        var cashTrans = new CashboxTransaction
+        {
+            CashBoxId = boxId,
+            ReferenceId = charge.ChargeId,
+            ReferenceType = "Charge",
+            TransactionType = "قبض",
+            Amount = charge.ChargeAmount.Value,
+            TransactionDate = DateTime.Now,
+            Notes = $"تحصيل {charge.ChargeAmount.Value:N2} ج - رسوم تعديل - {partyName}",
+            CreatedBy = currentUserName,
+            CreatedAt = DateTime.Now
+        };
+        _db.CashboxTransactions.Add(cashTrans);
+
+        var oldStatus = charge.Status;
+        charge.Status = ChargeStatuses.Paid;
+        await _db.SaveChangesAsync();
+
+        await _audit.LogAsync<object>("AdditionalCharges", "ModificationChargeCollected",
+            chargeId.ToString(), new { Status = oldStatus },
+            new { charge.Status, charge.ChargeAmount, CashBoxId = boxId }, currentUserName);
+
+        return (true, "تم تحصيل رسوم التعديل وتسجيل القبض في الخزينة — يمكنك تطبيقها على الفاتورة الآن.");
+    }
 
     private bool CanEditUnlinkedCharge()
     {

@@ -32,6 +32,13 @@ public class InvoiceListDto
     public string? PaymentMethod { get; set; }
     public string? InvoiceStatus { get; set; }
     public bool? IsDelivered { get; set; }
+
+    // ⭐ التسليم الجزئي (فواتير البيع): بدأ تسليمها بأحداث ولم تكتمل بعد —
+    // تُملأ دفعة واحدة لقائمة الصفحة من ملخصات أحداث التسليم (بلا N+1)
+    public bool IsPartiallyDelivered { get; set; }
+    public decimal DeliveredQty { get; set; }
+    public decimal InvoicedQty { get; set; }
+
     public DateTime? DueDate { get; set; }
     public int ItemsCount { get; set; }
     public string CreatedBy { get; set; } = "";
@@ -121,6 +128,11 @@ public class InvoiceItemDto
     public string? Notes { get; set; }
     public int? AvailableStock { get; set; }
     public bool IsShowroomProduct { get; set; }
+
+    // ⭐ جدولة تسليم البند: التاريخ الخاص لا يُخزَّن إلا مع DeliveryDateIsCustom،
+    // وإلا فالبند وارث لتاريخ استحقاق الفاتورة ويتحرك معه (DeliveryScheduleResolver)
+    public DateTime? DeliveryDate { get; set; }
+    public bool DeliveryDateIsCustom { get; set; }
 
     public int? SelectedAlternativeId { get; set; }
     public string? SelectedAlternativeName { get; set; }
@@ -392,6 +404,11 @@ public class InvoiceSnapshotItemDto
     public decimal UnitPrice { get; set; }
     public string? PricingTier { get; set; }
     public int? SelectedAlternativeId { get; set; }
+
+    // ⭐ جدولة تسليم البند (للنسخ المحفوظة بعد هذه الميزة؛ النسخ الأقدم بلا الحقلين
+    // فتُقرأ «وارثة» — وهي حالتها الحقيقية وقت حفظها قبل وجود الميزة)
+    public DateTime? DeliveryDate { get; set; }
+    public bool DeliveryDateIsCustom { get; set; }
 }
 
 // ⭐ نسخة تعديل الهيدر العادي (حركات Update القديمة)
@@ -521,6 +538,7 @@ public static class SystemRoles
     public const string SocialManager = "SocialManager";
     public const string ProductionManager = "ProductionManager";
     public const string FactoryManager = "FactoryManager";
+    public const string DeliveryOfficer = "DeliveryOfficer";
 }
 // === قائمة الرسوم ===
 public class AdditionalChargeListDto
@@ -537,6 +555,13 @@ public class AdditionalChargeListDto
     public string? PartyPhone { get; set; }
     public int? TransactionId { get; set; }
     public string? TransactionRef { get; set; }
+
+    /// <summary>حدث التسليم المولّد للرسم (رسوم التعديل فقط — القسم 11.4)</summary>
+    public int? SourceDeliveryId { get; set; }
+
+    /// <summary>رسم تعديل مولّد من نتيجة تسليم (له دورة اعتماد/تحصيل مؤجل خاصة — D8)</summary>
+    public bool IsDeliveryModification =>
+        ChargeType == ChargeTypes.Modification && SourceDeliveryId.HasValue;
     public int? AppliedToTransactionId { get; set; }
     public string? AppliedToTransactionRef { get; set; }
     public string? Notes { get; set; }
@@ -624,12 +649,16 @@ public static class ChargeTypes
     public const string Advance = "Advance";
     public const string Other = "Other";
 
+    /// <summary>رسوم تعديل بطلب العميل عند التسليم (القسم 11.4) — تُنشأ معلّقة من حدث تسليم فقط، لا من النموذج اليدوي</summary>
+    public const string Modification = "Modification";
+
     public static readonly Dictionary<string, string> All = new()
     {
         { Inspection, "رسوم معاينة" },
         { Shipping, "رسوم شحن" },
         { Installation, "رسوم تركيب" },
         { Advance, "دفعة مقدمة" },
+        { Modification, "رسوم تعديل" },
         { Other, "رسوم أخرى" }
     };
 
@@ -645,10 +674,20 @@ public static class ChargeStatuses
     public const string Applied = "Applied";
     public const string NonRefundable = "NonRefundable";
 
+    // ⭐ نتائج التسليم (11.4): دورة حياة رسم التعديل المعلّق — «مستحق غير محصّل»
+    //    كان مفهومًا غائبًا: التوليد عند التسليم ⟵ الاعتماد/التسعير ⟵ التحصيل
+    //    (Paid) ⟵ التطبيق القائم (Applied)؛ والرفض منتهٍ بلا أي حركة خزينة.
+    public const string PendingApproval = "PendingApproval";
+    public const string Approved = "Approved";
+    public const string Rejected = "Rejected";
+
     public static readonly Dictionary<string, string> All = new()
     {
         { Paid, "مدفوعة" },
         { Applied, "مطبقة" },
-        { NonRefundable, "غير مستردة" }
+        { NonRefundable, "غير مستردة" },
+        { PendingApproval, "بانتظار الاعتماد" },
+        { Approved, "معتمدة — غير محصّلة" },
+        { Rejected, "مرفوضة" }
     };
 }

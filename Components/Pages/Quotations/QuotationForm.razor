@@ -9,6 +9,7 @@
 @using global::COCOBOLOERPNEW.Models
 
 @inject IQuotationService QuotationService
+@inject COCOBOLOERPNEW.Helpers.ShareTokenService ShareTokens
 @inject IInvoiceService InvoiceService
 @inject IOpportunityService OpportunityService
 @inject IProductService ProductService
@@ -116,6 +117,12 @@ else
                     {
                         <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="OpenPrintPage"
                                    StartIcon="@Icons.Material.Filled.Print">طباعة</MudButton>
+
+                        @if (_canCreateTask)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Warning" OnClick="OpenCreateTaskAsync"
+                                       StartIcon="@Icons.Material.Filled.AddTask">تكليف جديد</MudButton>
+                        }
 
                         @if (!_form.IsConverted && (string.IsNullOrWhiteSpace(_form.Status) || _form.Status == QuotationStatuses.Draft))
                         {
@@ -3106,6 +3113,7 @@ else
 
     private string? _currentUserName;
     private bool _canEdit;
+    private bool _canCreateTask;
     private bool _canAdd;
     // صلاحية رؤية التكلفة: Admin + AccountManager فقط (+ دور المصنع في وضع القناع)
     private bool _canViewCost;
@@ -3146,6 +3154,7 @@ else
             _isSalesManager = user.IsInRole(SystemRoles.SalesManager);
 
             _canEdit = user.HasClaim("Permission", "frmNewQuotation:Edit") || _isAdmin;
+            _canCreateTask = GeneralTaskPermissions.CanCreate(user);
             _canAdd= user.HasClaim("Permission", "frmNewQuotation:Add") || _isAdmin;
 
             // ⭐ مشاهدو التكلفة المقيّدون (مدير الإنتاج / المصنع): تكلفة فقط، تُقنَّع الأسعار من الخدمة
@@ -4637,9 +4646,11 @@ private void UpdateGrandTotal()
     _whatsappPhone = _form.PartyPhone ?? "";
     _whatsappCountryCode = "20"; // مصر افتراضيًا
 
-    // 2) ⭐ ابني رابط المشاركة العام
+    // 2) ⭐ ابني رابط المشاركة العام — بتوكن موقّع (دفعة 1): لا روابط بالرقم الخام
+    //    نفس نمط نقطة توليد رابط المشاركة (QuotationEndpoints) وبصلاحية 30 يومًا افتراضيًا
     var baseUrl = Navigation.BaseUri.TrimEnd('/');
-    _shareLink = $"{baseUrl}/q/quotation/{_form.QuotationId}";
+    var shareToken = ShareTokens.GenerateToken("quotation", _form.QuotationId, TimeSpan.FromDays(30));
+    _shareLink = $"{baseUrl}/q/{shareToken}";
 
     // 3) ⭐ الرسالة فيها الرابط
     _whatsappMessage = $"السلام عليكم،\n\n" +
@@ -4872,6 +4883,19 @@ private async Task PreviewShareLink()
     {
         if (Id is null or 0) return;
         Navigation.NavigateTo($"/quotations/{Id}/print");
+    }
+
+    private async Task OpenCreateTaskAsync()
+    {
+        if (Id is null or 0) return;
+        var parameters = new DialogParameters
+        {
+            ["PresetLinkedType"] = GeneralTaskLinks.Quotation,
+            ["PresetLinkedId"] = Id.Value,
+            ["PresetLinkedTitle"] = $"عرض سعر {_form.ReferenceNumber ?? $"#{Id}"} — {_form.PartyName ?? "غير محدد"}"
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+        await DialogService.ShowAsync<COCOBOLOERPNEW.Components.Shared.CreateGeneralTaskDialog>("تكليف جديد", parameters, options);
     }
 
     private void GoBack() => Navigation.NavigateTo("/quotations");

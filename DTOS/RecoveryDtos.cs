@@ -31,7 +31,7 @@ public class LostRecoveryItemDto
     public string? LostReasonNameAr { get; set; }
     public string? LostNotes { get; set; }
 
-    // تقييم مندوب المبيعات وقت الإغلاق (محرك الأولوية)
+    // تقييم  مسؤول المبيعات وقت الإغلاق (محرك الأولوية)
     public bool IsRecoveryCandidate { get; set; }
     public string? RecoveryNotes { get; set; }
 

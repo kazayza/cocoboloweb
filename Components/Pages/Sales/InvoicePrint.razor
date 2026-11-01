@@ -7,6 +7,7 @@
 @inject IInvoiceService InvoiceService
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
 
 @if (_isLoading)
 {
@@ -14,6 +15,12 @@
         <MudProgressCircular Color="Color.Primary"
                              Size="Size.Large"
                              Indeterminate="true" />
+    </div>
+}
+else if (_accessDenied)
+{
+    <div class="not-found">
+        <h2>ليس لديك صلاحية لعرض هذه الفاتورة</h2>
     </div>
 }
 else if (_data == null)
@@ -908,6 +915,7 @@ else
     public int Id { get; set; }
 
     private bool _isLoading = true;
+    private bool _accessDenied;
     private InvoicePrintDto? _data;
 
     private const int FirstPageItems = 5;
@@ -919,6 +927,29 @@ else
     {
         try
         {
+            // ⛔ بوابة الصلاحية قبل أي تحميل: مجهول → تسجيل الدخول، وغير مصرّح → رفض بدون استدعاء الخدمة.
+            // الفحص المبدئي يقبل أيًّا من صلاحيتَي البيع/الشراء أو طاقم المصنع أو Admin،
+            // والخدمة (GetInvoiceForPrintAsync) تفرض الصلاحية المطابقة لنوع الفاتورة المحمّلة فعليًا.
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            if (user.Identity?.IsAuthenticated != true)
+            {
+                Navigation.NavigateTo($"/login?ReturnUrl={Uri.EscapeDataString($"/sales/invoices/{Id}/print")}", forceLoad: true);
+                return;
+            }
+
+            var canPrint = user.IsInRole("Admin")
+                           || user.HasClaim("Permission", "frm_PartiesInvoices:View")
+                           || user.HasClaim("Permission", "frm_SupplierInvoices:View")
+                           || user.IsInRole("factory")
+                           || user.IsInRole(SystemRoles.ProductionManager)
+                           || user.IsInRole(SystemRoles.FactoryManager);
+            if (!canPrint)
+            {
+                _accessDenied = true;
+                return;
+            }
+
             _data = await InvoiceService.GetInvoiceForPrintAsync(Id);
 
             if (_data != null)

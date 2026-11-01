@@ -1,6 +1,8 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using System.Security.Claims;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
 
@@ -11,13 +13,51 @@ public class ProductService : IProductService
     private readonly db24804Context _context;
     private readonly IAuditService _auditService;
     private readonly IWebHostEnvironment _env;
+    private readonly IHttpContextAccessor _http;
 
-    public ProductService(db24804Context context, IAuditService auditService, IWebHostEnvironment env)
+    public ProductService(db24804Context context, IAuditService auditService, IWebHostEnvironment env, IHttpContextAccessor http)
     {
         _context = context;
         _auditService = auditService;
         _env = env;
+        _http = http;
     }
+
+    // ⛔ F-09 (دفاع في العمق): كتابات خدمة المنتجات. لا توجد هنا دالة حفظ/حذف
+    // منتج أساسية — نموذج المنتج يحفظ مباشرة عبر DbContext في صفحته (خارج
+    // نطاق هذه الخدمة)؛ كتابات الخدمة هي مسار التسعير/التكلفة/المدة وبدائل
+    // المصنع فقط. المستدعون الوحيدون: ProductForm و PriceChangeRequests.
+    //  - دوال المسار (void): اتحاد بوابتي الصفحتين المستدعيتين —
+    //    ProductForm محكومة منذ Part B/1 بـ frm_ProductList:Edit أو Admin،
+    //    و PriceChangeRequests محكومة بأدوار Admin/AccountManager/SalesManager —
+    //    فالاتحاد لا يكسر أي مسار شرعي قائم. الرفض بـ
+    //    UnauthorizedAccessException لأن كل المستدعين يلتقطون Exception
+    //    ويعرضون رسالته (Snackbar/ShowError) — نفس أسلوب CompanyInfoService.
+    //  - بدائل المصنع (tuple): مرآة أزرار الصفحة حرفيًا —
+    //    حفظ/حذف: CanManageFactoryAlternatives (factory/Admin/Account)،
+    //    اعتماد/رفض: CanApproveFactoryAlternatives
+    //    (Admin/AccountManager/SalesManager). الرفض بقيمة tuple فاشلة.
+    //  - FactorySetCostAsync بلا أي مستدعٍ حالي؛ حارسها بنفس قاعدة المسار.
+    // القراءات غير محروسة (قوائم المنتجات والبدائل تُقرأ من عروض الأسعار وغيرها).
+    private ClaimsPrincipal? CurrentUser => _http.HttpContext?.User;
+
+    private void EnsureProductWorkflow()
+    {
+        if (!AppAuthorization.HasClaimOrRole(CurrentUser,
+                new[] { "frm_ProductList:Edit" },
+                new[] { "AccountManager", "SalesManager" }))
+            throw new UnauthorizedAccessException("غير مصرح لك بتنفيذ هذا الإجراء على المنتجات.");
+    }
+
+    private bool CanManageFactoryAlternative()
+        => AppAuthorization.HasClaimOrRole(CurrentUser,
+            Array.Empty<string>(), new[] { "factory", "Account" });
+
+    private bool CanApproveFactoryAlternative()
+        => AppAuthorization.HasClaimOrRole(CurrentUser,
+            Array.Empty<string>(), new[] { "AccountManager", "SalesManager" });
+
+    private const string AlternativeDeniedMessage = "غير مصرح لك بتنفيذ هذا الإجراء على بدائل المصنع.";
 
         public async Task<List<ProductListDto>> GetProductsAsync(string? search, int? branchId = null, int? warehouseId = null)
     {
@@ -183,7 +223,8 @@ public class ProductService : IProductService
         decimal? eliteCost,
         string currentUsername)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync();
+        EnsureProductWorkflow();
+    using var transaction = await _context.Database.BeginTransactionAsync();
 
         var product = await _context.Products
             .FirstOrDefaultAsync(p => p.ProductId == ProductId);
@@ -297,6 +338,7 @@ public class ProductService : IProductService
     decimal? newEliteSalePrice,
     string currentUsername)
 {
+    EnsureProductWorkflow();
     using var transaction = await _context.Database.BeginTransactionAsync();
 
     var product = await _context.Products
@@ -376,6 +418,7 @@ public async Task ApproveSalePriceChangeAsync(
     int ProductId,
     string currentUsername)
 {
+    EnsureProductWorkflow();
     using var transaction = await _context.Database.BeginTransactionAsync();
 
     var product = await _context.Products
@@ -477,6 +520,7 @@ public async Task RejectSalePriceChangeAsync(
     string currentUsername,
     string? rejectReason = null)
 {
+    EnsureProductWorkflow();
     using var transaction = await _context.Database.BeginTransactionAsync();
 
     var product = await _context.Products
@@ -526,6 +570,7 @@ public async Task RequestCostChangeAsync(
     int ProductId,
     string currentUsername)
 {
+    EnsureProductWorkflow();
     using var transaction = await _context.Database.BeginTransactionAsync();
 
     var product = await _context.Products
@@ -563,6 +608,7 @@ public async Task ApproveCostChangeAsync(
     decimal? newEliteCost,
     string currentUsername)
 {
+    EnsureProductWorkflow();
     using var transaction = await _context.Database.BeginTransactionAsync();
 
     var product = await _context.Products
@@ -683,6 +729,7 @@ public async Task RequestPeriodChangeAsync(
     string reason,
     string currentUsername)
 {
+    EnsureProductWorkflow();
     var product = await _context.Products
         .FirstOrDefaultAsync(p => p.ProductId == productId);
 
@@ -746,6 +793,7 @@ public async Task RequestPeriodChangeAsync(
 
 public async Task ApprovePeriodChangeAsync(int productId, string currentUsername)
 {
+    EnsureProductWorkflow();
     var product = await _context.Products
         .FirstOrDefaultAsync(p => p.ProductId == productId);
 
@@ -816,6 +864,7 @@ public async Task RejectPeriodChangeAsync(
     string currentUsername,
     string? rejectReason = null)
 {
+    EnsureProductWorkflow();
     var pendingRequest = await _context.PriceChangeRequests
         .FirstOrDefaultAsync(r => r.ProductId == productId 
                                && r.Status == "Pending" 
@@ -906,6 +955,8 @@ public async Task<List<ProductFactoryAlternativeDto>> GetFactoryAlternativesAsyn
 
 public async Task<(bool Success, string Message, int? AlternativeId)> SaveFactoryAlternativeAsync(ProductFactoryAlternativeDto dto, IReadOnlyList<IBrowserFile> files, string currentUsername)
 {
+    if (!CanManageFactoryAlternative())
+        return (false, AlternativeDeniedMessage, null);
     if (dto.ProductId <= 0)
         return (false, "احفظ المنتج أولاً قبل إضافة البدائل.", null);
 
@@ -1040,6 +1091,8 @@ public async Task<(bool Success, string Message, int? AlternativeId)> SaveFactor
 
 public async Task<(bool Success, string Message)> ApproveFactoryAlternativeAsync(int alternativeId, string currentUsername)
 {
+    if (!CanApproveFactoryAlternative())
+        return (false, AlternativeDeniedMessage);
     var alternative = await _context.ProductFactoryAlternatives
         .FirstOrDefaultAsync(x => x.AlternativeId == alternativeId);
 
@@ -1136,6 +1189,8 @@ public async Task<(bool Success, string Message)> ApproveFactoryAlternativeAsync
 
 public async Task<(bool Success, string Message)> RejectFactoryAlternativeAsync(int alternativeId, string currentUsername, string? reason = null)
 {
+    if (!CanApproveFactoryAlternative())
+        return (false, AlternativeDeniedMessage);
     var alternative = await _context.ProductFactoryAlternatives.FirstOrDefaultAsync(x => x.AlternativeId == alternativeId);
     if (alternative == null)
         return (false, "البديل غير موجود.");
@@ -1168,6 +1223,8 @@ public async Task<(bool Success, string Message)> RejectFactoryAlternativeAsync(
 
 public async Task<(bool Success, string Message)> DeleteFactoryAlternativeAsync(int alternativeId, string currentUsername)
 {
+    if (!CanManageFactoryAlternative())
+        return (false, AlternativeDeniedMessage);
     var alternative = await _context.ProductFactoryAlternatives
         .Include(x => x.Images)
         .FirstOrDefaultAsync(x => x.AlternativeId == alternativeId);

@@ -1,0 +1,272 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject ITaskService TaskService
+@inject IOpportunityService OppService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+
+@* ═══════════════════════════════════════════════════════════════════════════
+   حوار «تكليف جديد» الموحّد — تستخدمه صفحة التكليفات العامة وأزرار
+   «تكليف جديد» على صفحات المستندات (فاتورة/تسليمة/أمر تشغيل/عرض سعر/
+   عميل/صيانة). الإرسال عبر TaskService.AddGeneralEmployeeTaskAsync —
+   الخدمة هي مصدر الحقيقة للصلاحية والربط.
+   الهوية: كحلي المشروع #1B2A4A + الذهبي #D4A853 + الأبيض.
+   ═══════════════════════════════════════════════════════════════════════════ *@
+<MudDialog Style="min-width: 680px;">
+    <TitleContent>
+        <div class="gt-head">
+            <MudIcon Icon="@Icons.Material.Rounded.AddTask" Style="color:#D4A853;" />
+            <MudText Typo="Typo.h6" Style="color:#fff;font-weight:800;">تكليف جديد</MudText>
+            @if (!string.IsNullOrWhiteSpace(_linkedTitle))
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Class="gt-head-chip">@_linkedTitle</MudChip>
+            }
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Style="min-height:200px;" Spacing="2">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary">جارٍ التحميل...</MudText>
+            </MudStack>
+        }
+        else if (!_canCreate)
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Filled">
+                ليست لديك صلاحية إنشاء تكليفات عامة.
+            </MudAlert>
+        }
+        else
+        {
+            <div dir="rtl" class="gt-form">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" md="6">
+                        <MudSelect T="int?" Label="الموظف المكلف *" Variant="Variant.Outlined" Dense="true" @bind-Value="_assignedTo">
+                            @foreach (var emp in _employees)
+                            {
+                                <MudSelectItem T="int?" Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudSelect T="int?" Label="نوع المهمة" Variant="Variant.Outlined" Dense="true" @bind-Value="_dto.TaskTypeId" Clearable="true">
+                            @foreach (var tt in _taskTypes)
+                            {
+                                <MudSelectItem T="int?" Value="@((int?)tt.TaskTypeId)">@(tt.TaskTypeNameAr ?? tt.TaskTypeName)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudSelect T="string" Label="الأولوية" Variant="Variant.Outlined" Dense="true" @bind-Value="_dto.Priority">
+                            <MudSelectItem T="string" Value='@("High")'>عاجلة</MudSelectItem>
+                            <MudSelectItem T="string" Value='@("Medium")'>متوسطة</MudSelectItem>
+                            <MudSelectItem T="string" Value='@("Low")'>منخفضة</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudSelect T="int?" Label="التذكير قبل الموعد" Variant="Variant.Outlined" Dense="true" @bind-Value="_dto.ReminderMinutes" Clearable="true">
+                            <MudSelectItem T="int?" Value="@((int?)15)">قبل ١٥ دقيقة</MudSelectItem>
+                            <MudSelectItem T="int?" Value="@((int?)30)">قبل ٣٠ دقيقة</MudSelectItem>
+                            <MudSelectItem T="int?" Value="@((int?)60)">قبل ساعة</MudSelectItem>
+                            <MudSelectItem T="int?" Value="@((int?)120)">قبل ساعتين</MudSelectItem>
+                            <MudSelectItem T="int?" Value="@((int?)1440)">قبل يوم</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12">
+                        <MudTextField T="string" Label="وصف المهمة *" Variant="Variant.Outlined" Dense="true" Lines="3" @bind-Value="_dto.TaskDescription" />
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudDatePicker T="DateTime?" Label="تاريخ التنفيذ *" Variant="Variant.Outlined" Date="_dto.DueDate" DateChanged="@(d => _dto.DueDate = d ?? _dto.DueDate)" />
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudTimePicker Label="الوقت" Variant="Variant.Outlined" Time="_dueTime" TimeChanged="@(t => _dueTime = t ?? new TimeSpan(10, 0, 0))" />
+                    </MudItem>
+                </MudGrid>
+
+                <div class="gt-link-box">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <MudIcon Icon="@Icons.Material.Rounded.Link" Style="color:#B8912A;" Size="Size.Small" />
+                        <MudText Typo="Typo.subtitle2" Style="font-weight:800;">ربط بمستند (اختياري)</MudText>
+                    </MudStack>
+                    <MudGrid Spacing="2" Class="mt-1">
+                        <MudItem xs="12" md="4">
+                            <MudSelect T="string" Label="نوع المستند" Variant="Variant.Outlined" Dense="true" @bind-Value="_linkType" Clearable="true" Disabled="_linkLocked">
+                                @foreach (var lt in GeneralTaskLinks.Types)
+                                {
+                                    <MudSelectItem T="string" Value="@lt.Type">@lt.Label</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="4">
+                            <MudNumericField T="int?" Label="رقم المستند" Variant="Variant.Outlined" Dense="true" @bind-Value="_linkId" Disabled="_linkLocked" Min="1" />
+                        </MudItem>
+                        <MudItem xs="12" md="4">
+                            <MudButton Variant="Variant.Outlined" Class="gt-verify-btn" OnClick="VerifyLinkAsync" Disabled="_linkLocked || _verifying" FullWidth="true">
+                                @(_verifying ? "جارٍ التحقق..." : "تحقق من المستند")
+                            </MudButton>
+                        </MudItem>
+                    </MudGrid>
+                    @if (!string.IsNullOrWhiteSpace(_linkedTitle))
+                    {
+                        <MudChip T="string" Size="Size.Small" Class="gt-link-chip" Icon="@Icons.Material.Rounded.CheckCircle">@_linkedTitle</MudChip>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_linkError))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Error">@_linkError</MudText>
+                    }
+                </div>
+            </div>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="() => MudDialog.Cancel()">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Class="gt-submit" OnClick="SubmitAsync" Disabled="_saving || !_canCreate" StartIcon="@Icons.Material.Rounded.Send">
+            @(_saving ? "جارٍ الإرسال..." : "إرسال التكليف")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .gt-head {
+        display: flex; align-items: center; gap: .6rem;
+        background: linear-gradient(135deg, #0F1D36 0%, #1B2A4A 55%, #2D4A7A 100%);
+        margin: -1.1rem -1.5rem; padding: .9rem 1.4rem;
+        border-bottom: 3px solid #D4A853;
+    }
+    .gt-head-chip { background: rgba(212,168,83,.18) !important; color: #F0DBA8 !important; border: 1px solid rgba(212,168,83,.55); }
+    .gt-form { animation: gtFadeUp .35s ease both; }
+    .gt-link-box {
+        margin-top: 1rem; padding: .9rem 1rem;
+        background: #FEFBF3; border: 1px solid #F0DBA8; border-radius: 14px;
+    }
+    .gt-link-chip { background: #1B2A4A !important; color: #F0DBA8 !important; margin-top: .5rem; }
+    .gt-verify-btn { border-color: #B8912A !important; color: #B8912A !important; height: 100%; }
+    .gt-submit { background: linear-gradient(135deg, #D4A853, #B8912A) !important; color: #0F1D36 !important; font-weight: 800; }
+    @@keyframes gtFadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @@media (prefers-reduced-motion: reduce) { .gt-form { animation: none; } }
+</style>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>ربط مُعدّ مسبقًا من صفحة مستند (النوع + الرقم + العنوان للعرض)</summary>
+    [Parameter] public string? PresetLinkedType { get; set; }
+    [Parameter] public int? PresetLinkedId { get; set; }
+    [Parameter] public string? PresetLinkedTitle { get; set; }
+
+    private bool _loading = true;
+    private bool _saving;
+    private bool _verifying;
+    private bool _canCreate;
+    private string _userName = "system";
+    private string? _linkType;
+    private int? _linkId;
+    private bool _linkLocked;
+    private string? _linkedTitle;
+    private string? _linkError;
+    private int? _assignedTo;
+    private TimeSpan _dueTime = new(10, 0, 0);
+    private GeneralEmployeeTaskDto _dto = new();
+    private List<Employee> _employees = new();
+    private List<TaskType> _taskTypes = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            _userName = auth.User.Identity?.Name ?? "system";
+            _canCreate = GeneralTaskPermissions.CanCreate(auth.User);
+
+            _employees = (await OppService.GetActiveEmployeesAsync()).OrderBy(e => e.FullName).ToList();
+            _taskTypes = await OppService.GetTaskTypesAsync();
+
+            _dto = new GeneralEmployeeTaskDto { DueDate = DateTime.Today.AddDays(1), Priority = "Medium", ReminderMinutes = 30 };
+
+            if (GeneralTaskLinks.IsValidType(PresetLinkedType) && PresetLinkedId is > 0)
+            {
+                _linkType = PresetLinkedType;
+                _linkId = PresetLinkedId;
+                _linkLocked = true;
+                _linkedTitle = PresetLinkedTitle;
+                // تأكيد العنوان من الخادم (اللقطة الرسمية تُحفظ عند الإنشاء)
+                var resolved = await TaskService.ResolveLinkedEntityAsync(PresetLinkedType!, PresetLinkedId.Value);
+                if (resolved != null) _linkedTitle = resolved.Title;
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("خطأ: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task VerifyLinkAsync()
+    {
+        _linkError = null;
+        _linkedTitle = null;
+        if (string.IsNullOrWhiteSpace(_linkType) || _linkId is not > 0)
+        {
+            _linkError = "اختر نوع المستند واكتب رقمه أولًا.";
+            return;
+        }
+
+        try
+        {
+            _verifying = true;
+            var resolved = await TaskService.ResolveLinkedEntityAsync(_linkType, _linkId.Value);
+            if (resolved == null)
+                _linkError = "المستند غير موجود — تحقق من النوع والرقم.";
+            else
+                _linkedTitle = resolved.Title;
+        }
+        finally
+        {
+            _verifying = false;
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (!_assignedTo.HasValue || _assignedTo.Value <= 0)
+        {
+            Snackbar.Add("اختر الموظف المكلف", Severity.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_dto.TaskDescription))
+        {
+            Snackbar.Add("اكتب وصف المهمة", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            _saving = true;
+            _dto.AssignedTo = _assignedTo.Value;
+            _dto.DueTime = TimeOnly.FromTimeSpan(_dueTime);
+            _dto.LinkedEntityType = !string.IsNullOrWhiteSpace(_linkType) && _linkId is > 0 ? _linkType : null;
+            _dto.LinkedEntityId = _dto.LinkedEntityType != null ? _linkId : null;
+
+            var (ok, msg, taskId) = await TaskService.AddGeneralEmployeeTaskAsync(_dto, _userName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+            if (ok) MudDialog.Close(DialogResult.Ok(taskId));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("خطأ: " + ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

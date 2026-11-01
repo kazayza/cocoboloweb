@@ -9,7 +9,7 @@ public class CustomerResponseDto
     
     [JsonPropertyName("reason")]
     public string? Reason { get; set; }
-    
-    [JsonPropertyName("customerName")]
-    public string? CustomerName { get; set; }
+
+    // ⭐ دفعة 1: لا يوجد حقل لاسم العميل هنا عمدًا — اسم المستجيب يُؤخذ
+    //    دائمًا من سجل العميل المرتبط بالعرض في الخادم، لا من جسم الطلب.
 }

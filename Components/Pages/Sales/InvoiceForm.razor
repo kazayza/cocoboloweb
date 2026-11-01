@@ -140,7 +140,7 @@ else
                                       HelperText="اتركه فاضي للتوليد التلقائي" />
 
                         <MudDatePicker Date="_form.TransactionDate"
-                                       DateChanged="@(d => _form.TransactionDate = d ?? DateTime.Now)"
+                                       DateChanged="@(d => OnTransactionDateChanged(d))"
                                        Label="تاريخ الفاتورة"
                                        Variant="Variant.Outlined"
                                        ReadOnly="@(IsEdit && !_canFullEdit)" />
@@ -156,11 +156,21 @@ else
                             }
                         </MudSelect>
 
-                        <MudDatePicker Date="_form.DueDate"
-                                       DateChanged="@(d => _form.DueDate = d)"
-                                       Label="تاريخ التسليم"
-                                       Variant="Variant.Outlined"
-                                       Clearable="true" />
+                        <div>
+                            <MudDatePicker Date="_form.DueDate"
+                                           DateChanged="@(d => OnDueDateChanged(d))"
+                                           Label="تاريخ الاستحقاق — موعد التسليم المخطط"
+                                           Variant="Variant.Outlined"
+                                           Clearable="true" />
+                            @if (_dueDateManual)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Warning" Class="d-block mt-1">التاريخ مضبوط يدويًا — لن يُعاد حسابه تلقائيًا</MudText>
+                            }
+                            <MudButton Variant="Variant.Text"
+                                       Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Calculate"
+                                       OnClick="RecalculateDueDateFromPeriods">إعادة الحساب من مدد الأصناف</MudButton>
+                        </div>
                     </div>
                 </MudPaper>
 
@@ -447,12 +457,28 @@ else
                     <!-- جدول الأصناف المضافة -->
                     @if (_form.Items.Any())
                     {
-                        <div class="items-table mt-4">
+                        @* ⭐ شريط ملخص مواعيد التسليم: يظهر لحظيًا متى تعددت مواعيد البنود الفعّالة *@
+                        @if (!IsPurchaseMode)
+                        {
+                            var schedParts = ScheduleSummaryParts();
+                            @if (schedParts.Count > 1)
+                            {
+                                <div class="schedule-summary-strip">
+                                    <MudIcon Icon="@Icons.Material.Filled.EventNote" Size="Size.Small" />
+                                    <span><b>مواعيد التسليم:</b> @string.Join(" • ", schedParts)</span>
+                                </div>
+                            }
+                        }
+                        <div class="items-table mt-4 @(!IsPurchaseMode ? "with-dates" : "")">
                             <div class="items-header">
                                 <div class="col-product">الصنف</div>
                                 <div class="col-tier">الباقة</div>
                                 <div class="col-qty">الكمية</div>
                                 <div class="col-price">السعر</div>
+                                @if (!IsPurchaseMode)
+                                {
+                                    <div class="col-date">تاريخ تسليم البند</div>
+                                }
                                 <div class="col-total">الإجمالي</div>
                                 <div class="col-action"></div>
                             </div>
@@ -508,6 +534,41 @@ else
                                                          Step="1m"
                                                          Disabled="@(IsEdit && !_canFullEdit)" />
                                     </div>
+                                    @if (!IsPurchaseMode)
+                                    {
+                                        <div class="col-date">
+                                            <div class="line-date-box @(item.DeliveryDateIsCustom ? "line-date-box--custom" : "")">
+                                                <div class="line-date-box__head">
+                                                    <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Size="Size.Small" />
+                                                    <span>تاريخ تسليم البند</span>
+                                                    @{ var effDate = EffectiveLineDate(item); }
+                                                    @if (effDate.HasValue)
+                                                    {
+                                                        <span class="line-date-box__preview">@DeliveryDisplay.FormatWeekdayDate(effDate.Value)</span>
+                                                    }
+                                                </div>
+                                                <MudDatePicker Date="@effDate"
+                                                               DateChanged="@(d => OnItemDeliveryDateChanged(item, d))"
+                                                               Variant="Variant.Outlined"
+                                                               Margin="Margin.Dense"
+                                                               Clearable="true"
+                                                               AdornmentIcon="@Icons.Material.Filled.CalendarMonth"
+                                                               Disabled="@(IsEdit && !_canFullEdit)" />
+                                                @if (item.DeliveryDateIsCustom)
+                                                {
+                                                    <div class="item-date-custom">
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">موعد خاص</MudChip>
+                                                        <MudIconButton Icon="@Icons.Material.Filled.Undo"
+                                                                       Size="Size.Small"
+                                                                       Color="Color.Default"
+                                                                       Title="إرجاع البند لتاريخ الفاتورة"
+                                                                       Disabled="@(IsEdit && !_canFullEdit)"
+                                                                       OnClick="@(() => ResetItemDeliveryDate(item))" />
+                                                    </div>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
                                     <div class="col-total"><strong>@FormatMoney(item.TotalAmount) ج</strong></div>
                                     <div class="col-action">
                                         @if (!IsEdit)
@@ -919,6 +980,45 @@ else
         align-items: center;
     }
     .col-total { font-weight: 600; }
+    /* ⭐ جدولة تسليم البنود (بيع فقط): عمود إضافي لموعد كل بند — أعرض حتى يسع صندوق التاريخ */
+    .items-table.with-dates .items-header,
+    .items-table.with-dates .item-row {
+        grid-template-columns: 2.3fr 0.95fr 0.8fr 1fr 1.5fr 1fr 50px;
+    }
+    .item-date-custom { display: flex; align-items: center; gap: 0.25rem; margin-top: 0.25rem; }
+
+    /* ⭐ صندوق تاريخ تسليم البند: مُعنون وواضح، والمفصول يدويًا مظلَّل حتى يقفز للعين */
+    .line-date-box {
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 10px;
+        padding: 0.4rem 0.5rem 0.5rem;
+        background: var(--mud-palette-surface);
+        min-width: 190px;
+    }
+    .line-date-box__head {
+        display: flex; align-items: center; gap: 0.3rem;
+        font-size: 0.75rem; font-weight: 700;
+        color: var(--mud-palette-text-secondary);
+        margin-bottom: 0.3rem;
+    }
+    .line-date-box__preview { margin-inline-start: auto; color: var(--mud-palette-primary); white-space: nowrap; }
+    .line-date-box .mud-input-control { margin: 0; }
+    .line-date-box--custom {
+        background: rgba(255, 152, 0, 0.10);
+        border-color: var(--mud-palette-warning);
+        box-shadow: inset 0 0 0 1px var(--mud-palette-warning);
+    }
+
+    /* ⭐ شريط ملخص مواعيد التسليم أعلى جدول البنود */
+    .schedule-summary-strip {
+        display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;
+        background: rgba(33, 150, 243, 0.08);
+        border: 1px dashed var(--mud-palette-info);
+        border-radius: 10px;
+        padding: 0.45rem 0.7rem;
+        margin-top: 1rem;
+        font-size: 0.85rem;
+    }
     .item-source-row {
         display: flex;
         align-items: center;
@@ -1103,6 +1203,9 @@ else
     @@media (max-width: 700px) {
         .grid-2 { grid-template-columns: 1fr; }
         .items-header, .item-row {
+            grid-template-columns: 1fr;
+        }
+        .items-table.with-dates .items-header, .items-table.with-dates .item-row {
             grid-template-columns: 1fr;
         }
         .charge-row { grid-template-columns: 1fr; }
@@ -1306,6 +1409,8 @@ else
     private bool _isLoading = true;
     private bool _isSaving = false;
     private bool _canFullEdit = false;
+    // ⭐ تاريخ الاستحقاق مضبوط يدويًا في هذه الجلسة — يمنع إعادة الحساب التلقائي من مدد الأصناف
+    private bool _dueDateManual = false;
     private bool _showFullEditConfirm = false;
     private bool _isSavingFull = false;
     private string? _fullEditReason;
@@ -1370,6 +1475,17 @@ else
                 }
                 _form = loaded;
 
+                // ⭐ لو تاريخ الاستحقاق المحفوظ لا يساوي المحسوب من مدد الأصناف فهو مضبوط يدويًا —
+                // نعلّمه يدويًا حتى لا تمسحه إعادة الحساب التلقائي عند تعديل الأصناف في هذه الجلسة
+                var maxLoadedPeriod = _form.Items
+                    .Where(i => i.Period.HasValue)
+                    .Select(i => i.Period!.Value)
+                    .DefaultIfEmpty(0)
+                    .Max();
+                _dueDateManual = maxLoadedPeriod > 0
+                    && _form.DueDate.HasValue
+                    && _form.DueDate.Value.Date != _form.TransactionDate.Date.AddDays(maxLoadedPeriod);
+
                 // 🔒 تعديل فواتير البيع = Admin/مدير الحسابات فقط (حماية الرابط المباشر)
                 if (_form.TransactionType != TransactionTypes.Purchase && !_canFullEdit)
                 {
@@ -1389,7 +1505,9 @@ else
                         ProductName = i.ProductName,
                         Quantity = i.Quantity,
                         UnitPrice = i.UnitPrice,
-                        PricingTier = i.PricingTier
+                        PricingTier = i.PricingTier,
+                        DeliveryDate = i.DeliveryDate,
+                        DeliveryDateIsCustom = i.DeliveryDateIsCustom
                     }).ToList();
 
                 // ⭐ إتاحة إضافة أصناف في التعديل الكامل
@@ -1681,6 +1799,10 @@ else
         
         private void CalculateDueDate()
     {
+        // ⭐ التاريخ المضبوط يدويًا لا يُعاد حسابه تلقائيًا — يُعاد فقط بزر «إعادة الحساب من مدد الأصناف»
+        if (_dueDateManual)
+            return;
+
         var maxPeriod = _form.Items
             .Where(i => i.ProductId > 0 && i.Period.HasValue)
             .Select(i => i.Period.Value)
@@ -1691,6 +1813,70 @@ else
         {
             _form.DueDate = _form.TransactionDate.AddDays(maxPeriod);
         }
+        StateHasChanged();
+    }
+
+    // ⭐ المستخدم لمس خانة تاريخ الاستحقاق بنفسه — يصبح التاريخ يدويًا لبقية الجلسة
+    private void OnDueDateChanged(DateTime? d)
+    {
+        _form.DueDate = d;
+        _dueDateManual = true;
+    }
+
+    // ⭐ تغيير تاريخ الفاتورة يعيد حساب الاستحقاق التلقائي من التاريخ الجديد (إلا لو كان يدويًا)
+    private void OnTransactionDateChanged(DateTime? d)
+    {
+        _form.TransactionDate = d ?? DateTime.Now;
+        CalculateDueDate();
+    }
+
+    // ⭐ إعادة الحساب الصريحة من مدد الأصناف — تلغي الضبط اليدوي وتعيد التاريخ المحسوب
+    private void RecalculateDueDateFromPeriods()
+    {
+        _dueDateManual = false;
+        CalculateDueDate();
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // ⭐ جدولة تسليم البنود: كل بند يعرض موعده الفعّال — تاريخه الخاص إن فُصل
+    // يدويًا، وإلا تاريخ استحقاق الفاتورة (فيتحرك معه حيًّا عند تغييره).
+    // تواريخ البنود مستقلة تمامًا عن _dueDateManual وCalculateDueDate: لا لمس
+    // تاريخ بند يعيد حساب تاريخ الفاتورة، ولا إعادة حساب تاريخ الفاتورة تمس
+    // بندًا مفصولًا (وارثًا كان أو خاصًا) — الفصل/الإرجاع فعلان صريحان فقط.
+    // ════════════════════════════════════════════════════════════
+    private DateTime? EffectiveLineDate(InvoiceItemDto item)
+        => DeliveryScheduleResolver.EffectiveDate(item.DeliveryDate, item.DeliveryDateIsCustom, _form.DueDate);
+
+    // ⭐ شريط ملخص المواعيد أعلى جدول البنود: تجميع البنود بمواعيدها الفعّالة
+    // الحالية في جلسة النموذج (يُعاد حسابه مع كل رسم — فيتحرك حيًّا مع أي تعديل)
+    private List<string> ScheduleSummaryParts()
+        => _form.Items
+            .GroupBy(i => EffectiveLineDate(i)?.Date)
+            .OrderBy(g => g.Key ?? DateTime.MaxValue)
+            .Select(g => g.Key.HasValue
+                ? $"{DeliveryDisplay.FormatDayMonth(g.Key.Value)} ({g.Count()} بنود)"
+                : $"بلا موعد ({g.Count()} بنود)")
+            .ToList();
+
+    // ⭐ المستخدم اختار تاريخًا للبند بنفسه — يُفصل البند بهذا التاريخ ولا يعود
+    // يتحرك مع تاريخ الفاتورة؛ ومسح الخانة يعيده وارثًا
+    private void OnItemDeliveryDateChanged(InvoiceItemDto item, DateTime? d)
+    {
+        if (d == null)
+        {
+            ResetItemDeliveryDate(item);
+            return;
+        }
+        item.DeliveryDate = d.Value.Date;
+        item.DeliveryDateIsCustom = true;
+        StateHasChanged();
+    }
+
+    // ⭐ إرجاع البند لتاريخ الفاتورة (حذف الفصل اليدوي)
+    private void ResetItemDeliveryDate(InvoiceItemDto item)
+    {
+        item.DeliveryDate = null;
+        item.DeliveryDateIsCustom = false;
         StateHasChanged();
     }
 
@@ -2062,6 +2248,8 @@ else
         item.SelectedAlternativeSummary = null;
         item.IsShowroomProduct = product.IsShowroomProduct;
         item.AvailableStock = product.AvailableStock;
+        // ⭐ الصف المستبدَل يحمل مدة المنتج الجديد حتى تكون إعادة حساب الاستحقاق من المدد صحيحة
+        item.Period = product.Period;
 
         // تحديث ما يلزم: السعر المقترح حسب نفس tier الصف (للبيع) — للشراء يُبقى السعر للتعديل اليدوي
         if (!IsPurchaseMode)
@@ -2076,6 +2264,8 @@ else
         }
 
         RecalculateTotals();
+        // ⭐ إعادة حساب الاستحقاق بعد الاستبدال (لا-op لو التاريخ مضبوط يدويًا)
+        CalculateDueDate();
         _showSwapDialog = false;
         _swapCandidate = null;
         Snackbar.Add($"تم استبدال الصنف بـ '{product.ProductName}' — راجع الكمية والسعر قبل الحفظ", Severity.Success);

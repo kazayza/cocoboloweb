@@ -1,0 +1,333 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject ISalesDeliveryStatusService DeliveryService
+@inject ISnackbar Snackbar
+@inject ILogger<DecideScheduleChangeDialog> Logger
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog Style="min-width: 880px;">
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.FactCheck" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">اعتماد طلب تعديل مواعيد</MudText>
+            @if (_data is not null)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                    فاتورة @(_data.ReferenceNumber ?? $"#{_data.Request.TransactionId}")
+                </MudChip>
+            }
+        </MudStack>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Style="min-height:240px;" Spacing="2">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary">جارٍ التحميل...</MudText>
+            </MudStack>
+        }
+        else if (_data is null)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+                تعذّر تحميل الطلب — أو ليست لديك صلاحية البتّ في طلبات تعديل المواعيد.
+            </MudAlert>
+        }
+        else
+        {
+            @* ── شريط الترويسة: العميل والطلب ── *@
+            <div class="sd-head">
+                <div class="sd-head-main">
+                    <MudText Typo="Typo.h6" Style="color:#fff;">@_data.PartyName</MudText>
+                    <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,.78);">
+                        مقدّم الطلب: @(_data.Request.RequesterName ?? _data.Request.RequesterUserName)
+                        • @_data.Request.CreatedAt.ToString("yyyy/MM/dd HH:mm")
+                    </MudText>
+                    <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,.92);">
+                        السبب: @_data.Request.Reason
+                    </MudText>
+                </div>
+                <div class="sd-head-side">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning">
+                        @_data.Request.StatusName
+                    </MudChip>
+                </div>
+            </div>
+
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                التواريخ المعروضة هنا هي التواريخ <b>الحقيقية</b> الحالية للفاتورة وبنودها.
+                القيم النهائية التي تعتمدها هي ما سيُكتب على الفاتورة فعلًا.
+            </MudAlert>
+
+            @* ── التاريخ الكلي: حالي / مقترح / نهائي ── *@
+            <MudPaper Class="pa-3 mb-3" Elevation="0" Outlined="true">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">التاريخ الكلي الحالي (الحقيقي)</MudText>
+                        <div>
+                            @if (_data.CurrentDueDate.HasValue)
+                            {
+                                <b>@_data.CurrentDueDate.Value.ToString("yyyy/MM/dd")</b>
+                            }
+                            else
+                            {
+                                <span>— بلا تاريخ —</span>
+                            }
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="3">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">المقترح في الطلب</MudText>
+                        <div>
+                            @if (_data.Request.ProposedDueDate.HasValue)
+                            {
+                                <b>@_data.Request.ProposedDueDate.Value.ToString("yyyy/MM/dd")</b>
+                            }
+                            else
+                            {
+                                <span>لا تغيير مقترحًا</span>
+                            }
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="5">
+                        <MudDatePicker @bind-Date="_finalDueDate"
+                                       Label="التاريخ الكلي النهائي"
+                                       Variant="Variant.Outlined"
+                                       Clearable="true"
+                                       Editable="true"
+                                       DateFormat="yyyy/MM/dd"
+                                       HelperText="فارغ = لا تغيير على التاريخ الكلي" />
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+
+            @* ── البنود: الحالي الحقيقي / المقترح / النهائي ── *@
+            <MudSimpleTable Dense="true" Hover="true" Striped="true">
+                <thead>
+                    <tr>
+                        <th>البند</th>
+                        <th>المتبقي</th>
+                        <th>الحالي (الحقيقي)</th>
+                        <th>المقترح</th>
+                        <th style="min-width:300px;">النهائي المعتمد</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var cur in _data.CurrentLines)
+                    {
+                        var row = _rows.TryGetValue(cur.TransactionDetailId, out var r) ? r : null;
+                        <tr>
+                            <td><b>@cur.ProductName</b></td>
+                            <td>@cur.RemainingQty.ToString("0.###")</td>
+                            <td>
+                                @if (cur.CurrentDate.HasValue)
+                                {
+                                    <span>@cur.CurrentDate.Value.ToString("yyyy/MM/dd")</span>
+                                }
+                                else
+                                {
+                                    <span>—</span>
+                                }
+                                @if (cur.CurrentIsCustom)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">خاص</MudChip>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">يتبع الفاتورة</MudText>
+                                }
+                            </td>
+                            <td>
+                                @if (row is null)
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">لم يشمله الطلب</MudText>
+                                }
+                                else if (row.ProposedIsCustom && row.ProposedDate.HasValue)
+                                {
+                                    <b>@row.ProposedDate.Value.ToString("yyyy/MM/dd")</b>
+                                }
+                                else
+                                {
+                                    <span>اتباع تاريخ الفاتورة</span>
+                                }
+                            </td>
+                            <td>
+                                @if (row is null)
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                                }
+                                else
+                                {
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                        <MudSwitch @bind-Value="row.Include" Color="Color.Success" Label="تطبيق" />
+                                        <MudDatePicker @bind-Date="row.FinalDate"
+                                                       Variant="Variant.Outlined"
+                                                       Clearable="true"
+                                                       Editable="true"
+                                                       DateFormat="yyyy/MM/dd"
+                                                       Margin="Margin.Dense"
+                                                       Disabled="@(!row.Include || row.FollowHeader)" />
+                                        <MudSwitch @bind-Value="row.FollowHeader" Color="Color.Primary"
+                                                   Label="اتباع الفاتورة" Disabled="@(!row.Include)" />
+                                    </MudStack>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+
+            @* ── ملاحظة القرار ── *@
+            <MudTextField @bind-Value="_note"
+                          Label="ملاحظة القرار (إلزامية عند الرفض)"
+                          Variant="Variant.Outlined"
+                          Lines="2"
+                          MaxLength="1000"
+                          Counter="1000"
+                          Class="mt-3" />
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_submitting">إغلاق</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Error"
+                   StartIcon="@Icons.Material.Filled.Block"
+                   OnClick="RejectAsync" Disabled="_submitting || _loading || _data is null">
+            رفض الطلب
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Success"
+                   StartIcon="@Icons.Material.Filled.Verified"
+                   OnClick="ApproveAsync" Disabled="_submitting || _loading || _data is null">
+            @if (_submitting)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            اعتماد وتطبيق
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .sd-head {
+        background: linear-gradient(135deg,#060C18 0%,#0D1B30 60%,#132A47 100%);
+        border-bottom: 2px solid var(--gold);
+        border-radius: 12px;
+        padding: 14px 16px;
+        display: flex; justify-content: space-between; align-items: flex-start;
+        gap: 12px; flex-wrap: wrap;
+        margin-bottom: 12px;
+    }
+    .sd-head-main { min-width: 0; }
+    .sd-head-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+</style>
+
+@code {
+    [Parameter] public int RequestId { get; set; }
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private ScheduleChangeApprovalDto? _data;
+    private bool _loading = true;
+    private bool _submitting;
+    private string _userName = "system";
+    private string _note = "";
+    private DateTime? _finalDueDate;
+
+    private sealed class FinalRow
+    {
+        public int TransactionDetailId;
+        public DateTime? ProposedDate;
+        public bool ProposedIsCustom;
+        public bool Include = true;
+        public DateTime? FinalDate;
+        public bool FollowHeader;
+    }
+
+    private Dictionary<int, FinalRow> _rows = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            _userName = auth.User.Identity?.Name ?? "system";
+            _data = await DeliveryService.GetScheduleChangeApprovalDataAsync(RequestId);
+            if (_data is not null)
+            {
+                _finalDueDate = _data.Request.ProposedDueDate;
+                _rows = _data.Request.Lines.ToDictionary(
+                    l => l.TransactionDetailId,
+                    l => new FinalRow
+                    {
+                        TransactionDetailId = l.TransactionDetailId,
+                        ProposedDate = l.ProposedDate,
+                        ProposedIsCustom = l.ProposedIsCustom,
+                        FinalDate = l.ProposedIsCustom ? l.ProposedDate : null,
+                        FollowHeader = !l.ProposedIsCustom
+                    });
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Load schedule decision dialog failed {Id}", RequestId);
+            _data = null;
+        }
+        _loading = false;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task ApproveAsync()
+    {
+        var finals = _rows.Values.Where(r => r.Include).Select(r => new ScheduleChangeFinalLineDto
+        {
+            TransactionDetailId = r.TransactionDetailId,
+            FinalDate = r.FollowHeader ? null : r.FinalDate?.Date,
+            FinalIsCustom = !r.FollowHeader
+        }).ToList();
+
+        if (!_finalDueDate.HasValue && finals.Count == 0)
+        {
+            Snackbar.Add("لا توجد قيم نهائية لتطبيقها — فعّل «تطبيق» لبند واحد على الأقل أو حدّد تاريخًا كليًا.", Severity.Warning);
+            return;
+        }
+        // بند مُفعَّل بلا موعد وبلا اتباع = قيمة ناقصة
+        if (finals.Any(f => f.FinalIsCustom && !f.FinalDate.HasValue))
+        {
+            Snackbar.Add("بند مُفعَّل بلا موعد نهائي — حدّد تاريخه أو اختر «اتباع الفاتورة».", Severity.Warning);
+            return;
+        }
+
+        await DecideAsync(true, finals, _finalDueDate?.Date);
+    }
+
+    private async Task RejectAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_note))
+        {
+            Snackbar.Add("سبب الرفض إلزامي عند رفض طلب تعديل المواعيد.", Severity.Warning);
+            return;
+        }
+        await DecideAsync(false, new List<ScheduleChangeFinalLineDto>(), null);
+    }
+
+    private async Task DecideAsync(bool approve, List<ScheduleChangeFinalLineDto> finals, DateTime? finalDueDate)
+    {
+        _submitting = true;
+        try
+        {
+            var (ok, msg) = await DeliveryService.DecideScheduleChangeRequestAsync(
+                RequestId, approve, finals, finalDueDate,
+                string.IsNullOrWhiteSpace(_note) ? null : _note.Trim(), _userName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+            if (ok) MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Decide schedule change request failed {Id}", RequestId);
+            Snackbar.Add("تعذّر تنفيذ القرار: " + ex.Message, Severity.Error);
+        }
+        _submitting = false;
+    }
+}

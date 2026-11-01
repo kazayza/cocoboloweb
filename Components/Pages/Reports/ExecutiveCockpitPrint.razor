@@ -1,0 +1,513 @@
+@page "/executive-cockpit/print"
+@layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+
+@inject IExecutiveCockpitService CockpitService
+@inject ExecutiveCockpitSnapshotService SnapshotService
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IDbContextFactory<db24804Context> DbFactory
+
+<PageTitle>لوحة القيادة التنفيذية — نسخة مجلس إدارة</PageTitle>
+
+@if (_loading)
+{
+    <div class="loading-container">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else if (_noAccess)
+{
+    <div class="not-found"><h2>الملف غير متاح</h2><p>هذه النسخة لرئيس مجلس الإدارة (Admin) أو بإذن «لوحة القيادة التنفيذية».</p></div>
+}
+else if (_data == null)
+{
+    <div class="not-found"><h2>تعذّر تجهيز النسخة</h2><p>@(_isSnapshot ? "اللقطة المطلوبة غير موجودة أو تالفة." : "حدث خطأ أثناء تجهيز بيانات اللوحة.")</p></div>
+}
+else
+{
+    <div class="print-actions no-print">
+        <button class="btn-action btn-print" @onclick="PrintNow">🖨️ طباعة</button>
+        <button class="btn-action btn-back" @onclick="GoBack">← رجوع للوحة</button>
+    </div>
+
+    <div class="print-page" dir="rtl">
+        @* ══ الترويسة ══ *@
+        <div class="bp-header">
+            <div class="bp-company">
+                @if (_logoSrc != null)
+                {
+                    <img src="@_logoSrc" class="bp-logo" alt="شعار الشركة" />
+                }
+                <div>
+                    @if (!string.IsNullOrWhiteSpace(_companyName))
+                    {
+                        <div class="bp-company-name">@_companyName</div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_companyContact))
+                    {
+                        <div class="bp-company-contact">@_companyContact</div>
+                    }
+                </div>
+            </div>
+            <div class="bp-title">
+                <h1>لوحة القيادة التنفيذية</h1>
+                <div>نسخة مجلس إدارة — @_data.PeriodLabel@(_data.BranchId != null ? $" · فرع {_data.BranchName}" : " · كل الفروع")</div>
+            </div>
+        </div>
+
+        <div class="bp-meta">
+            @if (_isSnapshot && _snapshotMeta != null)
+            {
+                <span>📸 لقطة محفوظة — حُفظت بتاريخ @_snapshotMeta.CreatedAt.ToString("yyyy/MM/dd hh:mm tt") بواسطة @_snapshotMeta.CreatedBy (الأرقام كما كانت وقت الحفظ)</span>
+            }
+            else
+            {
+                <span>  بتاريخ @_data.GeneratedAt.ToString("yyyy/MM/dd hh:mm tt")</span>
+            }
+            <span>النطاق الفعلي للأرقام: @_data.RangeFrom.ToString("yyyy/MM/dd") — @_data.RangeTo.ToString("yyyy/MM/dd")</span>
+        </div>
+
+        @if (_data.BranchId != null && _data.BranchIgnoredSections.Count > 0)
+        {
+            <div class="bp-note">تنبيه: أقسام @BranchIgnoredText() لا يدعم بياناتها فلتر الفرع في النظام، فأرقامها في هذه النسخة بإجمالي الشركة.</div>
+        }
+
+        @* ══ القصة ══ *@
+        <div class="bp-story">@_data.Story</div>
+
+        @* ══ نبض الشركة ══ *@
+        <h2>نبض الشركة — مؤشرات الفترة</h2>
+        @if (Failed("kpis"))
+        {
+            <div class="bp-fail">تعذّر تحميل المؤشرات المالية وقت توليد هذه النسخة.</div>
+        }
+        else
+        {
+        <table class="bp-table">
+            <thead><tr><th>المؤشر</th><th>القيمة</th><th>عن الفترة السابقة</th><th>عن نفس الفترة سنويًا</th></tr></thead>
+            <tbody>
+                @KpiRow("المبيعات (الصافي بعد المرتجعات)", _data.Sales)
+                <tr><td class="sub" colspan="4">مرتجعات بيع الفترة: @_data.SaleReturns.ToString("N0") ج</td></tr>
+                @KpiRow("تحصيلات الفترة (نقدي — دفعات فعلية)", _data.Collected)
+                @KpiRow("المشتريات (الصافي — بلا مرآة)", _data.Purchases)
+                <tr><td class="sub" colspan="4">مرتجعات شراء الفترة: @_data.PurchaseReturns.ToString("N0") ج</td></tr>
+                @KpiRow("مصروفات التشغيل (شاملة الرواتب — حسب قائمة الدخل)", _data.Expenses)
+                @KpiRow("صافي الربح (حسب قائمة الدخل)", _data.Net)
+                @KpiRow("صافي حركة الخزينة (نقدي)", _data.CashNet)
+                <tr><td>رصيد الخزائن (لحظي)</td><td class="num">@_data.CashBalance.ToString("N0") ج</td><td colspan="2" class="sub">رصيد كل الخزن حتى الآن</td></tr>
+            </tbody>
+        </table>
+        }
+
+        @* ══ الربحية المصغرة ══ *@
+        <h2>الربحية — قائمة دخل مصغرة</h2>
+        @if (!_data.MiniPl.Loaded)
+        {
+            <div class="bp-fail">تعذّر تحميل الربحية وقت توليد هذه النسخة.</div>
+        }
+        else
+        {
+        <table class="bp-table">
+            <tbody>
+                <tr><td>صافي الإيراد</td><td class="num">@_data.MiniPl.NetRevenue.ToString("N0") ج</td></tr>
+                <tr><td>تكلفة المبيعات (COGS)</td><td class="num">@_data.MiniPl.Cogs.ToString("N0") ج</td></tr>
+                <tr><td>مجمل الربح</td><td class="num">@_data.MiniPl.GrossProfit.ToString("N0") ج · هامش @_data.MiniPl.GrossProfitMargin%</td></tr>
+                <tr><td>مصروفات التشغيل (منها رواتب @_data.MiniPl.PayrollExpense.ToString("N0") ج)</td><td class="num">@_data.MiniPl.OperatingExpenses.ToString("N0") ج</td></tr>
+                <tr><td><b>صافي الربح</b></td><td class="num"><b>@_data.MiniPl.NetProfit.ToString("N0") ج · هامش @_data.MiniPl.NetProfitMargin%</b></td></tr>
+                <tr><td>هدف هامش الربح</td><td class="num">الحالي @_data.MiniPl.NetProfitMargin% · الهدف @_data.MiniPl.TargetMarginPct% (التالي @_data.MiniPl.NextTargetMarginPct%) · تحقيق الهدف @_data.MiniPl.TargetAchievementPct% — @_data.MiniPl.TargetStatus</td></tr>
+            </tbody>
+        </table>
+        }
+
+        @* ══ قرارات واستثناءات ══ *@
+        <div class="bp-cols">
+            <div class="bp-col">
+                <h2>بنود في انتظار قرار (@_data.DecisionsPending)</h2>
+                <table class="bp-table">
+                    <tbody>
+                        <tr><td>طلبات تغيير أسعار معلقة</td><td class="num">@_data.Exceptions.PendingPrice</td></tr>
+                        <tr><td>طلبات تعديل فواتير معلقة</td><td class="num">@_data.PendingInvoiceEdits</td></tr>
+                        <tr><td>اعتمادات إغلاق فرص معلقة</td><td class="num">@_data.PendingClosureApprovals</td></tr>
+                        <tr><td>أذونات تسليم معلقة</td><td class="num">@_data.PendingDeliveryPermits</td></tr>
+                        <tr><td>شكاوى مصعَّدة</td><td class="num">@_data.Gm.EscalatedComplaints</td></tr>
+                        <tr><td>موظفون ساكنون (3+ أيام)</td><td class="num">@_data.DormantCount</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="bp-col">
+                <h2>استثناءات تحتاج انتباه</h2>
+                @if (Failed("exceptions"))
+                {
+                    <div class="bp-fail">تعذّر تحميل الاستثناءات وقت التوليد.</div>
+                }
+                else
+                {
+                <table class="bp-table">
+                    <tbody>
+                        <tr><td>مديونات متأخرة +30 يوم</td><td class="num">@_data.Exceptions.Debts30 فاتورة — @_data.Exceptions.Debts30Amount.ToString("N0") ج</td></tr>
+                        <tr><td>تسليمات متأخرة عن موعدها</td><td class="num">@_data.Exceptions.LateDeliveries</td></tr>
+                        <tr><td>أصناف برصيد سالب</td><td class="num">@_data.Exceptions.NegativeStock</td></tr>
+                        <tr><td>Leads بلا متابعة +10 أيام</td><td class="num">@_data.Exceptions.StalledLeads</td></tr>
+                        <tr><td>شكاوى عملاء مفتوحة</td><td class="num">@_data.Exceptions.OpenComplaints</td></tr>
+                        <tr><td>طلبات B2B بانتظار المعالجة</td><td class="num">@_data.B2bPending</td></tr>
+                    </tbody>
+                </table>
+                }
+            </div>
+        </div>
+
+        @* ══ أعمار الذمم والمستحقات ══ *@
+        <h2>أعمار الذمم والمستحقات (الرصيد المفتوح)</h2>
+        @if (Failed("aging"))
+        {
+            <div class="bp-fail">تعذّر تحميل الأعمار وقت التوليد.</div>
+        }
+        else
+        {
+        <table class="bp-table">
+            <thead><tr><th></th>@foreach (var b in _data.Aging.Receivables) { <th>@b.Label</th> }<th>الإجمالي</th></tr></thead>
+            <tbody>
+                <tr>
+                    <td>ذمم العملاء</td>
+                    @foreach (var b in _data.Aging.Receivables) { <td class="num">@b.Amount.ToString("N0")<br /><small>@b.Count فاتورة</small></td> }
+                    <td class="num"><b>@_data.Aging.TotalReceivables.ToString("N0") ج</b></td>
+                </tr>
+                <tr>
+                    <td>مستحقات الموردين</td>
+                    @foreach (var b in _data.Aging.Payables) { <td class="num">@b.Amount.ToString("N0")<br /><small>@b.Count فاتورة</small></td> }
+                    <td class="num"><b>@_data.Aging.TotalPayables.ToString("N0") ج</b></td>
+                </tr>
+            </tbody>
+        </table>
+        @if (_data.Aging.TopDebtors.Count > 0)
+        {
+            <div class="bp-inline">أكبر المدينين: @string.Join(" · ", _data.Aging.TopDebtors.Select(d => $"{d.Name}: {d.Amount:N0} ج"))</div>
+        }
+        }
+
+        @* ══ عروض الأسعار ══ *@
+        <h2>عروض الأسعار — خط مبيعات الغد</h2>
+        @if (Failed("quotations"))
+        {
+            <div class="bp-fail">تعذّر تحميل عروض الأسعار وقت التوليد.</div>
+        }
+        else
+        {
+        <table class="bp-table">
+            <thead><tr><th>الحالة</th><th>عدد</th><th>قيمة</th></tr></thead>
+            <tbody>
+                @foreach (var s in _data.Quotations.ByStatus)
+                {
+                    <tr><td>@s.Label</td><td class="num">@s.Count</td><td class="num">@s.Value.ToString("N0") ج</td></tr>
+                }
+                <tr><td>معدل التحويل لفاتورة (من المحسومة)</td><td class="num" colspan="2">@(_data.Quotations.HasDecided ? _data.Quotations.ConversionRate + "%" : "—") — @_data.Quotations.ConvertedCount محوّلة</td></tr>
+                <tr><td>بانتظار رد العميل الآن / مقبولة لم تُحوَّل / تنتهي خلال 7 أيام</td><td class="num" colspan="2">@_data.Quotations.SentCount (@_data.Quotations.SentValue.ToString("N0") ج) / @_data.Quotations.AcceptedNotConvertedCount (@_data.Quotations.AcceptedNotConvertedValue.ToString("N0") ج) / @_data.Quotations.ExpiringSoonCount</td></tr>
+            </tbody>
+        </table>
+        }
+
+        @* ══ التشغيل ══ *@
+        <div class="bp-cols">
+            <div class="bp-col">
+                <h2>المخزون (لقطة حالية)</h2>
+                @if (Failed("inventory"))
+                {
+                    <div class="bp-fail">تعذّر تحميل المخزون وقت التوليد.</div>
+                }
+                else
+                {
+                <table class="bp-table">
+                    <tbody>
+                        <tr><td>قيمة المخزون بالتكلفة</td><td class="num">@_data.Inventory.TotalCostValue.ToString("N0") ج</td></tr>
+                        <tr><td>قيمة البيع المتوقعة</td><td class="num">@_data.Inventory.TotalSaleValue.ToString("N0") ج</td></tr>
+                        <tr><td>أصناف / إجمالي كمية</td><td class="num">@_data.Inventory.ProductsCount / @_data.Inventory.TotalQuantity.ToString("N0")</td></tr>
+                        <tr><td>نافدة / منخفضة (1–5)</td><td class="num">@_data.Inventory.OutOfStockCount / @_data.Inventory.LowStockCount</td></tr>
+                        <tr><td>راكدة 90 يومًا</td><td class="num">@_data.Inventory.DeadStockCount صنف — @_data.Inventory.DeadStockValue.ToString("N0") ج</td></tr>
+                        @foreach (var w in _data.Inventory.Warehouses)
+                        {
+                            <tr><td>— مخزن @w.WarehouseName (@w.ProductsCount صنف)</td><td class="num">@w.CostValue.ToString("N0") ج · <span dir="ltr" style="unicode-bidi:isolate;">@w.SharePct.ToString("0.#")%</span></td></tr>
+                        }
+                    </tbody>
+                </table>
+                }
+            </div>
+            <div class="bp-col">
+                <h2>أوامر التشغيل والتسليمات</h2>
+                @if (Failed("joborders") || Failed("deliveries"))
+                {
+                    <div class="bp-fail">تعذّر تحميل جزء من التشغيل وقت التوليد.</div>
+                }
+                else
+                {
+                <table class="bp-table">
+                    <tbody>
+                        <tr><td>أوامر مفتوحة (بيع/توريد)</td><td class="num">@_data.JobOrders.OpenCount (@_data.JobOrders.OpenSale/@_data.JobOrders.OpenPurchase)</td></tr>
+                        <tr><td>أوامر متأخرة</td><td class="num">@_data.JobOrders.OverdueCount — @_data.JobOrders.OverdueValue.ToString("N0") ج</td></tr>
+                        <tr><td>سُلّمت في الفترة</td><td class="num">@_data.JobOrders.DeliveredInPeriod</td></tr>
+                        <tr><td>التزام التسليمات بالمواعيد</td><td class="num">@(_data.Deliveries.HasDelivered ? _data.Deliveries.OnTimePct + "%" : "—") (مخطط @_data.Deliveries.Planned · سُلّم @_data.Deliveries.Delivered)</td></tr>
+                        <tr><td>جزئي مفتوح الآن · دقة الدفعات</td><td class="num">@_data.Deliveries.PartialOpenNow · @(_data.Deliveries.HasBatchEvents ? _data.Deliveries.BatchPunctualityPct + "%" : "—")</td></tr>
+                        <tr><td>تسليمات بملاحظات في الفترة</td><td class="num">@_data.Deliveries.EventsWithRemarksInPeriod</td></tr>
+                        <tr><td>رجوع عيب تصنيع / تلف مناولة (كمية)</td><td class="num">@_data.Deliveries.ManufacturingDefectQtyInPeriod.ToString("0.###") / @_data.Deliveries.HandlingDamageQtyInPeriod.ToString("0.###")</td></tr>
+                        <tr><td>في الصيانة الآن (سجل · كمية)</td><td class="num">@_data.Deliveries.MaintenanceBacklogRecords · @_data.Deliveries.MaintenanceBacklogQty.ToString("0.###")</td></tr>
+                        <tr><td>رسوم تعديل بانتظار الاعتماد / معتمدة غير محصّلة</td><td class="num">@_data.Deliveries.PendingModificationChargesCount / @_data.Deliveries.ApprovedUncollectedModificationAmount.ToString("N0") ج</td></tr>
+                        <tr><td>تكلفة إصلاح داخلية في الفترة</td><td class="num">@_data.Deliveries.RepairCostInPeriod.ToString("N0") ج</td></tr>
+                        <tr><td>تسليمات متأخرة الآن</td><td class="num">@_data.Deliveries.OverdueNow — @_data.Deliveries.OverdueAmount.ToString("N0") ج</td></tr>
+                        <tr><td>مستحقة اليوم / غدًا</td><td class="num">@_data.Deliveries.DueToday / @_data.Deliveries.DueTomorrow</td></tr>
+                        <tr><td>تكليفات عامة مفتوحة / متأخرة الآن</td><td class="num">@_data.GeneralTasks.OpenTotal / @_data.GeneralTasks.OverdueTotal</td></tr>
+                        <tr><td>تكليفات أُنجزت في الفترة / مرتجعة بانتظار قرار</td><td class="num">@_data.GeneralTasks.CompletedInPeriod / @_data.GeneralTasks.ReturnedPendingTotal</td></tr>
+                        @foreach (var row in _data.GeneralTasks.TopOverdueEmployees)
+                        {
+                            <tr><td>أكثر تأخرًا: @row.EmployeeName</td><td class="num">@row.Overdue متأخرة · @row.Open مفتوحة</td></tr>
+                        }
+                    </tbody>
+                </table>
+                }
+            </div>
+        </div>
+
+        @* ══ تسويق وB2B وموارد بشرية وفرص ══ *@
+        <div class="bp-cols">
+            <div class="bp-col">
+                <h2>التسويق وبوابة التجار</h2>
+                <table class="bp-table">
+                    <tbody>
+                        <tr><td>ليدز الفترة / تحوّلوا لعملاء</td><td class="num">@_data.Marketing.Leads / @_data.Marketing.Customers (@_data.Marketing.ConversionPct%)</td></tr>
+                        <tr><td>إنفاق تسويقي / تكلفة الليد</td><td class="num">@_data.Marketing.Spend.ToString("N0") ج / @_data.Marketing.CostPerLead.ToString("N0") ج</td></tr>
+                        <tr><td>طلبات B2B في الفترة / تحوّلت</td><td class="num">@_data.B2bBlock.RequestsInPeriod / @_data.B2bBlock.ConvertedInPeriod (@_data.B2bBlock.ConvertedValue.ToString("N0") ج)</td></tr>
+                        <tr><td>شركات البوابة / حسابات نشطة</td><td class="num">@_data.B2bBlock.Companies / @_data.B2bBlock.ActiveUsers</td></tr>
+                        <tr><td>فرص بيعية مفتوحة وقيمتها</td><td class="num">@_data.PipelineOpen — @_data.PipelineValue.ToString("N0") ج</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="bp-col">
+                <h2>الموارد البشرية</h2>
+                <table class="bp-table">
+                    <tbody>
+                        <tr><td>حاضر اليوم / النشطون (نسبة الحضور)</td><td class="num">@_data.Hr.PresentToday / @_data.Hr.ActiveEmployees (@_data.Hr.AttendancePct%)</td></tr>
+                        <tr><td>متأخر / غائب / بإجازة</td><td class="num">@_data.Hr.LateToday / @_data.Hr.AbsentToday / @_data.Hr.OnLeaveCount</td></tr>
+                        <tr><td>تكلفة رواتب الشهر الحالي (@_data.Hr.PayrollMonthLabel)</td><td class="num">@_data.Hr.PayrollMonthCost.ToString("N0") ج</td></tr>
+                        <tr><td>سلف نشطة — المتبقي</td><td class="num">@_data.Hr.ActiveLoansCount — @_data.Hr.ActiveLoansRemaining.ToString("N0") ج</td></tr>
+                        <tr><td>مبيعات فريق المبيعات (الشهر)</td><td class="num">@_data.Gm.TeamSalesMonth.ToString("N0") ج · نشطون اليوم @_data.Gm.TeamActiveToday/@_data.Gm.TeamTotal</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        @* ══ الفروع والتوقع ══ *@
+        <div class="bp-cols">
+            <div class="bp-col">
+                <h2>المبيعات حسب الفرع</h2>
+                @if (_data.BranchSales.Count == 0)
+                {
+                    <div class="bp-inline">لا مبيعات مرتبطة بفروع في هذه الفترة.</div>
+                }
+                else
+                {
+                <table class="bp-table">
+                    <tbody>
+                        @foreach (var b in _data.BranchSales)
+                        {
+                            <tr><td>@b.Name</td><td class="num">@b.Value.ToString("N0") ج</td></tr>
+                        }
+                    </tbody>
+                </table>
+                }
+            </div>
+            <div class="bp-col">
+                <h2>توقع إقفال الشهر الحالي</h2>
+                <table class="bp-table">
+                    <tbody>
+                        <tr><td>التوقع (على معدل الأيام المنقضية)</td><td class="num">@_data.ForecastValue.ToString("N0") ج</td></tr>
+                        <tr><td>مبيعات الشهر الماضي</td><td class="num">@_data.LastMonthSales.ToString("N0") ج</td></tr>
+                        <tr><td>الفرق المتوقع</td><td class="num">@(_data.ForecastVsLastPct >= 0 ? "+" : "")@_data.ForecastVsLastPct%</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="bp-footer">
+            كل الأرقام من نظام COCOBOLO ERP لحظيًا: الفواتير · المدفوعات · قائمة الدخل · المصروفات · الخزائن · الفرص البيعية · عروض الأسعار · المخزون · أوامر التشغيل · التسليمات · التسويق · B2B · الحضور والرواتب والسلف · سجل التدقيق · المهام · العملاء المحتملين · الشكاوى — صافي الربح والمصروفات بنفس تعريف وحساب تقرير قائمة الدخل لنفس الفترة والفرع.
+        </div>
+    </div>
+}
+
+<style>
+    .loading-container { display: flex; justify-content: center; align-items: center; min-height: 300px; }
+    .not-found { max-width: 640px; margin: 4rem auto; text-align: center; font-family: Cairo, sans-serif; }
+
+    .print-actions.no-print { position: fixed; top: 14px; inset-inline-start: 14px; z-index: 50; display: flex; gap: .5rem; font-family: Cairo, sans-serif; }
+    .btn-action { border: 1px solid #cbd5e1; background: #fff; border-radius: 9px; padding: .5rem 1rem; cursor: pointer; font-family: inherit; font-size: .85rem; box-shadow: 0 2px 8px rgba(15,23,42,.08); }
+    .btn-print { background: #1E293B; color: #D4AF37; border-color: #1E293B; font-weight: 700; }
+
+    .print-page { max-width: 1050px; margin: 3.5rem auto 2rem; background: #fff; padding: 1.6rem 1.8rem; border-radius: 14px;
+                  box-shadow: 0 6px 24px rgba(15,23,42,.08); font-family: Cairo, sans-serif; color: #14213a; }
+    .bp-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; border-bottom: 3px solid #d4af37; padding-bottom: .8rem; flex-wrap: wrap; }
+    .bp-company { display: flex; align-items: center; gap: .7rem; }
+    .bp-logo { max-height: 54px; max-width: 150px; object-fit: contain; }
+    .bp-company-name { font-size: 1.15rem; font-weight: 900; }
+    .bp-company-contact { font-size: .72rem; color: #64748b; margin-top: 2px; }
+    .bp-title h1 { margin: 0; font-size: 1.35rem; font-weight: 900; color: #0d1b30; }
+    .bp-title div { font-size: .8rem; color: #64748b; margin-top: 3px; }
+    .bp-meta { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; font-size: .74rem; color: #64748b; padding: .5rem 0 .2rem; }
+    .bp-note { border: 1px dashed #b45309; color: #92400e; background: #fffbeb; border-radius: 8px; padding: .5rem .8rem; font-size: .76rem; margin-top: .5rem; }
+    .bp-story { border: 1px solid #e8d48b; border-inline-start: 4px solid #d4af37; background: #fffdf2; border-radius: 10px;
+                padding: .7rem 1rem; margin: .8rem 0 .4rem; line-height: 2; font-size: .88rem; }
+    .bp-fail { border: 1px dashed #d97706; color: #b45309; background: #fffbeb; border-radius: 8px; padding: .5rem .8rem; font-size: .78rem; }
+    .bp-inline { font-size: .8rem; color: #475569; margin-top: .4rem; }
+    .print-page h2 { font-size: .98rem; font-weight: 800; color: #0d1b30; margin: 1.1rem 0 .45rem; border-inline-start: 4px solid #d4af37; padding-inline-start: .5rem; }
+    .bp-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+    .bp-table th, .bp-table td { border: 1px solid #e2e8f0; padding: .42rem .6rem; text-align: start; vertical-align: top; }
+    .bp-table thead th { background: #f1f5f9; font-weight: 800; }
+    .bp-table .num { text-align: end; font-weight: 700; white-space: nowrap; }
+    .bp-table td.sub { color: #94a3b8; font-size: .7rem; border-top: none; padding-top: 0; }
+    .bp-table small { color: #94a3b8; font-weight: 400; }
+    .bp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+    .bp-footer { margin-top: 1.4rem; border-top: 1px solid #e2e8f0; padding-top: .6rem; font-size: .68rem; color: #94a3b8; text-align: center; line-height: 1.9; }
+
+    @@media (max-width: 800px) {
+        .bp-cols { grid-template-columns: 1fr; }
+        .print-page { margin: 3.5rem .5rem 1rem; padding: 1rem; }
+    }
+
+    @@media print {
+        .no-print { display: none !important; }
+        .print-page { box-shadow: none; margin: 0 auto; max-width: 100%; padding: 0; border-radius: 0; }
+        .bp-cols { break-inside: avoid; }
+        h2 { break-after: avoid; }
+        .bp-table { break-inside: avoid; }
+    }
+    @@page { margin: 12mm; }
+</style>
+
+@code {
+    [SupplyParameterFromQuery] public string? period { get; set; }
+    [SupplyParameterFromQuery] public int? branch { get; set; }
+    [SupplyParameterFromQuery] public DateTime? from { get; set; }
+    [SupplyParameterFromQuery] public DateTime? to { get; set; }
+    [SupplyParameterFromQuery] public long? snapshot { get; set; }
+
+    private bool _loading = true;
+    private bool _noAccess;
+    private bool _isSnapshot;
+    private ExecutiveCockpitDto? _data;
+    private ExecutiveCockpitSnapshotItemDto? _snapshotMeta;
+
+    private string? _companyName;
+    private string? _companyContact;
+    private string? _logoSrc;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        var allowed = user.IsInRole("Admin")
+                   || user.HasClaim(c => c.Type == "Permission" && c.Value == "frm_ExecutiveCockpit:View");
+        if (!allowed)
+        {
+            _noAccess = true;
+            _loading = false;
+            return;
+        }
+
+        await LoadCompanyAsync();
+
+        if (snapshot.HasValue)
+        {
+            _isSnapshot = true;
+            var detail = await SnapshotService.GetSnapshotAsync(snapshot.Value);
+            if (detail != null)
+            {
+                _data = detail.Data;
+                _snapshotMeta = detail.Meta;
+            }
+        }
+        else
+        {
+            try
+            {
+                _data = await CockpitService.GetCockpitAsync(
+                    string.IsNullOrWhiteSpace(period) ? "month" : period,
+                    branch, from, to, userScope: "print");
+            }
+            catch
+            {
+                _data = null;
+            }
+        }
+
+        _loading = false;
+    }
+
+    private async Task LoadCompanyAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var info = await db.CompanyInfos.AsNoTracking().OrderBy(c => c.CompanyId).FirstOrDefaultAsync();
+            if (info != null)
+            {
+                _companyName = info.CompanyName;
+                var parts = new List<string>();
+                if (!string.IsNullOrWhiteSpace(info.Address)) parts.Add(info.Address);
+                if (!string.IsNullOrWhiteSpace(info.Phone1)) parts.Add("ت: " + info.Phone1);
+                _companyContact = string.Join(" — ", parts);
+                _logoSrc = info.Logo is { Length: > 0 }
+                    ? $"data:image/png;base64,{Convert.ToBase64String(info.Logo)}"
+                    : (string.IsNullOrWhiteSpace(info.LogoPath) ? null : info.LogoPath);
+            }
+        }
+        catch { /* الترويسة تعمل بلا بيانات شركة */ }
+    }
+
+    private bool Failed(string section) => _data?.FailedSections.Contains(section) == true;
+
+    private string BranchIgnoredText()
+    {
+        if (_data == null) return "";
+        var names = new Dictionary<string, string>
+        {
+            ["marketing"] = "التسويق",
+            ["b2b"] = "بوابة B2B",
+            ["gm"] = "لوحة المدير العام",
+            ["complaints"] = "الشكاوى"
+        };
+        return string.Join("، ", _data.BranchIgnoredSections.Select(k => names.GetValueOrDefault(k, k)));
+    }
+
+    private RenderFragment KpiRow(string label, ExecutiveKpiDto k) => builder =>
+    {
+        builder.OpenElement(0, "tr");
+        builder.OpenElement(1, "td");
+        builder.AddContent(2, label);
+        builder.CloseElement();
+        builder.OpenElement(3, "td");
+        builder.AddAttribute(4, "class", "num");
+        builder.AddContent(5, $"{k.Value:N0} ج");
+        builder.CloseElement();
+        builder.OpenElement(6, "td");
+        builder.AddAttribute(7, "class", "num");
+        builder.AddContent(8, PctText(k.PrevPctOrNull));
+        builder.CloseElement();
+        builder.OpenElement(9, "td");
+        builder.AddAttribute(10, "class", "num");
+        builder.AddContent(11, PctText(k.YearPctOrNull));
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private static string PctText(decimal? pct)
+        => pct == null ? "—" : $"{(pct.Value >= 0 ? "+" : "")}{pct.Value}%";
+
+    private async Task PrintNow() => await JS.InvokeVoidAsync("window.print");
+
+    private void GoBack() => Nav.NavigateTo("/executive-cockpit");
+}

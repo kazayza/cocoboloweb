@@ -4,6 +4,7 @@
 @using MudBlazor
 
 @inject IAdditionalChargeService ChargeService
+@inject ICashBoxService CashBoxService
 @inject IPaymentService PaymentService
 @inject ISnackbar Snackbar
 @inject AuthenticationStateProvider AuthState
@@ -372,6 +373,10 @@
                     <span class="type-badge type-@(context.ChargeType?.ToLower())">
                         @context.ChargeTypeName
                     </span>
+                    @if (context.IsDeliveryModification)
+                    {
+                        <span class="type-source-note">🔗 من حدث تسليم</span>
+                    }
                 </div>
             </MudTd>
             <MudTd DataLabel="الوصف">
@@ -418,6 +423,24 @@
                 <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small"
                          AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopRight"
                          Class="row-menu">
+                    @if (context.IsDeliveryModification && context.Status == ChargeStatuses.PendingApproval && _canManageModification)
+                    {
+                        <MudMenuItem Icon="@Icons.Material.Filled.Verified"
+                                     OnClick="@(() => OpenModDialog(context, "approve"))">
+                            اعتماد وتسعير رسوم التعديل
+                        </MudMenuItem>
+                        <MudMenuItem Icon="@Icons.Material.Filled.Cancel"
+                                     OnClick="@(() => OpenModDialog(context, "reject"))">
+                            رفض رسوم التعديل
+                        </MudMenuItem>
+                    }
+                    @if (context.IsDeliveryModification && context.Status == ChargeStatuses.Approved && _canCollectModification)
+                    {
+                        <MudMenuItem Icon="@Icons.Material.Filled.Payments"
+                                     OnClick="@(() => OpenModDialog(context, "collect"))">
+                            تحصيل رسوم التعديل
+                        </MudMenuItem>
+                    }
                     @if (context.Status == ChargeStatuses.Paid)
                     {
                         <MudMenuItem Icon="@Icons.Material.Filled.Link"
@@ -426,7 +449,7 @@
                             تطبيق على فاتورة
                         </MudMenuItem>
                     }
-                    @if (context.Status != ChargeStatuses.NonRefundable && context.Status != ChargeStatuses.Applied)
+                    @if (context.Status != ChargeStatuses.NonRefundable && context.Status != ChargeStatuses.Applied && !context.IsDeliveryModification)
                     {
                         <MudMenuItem Icon="@Icons.Material.Filled.Block"
                                      OnClick="@(() => OpenNonRefundDialog(context))"
@@ -786,6 +809,88 @@
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
 <!-- ⭐ DIALOG: NON REFUNDABLE (Premium)                                         -->
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
+@* ═══ Dialog: رسوم تعديل التسليم (اعتماد/رفض/تحصيل مؤجل — D8) ═══ *@
+<MudDialog @bind-Visible="_showModDialog" Class="premium-dialog">
+    <TitleContent>
+        <div class="dialog-header">
+            <div class="dialog-header-content">
+                <span class="dialog-title">
+                    @(_modAction == "approve" ? "⭐ اعتماد وتسعير رسوم التعديل"
+                      : _modAction == "reject" ? "❌ رفض رسوم التعديل"
+                      : "💵 تحصيل رسوم التعديل")
+                </span>
+            </div>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           OnClick="@(() => _showModDialog = false)" Class="dialog-close-btn" />
+        </div>
+    </TitleContent>
+    <DialogContent>
+        @if (_modCharge != null)
+        {
+            <MudText Typo="Typo.body2" Class="mb-1">
+                فاتورة <b>@(_modCharge.TransactionRef ?? $"#{_modCharge.TransactionId}")</b> —
+                @(_modCharge.PartyName ?? "")
+            </MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                @(_modCharge.ChargeDescription ?? "")
+            </MudText>
+
+            @if (_modAction == "approve")
+            {
+                <MudNumericField T="decimal" @bind-Value="_modAmount"
+                                 Label="المبلغ النهائي المعتمد (ج.م) — الاعتماد مستحيل بدون مبلغ نهائي"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Min="0m" Step="50m" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    بعد الاعتماد لا يُحصَّل شيء فورًا — التحصيل خطوة منفصلة، وبعد التحصيل
+                    يُطبَّق الرسم على الفاتورة فيُضاف لإجماليها.
+                </MudText>
+            }
+            else if (_modAction == "reject")
+            {
+                <MudTextField T="string" @bind-Value="_modReason" Label="سبب الرفض (إلزامي)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Lines="2"
+                              MaxLength="500" Counter="500" />
+                <MudText Typo="Typo.caption" Color="Color.Warning">
+                    الرفض يُلغي أيضًا أي طلبات صيانة مرتبطة ما زالت مفتوحة لنفس التعديل.
+                </MudText>
+            }
+            else if (_modAction == "collect")
+            {
+                <MudText Typo="Typo.body1" Class="mb-2">
+                    المبلغ المعتمد: <b>@_modCharge.ChargeAmount.ToString("N2") ج.م</b>
+                </MudText>
+                <MudSelect T="int" @bind-Value="_modCashBoxId" Label="خزنة/حساب التحصيل"
+                           Variant="Variant.Outlined" Margin="Margin.Dense"
+                           AnchorOrigin="Origin.BottomCenter">
+                    @foreach (var box in _modCashBoxes)
+                    {
+                        <MudSelectItem T="int" Value="@box.CashBoxId">@box.CashBoxName</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <div class="dialog-actions">
+            <MudButton OnClick="@(() => _showModDialog = false)" Variant="Variant.Text" Class="btn-cancel">
+                إلغاء
+            </MudButton>
+            <MudButton Color="@(_modAction == "reject" ? Color.Error : Color.Success)"
+                       Variant="Variant.Filled" OnClick="ConfirmModificationAction" Disabled="@_isSaving"
+                       StartIcon="@Icons.Material.Filled.Check" Class="btn-success">
+                @if (_isSaving)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                }
+                else
+                {
+                    <span>@(_modAction == "approve" ? "اعتماد" : _modAction == "reject" ? "رفض" : "تحصيل")</span>
+                }
+            </MudButton>
+        </div>
+    </DialogActions>
+</MudDialog>
+
 <MudDialog @bind-Visible="_showNonRefundDialog" Class="premium-dialog dialog-warning">
     <TitleContent>
         <div class="dialog-header dialog-header-warning">
@@ -1724,6 +1829,18 @@
     .status-applied .status-dot { background: #06b6d4; }
     .status-nonrefundable { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
     .status-nonrefundable .status-dot { background: #ef4444; }
+    .status-pendingapproval { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+    .status-pendingapproval .status-dot { background: #f59e0b; }
+    .status-approved { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+    .status-approved .status-dot { background: #3b82f6; }
+    .status-rejected { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+    .status-rejected .status-dot { background: #dc2626; }
+    .type-source-note {
+        display: block; width: 100%;
+        font-size: 0.68rem; font-weight: 600;
+        color: var(--mud-palette-info);
+        margin-top: 0.2rem;
+    }
     /* Invoice Ref */
     .invoice-ref {
         display: inline-flex;
@@ -2312,6 +2429,17 @@
     private bool _canEditCharges = false;
     private bool _canDeleteCharges = false;
 
+    // رسوم تعديل التسليم (D8): اعتماد/رفض للإدارة والحسابات، والتحصيل للحسابات أيضًا
+    private bool _canManageModification = false;
+    private bool _canCollectModification = false;
+    private bool _showModDialog = false;
+    private string _modAction = "";
+    private AdditionalChargeListDto? _modCharge;
+    private decimal _modAmount = 0;
+    private string _modReason = "";
+    private int _modCashBoxId = 0;
+    private List<CashBoxListDto> _modCashBoxes = new();
+
     // Form
     private AdditionalChargeFormDto _formData = new();
     private AdditionalChargeListDto? _selectedCharge;
@@ -2333,6 +2461,8 @@
             || user.IsInRole(SystemRoles.Account);
         _canDeleteCharges = user.IsInRole(SystemRoles.Admin)
             || user.IsInRole(SystemRoles.AccountManager);
+        _canManageModification = _canDeleteCharges;
+        _canCollectModification = _canEditCharges;
         await LoadData();
     }
 
@@ -2412,6 +2542,7 @@
         ChargeTypes.Advance => "💵",
         ChargeTypes.Shipping => "🚚",
         ChargeTypes.Installation => "🔧",
+        ChargeTypes.Modification => "✏️",
         _ => "📦"
     };
 
@@ -2423,6 +2554,67 @@
            || charge.AppliedToTransactionId.HasValue
            || charge.Status == ChargeStatuses.Applied
            || charge.Status == ChargeStatuses.NonRefundable;
+
+    /* ═══════════════════════════════════════════════════════════════════════════
+       رسوم تعديل التسليم — اعتماد/رفض/تحصيل مؤجل (D8، القسم 11.4)
+       ═══════════════════════════════════════════════════════════════════════════ */
+    private async Task OpenModDialog(AdditionalChargeListDto charge, string action)
+    {
+        _modCharge = charge;
+        _modAction = action;
+        _modAmount = charge.ChargeAmount;
+        _modReason = "";
+        if (action == "collect" && _modCashBoxes.Count == 0)
+        {
+            try
+            {
+                _modCashBoxes = await CashBoxService.GetCashBoxesAsync(activeOnly: true);
+                _modCashBoxId = _modCashBoxes.FirstOrDefault()?.CashBoxId ?? 0;
+            }
+            catch { _modCashBoxes = new(); }
+        }
+        _showModDialog = true;
+    }
+
+    private async Task ConfirmModificationAction()
+    {
+        if (_modCharge is null || _isSaving) return;
+
+        if (_modAction == "approve" && _modAmount <= 0)
+        { Snackbar.Add("لا اعتماد بدون مبلغ نهائي أكبر من صفر (D8).", Severity.Warning); return; }
+        if (_modAction == "reject" && string.IsNullOrWhiteSpace(_modReason))
+        { Snackbar.Add("سبب الرفض إلزامي.", Severity.Warning); return; }
+        if (_modAction == "collect" && _modCashBoxId <= 0)
+        { Snackbar.Add("اختر خزنة/حساب التحصيل.", Severity.Warning); return; }
+
+        _isSaving = true;
+        try
+        {
+            var (ok, msg) = _modAction switch
+            {
+                "approve" => await ChargeService.ApproveModificationChargeAsync(
+                    _modCharge.ChargeId, _modAmount, _currentUserName),
+                "reject" => await ChargeService.RejectModificationChargeAsync(
+                    _modCharge.ChargeId, _modReason.Trim(), _currentUserName),
+                "collect" => await ChargeService.CollectModificationChargeAsync(
+                    _modCharge.ChargeId, _modCashBoxId, _currentUserName),
+                _ => (false, "إجراء غير معروف.")
+            };
+
+            if (ok)
+            {
+                Snackbar.Add(msg, Severity.Success);
+                _showModDialog = false;
+                await LoadData();
+            }
+            else Snackbar.Add(msg, Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"حدث خطأ: {ex.Message}", Severity.Error);
+        }
+        finally { _isSaving = false; }
+    }
 
     private string FormatMoney(decimal v) => $"{v:N2}";
 

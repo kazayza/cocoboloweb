@@ -4,11 +4,13 @@ namespace COCOBOLOERPNEW.Services.Assistant;
 public class ZakiChatItem
 {
     public bool IsUser { get; init; }
-    public string Text { get; init; } = "";
-    public bool Ok { get; init; } = true;
-    public int Tokens { get; init; }
-    public List<string> Tools { get; init; } = new();
-    public List<ZakiTable> Tables { get; init; } = new();
+
+    /// <summary>قابلة للتعديل: فقاعة الرد بتتملي تدريجياً مع البثّ وبعدين بتتثبت بالنتيجة النهائية</summary>
+    public string Text { get; set; } = "";
+    public bool Ok { get; set; } = true;
+    public int Tokens { get; set; }
+    public List<string> Tools { get; set; } = new();
+    public List<ZakiTable> Tables { get; set; } = new();
     public DateTime CreatedAt { get; init; } = DateTime.Now;
 
     /// <summary>رقم الرسالة في قاعدة البيانات (عشان التقييم 👍/👎)</summary>

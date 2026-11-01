@@ -152,6 +152,7 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
     public virtual DbSet<Warehouse> Warehouses { get; set; }
     public virtual DbSet<EmployeeLoan>     EmployeeLoans     { get; set; }
     public virtual DbSet<LoanInstallment>  LoanInstallments  { get; set; }
+    public virtual DbSet<EmployeePenalty>  EmployeePenalties { get; set; }
     public virtual DbSet<LeadsCrm> LeadsCRMs { get; set; }
     public virtual DbSet<LeadInteraction> LeadInteractions { get; set; }
 
@@ -213,6 +214,8 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
             entity.Property(e => e.PartyId).HasColumnName("PartyID");
             entity.Property(e => e.QuotationId).HasColumnName("QuotationID");
             entity.Property(e => e.TransactionId).HasColumnName("TransactionID");
+            // نتائج التسليم (11.4): رابط رسم التعديل بحدث التسليم المولّد له (delivery-outcomes.sql)
+            entity.Property(e => e.SourceDeliveryId);
         });
 
         modelBuilder.Entity<Attendance>(entity =>
@@ -345,6 +348,33 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
                 .HasForeignKey(d => d.PaymentId)
                 .OnDelete(DeleteBehavior.SetNull)
                 .HasConstraintName("FK_CashboxTransactions_Payments");
+        });
+
+        // أختام مراجعة الخزينة (cashbox-review.sql) — سجل تاريخي بلا أي قفل
+        modelBuilder.Entity<CashBoxReview>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("PK_CashBoxReviews");
+
+            entity.ToTable("CashBoxReviews");
+
+            entity.HasIndex(e => new { e.CashBoxId, e.PeriodFrom, e.PeriodTo, e.ReviewedAt }, "IX_CashBoxReviews_Box_Period_ReviewedAt");
+
+            entity.Property(e => e.PeriodFrom).HasColumnType("date");
+            entity.Property(e => e.PeriodTo).HasColumnType("date");
+            entity.Property(e => e.ReviewedByUserName).HasMaxLength(256);
+            entity.Property(e => e.ReviewedByName).HasMaxLength(256);
+            entity.Property(e => e.ReviewedAt)
+                .HasDefaultValueSql("(sysdatetime())")
+                .HasColumnType("datetime2");
+            entity.Property(e => e.Note).HasMaxLength(1000);
+            entity.Property(e => e.TotalIn).HasColumnType("decimal(18, 2)");
+            entity.Property(e => e.TotalOut).HasColumnType("decimal(18, 2)");
+            entity.Property(e => e.LastTxCreatedAt).HasColumnType("datetime2");
+
+            entity.HasOne(d => d.CashBox).WithMany()
+                .HasForeignKey(d => d.CashBoxId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_CashBoxReviews_CashBoxes");
         });
 
         modelBuilder.Entity<CommissionAssignment>(entity =>
@@ -559,6 +589,18 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
                 .HasMaxLength(20)
                 .HasDefaultValue("Pending");
             entity.Property(e => e.TaskDescription).HasMaxLength(500);
+            // تطوير التكليفات العامة — أعمدة تُنشأ بـ general-tasks-2-platform.sql
+            entity.Property(e => e.CancelledAt).HasColumnType("datetime");
+            entity.Property(e => e.CancelledBy).HasMaxLength(50);
+            entity.Property(e => e.CancellationReason).HasMaxLength(500);
+            entity.Property(e => e.AcknowledgedAt).HasColumnType("datetime");
+            entity.Property(e => e.AcknowledgedBy).HasMaxLength(50);
+            entity.Property(e => e.ReturnedAt).HasColumnType("datetime");
+            entity.Property(e => e.ReturnedBy).HasMaxLength(50);
+            entity.Property(e => e.ReturnReason).HasMaxLength(500);
+            entity.Property(e => e.CompletionLink).HasMaxLength(500);
+            entity.Property(e => e.LinkedEntityType).HasMaxLength(30);
+            entity.Property(e => e.LinkedEntityTitle).HasMaxLength(250);
             entity.Property(e => e.TaskScope)
                 .HasMaxLength(30)
                 .HasDefaultValue("Opportunity");
@@ -709,6 +751,7 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
                 .HasColumnType("datetime");
             entity.Property(e => e.CreatedBy).HasMaxLength(50);
             entity.Property(e => e.BranchId).HasColumnName("BranchID");
+            entity.Property(e => e.DirectManagerId).HasColumnName("DirectManagerID");
             entity.Property(e => e.CurrentSalaryBase).HasColumnType("decimal(18, 2)");
             entity.Property(e => e.Department).HasMaxLength(100);
             entity.Property(e => e.EmailAddress).HasMaxLength(50);
@@ -734,6 +777,28 @@ public virtual DbSet<AttendanceManual>  AttendanceManuals  { get; set; }
                 .HasMaxLength(4)
                 .HasColumnName("yearqualification");
         });
+        modelBuilder.Entity<EmployeePenalty>(entity =>
+        {
+            entity.ToTable("EmployeePenalties");
+
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.Id).HasColumnName("Id");
+            entity.Property(e => e.EmployeeId).HasColumnName("EmployeeID");
+            entity.Property(e => e.PenaltyType).HasColumnName("PenaltyType");
+            entity.Property(e => e.DaysCount).HasColumnName("DaysCount");
+            entity.Property(e => e.FixedAmount).HasColumnName("FixedAmount");
+            entity.Property(e => e.ComputedAmount).HasColumnName("ComputedAmount");
+            entity.Property(e => e.TargetMonth).HasColumnName("TargetMonth");
+            entity.Property(e => e.Reason).HasColumnName("Reason");
+            entity.Property(e => e.Status).HasColumnName("Status");
+            entity.Property(e => e.CreatedBy).HasColumnName("CreatedBy");
+            entity.Property(e => e.ApprovedBy).HasColumnName("ApprovedBy");
+            entity.Property(e => e.CreatedAt).HasColumnName("CreatedAt");
+            entity.Property(e => e.ApprovedAt).HasColumnName("ApprovedAt");
+            entity.Property(e => e.AppliedPayrollId).HasColumnName("AppliedPayrollID");
+        });
+
         modelBuilder.Entity<EmployeeLoan>(entity =>
         {
             entity.ToTable("EmployeeLoans");
@@ -1991,6 +2056,8 @@ modelBuilder.Entity<PartyContact>(entity =>
             entity.HasKey(e => e.DetailId).HasName("PK__Transact__135C314D32A2B70C");
 
             entity.Property(e => e.DetailId).HasColumnName("DetailID");
+            entity.Property(e => e.DeliveryDate).HasColumnType("datetime");
+            entity.Property(e => e.DeliveryDateIsCustom).HasDefaultValue(false);
             entity.Property(e => e.Notes).HasMaxLength(255);
             entity.Property(e => e.PricingTier)
                 .HasMaxLength(50)
@@ -2458,6 +2525,232 @@ modelBuilder.Entity<LeadInteraction>(entity =>
             entity.Property(e => e.CreatedBy).HasMaxLength(100);
             entity.Property(e => e.CompletedBy).HasMaxLength(100);
             entity.Property(e => e.UpdatedBy).HasMaxLength(100);
+        });
+
+        // ─── التسليم الجزئي: أحداث تسليم الفواتير (مكتوبة يدويًا بنمط الـScaffold —
+        //     الجدولان يُنشآن بـ partial-delivery-tables.sql) ───
+        modelBuilder.Entity<InvoiceDelivery>(entity =>
+        {
+            entity.HasKey(e => e.DeliveryId).HasName("PK_InvoiceDeliveries");
+
+            entity.ToTable("InvoiceDeliveries");
+
+            entity.HasIndex(e => new { e.TransactionId, e.DeliveryDate }, "IX_InvoiceDeliveries_Transaction");
+
+            entity.HasIndex(e => e.DeliveryDate, "IX_InvoiceDeliveries_Date");
+
+            entity.HasIndex(e => e.EventGuid, "UX_InvoiceDeliveries_EventGuid").IsUnique();
+
+            entity.Property(e => e.DeliveryDate).HasColumnType("datetime2");
+            entity.Property(e => e.DeliveryEmployeeName).HasMaxLength(150);
+            entity.Property(e => e.Notes).HasMaxLength(500);
+            entity.Property(e => e.RecordedBy).HasMaxLength(100);
+            entity.Property(e => e.RecordedAt)
+                .HasDefaultValueSql("(sysdatetime())")
+                .HasColumnType("datetime2");
+            entity.Property(e => e.VoidedBy).HasMaxLength(100);
+            entity.Property(e => e.VoidedAt).HasColumnType("datetime2");
+            entity.Property(e => e.VoidReason).HasMaxLength(500);
+            entity.Property(e => e.EventGuid).HasDefaultValueSql("(newid())");
+
+            entity.HasOne(d => d.Transaction).WithMany()
+                .HasForeignKey(d => d.TransactionId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_InvoiceDeliveries_Transactions");
+
+            entity.HasOne(d => d.DeliveryEmployee).WithMany()
+                .HasForeignKey(d => d.DeliveryEmployeeId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_InvoiceDeliveries_Employees");
+        });
+
+        modelBuilder.Entity<InvoiceDeliveryItem>(entity =>
+        {
+            entity.HasKey(e => e.DeliveryItemId).HasName("PK_InvoiceDeliveryItems");
+
+            entity.ToTable("InvoiceDeliveryItems");
+
+            entity.HasIndex(e => e.DeliveryId, "IX_InvoiceDeliveryItems_Delivery");
+
+            entity.HasIndex(e => e.TransactionDetailId, "IX_InvoiceDeliveryItems_Detail");
+
+            entity.Property(e => e.Quantity).HasColumnType("decimal(18, 3)");
+
+            // نتائج التسليم (القسم 11.1 — delivery-outcomes.sql): حصص التصنيف
+            entity.Property(e => e.AcceptedQty).HasColumnType("decimal(18, 3)");
+            entity.Property(e => e.ReturnedManufacturingQty).HasColumnType("decimal(18, 3)");
+            entity.Property(e => e.ReturnedHandlingQty).HasColumnType("decimal(18, 3)");
+            entity.Property(e => e.ReturnedModificationQty).HasColumnType("decimal(18, 3)");
+            entity.Property(e => e.DispositionNotes).HasMaxLength(500);
+            entity.HasIndex(e => e.MaintenanceId, "IX_InvoiceDeliveryItems_Maintenance");
+
+            entity.HasOne(d => d.Delivery).WithMany(p => p.InvoiceDeliveryItems)
+                .HasForeignKey(d => d.DeliveryId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_InvoiceDeliveryItems_Deliveries");
+
+            entity.HasOne(d => d.TransactionDetail).WithMany()
+                .HasForeignKey(d => d.TransactionDetailId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_InvoiceDeliveryItems_Details");
+
+            entity.HasOne(d => d.Maintenance).WithMany()
+                .HasForeignKey(d => d.MaintenanceId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_InvoiceDeliveryItems_Maintenance");
+        });
+
+        // ─── نتائج التسليم: حلقة صيانة المرتجعات (القسم 11.3 — delivery-outcomes.sql) ───
+        modelBuilder.Entity<DeliveryMaintenanceItem>(entity =>
+        {
+            entity.HasKey(e => e.MaintenanceId).HasName("PK_DeliveryMaintenanceItems");
+
+            entity.ToTable("DeliveryMaintenanceItems");
+
+            entity.HasIndex(e => new { e.TransactionId, e.Status }, "IX_DeliveryMaintenanceItems_Transaction");
+
+            entity.HasIndex(e => new { e.TransactionDetailId, e.Status }, "IX_DeliveryMaintenanceItems_Detail");
+
+            entity.HasIndex(e => e.DeliveryId, "IX_DeliveryMaintenanceItems_Delivery");
+
+            entity.Property(e => e.Quantity).HasColumnType("decimal(18, 3)");
+            entity.Property(e => e.ReasonClass).HasMaxLength(30);
+            entity.Property(e => e.IssueDescription).HasMaxLength(500);
+            entity.Property(e => e.Status).HasMaxLength(30);
+            entity.Property(e => e.RepairCost).HasColumnType("decimal(18, 2)");
+            entity.Property(e => e.RepairCostNotes).HasMaxLength(500);
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(sysdatetime())")
+                .HasColumnType("datetime2");
+            entity.Property(e => e.StartedAt).HasColumnType("datetime2");
+            entity.Property(e => e.ReadyAt).HasColumnType("datetime2");
+            entity.Property(e => e.ClosedAt).HasColumnType("datetime2");
+            entity.Property(e => e.StatusBy).HasMaxLength(100);
+            entity.Property(e => e.ResolutionNotes).HasMaxLength(500);
+            entity.Property(e => e.VoidedBy).HasMaxLength(100);
+            entity.Property(e => e.VoidedAt).HasColumnType("datetime2");
+            entity.Property(e => e.VoidReason).HasMaxLength(500);
+
+            entity.HasOne(d => d.DeliveryItem).WithMany()
+                .HasForeignKey(d => d.DeliveryItemId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_DeliveryMaintenanceItems_DeliveryItems");
+
+            entity.HasOne(d => d.Transaction).WithMany()
+                .HasForeignKey(d => d.TransactionId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_DeliveryMaintenanceItems_Transactions");
+
+            entity.HasOne(d => d.TransactionDetail).WithMany()
+                .HasForeignKey(d => d.TransactionDetailId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_DeliveryMaintenanceItems_Details");
+
+            entity.HasOne(d => d.AdditionalCharge).WithMany()
+                .HasForeignKey(d => d.AdditionalChargeId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_DeliveryMaintenanceItems_Charges");
+
+            entity.HasOne(d => d.HandledByEmployee).WithMany()
+                .HasForeignKey(d => d.HandledByEmployeeId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_DeliveryMaintenanceItems_Employees");
+        });
+
+        // ─── طلبات تعديل مواعيد التسليم (مكتوبة يدويًا بنمط الـScaffold —
+        //     الجدولان يُنشآن بـ delivery-schedule-requests.sql) ───
+        modelBuilder.Entity<DeliveryScheduleChangeRequest>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("PK_DeliveryScheduleChangeRequests");
+
+            entity.ToTable("DeliveryScheduleChangeRequests");
+
+            entity.HasIndex(e => new { e.TransactionId, e.Status }, "IX_DeliveryScheduleChangeRequests_Transaction");
+
+            entity.Property(e => e.RequesterUserName).HasMaxLength(100);
+            entity.Property(e => e.RequesterName).HasMaxLength(150);
+            entity.Property(e => e.Reason).HasMaxLength(1000);
+            entity.Property(e => e.ProposedDueDate).HasColumnType("datetime2");
+            entity.Property(e => e.Status).HasMaxLength(20);
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(sysdatetime())")
+                .HasColumnType("datetime2");
+            entity.Property(e => e.DecidedBy).HasMaxLength(100);
+            entity.Property(e => e.DecidedAt).HasColumnType("datetime2");
+            entity.Property(e => e.DecisionNote).HasMaxLength(1000);
+
+            entity.HasOne(d => d.Transaction).WithMany()
+                .HasForeignKey(d => d.TransactionId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_DeliveryScheduleChangeRequests_Transactions");
+        });
+
+        modelBuilder.Entity<DeliveryScheduleChangeRequestLine>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("PK_DeliveryScheduleChangeRequestLines");
+
+            entity.ToTable("DeliveryScheduleChangeRequestLines");
+
+            entity.HasIndex(e => e.RequestId, "IX_DeliveryScheduleChangeRequestLines_Request");
+
+            entity.Property(e => e.ProposedDate).HasColumnType("datetime2");
+
+            entity.HasOne(d => d.Request).WithMany(p => p.Lines)
+                .HasForeignKey(d => d.RequestId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_DeliveryScheduleChangeRequestLines_Requests");
+
+            entity.HasOne(d => d.TransactionDetail).WithMany()
+                .HasForeignKey(d => d.TransactionDetailId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_DeliveryScheduleChangeRequestLines_Details");
+        });
+
+        modelBuilder.Entity<TaskComment>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("PK_TaskComments");
+
+            entity.ToTable("TaskComments");
+
+            entity.HasIndex(e => new { e.TaskId, e.CreatedAt }, "IX_TaskComments_TaskId");
+
+            entity.Property(e => e.AuthorUserName).HasMaxLength(100);
+            entity.Property(e => e.AuthorName).HasMaxLength(150);
+            entity.Property(e => e.Body).HasMaxLength(2000);
+            entity.Property(e => e.Kind).HasMaxLength(20);
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("(sysdatetime())")
+                .HasColumnType("datetime2");
+
+            entity.HasOne(d => d.Task).WithMany()
+                .HasForeignKey(d => d.TaskId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_TaskComments_CRM_Tasks");
+
+            entity.HasOne(d => d.AuthorEmployee).WithMany()
+                .HasForeignKey(d => d.AuthorEmployeeId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_TaskComments_Employees");
+        });
+
+        modelBuilder.Entity<TaskCommentMention>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("PK_TaskCommentMentions");
+
+            entity.ToTable("TaskCommentMentions");
+
+            entity.HasIndex(e => new { e.MentionedEmployeeId, e.CommentId }, "IX_TaskCommentMentions_Employee");
+            entity.HasIndex(e => e.CommentId, "IX_TaskCommentMentions_Comment");
+
+            entity.HasOne(d => d.Comment).WithMany(p => p.Mentions)
+                .HasForeignKey(d => d.CommentId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_TaskCommentMentions_TaskComments");
+
+            entity.HasOne(d => d.MentionedEmployee).WithMany()
+                .HasForeignKey(d => d.MentionedEmployeeId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_TaskCommentMentions_Employees");
         });
 
         OnModelCreatingPartial(modelBuilder);

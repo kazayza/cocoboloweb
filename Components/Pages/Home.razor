@@ -20,6 +20,7 @@
 @inject NavigationManager        Navigation
 @inject ISnackbar                Snackbar
 @inject IJSRuntime               JS
+@inject ISalesDeliveryStatusService DeliveryService
 
 <PageTitle>الرئيسية — COCOBOLO ERP</PageTitle>
 
@@ -384,6 +385,41 @@ else
                         </div>
                     }
 
+                    @if (_myTasksLoaded && (_myTasksSummary.OpenAssigned + _myTasksSummary.OpenCreated + _myTasksSummary.MentionedTasks) > 0)
+                    {
+                        <div class="pro-card mini-insight-card" style="border-inline-start:4px solid #D4A853;cursor:pointer;" @onclick='() => Navigation.NavigateTo("/my-tasks")'>
+                            <div class="card-hdr mini-card-hdr">
+                                <div class="hdr-left">
+                                    <div class="hdr-icon" style="background:linear-gradient(135deg,#1B2A4A,#2D4A7A);">
+                                        <MudIcon Icon="@Icons.Material.Filled.AssignmentInd" />
+                                    </div>
+                                    <div>
+                                        <h3>مهامي</h3>
+                                        <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.35rem;">
+                                            <span style="background:#1B2A4A;color:#fff;padding:.15rem .65rem;border-radius:999px;font-size:.8rem;font-weight:700;">وارد مفتوح: @_myTasksSummary.OpenAssigned</span>
+                                            <span style="background:@(_myTasksSummary.OverdueAssigned > 0 ? "#FEF2F2" : "#F3F4F6");color:@(_myTasksSummary.OverdueAssigned > 0 ? "#DC2626" : "#6B7280");border:1px solid @(_myTasksSummary.OverdueAssigned > 0 ? "#FECACA" : "#E5E7EB");padding:.15rem .65rem;border-radius:999px;font-size:.8rem;font-weight:700;">متأخر: @_myTasksSummary.OverdueAssigned</span>
+                                            <span style="background:#fff;color:#1B2A4A;border:1px solid #1B2A4A;padding:.15rem .65rem;border-radius:999px;font-size:.8rem;font-weight:700;">صادر مفتوح: @_myTasksSummary.OpenCreated</span>
+                                            @if (_myTasksSummary.MentionedTasks > 0)
+                                            {
+                                                <span style="background:#FEFBF3;color:#B8912A;border:1px solid #D4A853;padding:.15rem .65rem;border-radius:999px;font-size:.8rem;font-weight:800;">إشارات: @_myTasksSummary.MentionedTasks</span>
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="display:flex;gap:.5rem;align-items:center;">
+                                    <button class="view-all" @onclick='() => Navigation.NavigateTo("/crm/general-tasks")' @onclick:stopPropagation="true">
+                                        التكليفات العامة
+                                        <MudIcon Icon="@Icons.Material.Filled.AssignmentTurnedIn" Size="MudBlazor.Size.Small" />
+                                    </button>
+                                    <button class="view-all" @onclick='() => Navigation.NavigateTo("/my-tasks")' @onclick:stopPropagation="true">
+                                        افتح مهامي
+                                        <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Size="MudBlazor.Size.Small" />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+
                     @if (ShouldShowCrmWidget())
                     {
                         <div class="pro-card mini-insight-card crm-widget-card">
@@ -586,6 +622,77 @@ else
                         </div>
                     }
                 </div>
+            }
+        </div>
+    }
+
+    @if (_p.ViewDeliveryTracking && _upcomingDeliveries.Any())
+    {
+        <div class="pro-card animate-card upcoming-card" style="--delay: 0.28s">
+            <div class="card-hdr">
+                <div class="hdr-left">
+                    <div class="hdr-icon delivery-widget-icon">
+                        <MudIcon Icon="@Icons.Material.Filled.Upcoming" />
+                    </div>
+                    <div>
+                        <h3>التسليمات القادمة — 10 أيام</h3>
+                        <p>@_upcomingDeliveries.Count موعد تسليم خلال 10 أيام — بالتواريخ كما تظهر لك</p>
+                    </div>
+                </div>
+                <button class="view-all" @onclick='() => Navigation.NavigateTo("/sales-delivery-status")'>
+                    فتح متابعة التسليمات
+                    <MudIcon Icon="@Icons.Material.Filled.ArrowBack" Size="MudBlazor.Size.Small" />
+                </button>
+            </div>
+
+            @* شريط ملخص سريع: حجم النافذة + مستحق اليوم + المتأخر (من عدّاد الرئيسية الحالي) *@
+            <div class="upcoming-stats">
+                <div class="upcoming-stat info">
+                    <span>مواعيد خلال 10 أيام</span>
+                    <strong>@_upcomingDeliveries.Count</strong>
+                </div>
+                <div class="upcoming-stat warning">
+                    <span>مستحق اليوم</span>
+                    <strong>@_upcomingDeliveries.Count(a => a.DisplayDate.Date == DateTime.Today)</strong>
+                </div>
+                @if (_deliveryWidget.OverdueCount > 0)
+                {
+                    <div class="upcoming-stat danger">
+                        <span>تسليمات متأخرة</span>
+                        <strong>@_deliveryWidget.OverdueCount</strong>
+                    </div>
+                }
+            </div>
+
+            @foreach (var dayGroup in _upcomingDeliveries.Take(12).GroupBy(a => a.DisplayDate.Date))
+            {
+                var isToday = dayGroup.Key == DateTime.Today;
+                <div class="upcoming-day @(isToday ? "today" : "")">
+                    <div class="upcoming-day-hdr">
+                        <DeliveryDateChip Date="@dayGroup.Key" Size="MudBlazor.Size.Small" />
+                        <span class="upcoming-day-rel">@RelativeDayLabel(dayGroup.Key)</span>
+                        <span class="upcoming-day-meta">@dayGroup.Count() موعد • متبقي @dayGroup.Sum(a => a.RemainingQty).ToString("0.###")</span>
+                    </div>
+                    @foreach (var appt in dayGroup)
+                    {
+                        <button type="button" class="upcoming-row @(isToday ? "today" : "")"
+                                @onclick='() => Navigation.NavigateTo($"/sales-delivery-status/{appt.TransactionId}")'>
+                            <span class="upcoming-row-icon">
+                                <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Size="MudBlazor.Size.Small" />
+                            </span>
+                            <span class="upcoming-row-main">
+                                <strong>@appt.PartyName</strong>
+                                <small>فاتورة @appt.Reference • بنود مستحقة @appt.DueLineCount</small>
+                            </span>
+                            <span class="upcoming-row-qty">متبقي @appt.RemainingQty.ToString("0.###")</span>
+                            <MudIcon Icon="@Icons.Material.Filled.ChevronLeft" Size="MudBlazor.Size.Small" />
+                        </button>
+                    }
+                </div>
+            }
+            @if (_upcomingDeliveries.Count > 12)
+            {
+                <div class="upcoming-more">و@(_upcomingDeliveries.Count - 12) موعد آخر — افتح متابعة التسليمات لعرض الكل</div>
             }
         </div>
     }
@@ -2119,6 +2226,58 @@ else
         border-right: 4px solid transparent;
     }
     .att-row:hover { transform: translateX(-3px); box-shadow: 0 4px 12px rgba(0,0,0,.06); }
+    .upcoming-stats { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: 1rem; }
+    .upcoming-stat {
+        flex: 1 1 140px; display: flex; flex-direction: column; gap: .2rem;
+        padding: .65rem .8rem; border-radius: 12px;
+        border: 1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-background);
+    }
+    .upcoming-stat span { font-size: .74rem; font-weight: 700; color: var(--mud-palette-text-secondary); }
+    .upcoming-stat strong { font-size: 1.15rem; line-height: 1.1; }
+    .upcoming-stat.info    { border-inline-start: 4px solid #3b82f6; }
+    .upcoming-stat.warning { border-inline-start: 4px solid #f59e0b; }
+    .upcoming-stat.danger  { border-inline-start: 4px solid #ef4444; }
+    .upcoming-stat.danger strong { color: #ef4444; }
+    .upcoming-day { margin-top: 1.1rem; }
+    .upcoming-day-hdr {
+        display: flex; align-items: center; gap: .6rem;
+        margin-bottom: .55rem; padding-bottom: .45rem;
+        border-bottom: 1px dashed var(--mud-palette-divider);
+    }
+    .upcoming-day-rel { font-size: .88rem; font-weight: 800; color: var(--mud-palette-text-primary); }
+    .upcoming-day.today .upcoming-day-rel { color: #b45309; }
+    .upcoming-day-meta {
+        margin-inline-start: auto; font-size: .76rem; font-weight: 700;
+        color: var(--mud-palette-text-secondary);
+        background: var(--mud-palette-background-grey);
+        border-radius: 999px; padding: .15rem .6rem; white-space: nowrap;
+    }
+    .upcoming-row {
+        display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+        align-items: center; gap: .65rem;
+        width: 100%; padding: .7rem .85rem; margin-bottom: .5rem;
+        border-radius: 14px; border: 1px solid var(--mud-palette-divider);
+        background: var(--mud-palette-background);
+        cursor: pointer; text-align: right; font-family: inherit;
+        transition: transform .2s, box-shadow .2s;
+    }
+    .upcoming-row:hover { transform: translateX(-3px); box-shadow: 0 4px 12px rgba(0,0,0,.06); }
+    .upcoming-row.today { border-inline-start: 4px solid #f59e0b; }
+    .upcoming-row-icon {
+        display: flex; align-items: center; justify-content: center;
+        width: 34px; height: 34px; border-radius: 10px;
+        background: rgba(20,184,166,.12); color: #0f766e;
+    }
+    .upcoming-row-main { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+    .upcoming-row-main strong { font-size: .92rem; }
+    .upcoming-row-main small { color: var(--mud-palette-text-secondary); font-size: .78rem; }
+    .upcoming-row-qty {
+        font-size: .74rem; font-weight: 800; color: #0f766e;
+        background: rgba(20,184,166,.12);
+        border-radius: 999px; padding: .2rem .55rem; white-space: nowrap;
+    }
+    .upcoming-more { text-align: center; color: var(--mud-palette-text-secondary); font-size: .82rem; padding: .4rem 0 .2rem; }
     .att-row.high   { border-right-color: #ef4444; }
     .att-row.medium { border-right-color: #f59e0b; }
     .att-row.low    { border-right-color: #3b82f6; }
@@ -2390,9 +2549,12 @@ else
     private List<TaskListDto>       _crmUpcomingTasks   = new();
     private List<CrmTeamMemberItem> _crmTeamMembers     = new();
     private DeliveryWidgetData      _deliveryWidget     = new();
+    private List<UpcomingDeliveryAppointmentDto> _upcomingDeliveries = new();
     private FinanceWidgetData       _financeWidget      = new();
     private CrmWidgetData           _crmWidget          = new();
     private CrmTeamWidgetData       _crmTeamWidget      = new();
+    private MyTasksSummaryDto       _myTasksSummary     = new();
+    private bool                    _myTasksLoaded;
     private bool                    _crmHomeLoadFailed;
     private bool                    _crmTeamLoadFailed;
 
@@ -2566,6 +2728,7 @@ else
             await LoadNotifications();
             await LoadPersonalizedInsights();
             await LoadCrmHomeInsights();
+            await LoadMyTasksSummaryAsync();
         }
         catch (Exception ex)
         {
@@ -2637,7 +2800,8 @@ else
         if (_p.ViewSales)      links.Add(new("المدفوعات",    "/payments",           Icons.Material.Rounded.Payments,             "#3b82f6"));
         if (_p.ViewDeliveryTracking) links.Add(new("متابعة التسليمات", "/sales-delivery-status", Icons.Material.Rounded.LocalShipping, "#14b8a6"));
         if (_p.ViewB2BManagement) links.Add(new("طلبات B2B", "/admin/b2b/requests", Icons.Material.Rounded.StoreMallDirectory, "#0ea5e9"));
-        if (_p.ViewGeneralTasks) links.Add(new("التكليفات العامة", "/crm/general-tasks", Icons.Material.Rounded.AssignmentTurnedIn, "#059669"));
+        // التكليفات العامة: للمديرين (ViewGeneralTasks) أو لأي مستخدم مربوط بسجل موظف — الصفحة تحصره في تكليفاته
+        if (_p.ViewGeneralTasks || _crmWidget.IsEmployeeLinked) links.Add(new("التكليفات العامة", "/crm/general-tasks", Icons.Material.Rounded.AssignmentTurnedIn, "#059669"));
         return links;
     }
 
@@ -3057,6 +3221,17 @@ if (_p.ViewQuotes)
 
                 if (_deliveryWidget.DueTodayCount > 0)
                     priorityItems.Add(new("تسليمات مستحقة اليوم", _deliveryWidget.DueTodayCount, "رتّب جدول التسليم اليومي", "/sales-delivery-status", Icons.Material.Filled.LocalShipping, "#14b8a6", "high", 90));
+
+                // قسم «التسليمات القادمة — 10 أيام»: مواعيد بصيغة عرض هذا المستخدم
+                // (حقيقية أو مقنّعة حسب صلاحيته) — استعلام واحد مجمّع من خدمة التسليمات
+                try
+                {
+                    _upcomingDeliveries = await DeliveryService.GetUpcomingAppointmentsAsync(10);
+                }
+                catch
+                {
+                    _upcomingDeliveries = new();
+                }
             }
 
             if (_p.ViewSales || _p.ViewCashBox || _p.ViewExpenses)
@@ -3131,6 +3306,23 @@ if (_p.ViewQuotes)
             _priorityItems = new();
             _deliveryWidget = new();
             _financeWidget = new();
+        }
+    }
+
+    /// <summary>شريط «مهامي» المضغوط — عدّادات صندوق التكليفات الموحد (فشل التحميل صامت)</summary>
+    private async Task LoadMyTasksSummaryAsync()
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_currentUserName))
+            {
+                _myTasksSummary = await TaskService.GetMyTasksSummaryAsync(_currentUserName);
+                _myTasksLoaded = true;
+            }
+        }
+        catch
+        {
+            _myTasksLoaded = false;
         }
     }
 
@@ -3379,6 +3571,17 @@ if (_p.ViewQuotes)
     }
 
     private bool ShouldShowDeliveryWidget() => _p.ViewDeliveryTracking;
+
+    private static string RelativeDayLabel(DateTime day)
+    {
+        var diff = (day.Date - DateTime.Today).Days;
+        return diff switch
+        {
+            0 => "اليوم",
+            1 => "بكرة",
+            _ => $"بعد {diff} يوم"
+        };
+    }
 
     private bool ShouldShowFinanceWidget() => _p.ViewSales || _p.ViewCashBox || _p.ViewExpenses;
 

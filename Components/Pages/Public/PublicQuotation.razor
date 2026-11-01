@@ -1,4 +1,4 @@
-@page "/q/quotation/{Id:int}"
+﻿@page "/q/{Token}"
 @layout COCOBOLOERPNEW.Components.Layout.EmptyLayout
 
 @using COCOBOLOERPNEW.DTOs
@@ -7,6 +7,7 @@
 @using Microsoft.AspNetCore.Components
 
 @inject IQuotationService QuotationService
+@inject COCOBOLOERPNEW.Helpers.ShareTokenService ShareTokens
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
 @inject IHttpClientFactory HttpFactory
@@ -54,17 +55,17 @@
 
                 <!-- Download Actions -->
                 <div class="top-actions">
-                    <a href="/q/quotation/@Id/print" target="_blank"
+                    <a href="/q/@Token/print" target="_blank"
    class="action-btn" title="طباعة">
                         <span class="action-icon">🖨️</span>
                         <span class="action-label">طباعة</span>
                     </a>
-                    <a href="/api/quotations/@Id/pdf" target="_blank"
+                    <a href="/api/public/quotations/@Token/pdf" target="_blank"
                        class="action-btn action-pdf" title="تحميل PDF">
                         <span class="action-icon">📄</span>
                         <span class="action-label">PDF</span>
                     </a>
-                    <a href="/api/quotations/@Id/excel" download
+                    <a href="/api/public/quotations/@Token/excel" download
                        class="action-btn action-excel" title="تحميل Excel">
                         <span class="action-icon">📊</span>
                         <span class="action-label">Excel</span>
@@ -135,7 +136,7 @@
         <!-- ║   DESKTOP: A4 IFRAME PREVIEW                    ║ -->
         <!-- ╚════════════════════════════════════════════════╝ -->
         <main class="preview-area desktop-only @(CanCustomerRespond() ? "with-sticky-cta" : "")">
-            <iframe src="/q/quotation/@Id/print" class="print-iframe" frameborder="0"></iframe>
+            <iframe src="/q/@Token/print" class="print-iframe" frameborder="0"></iframe>
         </main>
 
         <!-- ╔════════════════════════════════════════════════╗ -->
@@ -147,7 +148,7 @@
             <div class="mv-section">
                 <div class="mv-section-title">
                     <span>📋 تفاصيل العرض</span>
-                    <a href="/q/quotation/@Id/print" target="_blank" class="mv-print-link">🖨️ طباعة</a>
+                    <a href="/q/@Token/print" target="_blank" class="mv-print-link">🖨️ طباعة</a>
                 </div>
                 <div class="mv-detail-grid">
                     <div class="mv-detail-item">
@@ -388,12 +389,6 @@
                 <p><strong>هل تؤكد موافقتك على هذا العرض؟</strong></p>
                 <p class="small">سيتم التواصل معك من فريقنا قريباً لإتمام الإجراءات.</p>
 
-                <label>اسمك (اختياري):</label>
-                <input type="text"
-                       @bind="_customerName"
-                       @bind:event="oninput"
-                       placeholder="مثال: أحمد محمد"
-                       class="input-field" />
             </div>
             <div class="modal-footer">
                 <button @onclick="@(() => _showAcceptDialog = false)"
@@ -419,12 +414,6 @@
             <div class="modal-body">
                 <p><strong>نأسف لعدم استمرارك. هل يمكنك إخبارنا بالسبب؟</strong></p>
 
-                <label>اسمك (اختياري):</label>
-                <input type="text"
-                       @bind="_customerName"
-                       @bind:event="oninput"
-                       placeholder="مثال: أحمد محمد"
-                       class="input-field" />
 
                 <label>سبب الرفض (يساعدنا على التحسين):</label>
                 <textarea @bind="_rejectionReason"
@@ -1487,7 +1476,9 @@
 </style>
 
 @code {
-    [Parameter] public int Id { get; set; }
+    [Parameter] public string Token { get; set; } = "";
+
+    private int _quotationId;
 
     private bool _isLoading = true;
     private string? _error;
@@ -1496,7 +1487,6 @@
     private bool _showAcceptDialog = false;
     private bool _showRejectDialog = false;
     private bool _isSubmittingResponse = false;
-    private string _customerName = "";
     private string _rejectionReason = "";
     private string _responseMessage = "";
     private bool _responseSuccess = false;
@@ -1505,7 +1495,16 @@
     {
         try
         {
-            _quote = await QuotationService.GetQuotationPublicAsync(Id);
+            // ⭐ دفعة 1: الوصول بالتوكن الموقّع فقط — مسار الرقم الخام أُلغي نهائيًا
+            var payload = ShareTokens.ValidateToken(Token);
+            if (payload == null || payload.Type != "quotation")
+            {
+                _error = "الرابط غير صحيح أو انتهت صلاحيته. تواصل معنا للحصول على رابط جديد.";
+                return;
+            }
+
+            _quotationId = payload.Id;
+            _quote = await QuotationService.GetQuotationPublicAsync(_quotationId);
             if (_quote == null)
             {
                 _error = "عرض السعر غير موجود أو الرابط غير صحيح.";
@@ -1528,6 +1527,8 @@
         if (_quote.IsExpired) return false;
         if (_quote.Status == "Accepted") return false;
         if (_quote.Status == "Rejected") return false;
+        // ⭐ الرد متاح فقط لعرض حالته "مُرسل" — نفس قاعدة الخادم
+        if (_quote.Status != "Sent") return false;
         return true;
     }
 
@@ -1557,15 +1558,15 @@
             var http = HttpFactory.CreateClient();
             http.BaseAddress = new Uri(Navigation.BaseUri);
 
+            // ⭐ اسم المستجيب لا يُرسل — الخادم يأخذه من سجل العميل المرتبط بالعرض
             var payload = new
             {
                 response = response,
-                reason = reason,
-                customerName = _customerName
+                reason = reason
             };
 
             var apiResponse = await http.PostAsJsonAsync(
-                $"/api/public/quotations/{Id}/respond", payload);
+                $"/api/public/quotations/{Token}/respond", payload);
 
             if (apiResponse.IsSuccessStatusCode)
             {
@@ -1574,7 +1575,7 @@
                 _responseSuccess = true;
 
                 await Task.Delay(2500);
-                _quote = await QuotationService.GetQuotationPublicAsync(Id);
+                _quote = await QuotationService.GetQuotationPublicAsync(_quotationId);
                 _responseMessage = "";
             }
             else

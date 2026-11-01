@@ -1,0 +1,355 @@
+@page "/delivery-maintenance"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject IDeliveryMaintenanceService MaintenanceService
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+@inject ILogger<DeliveryMaintenance> Logger
+
+@attribute [Authorize]
+
+<PageTitle>صيانة التسليمات</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3" Wrap="Wrap.Wrap">
+        <MudText Typo="Typo.h5">
+            <MudIcon Icon="@Icons.Material.Filled.Build" Color="Color.Primary" />
+            صيانة التسليمات — مرتجعات بانتظار الحل
+        </MudText>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh"
+                   OnClick="LoadAsync" Disabled="_loading">تحديث</MudButton>
+    </MudStack>
+
+    @if (!_canView)
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+            ليس لديك صلاحية عرض شاشة صيانة التسليمات.
+        </MudAlert>
+    }
+    else
+    {
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+            كل كمية رُدّت عند التسليم (عيب تصنيع/تلف مناولة/تعديل عميل) لها سجل هنا:
+            المصنع يعمل عليها، ثم تُعاد تسليمها أو تُستبدل أو تُردّ نهائيًا بقرار موثق.
+            تلف المناولة تصنيف وتقارير فقط — لا خصومات تلقائية (D9).
+        </MudText>
+
+        @* ── فلاتر ── *@
+        <MudPaper Class="pa-3 mb-3" Elevation="1">
+            <MudGrid Spacing="2">
+                <MudItem xs="12" md="3">
+                    <MudSelect T="string" Value="_statusFilter" ValueChanged="OnStatusFilterChanged"
+                               Label="الحالة" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true"
+                               AnchorOrigin="Origin.BottomCenter">
+                        @foreach (var st in DeliveryMaintenanceStatuses.All)
+                        {
+                            <MudSelectItem T="string" Value="@st.Key">@st.Value</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="3">
+                    <MudSelect T="string" Value="_classFilter" ValueChanged="OnClassFilterChanged"
+                               Label="تصنيف الرجوع" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true"
+                               AnchorOrigin="Origin.BottomCenter">
+                        @foreach (var cls in DeliveryDispositions.All.Where(kv => kv.Key != DeliveryDispositions.Accepted))
+                        {
+                            <MudSelectItem T="string" Value="@cls.Key">@cls.Value</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTextField T="string" @bind-Value="_search" Label="بحث (مرجع فاتورة / عميل / منتج)"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                                  Immediate="true" DebounceInterval="400"
+                                  OnDebounceIntervalElapsed="LoadAsync" />
+                </MudItem>
+                <MudItem xs="12" md="2">
+                    <MudSwitch T="bool" @bind-Value="_includeTerminal" @bind-Value:after="LoadAsync"
+                               Color="Color.Primary" Label="إظهار المنتهية" />
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        @* ── ملخص سريع ── *@
+        <MudStack Row="true" Spacing="2" Class="mb-3" Wrap="Wrap.Wrap">
+            <MudChip T="string" Color="Color.Warning" Variant="Variant.Filled">
+                في الحلقة الآن: @_items.Count(i => i.IsInLoop) سجل — @_items.Where(i => i.IsInLoop).Sum(i => i.Quantity).ToString("0.###") كمية
+            </MudChip>
+            <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined">
+                عيوب تصنيع: @_items.Where(i => i.IsInLoop && i.ReasonClass == DeliveryDispositions.ManufacturingDefect).Sum(i => i.Quantity).ToString("0.###")
+            </MudChip>
+            <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined">
+                تلف مناولة: @_items.Where(i => i.IsInLoop && i.ReasonClass == DeliveryDispositions.HandlingDamage).Sum(i => i.Quantity).ToString("0.###")
+            </MudChip>
+            <MudChip T="string" Color="Color.Success" Variant="Variant.Outlined">
+                جاهز لإعادة التسليم: @_items.Count(i => i.Status == DeliveryMaintenanceStatuses.ReadyForRedelivery)
+            </MudChip>
+            <MudChip T="string" Color="Color.Error" Variant="Variant.Outlined">
+                تعذّر إصلاحه — بانتظار قرار: @_items.Count(i => i.Status == DeliveryMaintenanceStatuses.Unrepairable)
+            </MudChip>
+        </MudStack>
+
+        @if (_loading)
+        {
+            <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Style="min-height:240px;" Spacing="2">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary">جارٍ التحميل...</MudText>
+            </MudStack>
+        }
+        else if (_items.Count == 0)
+        {
+            <MudAlert Severity="Severity.Success" Variant="Variant.Outlined">
+                لا توجد سجلات صيانة مطابقة — لا مرتجعات مفتوحة حاليًا.
+            </MudAlert>
+        }
+        else
+        {
+            <MudTable T="DeliveryMaintenanceItemDto" Items="_items" Dense="true" Hover="true" Striped="true">
+                <HeaderContent>
+                    <MudTh>الفاتورة / العميل</MudTh>
+                    <MudTh>المنتج</MudTh>
+                    <MudTh Style="text-align:end;">الكمية</MudTh>
+                    <MudTh>التصنيف</MudTh>
+                    <MudTh>الحالة</MudTh>
+                    <MudTh Style="text-align:end;">العمر</MudTh>
+                    @if (_canSeeCost)
+                    {
+                        <MudTh Style="text-align:end;">تكلفة الإصلاح</MudTh>
+                    }
+                    <MudTh Style="width:60px;"></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="الفاتورة">
+                        <MudLink Href="@($"/sales-delivery-status/{context.TransactionId}")">
+                            @(string.IsNullOrWhiteSpace(context.TransactionRef) ? $"#{context.TransactionId}" : context.TransactionRef)
+                        </MudLink>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">@context.PartyName</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="المنتج">
+                        @context.ProductName
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">
+                            «@context.IssueDescription»
+                        </MudText>
+                        @if (!string.IsNullOrWhiteSpace(context.HandledByEmployeeName))
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">
+                                يعمل عليه: @context.HandledByEmployeeName
+                            </MudText>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="الكمية" Style="text-align:end;"><b>@context.Quantity.ToString("0.###")</b></MudTd>
+                    <MudTd DataLabel="التصنيف">
+                        <MudChip T="string" Size="Size.Small" Color="@ClassColor(context.ReasonClass)" Variant="Variant.Filled">
+                            @context.ReasonClassName
+                        </MudChip>
+                        @if (context.Billable)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Variant="Variant.Outlined">
+                                💰 @(context.ChargeStatusName ?? "رسم")@(context.ChargeAmount.HasValue ? $" — {context.ChargeAmount.Value:N2} ج" : "")
+                            </MudChip>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="الحالة">
+                        <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Status)" Variant="Variant.Filled">
+                            @context.StatusName
+                        </MudChip>
+                        @if (!string.IsNullOrWhiteSpace(context.ResolutionNotes) && context.IsTerminal)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">@context.ResolutionNotes</MudText>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="العمر" Style="text-align:end;">
+                        @context.AgeDays يوم
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">
+                            @context.CreatedAt.ToString("yyyy/MM/dd")
+                        </MudText>
+                    </MudTd>
+                    @if (_canSeeCost)
+                    {
+                        <MudTd DataLabel="تكلفة الإصلاح" Style="text-align:end;">
+                            @(context.RepairCost.HasValue ? context.RepairCost.Value.ToString("N2") + " ج" : "—")
+                        </MudTd>
+                    }
+                    <MudTd>
+                        @if (_canCreateTask)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.AddTask" Size="Size.Small" Color="Color.Warning"
+                                           Title="تكليف جديد على هذا البند"
+                                           OnClick="@(() => OpenCreateTaskAsync(context))" />
+                        }
+                        @if (!context.IsTerminal)
+                        {
+                            <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small"
+                                     AnchorOrigin="Origin.BottomLeft">
+                                @if (_canTransition && context.Status == DeliveryMaintenanceStatuses.Pending)
+                                {
+                                    <MudMenuItem Icon="@Icons.Material.Filled.PlayArrow"
+                                                 OnClick="@(() => OpenActionAsync(context, "start"))">بدء الصيانة</MudMenuItem>
+                                }
+                                @if (_canTransition && (context.Status == DeliveryMaintenanceStatuses.Pending
+                                                      || context.Status == DeliveryMaintenanceStatuses.InProgress))
+                                {
+                                    <MudMenuItem Icon="@Icons.Material.Filled.CheckCircle"
+                                                 OnClick="@(() => OpenActionAsync(context, "ready"))">جاهز لإعادة التسليم</MudMenuItem>
+                                    <MudMenuItem Icon="@Icons.Material.Filled.ReportProblem"
+                                                 OnClick="@(() => OpenActionAsync(context, "unrepairable"))">تعذّر إصلاحه</MudMenuItem>
+                                }
+                                @if (context.Status == DeliveryMaintenanceStatuses.Unrepairable)
+                                {
+                                    @if (_canReplace)
+                                    {
+                                        <MudMenuItem Icon="@Icons.Material.Filled.SwapHoriz"
+                                                     OnClick="@(() => OpenActionAsync(context, "replace"))">إغلاق باستبدال</MudMenuItem>
+                                    }
+                                    @if (_canCredit)
+                                    {
+                                        <MudMenuItem Icon="@Icons.Material.Filled.MoneyOff"
+                                                     OnClick="@(() => OpenActionAsync(context, "credit"))">إغلاق بردّ نهائي/رصيد</MudMenuItem>
+                                    }
+                                }
+                                @if (_canReclassify)
+                                {
+                                    <MudMenuItem Icon="@Icons.Material.Filled.SwapHorizontalCircle"
+                                                 OnClick="@(() => OpenActionAsync(context, "reclassify"))">إعادة تصنيف السبب</MudMenuItem>
+                                }
+                                @if (_canCredit)
+                                {
+                                    <MudMenuItem Icon="@Icons.Material.Filled.Cancel"
+                                                 OnClick="@(() => OpenActionAsync(context, "cancel"))">إلغاء الطلب</MudMenuItem>
+                                }
+                            </MudMenu>
+                        }
+                    </MudTd>
+                </RowTemplate>
+                <PagerContent>
+                    <MudTablePager PageSizeOptions="new int[] { 20, 50, 100 }" />
+                </PagerContent>
+            </MudTable>
+        }
+    }
+</MudContainer>
+
+@code {
+    private List<DeliveryMaintenanceItemDto> _items = new();
+    private bool _loading = true;
+
+    private string? _statusFilter;
+    private string? _classFilter;
+    private string _search = "";
+    private bool _includeTerminal;
+
+    private bool _canView;
+    private bool _canCreateTask;
+    private bool _canTransition;
+    private bool _canReplace;
+    private bool _canCredit;
+    private bool _canReclassify;
+    private bool _canSeeCost;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        var user = state.User;
+        _canView        = DeliveryPermissions.CanViewMaintenance(user);
+        _canCreateTask  = GeneralTaskPermissions.CanCreate(user);
+        _canTransition  = DeliveryPermissions.CanTransitionMaintenance(user);
+        _canReplace     = DeliveryPermissions.CanCloseMaintenanceByReplacement(user);
+        _canCredit      = DeliveryPermissions.CanCloseMaintenanceByCredit(user);
+        _canReclassify  = DeliveryPermissions.CanReclassifyMaintenance(user);
+        _canSeeCost     = DeliveryPermissions.CanSeeRepairCost(user);
+
+        if (_canView)
+            await LoadAsync();
+        _loading = false;
+    }
+
+    private async Task OpenCreateTaskAsync(DeliveryMaintenanceItemDto item)
+    {
+        var parameters = new DialogParameters
+        {
+            ["PresetLinkedType"] = GeneralTaskLinks.Maintenance,
+            ["PresetLinkedId"] = item.MaintenanceId,
+            ["PresetLinkedTitle"] = $"صيانة تسليم #{item.MaintenanceId} — {item.ProductName} ({item.PartyName})"
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+        await DialogService.ShowAsync<CreateGeneralTaskDialog>("تكليف جديد", parameters, options);
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _items = await MaintenanceService.GetQueueAsync(
+                _statusFilter, _classFilter,
+                string.IsNullOrWhiteSpace(_search) ? null : _search,
+                _includeTerminal);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load maintenance queue");
+            Snackbar.Add("تعذّر تحميل طابور الصيانة: " + ex.Message, Severity.Error);
+            _items = new();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnStatusFilterChanged(string? value)
+    {
+        _statusFilter = value;
+        await LoadAsync();
+    }
+
+    private async Task OnClassFilterChanged(string? value)
+    {
+        _classFilter = value;
+        await LoadAsync();
+    }
+
+    private async Task OpenActionAsync(DeliveryMaintenanceItemDto item, string mode)
+    {
+        var parameters = new DialogParameters<MaintenanceActionDialog>
+        {
+            { x => x.MaintenanceId, item.MaintenanceId },
+            { x => x.Mode, mode },
+            { x => x.ProductName, item.ProductName },
+            { x => x.Quantity, item.Quantity },
+            { x => x.ClassName, item.ReasonClassName },
+            { x => x.CurrentClass, item.ReasonClass },
+            { x => x.TransactionId, item.TransactionId },
+            { x => x.TransactionRef, item.TransactionRef },
+            { x => x.CanSeeCost, _canSeeCost }
+        };
+        var dialog = await DialogService.ShowAsync<MaintenanceActionDialog>("صيانة التسليمات", parameters);
+        var result = await dialog.Result;
+        if (result is { Canceled: false })
+            await LoadAsync();
+    }
+
+    private static Color StatusColor(string status) => status switch
+    {
+        DeliveryMaintenanceStatuses.Pending => Color.Default,
+        DeliveryMaintenanceStatuses.InProgress => Color.Info,
+        DeliveryMaintenanceStatuses.ReadyForRedelivery => Color.Success,
+        DeliveryMaintenanceStatuses.Unrepairable => Color.Error,
+        DeliveryMaintenanceStatuses.Redelivered => Color.Success,
+        DeliveryMaintenanceStatuses.ClosedByReplacement => Color.Warning,
+        DeliveryMaintenanceStatuses.ClosedByCredit => Color.Secondary,
+        _ => Color.Dark
+    };
+
+    private static Color ClassColor(string cls) => cls switch
+    {
+        DeliveryDispositions.ManufacturingDefect => Color.Error,
+        DeliveryDispositions.HandlingDamage => Color.Warning,
+        DeliveryDispositions.CustomerModification => Color.Info,
+        _ => Color.Default
+    };
+}

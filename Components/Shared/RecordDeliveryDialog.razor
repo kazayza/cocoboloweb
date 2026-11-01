@@ -1,0 +1,882 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject ISalesDeliveryStatusService DeliveryService
+@inject ISnackbar Snackbar
+@inject ILogger<RecordDeliveryDialog> Logger
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog Style="min-width: 840px;">
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.LocalShipping" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">تسجيل تسليمة</MudText>
+            @if (_detail is not null)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                    فاتورة @(_detail.ReferenceNumber ?? $"#{TransactionId}")
+                </MudChip>
+            }
+        </MudStack>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Style="min-height:240px;" Spacing="2">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary">جارٍ التحميل...</MudText>
+            </MudStack>
+        }
+        else if (_progress is null || _detail is null)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+                لا توجد بيانات لهذه الفاتورة
+            </MudAlert>
+        }
+        else
+        {
+            @* ── شريط الترويسة: العميل والفاتورة وحالة التسليم ── *@
+            <div class="rd-head">
+                <div class="rd-head-main">
+                    <MudText Typo="Typo.h6" Style="color:#fff;">@_detail.PartyName</MudText>
+                    <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,.78);">
+                        فاتورة @(_detail.ReferenceNumber ?? $"#{TransactionId}")
+                        • تاريخ الفاتورة @_detail.TransactionDate.ToString("yyyy/MM/dd")
+                        @if (!string.IsNullOrWhiteSpace(_detail.PartyPhone))
+                        {
+                            <span> • ☎ @_detail.PartyPhone</span>
+                        }
+                    </MudText>
+                    @if (!string.IsNullOrWhiteSpace(_detail.PartyAddress))
+                    {
+                        <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,.65);">
+                            📍 @_detail.PartyAddress
+                        </MudText>
+                    }
+                </div>
+                <div class="rd-head-side">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info">
+                        @_detail.DeliveryStatus
+                    </MudChip>
+                    @if (HasAppointmentScope)
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,.78);">موعد:</MudText>
+                            <DeliveryDateChip Date="@AppointmentDate" Size="Size.Small"
+                                              IsOverdue="@_progress.Lines.Any(l => IsAppointmentLine(l) && l.IsScheduleOverdue)" />
+                        </MudStack>
+                    }
+                </div>
+            </div>
+
+            @* ── شريط تقدم التسليم (كميات فقط — لا مبالغ) ── *@
+            <div class="rd-stats">
+                <div class="rd-stat">
+                    <span>إجمالي المفوتر</span>
+                    <strong>@_progress.TotalInvoicedQty.ToString("0.###")</strong>
+                </div>
+                <div class="rd-stat">
+                    <span>قُبل حتى الآن</span>
+                    <strong>@_progress.TotalDeliveredQty.ToString("0.###")</strong>
+                </div>
+                @if (_progress.TotalInLoopQty > 0)
+                {
+                    <div class="rd-stat rd-stat-warn">
+                        <span>في الصيانة</span>
+                        <strong>@_progress.TotalInLoopQty.ToString("0.###")</strong>
+                    </div>
+                }
+                @if (_progress.TotalSettledQty > 0)
+                {
+                    <div class="rd-stat">
+                        <span>سُوّي بردّ نهائي</span>
+                        <strong>@_progress.TotalSettledQty.ToString("0.###")</strong>
+                    </div>
+                }
+                <div class="rd-stat rd-stat-open">
+                    <span>مفتوح</span>
+                    <strong>@_progress.TotalRemainingQty.ToString("0.###")</strong>
+                </div>
+            </div>
+            @if (HasAppointmentScope)
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-2">
+                    تسليمة موعد محدد — بنود هذا الموعد محددة جاهزة، وباقي البنود مخفية خلف «عرض كل البنود».
+                </MudText>
+            }
+
+            @* ── تغطية الدفعة ماليًا: الأرقام لا تظهر إلا لمن له صلاحية رؤية المبالغ ── *@
+            @if (_coverage is not null && _coverage.RemainingAmount > 0)
+            {
+                @if (_coverage.Covered)
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-3" Dense="true">
+                        @if (_canSeeAmounts)
+                        {
+                            <span>✅ المدفوع من الفاتورة (@_coverage.PaidAmount.ToString("N2") ج) يغطي قيمة ما سُلّم سابقًا
+                            (@_coverage.PreviouslyDeliveredValue.ToString("N2") ج) + هذه الدفعة (@_coverage.ThisBatchValue.ToString("N2") ج).</span>
+                        }
+                        else
+                        {
+                            <span>✅ التغطية كافية — المدفوع من الفاتورة يغطي قيمة ما سُلّم سابقًا + هذه الدفعة.</span>
+                        }
+                    </MudAlert>
+                }
+                else if (_coverage.GatePasses)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3" Dense="true">
+                        ⚠️ المدفوع لا يغطي قيمة هذه الدفعة — التسليم مسموح بموجب
+                        @(_coverage.HasGrant ? "إذن تسليم ممنوح" : "صلاحية الموافقة") وسيُوثَّق في سجل التدقيق.
+                    </MudAlert>
+                }
+                else if (_coverage.HasPendingRequest)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3" Dense="true">
+                        @if (_canSeeAmounts)
+                        {
+                            <span>⏳ المدفوع (@_coverage.PaidAmount.ToString("N2") ج) لا يغطي قيمة المسلَّم + هذه الدفعة
+                            (@_coverage.RequiredValue.ToString("N2") ج) — ويوجد طلب إذن معلّق بانتظار موافقة الإدارة أو مدير الحسابات.</span>
+                        }
+                        else
+                        {
+                            <span>⏳ التغطية غير كافية — ويوجد طلب إذن معلّق بانتظار موافقة الإدارة أو مدير الحسابات.</span>
+                        }
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+                            @if (_canSeeAmounts)
+                            {
+                                <span>
+                                    🚫 المدفوع من الفاتورة (@_coverage.PaidAmount.ToString("N2") ج) لا يغطي قيمة ما سُلّم سابقًا
+                                    (@_coverage.PreviouslyDeliveredValue.ToString("N2") ج) + هذه الدفعة (@_coverage.ThisBatchValue.ToString("N2") ج)
+                                    — سدّد الفرق أو أرسل طلب إذن.
+                                </span>
+                            }
+                            else
+                            {
+                                <span>🚫 التغطية غير كافية — المدفوع من الفاتورة لا يغطي قيمة ما سُلّم سابقًا + هذه الدفعة. راجع الحسابات أو أرسل طلب إذن.</span>
+                            }
+                            <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Send"
+                                       Disabled="_requesting"
+                                       OnClick="RequestPermissionAsync">إرسال طلب إذن تسليم</MudButton>
+                        </MudStack>
+                    </MudAlert>
+                }
+            }
+
+            @* ── بيانات التسليمة: التاريخ والمندوب ── *@
+            <MudPaper Class="pa-3 mb-3" Elevation="0" Outlined="true">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" md="6">
+                        <MudDatePicker @bind-Date="_date"
+                                       Label="تاريخ التسليم"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       MaxDate="DateTime.Today"
+                                       Required="true" />
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudAutocomplete T="EmployeeLookupDto"
+                                         @bind-Value="_selectedEmployee"
+                                         SearchFunc="SearchEmployeesAsync"
+                                         ToStringFunc="@(e => e?.FullName ?? "")"
+                                         Label="مندوب التسليم"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Clearable="true"
+                                         CoerceText="true"
+                                         CoerceValue="true"
+                                         Required="true"
+                                         RequiredError="المندوب مطلوب"
+                                         AdornmentIcon="@Icons.Material.Filled.DeliveryDining"
+                                         Adornment="Adornment.Start">
+                            <ItemTemplate Context="emp">
+                                <MudStack Row="true" Justify="Justify.SpaceBetween">
+                                    <span>@emp.FullName</span>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@emp.JobTitle</MudText>
+                                </MudStack>
+                            </ItemTemplate>
+                        </MudAutocomplete>
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-2" Wrap="Wrap.Wrap">
+                <MudText Typo="Typo.subtitle2">
+                    <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Small" />
+                    كميات هذه الدفعة — حدّد البنود الخارجة واختر نوع المشكلة لكل بند إن وجدت
+                </MudText>
+                <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.DoneAll"
+                               OnClick="SelectAll">تحديد الكل</MudButton>
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Warning"
+                               StartIcon="@Icons.Material.Filled.Today"
+                               OnClick="SelectToday">بنود اليوم</MudButton>
+                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default"
+                               StartIcon="@Icons.Material.Filled.ClearAll"
+                               OnClick="ClearSelection">إلغاء التحديد</MudButton>
+                </MudStack>
+            </MudStack>
+
+            @if (HasAppointmentScope)
+            {
+                <MudSwitch T="bool" @bind-Value="_showAllLines" Color="Color.Primary"
+                           Label="عرض كل البنود" Class="mb-2" />
+            }
+
+            @if (_readyRows.Count > 0)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-2" Dense="true">
+                    🔧 يوجد @_readyRows.Count بند جاهز لإعادة التسليم من الصيانة — حدّده في القائمة
+                    (بطاقات «إعادة تسليم») ليُربط بسجله ويُغلق بقبوله عند العميل.
+                </MudAlert>
+            }
+
+            @* ── بطاقات البنود ── *@
+            <div class="rd-lines">
+                @foreach (var row in VisibleRows())
+                {
+                    <div class="rd-line @(row.Selected ? "rd-line-sel" : "") @(row.IsReadyRow ? "rd-line-ready" : "") @(row.Selected && row.HasProblem ? "rd-line-warn" : "")">
+                        <div class="rd-line-top">
+                            <MudCheckBox T="bool"
+                                         Value="@row.Selected"
+                                         ValueChanged="@(v => ToggleRow(row, v))"
+                                         Dense="true"
+                                         Color="Color.Primary"
+                                         Disabled="@(row.MaxQty <= 0)" />
+                            <div class="rd-line-name">
+                                <MudText Typo="Typo.subtitle2"><b>@row.ProductName</b></MudText>
+                                @if (row.IsReadyRow)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled">
+                                        إعادة تسليم — @row.ReadyClassName
+                                    </MudChip>
+                                }
+                                else if (row.Line is not null && row.Line.ScheduledDate.HasValue)
+                                {
+                                    <MudText Typo="Typo.caption" Color="@(row.Line.IsScheduleOverdue ? Color.Error : Color.Secondary)" Class="d-block">
+                                        موعد: @row.Line.ScheduledDate.Value.ToString("yyyy/MM/dd")@(row.Line.ScheduledDateIsCustom ? " (خاص)" : "")@(row.Line.IsScheduleOverdue ? " — متأخر" : "")
+                                    </MudText>
+                                }
+                            </div>
+                            <div class="rd-line-qty">
+                                <MudNumericField T="decimal"
+                                                 Value="@row.Attempted"
+                                                 ValueChanged="@(v => SetAttempted(row, v))"
+                                                 Min="0m"
+                                                 Max="@row.MaxQty"
+                                                 Step="1m"
+                                                 Label="هذه الدفعة"
+                                                 Variant="Variant.Outlined"
+                                                 Margin="Margin.Dense"
+                                                 Disabled="@(!row.Selected || row.MaxQty <= 0)" />
+                            </div>
+                        </div>
+
+                        <div class="rd-line-stats">
+                            @if (row.IsReadyRow)
+                            {
+                                <span>سجل صيانة جاهز — كميته <b>@row.MaxQty.ToString("0.###")</b></span>
+                            }
+                            else
+                            {
+                                <span>المفوتر <b>@row.Line!.InvoicedQty.ToString("0.###")</b></span>
+                                <span>المقبول <b>@row.Line.DeliveredQty.ToString("0.###")</b></span>
+                                @if (row.Line.InLoopQty > 0)
+                                {
+                                    <span>في الصيانة <b>@row.Line.InLoopQty.ToString("0.###")</b></span>
+                                }
+                                <span>متاح للتحميل <b>@row.MaxQty.ToString("0.###")</b></span>
+                            }
+                        </div>
+
+                        @if (row.Selected && row.Attempted > 0)
+                        {
+                            <div class="rd-problem">
+                                <MudStack Spacing="2">
+                                    <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap" AlignItems="AlignItems.End">
+                                        <MudSelect T="int" Label="نوع المشكلة الخاصة بالبند"
+                                                   Value="@row.ProblemType"
+                                                   ValueChanged="@(v => SetProblemType(row, v))"
+                                                   Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                   Style="min-width:280px;">
+                                            <MudSelectItem T="int" Value="0">سليم — بدون ملاحظات</MudSelectItem>
+                                            <MudSelectItem T="int" Value="1">عيب تصنيع</MudSelectItem>
+                                            <MudSelectItem T="int" Value="2">تلف مناولة</MudSelectItem>
+                                            <MudSelectItem T="int" Value="3">العميل طلب تعديل إضافي</MudSelectItem>
+                                        </MudSelect>
+                                        @if (row.HasProblem)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">
+                                                كمية @row.Attempted.ToString("0.###") راجعة — @ProblemTypeLabel(row.ProblemType)
+                                            </MudChip>
+                                        }
+                                    </MudStack>
+                                    <MudTextField T="string" @bind-Value="row.Notes"
+                                                  Label="ملاحظة على البند (اختياري)"
+                                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                  MaxLength="500" Counter="500" Lines="1" />
+                                    @if (row.ProblemType == ProblemModification && _canSeeAmounts)
+                                    {
+                                        <MudNumericField T="decimal?" Label="سعر تعديل متفق عليه (اختياري — يُسعَّر عند الاعتماد إن تُرك فارغًا)"
+                                                         @bind-Value="row.AgreedPrice"
+                                                         Min="0m" Step="50m"
+                                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Style="max-width:320px;"
+                                                         Adornment="Adornment.End" AdornmentText="ج.م" />
+                                    }
+                                    @if (row.HasProblem)
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            الكمية الراجعة تعود للمصنع وتفتح سجل صيانة تلقائيًا — ولا تدخل المخزن.
+                                            @if (row.ProblemType == ProblemModification && !_canSeeAmounts)
+                                            {
+                                                <span> وسيُسعَّر التعديل عند اعتماد الحسابات.</span>
+                                            }
+                                        </MudText>
+                                    }
+                                </MudStack>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <MudTextField T="string"
+                          @bind-Value="_notes"
+                          Label="ملاحظات التسليمة"
+                          Variant="Variant.Outlined"
+                          Lines="2"
+                          Margin="Margin.Dense"
+                          Class="mt-3"
+                          MaxLength="500"
+                          Counter="500" />
+
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2">
+                البند «السليم» تُحسب كميته مُسلَّمة عند العميل؛ واختيار نوع مشكلة لبند يجعل كميته
+                في هذه الدفعة راجعة للمصنع (تفتح سجل صيانة تلقائيًا ولا تدخل المخزن)،
+                ورسوم التعديل تُنشأ معلّقة بانتظار اعتماد الحسابات.
+            </MudText>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        @if (_progress is not null)
+        {
+            <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Style="margin-inline-end:auto;" Wrap="Wrap.Wrap">
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                    بنود محددة: @SelectedCount
+                </MudChip>
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                    إجمالي الكمية: @SelectedQty.ToString("0.###")
+                </MudChip>
+                @if (SelectedReturned > 0)
+                {
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning">
+                        منها راجعة: @SelectedReturned.ToString("0.###")
+                    </MudChip>
+                }
+            </MudStack>
+        }
+        <MudButton OnClick="Cancel" Disabled="_saving">إغلاق</MudButton>
+        @if (_progress is not null)
+        {
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Success"
+                       StartIcon="@Icons.Material.Filled.CheckCircle"
+                       OnClick="SaveAsync"
+                       Disabled="_saving || (_coverage is not null && !_coverage.GatePasses)">
+                @if (_saving)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                    <span>جارٍ التسجيل...</span>
+                }
+                else
+                {
+                    <span>تسجيل التسليمة</span>
+                }
+            </MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .rd-head {
+        background: linear-gradient(135deg,#060C18 0%,#0D1B30 60%,#132A47 100%);
+        border-bottom: 2px solid var(--gold);
+        border-radius: 12px;
+        padding: 14px 16px;
+        display: flex; justify-content: space-between; align-items: flex-start;
+        gap: 12px; flex-wrap: wrap;
+        margin-bottom: 12px;
+    }
+    .rd-head-main { min-width: 0; }
+    .rd-head-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+
+    .rd-stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .rd-stat {
+        flex: 1 1 118px;
+        border: 1px solid var(--mud-palette-lines-default);
+        border-radius: 10px;
+        padding: 8px 12px;
+        background: var(--mud-palette-background-grey);
+        display: flex; flex-direction: column; gap: 2px;
+    }
+    .rd-stat span { font-size: .72rem; font-weight: 700; color: var(--mud-palette-text-secondary); }
+    .rd-stat strong { font-size: 1.05rem; line-height: 1.2; }
+    .rd-stat-warn strong { color: var(--mud-palette-warning-darken, #e65100); }
+    .rd-stat-open { border-color: var(--mud-palette-info); }
+    .rd-stat-open strong { color: var(--mud-palette-info-darken, #01579b); }
+
+    .rd-lines { display: flex; flex-direction: column; gap: 8px; }
+    .rd-line {
+        border: 1px solid var(--mud-palette-lines-default);
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: var(--mud-palette-background-grey);
+        transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
+    }
+    .rd-line-sel { background: var(--mud-palette-surface); border-color: var(--mud-palette-primary); box-shadow: 0 1px 5px rgba(0,0,0,.07); }
+    .rd-line-ready { border-inline-start: 4px solid var(--mud-palette-info); }
+    .rd-line-warn  { border-inline-start: 4px solid var(--mud-palette-warning); }
+    .rd-line-top { display: flex; align-items: flex-start; gap: 6px; }
+    .rd-line-name { flex: 1; min-width: 0; padding-top: 4px; }
+    .rd-line-qty { width: 138px; flex-shrink: 0; }
+    .rd-line-stats {
+        display: flex; gap: 6px 16px; flex-wrap: wrap;
+        margin-top: 6px; padding-inline-start: 34px;
+        font-size: .8rem; color: var(--mud-palette-text-secondary);
+    }
+    .rd-line-stats b { color: var(--mud-palette-text-primary); }
+    .rd-problem {
+        margin-top: 10px; margin-inline-start: 34px;
+        background: var(--mud-palette-background-grey);
+        border: 1px dashed var(--mud-palette-lines-default);
+        border-radius: 10px;
+        padding: 10px 12px;
+    }
+    .rd-line-sel .rd-problem { background: var(--mud-palette-background); }
+</style>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public int TransactionId { get; set; }
+
+    /// <summary>
+    /// نطاق موعد (اختياري): عند الفتح من مدخل موعد في قائمة المتابعة تُحدَّد بنود
+    /// هذا الموعد وحده وتُخفى الباقية خلف مفتاح «عرض كل البنود». الموعد بصيغة
+    /// العرض للمستخدم الحالي — وبنود التقدم تحمل مواعيدها بنفس الصيغة، فالتطابق متسق.
+    /// </summary>
+    [Parameter] public DateTime? AppointmentDate { get; set; }
+    [Parameter] public bool HasAppointmentScope { get; set; }
+
+    private const decimal Eps = 0.0005m;
+
+    // ─── أنواع المشكلة الثابتة في قائمة اختيار البند (قرار المالك) ───
+    private const int ProblemNone          = 0;   // سليم — بدون ملاحظات
+    private const int ProblemManufacturing = 1;   // عيب تصنيع
+    private const int ProblemHandling      = 2;   // تلف مناولة
+    private const int ProblemModification  = 3;   // العميل طلب تعديل إضافي
+
+    private static string ProblemTypeLabel(int type) => type switch
+    {
+        ProblemManufacturing => "عيب تصنيع",
+        ProblemHandling      => "تلف مناولة",
+        ProblemModification  => "العميل طلب تعديل إضافي",
+        _                    => "سليم — بدون ملاحظات"
+    };
+
+    /// <summary>حالة صف واحد في الحوار: بند فاتورة (متاح للتحميل) أو سجل صيانة جاهز (إعادة تسليم)</summary>
+    private sealed class RowState
+    {
+        public DeliveryProgressLineDto? Line;
+        public DeliveryMaintenanceItemDto? Ready;
+        public bool IsReadyRow => Ready is not null;
+        public string ProductName => Line?.ProductName ?? Ready?.ProductName ?? "";
+        public string ReadyClassName => Ready?.ReasonClassName ?? "";
+        public int DetailId => Line?.TransactionDetailId ?? Ready?.TransactionDetailId ?? 0;
+
+        /// <summary>أقصى كمية لهذه الدفعة: المتاح للتحميل للبند، أو كمية السجل الجاهز</summary>
+        public decimal MaxQty;
+
+        public bool Selected;
+        public decimal Attempted;
+
+        /// <summary>نوع المشكلة المختار من القائمة الثابتة — يسري على كمية البند كلها في هذه الدفعة</summary>
+        public int ProblemType;
+        public string Notes = "";
+        public decimal? AgreedPrice;
+
+        public bool HasProblem => ProblemType != ProblemNone;
+        public decimal AcceptedQty => HasProblem ? 0m : Attempted;
+        public decimal ReturnedQty => HasProblem ? Attempted : 0m;
+
+        /// <summary>وصف الحصة الراجعة: ملاحظة المندوب إن كتبها، وإلا اسم النوع نفسه</summary>
+        public string? SliceDescription => !HasProblem
+            ? null
+            : string.IsNullOrWhiteSpace(Notes) ? ProblemTypeLabel(ProblemType) : Notes.Trim();
+    }
+
+    private InvoiceDeliveryProgressDto? _progress;
+    private DeliveryDetailDto?          _detail;
+    private bool _loading = true;
+    private bool _saving  = false;
+
+    // صلاحية رؤية المبالغ: بدونها لا يُعرض أي رقم مالي في الحوار (حالة التغطية فقط)
+    private bool _canSeeAmounts;
+
+    // تغطية الدفعة ماليًا (تُعاد حسابها مع كل تغيير في التحديد/الكميات/الأنواع)
+    private DeliveryBatchCoverageDto? _coverage;
+    private int  _coverageVersion;
+    private bool _requesting;
+
+    private List<EmployeeLookupDto> _employees = new();
+    private EmployeeLookupDto?      _selectedEmployee;
+
+    private DateTime? _date = DateTime.Today;
+    private string    _notes = "";
+    private string    _userName = "system";
+
+    private readonly List<RowState> _rows = new();
+    private List<RowState> _readyRows = new();
+    private bool _showAllLines;
+
+    // مفتاح منع تكرار الحدث — يُولَّد مرة واحدة عند فتح الحوار
+    private readonly Guid _eventGuid = Guid.NewGuid();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var state = await AuthProvider.GetAuthenticationStateAsync();
+            _userName = state.User?.Identity?.Name ?? "system";
+            _canSeeAmounts = DeliveryPermissions.CanSeeAmounts(state.User);
+        }
+        catch { }
+
+        var progressTask  = SafeLoadProgressAsync();
+        var detailTask    = SafeLoadDetailAsync();
+        var employeesTask = SafeLoadEmployeesAsync();
+        await Task.WhenAll(progressTask, detailTask, employeesTask);
+
+        if (_progress is not null)
+        {
+            foreach (var line in _progress.Lines)
+            {
+                var row = new RowState
+                {
+                    Line = line,
+                    MaxQty = line.AwaitingQty,
+                    Attempted = line.AwaitingQty
+                };
+                // التحديد الافتراضي: بلا نطاق = كل البنود ذات المتاح؛ وبنطاق موعد = بنود الموعد وحده
+                if (line.AwaitingQty > Eps && (!HasAppointmentScope || IsAppointmentLine(line)))
+                    row.Selected = true;
+                _rows.Add(row);
+            }
+
+            // صفوف إعادة التسليم: سجلات جاهزة من الصيانة — تُعرض دائمًا ولا
+            // تُحدَّد افتراضيًا حتى لا تخرج بضاعة مُصلحة في دفعة عادية دون قصد
+            foreach (var rec in _progress.ReadyMaintenance)
+            {
+                var row = new RowState
+                {
+                    Ready = rec,
+                    MaxQty = rec.Quantity,
+                    Attempted = rec.Quantity,
+                    Selected = false
+                };
+                _rows.Add(row);
+            }
+            _readyRows = _rows.Where(r => r.IsReadyRow).ToList();
+        }
+
+        // فحص تغطية الدفعة الافتراضية ماليًا (المدفوع مقابل المسلَّم + هذه الدفعة)
+        await RefreshCoverageAsync();
+
+        // المندوب الافتراضي: مندوب الفاتورة الحالي، وإلا موظف المستخدم الحالي
+        if (_detail?.DeliveryEmployeeId != null)
+            _selectedEmployee = _employees.FirstOrDefault(e => e.EmployeeId == _detail.DeliveryEmployeeId);
+        if (_selectedEmployee == null)
+        {
+            var (id, _) = await DeliveryService.GetEmployeeByUserNameAsync(_userName);
+            if (id != null)
+                _selectedEmployee = _employees.FirstOrDefault(e => e.EmployeeId == id.Value);
+        }
+
+        _loading = false;
+    }
+
+    private async Task SafeLoadProgressAsync()
+    {
+        try { _progress = await DeliveryService.GetDeliveryProgressAsync(TransactionId); }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load delivery progress {Id}", TransactionId);
+            Snackbar.Add("تعذّر تحميل تقدم التسليم: " + ex.Message, Severity.Error);
+            _progress = null;
+        }
+    }
+
+    private async Task SafeLoadDetailAsync()
+    {
+        try { _detail = await DeliveryService.GetDeliveryDetailsAsync(TransactionId); }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load delivery detail {Id}", TransactionId);
+            _detail = null;
+        }
+    }
+
+    private async Task SafeLoadEmployeesAsync()
+    {
+        try { _employees = await DeliveryService.GetDeliveryEmployeesAsync(); }
+        catch (Exception ex) { Logger.LogError(ex, "Failed loading employees"); _employees = new(); }
+    }
+
+    private Task<IEnumerable<EmployeeLookupDto>> SearchEmployeesAsync(string? value, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return Task.FromResult<IEnumerable<EmployeeLookupDto>>(_employees);
+        var filtered = _employees
+            .Where(e => e.FullName.Contains(value, StringComparison.OrdinalIgnoreCase)
+                     || (e.JobTitle?.Contains(value, StringComparison.OrdinalIgnoreCase) ?? false));
+        return Task.FromResult(filtered);
+    }
+
+    // ─── صفوف الحوار ───────────────────────────────────────
+    /// <summary>بندٌ من بنود الموعد المنطق عليه الحوار (بمقارنة المواعيد المعروضة)</summary>
+    private bool IsAppointmentLine(DeliveryProgressLineDto line)
+        => Nullable.Equals(line.ScheduledDate?.Date, AppointmentDate?.Date);
+
+    /// <summary>الصفوف الظاهرة: بنود الموعد فقط ما لم يُفعَّل «عرض كل البنود» — وصفوف إعادة التسليم ظاهرة دائمًا</summary>
+    private IEnumerable<RowState> VisibleRows()
+    {
+        if (!HasAppointmentScope || _showAllLines) return _rows;
+        return _rows.Where(r => r.IsReadyRow || (r.Line is not null && IsAppointmentLine(r.Line)));
+    }
+
+    private void ToggleRow(RowState row, bool selected)
+    {
+        row.Selected = selected;
+        if (selected)
+        {
+            // التحديد يهيّئ الكمية بالمتاح/الجاهز كاملًا — وتبقى قابلة للتعديل لأخذ جزئي
+            row.Attempted = row.MaxQty;
+        }
+        _ = RefreshCoverageAsync();
+    }
+
+    private void SetAttempted(RowState row, decimal value)
+    {
+        row.Attempted = value;
+        _ = RefreshCoverageAsync();
+    }
+
+    private void SetProblemType(RowState row, int type)
+    {
+        row.ProblemType = type;
+        _ = RefreshCoverageAsync();
+    }
+
+    private void SelectAll()
+    {
+        _showAllLines = true;   // تحديد الكل يشمل المخفية — تُعرض حتى يرى المستخدم ما حدّده
+        foreach (var row in _rows)
+        {
+            if (row.IsReadyRow || row.MaxQty <= Eps) continue;
+            row.Selected = true;
+            row.Attempted = row.MaxQty;
+        }
+        _ = RefreshCoverageAsync();
+    }
+
+    private void SelectToday()
+    {
+        _showAllLines = true;
+        foreach (var row in _rows) row.Selected = false;
+        foreach (var row in _rows)
+        {
+            if (row.IsReadyRow || row.MaxQty <= Eps) continue;
+            if (row.Line?.ScheduledDate?.Date != DateTime.Today) continue;
+            row.Selected = true;
+            row.Attempted = row.MaxQty;
+        }
+        _ = RefreshCoverageAsync();
+    }
+
+    private void ClearSelection()
+    {
+        foreach (var row in _rows) row.Selected = false;
+        _ = RefreshCoverageAsync();
+    }
+
+    // ملخص التذييل: الصفوف المحددة بكمية فعلية + إجمالي كمياتها وراجعها
+    private int SelectedCount => _rows.Count(r => r.Selected && r.Attempted > 0);
+
+    private decimal SelectedQty => _rows
+        .Where(r => r.Selected)
+        .Sum(r => r.Attempted);
+
+    private decimal SelectedReturned => _rows
+        .Where(r => r.Selected && r.Attempted > 0)
+        .Sum(r => r.ReturnedQty);
+
+    /// <summary>
+    /// بنود الدفعة من الصفوف المحددة — مصدر واحد لحفظ التسليمة ولفحص التغطية:
+    /// نوع المشكلة يحوّل كمية البند كلها إلى حصتها (مقبولة أو راجعة بنوعها).
+    /// </summary>
+    private List<RecordDeliveryItemDto> BuildItems()
+    {
+        var items = new List<RecordDeliveryItemDto>();
+        foreach (var row in _rows)
+        {
+            if (!row.Selected || row.Attempted <= 0) continue;
+            items.Add(new RecordDeliveryItemDto
+            {
+                TransactionDetailId = row.DetailId,
+                Quantity = row.Attempted,
+                AcceptedQty = row.AcceptedQty,
+                ReturnedManufacturingQty = row.ProblemType == ProblemManufacturing ? row.Attempted : 0m,
+                ReturnedHandlingQty       = row.ProblemType == ProblemHandling      ? row.Attempted : 0m,
+                ReturnedModificationQty   = row.ProblemType == ProblemModification  ? row.Attempted : 0m,
+                DispositionNotes = row.SliceDescription,
+                AgreedModificationPrice = row.ProblemType == ProblemModification ? row.AgreedPrice : null,
+                MaintenanceId = row.Ready?.MaintenanceId
+            });
+        }
+        return items;
+    }
+
+    /// <summary>إعادة حساب تغطية الدفعة الحالية — تسلسلية بنسخة متزايدة حتى لا تسبق نتيجة قديمة أحدث منها</summary>
+    private async Task RefreshCoverageAsync()
+    {
+        var version = ++_coverageVersion;
+        if (_progress is null) return;
+        try
+        {
+            var cov = await DeliveryService.GetBatchCoverageAsync(TransactionId, BuildItems());
+            if (version == _coverageVersion)
+            {
+                _coverage = cov;
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Batch coverage check failed for {Id}", TransactionId);
+            if (version == _coverageVersion) _coverage = null;
+        }
+    }
+
+    /// <summary>مسار المندوب عند غياب التغطية: طلب إذن التسليم بآليته الموجودة</summary>
+    private async Task RequestPermissionAsync()
+    {
+        _requesting = true;
+        try
+        {
+            var (ok, msg) = await DeliveryService.RequestDeliveryPermissionAsync(TransactionId, _userName);
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+            if (ok) await RefreshCoverageAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Request delivery permission failed for {Id}", TransactionId);
+            Snackbar.Add("حدث خطأ أثناء إرسال الطلب: " + ex.Message, Severity.Error);
+        }
+        finally { _requesting = false; }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_progress is null) return;
+
+        if (_selectedEmployee == null)
+        {
+            Snackbar.Add("برجاء تحديد مندوب التسليم.", Severity.Warning);
+            return;
+        }
+        if (_date == null)
+        {
+            Snackbar.Add("برجاء تحديد تاريخ التسليم.", Severity.Warning);
+            return;
+        }
+
+        foreach (var row in _rows)
+        {
+            // ⭐ الصفوف غير المحددة مستبعدة من هذه الدفعة تمامًا مهما كانت خانة كميتها
+            if (!row.Selected || row.Attempted <= 0) continue;
+
+            if (row.Attempted > row.MaxQty)
+            {
+                Snackbar.Add($"كمية «{row.ProductName}» تتجاوز المتاح ({row.MaxQty:0.###}).", Severity.Warning);
+                return;
+            }
+        }
+
+        var items = BuildItems();
+        if (items.Count == 0)
+        {
+            Snackbar.Add("برجاء تحديد بند واحد على الأقل بكمية أكبر من صفر.", Severity.Warning);
+            return;
+        }
+
+        // ملاحظات بنود «سليمة» لا تضيع: لا حصة راجعة تحملها، فتُلحق بملاحظات الحدث
+        var acceptedNotes = _rows
+            .Where(r => r.Selected && r.Attempted > 0 && !r.HasProblem
+                     && !string.IsNullOrWhiteSpace(r.Notes))
+            .Select(r => $"{r.ProductName}: {r.Notes.Trim()}")
+            .ToList();
+        var eventNotes = string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim();
+        if (acceptedNotes.Count > 0)
+            eventNotes = string.Join("\n",
+                new[] { eventNotes }
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Concat(acceptedNotes));
+
+        _saving = true;
+        try
+        {
+            var date = _date.Value.Date;
+            var dto = new RecordDeliveryDto
+            {
+                TransactionId        = TransactionId,
+                DeliveryDate         = date == DateTime.Today ? DateTime.Now : date,
+                DeliveryEmployeeId   = _selectedEmployee.EmployeeId,
+                DeliveryEmployeeName = _selectedEmployee.FullName,
+                Notes                = eventNotes,
+                EventGuid            = _eventGuid,
+                UserName             = _userName,
+                Items                = items
+            };
+
+            var (ok, msg) = await DeliveryService.RecordDeliveryAsync(dto);
+            if (ok)
+            {
+                Snackbar.Add(msg, Severity.Success);
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(msg, Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Record delivery failed for {Id}", TransactionId);
+            Snackbar.Add("حدث خطأ أثناء تسجيل التسليمة: " + ex.Message, Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

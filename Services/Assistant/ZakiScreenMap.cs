@@ -27,6 +27,7 @@ public static class ZakiScreenMap
         new("المبيعات", "المدفوعات", "/payments", new string[] { "frm_Payments:View" }, new string[] {  }),
         new("المبيعات", "رسوم المعاينة", "/additional-charges", new string[] { "frmInspectionCharge:View" }, new string[] {  }),
         new("المبيعات", "متابعة التسليم", "/sales-delivery-status", new string[] { "frmInvoiceDeliveryStatus:View" }, new string[] {  }),
+        new("المبيعات", "صيانة التسليمات", "/delivery-maintenance", new string[] { "frmDeliveryMaintenance:View" }, new string[] { "Admin", "AccountManager", "ProductionManager", "FactoryManager", "DeliveryOfficer" }),
         new("المبيعات", "إدارة الشكاوى", "/complaints/list", new string[] { "frm_Complaints_Main:View" }, new string[] {  }),
         new("المبيعات", "طلبات تعديل الأسعار", "/sales/price-requests", new string[] { "frm_PriceRequests:View" }, new string[] {  }),
         new("المخزون", "المخازن", "/admin/warehouses", new string[] { "frm_Warehouses:View" }, new string[] { "Admin" }),

@@ -3,6 +3,7 @@
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Services
 @using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Http
 @using System.Net.Http.Json
 @using System.Text.Json
 
@@ -1566,6 +1567,27 @@ private void SyncActiveQuickFilter()
     }
     [Inject] private IJSRuntime JS { get; set; } = null!;
 [Inject] private IHttpClientFactory HttpFactory { get; set; } = null!;
+[Inject] private IHttpContextAccessor HttpContextAccessor { get; set; } = null!;
+
+/// <summary>
+/// F-02: بناء طلب تصدير مع تمرير كوكي مصادقة المستخدم الحالي (COCOBOLO.Auth).
+/// استدعاءات التصدير كانت تُرسَل بدون أي كوكي (لا يوجد Cookie-forwarding handler
+/// في التطبيق)، فتصل للـ endpoint مجهولة الهوية — وبعد فرض سياسة QuotationExport
+/// كانت ستفشل حتمًا. نمرر ترويسة Cookie كما جاءت في طلب الصفحة الحالي.
+/// </summary>
+private HttpRequestMessage CreateExportRequest(string url)
+{
+    var request = new HttpRequestMessage(HttpMethod.Post, url)
+    {
+        Content = JsonContent.Create(_filter)
+    };
+
+    var cookie = HttpContextAccessor.HttpContext?.Request.Headers.Cookie.ToString();
+    if (!string.IsNullOrWhiteSpace(cookie))
+        request.Headers.TryAddWithoutValidation("Cookie", cookie);
+
+    return request;
+}
 
 private async Task ExportToExcel()
 {
@@ -1576,8 +1598,8 @@ private async Task ExportToExcel()
         var http = HttpFactory.CreateClient();
         http.BaseAddress = new Uri(Navigation.BaseUri);
 
-        var response = await http.PostAsJsonAsync(
-            "/api/quotations/export-excel", _filter);
+        using var exportRequest = CreateExportRequest("/api/quotations/export-excel");
+        var response = await http.SendAsync(exportRequest);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -1609,8 +1631,8 @@ private async Task ExportToPdf()
         var http = HttpFactory.CreateClient();
         http.BaseAddress = new Uri(Navigation.BaseUri);
 
-        var response = await http.PostAsJsonAsync(
-            "/api/quotations/export-pdf", _filter);
+        using var exportRequest = CreateExportRequest("/api/quotations/export-pdf");
+        var response = await http.SendAsync(exportRequest);
 
         if (!response.IsSuccessStatusCode)
         {

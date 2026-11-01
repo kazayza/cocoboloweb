@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using ClosedXML.Excel;
 using COCOBOLOERPNEW.DTOs;
+using Microsoft.AspNetCore.Http;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -16,6 +18,7 @@ public class QuotationExportService : IQuotationExportService
     private readonly IQuotationService _quotations;
     private readonly ILogger<QuotationExportService> _logger;
     private readonly IWebHostEnvironment _env;
+    private readonly IHttpContextAccessor _httpContext;
 
     // يتم تحميل الخط مرة واحدة وتخزينه
     private static byte[]? _arabicFont;
@@ -25,21 +28,34 @@ public class QuotationExportService : IQuotationExportService
     public QuotationExportService(
         IQuotationService quotations,
         ILogger<QuotationExportService> logger,
-        IWebHostEnvironment env)
+        IWebHostEnvironment env,
+        IHttpContextAccessor httpContext)
     {
         _quotations = quotations;
         _logger = logger;
         _env = env;
+        _httpContext = httpContext;
     }
+
+    private ClaimsPrincipal? CurrentUser => _httpContext.HttpContext?.User;
+
+    /// <summary>
+    /// F-02 (دفاع في العمق): تصدير قائمة العروض مسموح فقط لمستخدم داخلي
+    /// Admin أو حامل frmQuotationsList:View وليس مشاهد تكلفة مقيّدًا —
+    /// نفس قاعدة سياسة QuotationExport على الـ endpoints وبوابة أزرار التصدير في القائمة.
+    /// </summary>
+    private bool CanExportQuotations() => AppAuthorization.CanExportQuotations(CurrentUser);
 
     // ============================================================
     // PDF
     // ============================================================
-    public async Task<(bool Success, string? Error, byte[]? Pdf, string FileName)> GeneratePdfAsync(int quotationId)
+    public async Task<(bool Success, string? Error, byte[]? Pdf, string FileName)> GeneratePdfAsync(int quotationId, bool publicAccess = false)
     {
         try
         {
-            var data = await _quotations.GetQuotationForPrintAsync(quotationId);
+            var data = publicAccess
+                ? await _quotations.GetQuotationForPrintPublicAsync(quotationId)
+                : await _quotations.GetQuotationForPrintAsync(quotationId);
             if (data == null)
                 return (false, "عرض السعر غير موجود.", null, "");
 
@@ -264,11 +280,13 @@ public class QuotationExportService : IQuotationExportService
     // ============================================================
     // Excel
     // ============================================================
-    public async Task<(bool Success, string? Error, byte[]? Excel, string FileName)> GenerateExcelAsync(int quotationId)
+    public async Task<(bool Success, string? Error, byte[]? Excel, string FileName)> GenerateExcelAsync(int quotationId, bool publicAccess = false)
     {
         try
         {
-            var data = await _quotations.GetQuotationForPrintAsync(quotationId);
+            var data = publicAccess
+                ? await _quotations.GetQuotationForPrintPublicAsync(quotationId)
+                : await _quotations.GetQuotationForPrintAsync(quotationId);
             if (data == null)
                 return (false, "عرض السعر غير موجود.", null, "");
 
@@ -455,6 +473,9 @@ public class QuotationExportService : IQuotationExportService
 public async Task<(bool Success, string? Error, byte[]? Excel, string FileName)> ExportQuotationsToExcelAsync(
     QuotationFilterDto filter)
 {
+    if (!CanExportQuotations())
+        return (false, "غير مصرح لك بتصدير عروض الأسعار.", null, "");
+
     try
     {
         // نجيب القائمة بالفلاتر بتاعتها (بدون pagination)
@@ -687,6 +708,9 @@ private static string GetStatusText(string status)
 public async Task<(bool Success, string? Error, byte[]? Pdf, string FileName)> 
     ExportQuotationsToPdfAsync(QuotationFilterDto filter)
 {
+    if (!CanExportQuotations())
+        return (false, "غير مصرح لك بتصدير عروض الأسعار.", null, "");
+
     try
     {
         // نجيب كل النتائج

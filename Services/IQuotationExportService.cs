@@ -9,13 +9,13 @@ public interface IQuotationExportService
 {
     // ============ Single Quotation Exports ============
 
-    /// <summary>توليد PDF لعرض سعر واحد.</summary>
+    /// <summary>توليد PDF لعرض سعر واحد. publicAccess = روابط التوكن العامة (بدون فحص صلاحية وبدون أسعار شراء).</summary>
     Task<(bool Success, string? Error, byte[]? Pdf, string FileName)> 
-        GeneratePdfAsync(int quotationId);
+        GeneratePdfAsync(int quotationId, bool publicAccess = false);
 
-    /// <summary>توليد Excel لعرض سعر واحد.</summary>
+    /// <summary>توليد Excel لعرض سعر واحد. publicAccess = روابط التوكن العامة (بدون فحص صلاحية وبدون أسعار شراء).</summary>
     Task<(bool Success, string? Error, byte[]? Excel, string FileName)> 
-        GenerateExcelAsync(int quotationId);
+        GenerateExcelAsync(int quotationId, bool publicAccess = false);
 
     // ============ List Exports (مع الفلاتر) ============
 

@@ -72,6 +72,12 @@ window.zakiVoice = {
         this._recorder = null;
         this._stream = null;
         this._chunks = [];
+    },
+
+    // فحص دعم التسجيل من غير ما يطلب إذن الميكروفون — اللوحة بتستخدمه عشان
+    // تخفي زرار المايك بس لو لا الإملاء الحي ولا التسجيل مدعومين
+    supported: function () {
+        return !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
     }
 };
 

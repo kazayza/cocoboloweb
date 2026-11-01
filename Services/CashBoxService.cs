@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services;
@@ -9,13 +11,24 @@ public class CashBoxService : ICashBoxService
     private readonly db24804Context _db;
     private readonly IDbContextFactory<db24804Context> _dbFactory;
     private readonly IAuditService _audit;
+    private readonly IHttpContextAccessor _http;
 
-    public CashBoxService(db24804Context db, IDbContextFactory<db24804Context> dbFactory, IAuditService audit)
+    public CashBoxService(db24804Context db, IDbContextFactory<db24804Context> dbFactory, IAuditService audit, IHttpContextAccessor http)
     {
         _db = db;
         _dbFactory = dbFactory;
         _audit = audit;
+        _http = http;
     }
+
+    // ⛔ F-09 (دفاع في العمق): كتابات الخزينة — داخلي + Admin أو صلاحية الوحدة
+    // حسب نوع العملية، مطابقة لبوابات الصفحات نفسها:
+    // إدارة الخزائن frmCashBox:Add/Edit/Delete، العمليات اليدوية
+    // frm_CashBoxManual:Add. القراءات غير محروسة (زكي ولوحات المعلومات
+    // والشاشات الأخرى تقرأ الأرصدة والحركات لمستخدمين داخليين أوسع من كتّاب الخزينة).
+    private ClaimsPrincipal? CurrentUser => _http.HttpContext?.User;
+    private bool CanMutateCashBox(string claim) => AppAuthorization.HasClaim(CurrentUser, claim);
+    private const string CashBoxDeniedMessage = "غير مصرح لك بتنفيذ هذا الإجراء على الخزينة.";
 
     // ============================================================
     //  CashBoxes
@@ -99,6 +112,8 @@ public class CashBoxService : ICashBoxService
     public async Task<(bool Success, string Message, int? Id)> SaveCashBoxAsync(
         CashBoxFormDto dto, string userName)
     {
+        if (!CanMutateCashBox(dto.CashBoxId == 0 ? "frmCashBox:Add" : "frmCashBox:Edit"))
+            return (false, CashBoxDeniedMessage, null);
         if (string.IsNullOrWhiteSpace(dto.CashBoxName))
             return (false, "اسم الخزينة مطلوب", null);
         if (!dto.BranchId.HasValue)
@@ -187,6 +202,8 @@ public class CashBoxService : ICashBoxService
 
     public async Task<(bool Success, string Message)> DeleteCashBoxAsync(int id, string userName)
     {
+        if (!CanMutateCashBox("frmCashBox:Delete"))
+            return (false, CashBoxDeniedMessage);
         var box = await _db.CashBoxes.FindAsync(id);
         if (box == null) return (false, "الخزينة غير موجودة");
 
@@ -674,6 +691,8 @@ private async Task<(string? Title, string? Url, string? PartyName, string? Perso
     public async Task<(bool Success, string Message, int? Id)> CreateManualOperationAsync(
         CashBoxManualFormDto dto, string userName)
     {
+        if (!CanMutateCashBox("frm_CashBoxManual:Add"))
+            return (false, CashBoxDeniedMessage, null);
         if (dto.Amount <= 0) return (false, "المبلغ يجب أن يكون أكبر من صفر", null);
         if (dto.CashBoxId == null) return (false, "الخزينة مطلوبة", null);
 

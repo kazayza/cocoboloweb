@@ -5,6 +5,7 @@
 @using COCOBOLOERPNEW.Components.Shared
 
 @inject IInvoiceService InvoiceService
+@inject ISalesDeliveryStatusService DeliveryStatusService
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -77,6 +78,12 @@ else
                     {
                         <MudButton Variant="Variant.Filled" Color="Color.Info" OnClick="OpenPrintPage"
                                    StartIcon="@Icons.Material.Filled.Print" Class="print-btn">طباعة</MudButton>
+                        @if (_canCreateTask)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                                       StartIcon="@Icons.Material.Filled.AddTask"
+                                       OnClick="OpenCreateTaskAsync">تكليف جديد</MudButton>
+                        }
                         @if (!isPurchase && inv.InvoiceStatus != InvoiceStatuses.Cancelled && inv.EditStatus != InvoiceEditStatuses.Pending && inv.EditStatus != InvoiceEditStatuses.Approved)
                         {
                             <MudButton Variant="Variant.Outlined" Color="Color.Warning"
@@ -249,6 +256,29 @@ else
         {
             <MudAlert Severity="Severity.Info" Class="mb-3" Icon="@Icons.Material.Filled.Edit" Variant="Variant.Outlined">
                 📝 تم تنفيذ طلب التعديل على هذه الفاتورة. @(inv.EditDone)
+            </MudAlert>
+        }
+
+        @* ═══ نتائج التسليم (القسم 11): شريط ملخص يظهر فقط لفواتير البيع ذات النتائج ═══ *@
+        @if (!isPurchase && _outcomes is { HasOutcomes: true })
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3"
+                      Icon="@Icons.Material.Filled.AssignmentReturn">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                    <MudText Typo="Typo.body2">
+                        <b>نتائج التسليم:</b>
+                        تسليمات بملاحظات: @_outcomes.EventsWithRemarks ·
+                        في الصيانة الآن: @_outcomes.OpenMaintenanceRecords سجل (@_outcomes.InMaintenanceQty.ToString("0.###") كمية)
+                        @if (_outcomes.PendingModificationCharges > 0)
+                        {
+                            <span> · رسوم تعديل بانتظار الاعتماد: @_outcomes.PendingModificationCharges</span>
+                        }
+                    </MudText>
+                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                               Href="@($"/sales-delivery-status/{Id}")">تفاصيل التسليم</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                               Href="/delivery-maintenance">طابور الصيانة</MudButton>
+                </MudStack>
             </MudAlert>
         }
 
@@ -1162,12 +1192,14 @@ else
 
     private bool _isLoading = true;
     private InvoiceDetailsDto? _details;
+    private InvoiceOutcomesSummaryDto? _outcomes;
 
     private bool _canViewInvoice;
     private bool _hasSalesInvoicePerm;      // frm_PartiesInvoices:View — فواتير البيع
     private bool _hasPurchaseInvoicePerm;   // frm_SupplierInvoices:View — فواتير الشراء
     private bool _isAdminUser;
     private bool _canEdit;
+    private bool _canCreateTask;
     private bool _canApproveEdit;
     private bool _canViewPurchases;
     private Components.Shared.InvoiceEditHistoryDrawer? _historyDrawer;
@@ -1228,6 +1260,7 @@ else
 
         _currentUserName = user.Identity?.Name ?? "System";
         _canEdit = user.HasClaim("Permission", "frm_SalesInvoiveNew:Edit") || user.IsInRole("Admin");
+        _canCreateTask = GeneralTaskPermissions.CanCreate(user);
         _canApproveEdit = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
         _canViewProfit = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin) || user.IsInRole("AccountManager") || user.IsInRole(SystemRoles.AccountManager);
         // ⭐ سجل التعديلات: Admin + مدير الحسابات فقط (طلب المستخدم)
@@ -1254,6 +1287,14 @@ else
     private async Task LoadInvoice()
     {
         _details = await InvoiceService.GetInvoiceDetailsAsync(Id);
+
+        // نتائج التسليم (ملاحظات/صيانة/رسوم تعديل) — لفواتير البيع فقط، وتتحلل بأمان
+        _outcomes = null;
+        if (_details?.Invoice?.TransactionType == TransactionTypes.Sale)
+        {
+            try { _outcomes = await DeliveryStatusService.GetInvoiceOutcomesSummaryAsync(Id); }
+            catch { _outcomes = null; }
+        }
 
         // ⭐ مستخدم المصنع: يُقيَّد بفواتير الشراء فقط — أي نوع آخر يُعاد لمشتريات المصنع
         if (_isFactory && _details?.Invoice?.TransactionType != TransactionTypes.Purchase)
@@ -1352,6 +1393,20 @@ else
     }
 
     private void GoToEditInvoice() => Navigation.NavigateTo($"/sales/invoices/{Id}/edit");
+
+    private async Task OpenCreateTaskAsync()
+    {
+        if (_details?.Invoice is null) return;
+        var inv = _details.Invoice;
+        var parameters = new DialogParameters
+        {
+            ["PresetLinkedType"] = GeneralTaskLinks.Invoice,
+            ["PresetLinkedId"] = Id,
+            ["PresetLinkedTitle"] = $"فاتورة {inv.ReferenceNumber ?? $"#{Id}"} — {inv.PartyName}"
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+        await DialogService.ShowAsync<CreateGeneralTaskDialog>("تكليف جديد", parameters, options);
+    }
 
     private void OpenEditReviewDialog(bool approve)
     {

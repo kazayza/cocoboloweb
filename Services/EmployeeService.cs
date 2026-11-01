@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Claims;
 using System.Threading.Tasks;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services
@@ -13,16 +15,29 @@ namespace COCOBOLOERPNEW.Services
         private readonly db24804Context _db;
         private readonly IAuditService _audit;
         private readonly NotificationService _notify;
+        private readonly IHttpContextAccessor _http;
 
         public EmployeeService(
             db24804Context db,
             IAuditService audit,
-            NotificationService notify)
+            NotificationService notify,
+            IHttpContextAccessor http)
         {
             _db = db;
             _audit = audit;
             _notify = notify;
+            _http = http;
         }
+
+        // ⛔ F-09 (دفاع في العمق): كتابات الموظفين — داخلي + Admin أو صلاحية
+        // الوحدة بنفس إملاء الصفحات القائم حرفيًا (العائلتان مختلفتان في المصدر):
+        // الإضافة frm_Employees:Add (النموذج والقائمة)، التعديل وتغيير الحالة
+        // frm_Employeeslist:Edit (زر الحالة في القائمة محكوم بـ _canEdit).
+        // القراءات غير محروسة (زكي يقرأ الإحصائيات والقائمة بأدوات قراءة فقط،
+        // وصفحات الحضور والتقارير تقرأ لمستخدمين داخليين أوسع من كتّاب الموظفين).
+        private ClaimsPrincipal? CurrentUser => _http.HttpContext?.User;
+        private bool CanMutateEmployees(string claim) => AppAuthorization.HasClaim(CurrentUser, claim);
+        private const string EmployeeDeniedMessage = "غير مصرح لك بتنفيذ هذا الإجراء على بيانات الموظفين.";
 
         public async Task<PagedResult<EmployeeListDto>> GetEmployeesAsync(EmployeeFilterDto filter)
         {
@@ -210,6 +225,8 @@ namespace COCOBOLOERPNEW.Services
 
         public async Task<(bool Success, string Message, int? EmployeeId)> CreateEmployeeAsync(EmployeeFormDto dto, string userName)
         {
+            if (!CanMutateEmployees("frm_Employees:Add"))
+                return (false, EmployeeDeniedMessage, null);
             // التحقق من الرقم القومي المكرر
             var exists = await _db.Employees.AnyAsync(e => e.NationalId == dto.NationalId);
             if (exists)
@@ -322,6 +339,8 @@ namespace COCOBOLOERPNEW.Services
 
         public async Task<(bool Success, string Message)> UpdateEmployeeAsync(int employeeId, EmployeeFormDto dto, string userName)
         {
+            if (!CanMutateEmployees("frm_Employeeslist:Edit"))
+                return (false, EmployeeDeniedMessage);
             var employee = await _db.Employees.FindAsync(employeeId);
             if (employee == null)
             {
@@ -487,6 +506,8 @@ namespace COCOBOLOERPNEW.Services
 
         public async Task<(bool Success, string Message)> ChangeStatusAsync(int employeeId, string newStatus, string reason, string userName)
         {
+            if (!CanMutateEmployees("frm_Employeeslist:Edit"))
+                return (false, EmployeeDeniedMessage);
             var employee = await _db.Employees.FindAsync(employeeId);
             if (employee == null)
             {

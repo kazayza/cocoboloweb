@@ -6,10 +6,12 @@ namespace COCOBOLOERPNEW.Services
     public class NotificationService
     {
         private readonly db24804Context _db;
+        private readonly IConfiguration _config;
 
-        public NotificationService(db24804Context db)
+        public NotificationService(db24804Context db, IConfiguration config)
         {
             _db = db;
+            _config = config;
         }
 
         // جلب عدد الإشعارات غير المقروءة
@@ -208,6 +210,16 @@ namespace COCOBOLOERPNEW.Services
                 if (string.IsNullOrWhiteSpace(apiBase)) return;
 
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+
+                // مصادقة خدمة-إلى-خدمة: الـ API يشترط توكن الخدمة على هذا المسار فقط.
+                // يُقرأ من الإعدادات Api:ServiceToken أو من متغير البيئة API_SERVICE_TOKEN،
+                // وإن لم يُضبط لا تُرسل أي ترويسة ويبقى السلوك كما هو تمامًا.
+                var serviceToken = _config["Api:ServiceToken"];
+                if (string.IsNullOrWhiteSpace(serviceToken))
+                    serviceToken = Environment.GetEnvironmentVariable("API_SERVICE_TOKEN");
+                if (!string.IsNullOrWhiteSpace(serviceToken))
+                    http.DefaultRequestHeaders.Add("x-service-token", serviceToken.Trim());
+
                 foreach (var username in recipients)
                 {
                     if (string.Equals(username, createdBy, StringComparison.OrdinalIgnoreCase))

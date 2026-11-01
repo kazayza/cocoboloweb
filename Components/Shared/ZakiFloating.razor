@@ -1,14 +1,18 @@
 @implements IDisposable
 
+@using COCOBOLOERPNEW.Services
 @using COCOBOLOERPNEW.Services.Assistant
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Routing
+@using Microsoft.Extensions.DependencyInjection
+@using System.Security.Claims
 
 @inject ZakiAssistantService ZakiService
 @inject ZakiChatState State
 @inject AuthenticationStateProvider AuthProvider
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject IServiceScopeFactory ScopeFactory
 
 @if (_canUse)
 {
@@ -47,6 +51,10 @@
             {
                 <span class="zk-fab-ring" aria-hidden="true"></span>
                 <img src="img/zaki-icon.png" class="zk-fab-img" alt="زكي" draggable="false" />
+                @if (_unreadCount > 0)
+                {
+                    <span class="zk-fab-badge">@(_unreadCount > 99 ? "99+" : _unreadCount.ToString())</span>
+                }
             }
         </button>
     }
@@ -56,6 +64,12 @@
     private bool _canUse;
     private bool _onZakiPage;
 
+    // عدّاد الإشعارات غير المقروءة على الزر العائم
+    private int _unreadCount;
+    private string _userName = "";
+    private List<string> _userRoles = new();
+    private bool _lastMiniOpen;
+
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthProvider.GetAuthenticationStateAsync();
@@ -64,6 +78,35 @@
 
         Nav.LocationChanged += OnLocationChanged;
         State.Changed += OnStateChanged;
+
+        if (_canUse)
+        {
+            _userName = auth.User.Identity?.Name ?? "";
+            _userRoles = auth.User.Claims
+                .Where(c => c.Type == ClaimTypes.Role || c.Type == "role" || c.Type.EndsWith("/role"))
+                .Select(c => c.Value)
+                .Distinct()
+                .ToList();
+            _lastMiniOpen = State.MiniOpen;
+            await RefreshUnreadAsync();
+        }
+    }
+
+    /// <summary>بيحدّث عدّاد غير المقروء من نفس مصدر جرس الإشعارات في التخطيط (NotificationService)
+    /// وبنطاق DI جديد كل مرة — زي الجرس بالظبط — عشان مايخبطش في DbContext المشترك بتاع الجلسة</summary>
+    private async Task RefreshUnreadAsync()
+    {
+        if (string.IsNullOrEmpty(_userName)) return;
+        try
+        {
+            using var scope = ScopeFactory.CreateScope();
+            var svc = scope.ServiceProvider.GetRequiredService<NotificationService>();
+            _unreadCount = await svc.GetUnreadCountAsync(_userName, _userRoles);
+        }
+        catch
+        {
+            // العدّاد تجميلي: أي فشل بيخليه زي ما هو ومابيأثرش على الزر
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -110,7 +153,21 @@
         InvokeAsync(StateHasChanged);
     }
 
-    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+    private void OnStateChanged()
+    {
+        // فتح/قفل النافذة الصغيرة لحظة طبيعية لتحديث العدّاد — من غير أي بولينج
+        if (State.MiniOpen != _lastMiniOpen)
+        {
+            _lastMiniOpen = State.MiniOpen;
+            _ = InvokeAsync(async () =>
+            {
+                await RefreshUnreadAsync();
+                StateHasChanged();
+            });
+            return;
+        }
+        _ = InvokeAsync(StateHasChanged);
+    }
 
     private void CloseMini() => State.SetMiniOpen(false);
 

@@ -2,8 +2,10 @@
 // ✅ PayrollService.cs - النسخة المُصلَحة الكاملة
 // بناءً على الـ SQL Script الفعلي للـ Database
 // ============================================================
+using System.Security.Claims;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using ClosedXML.Excel;
 
@@ -13,16 +15,62 @@ public class PayrollService : IPayrollService
 {
     private const string OffPayrollMarker = "[OFFPAYROLL]";
 
+    // وسم بنود الجزاءات النظامية (من جدول EmployeePenalties) داخل
+    // PayrollDetailDto.Notes — بصيغة "[EMP-PENALTY:{Id}]" — ليميزها
+    // مسار الحفظ عن الجزاءات اليدوية المكتوبة في شاشة المعالجة،
+    // فيعلّم صفوفها في الجدول Applied بعد حفظ الراتب.
+    private const string SystemPenaltyMarkerPrefix = "[EMP-PENALTY:";
+
     private readonly db24804Context _db;
     private readonly IAuditService  _audit;
     private readonly NotificationService _notify;
+    private readonly IHttpContextAccessor _http;
 
-    public PayrollService(db24804Context db, IAuditService audit, NotificationService notify)
+    public PayrollService(db24804Context db, IAuditService audit, NotificationService notify, IHttpContextAccessor http)
     {
         _db    = db;
         _audit = audit;
         _notify = notify;
+        _http  = http;
     }
+
+    // ⛔ F-09 (دفاع في العمق): كتابات الرواتب — داخلي فقط، ومطابقة لبوابات
+    // الصفحات نفسها (وهي بوابات أدوار أساسًا):
+    //  - المعالجة/الحفظ للإرسال (SaveOnly/ProcessMonth): أدوار _canProcess في
+    //    PayrollProcessor (HrManager/HRManager/AccountManager/AccountsManager)
+    //    أو frm_Payroll:Edit. ‏ProcessMonth بلا مستدعٍ حالي في الواجهة، وحارسه
+    //    بنفس قاعدة توأمه SaveOnly.
+    //  - الاعتماد/الرفض والصرف: أدوار _canReview/_canPay في صفحات القائمة
+    //    والمراجعة وخارج الراتب (AccountManager/AccountsManager + Admin) —
+    //    وتظل قاعدة المراجع الأضيق القائمة (Admin/AccountManager من قاعدة
+    //    البيانات) مطبَّقة كما هي داخل Approve/Reject/PayOne.
+    //  - الإلغاء وحفظ دفعة خارج الراتب: زراهما في الصفحات غير محكومين إلا
+    //    ببوابة دخول الصفحة نفسها، فنطابقها (أدوار العرض أو أيٍّ من صلاحيات
+    //    عرض الوحدة الثلاث المستخدمة عبر صفحاتها).
+    //  - الحضور اليدوي: صفحته بلا أي بوابة دور/صلاحية أصلًا (Authorize فقط)،
+    //    فحارسه InternalUser فقط حتى لا ينكسر مستخدموها الشرعيون الحاليون.
+    // القراءات والحسابات وتصدير Excel غير محروسة (زكي يقرأ ملخصات الشهور
+    // بأدوات قراءة فقط، وصفحات التقارير تقرأ لمستخدمين داخليين أوسع).
+    private ClaimsPrincipal? CurrentUser => _http.HttpContext?.User;
+
+    private static readonly string[] PayrollProcessRoles =
+        { "HrManager", "HRManager", "AccountManager", "AccountsManager" };
+    private static readonly string[] PayrollReviewPayRoles =
+        { "AccountManager", "AccountsManager" };
+    private static readonly string[] PayrollViewRoles =
+        { "HrManager", "HRManager", "AccountManager", "Accountant", "AccountsManager" };
+    private static readonly string[] PayrollViewClaims =
+        { "frm_Payroll:View", "frmPayrollProcessor:View", "frm_PayrollPayment:View" };
+
+    private bool CanProcessPayroll()
+        => AppAuthorization.HasClaimOrRole(CurrentUser, new[] { "frm_Payroll:Edit" }, PayrollProcessRoles);
+    private bool CanReviewOrPayPayroll()
+        => AppAuthorization.HasClaimOrRole(CurrentUser, Array.Empty<string>(), PayrollReviewPayRoles);
+    private bool CanEnterPayroll()
+        => AppAuthorization.HasClaimOrRole(CurrentUser, PayrollViewClaims, PayrollViewRoles);
+    private bool IsInternalPayrollUser() => AppAuthorization.IsInternalUser(CurrentUser);
+
+    private const string PayrollDeniedMessage = "غير مصرح لك بتنفيذ هذا الإجراء على الرواتب.";
 
     // ============================================================
     // قائمة المرتبات
@@ -283,6 +331,30 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
             }
         ).ToListAsync();
 
+        // ✅ جزاءات الموظف المعتمدة لهذا الشهر (نظام الجزاءات — EmployeePenalties):
+        // تُدمج في قائمة Penalties نفسها التي تُغذّي TotalPenalties و
+        // TotalDeductions وبنود BuildPayrollDetails — تعريف واحد للمجموع
+        // والترتيب والتقريب مع الجزاءات اليدوية من شاشة المعالجة.
+        // الشهر بصيغة YYYY-MM كما يُستخدم في PayrollMonth/DeductionMonth.
+        var approvedPenalties = await _db.EmployeePenalties.AsNoTracking()
+            .Where(p => p.EmployeeId == employeeId
+                     && p.Status == "Approved"
+                     && p.TargetMonth == month)
+            .OrderBy(p => p.Id)
+            .ToListAsync();
+
+        var systemPenalties = approvedPenalties.Select(p => new PayrollDetailDto
+        {
+            DetailID    = p.Id,
+            DetailType  = "Penalty",
+            Description = $"جزاء: {p.Reason}",
+            // ComputedAmount يُجمَّد عند الاعتماد؛ الاحتياط دفاعي فقط
+            Amount      = p.ComputedAmount ?? p.FixedAmount ?? 0,
+            IsDeduction = true,
+            PaymentType = "InPayroll",
+            Notes       = $"{SystemPenaltyMarkerPrefix}{p.Id}]"
+        }).ToList();
+
         var existing = await _db.Payrolls.AsNoTracking()
             .Where(p => p.EmployeeId == employeeId
                      && p.PayrollMonth == month
@@ -307,7 +379,7 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
             LateDeduction         = lateDed,
             LoanDeduction         = loanItems.Sum(i => i.Amount),
             LoanItems             = loanItems,
-            Penalties             = new(),
+            Penalties             = systemPenalties,
             BonusItems            = new(),
             SeparateBonuses       = new(),
             HasExistingPayroll    = existing != null,
@@ -355,6 +427,8 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
         List<PayrollCalculationDto> data,
         string user)
     {
+        if (!CanProcessPayroll())
+            return (false, PayrollDeniedMessage, null);
         var selected = data.Where(d => d.IsSelected && !d.HasExistingPayroll).ToList();
         if (!selected.Any())
             return (false, "لم يتم اختيار أي موظف", null);
@@ -419,6 +493,10 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
                     await _db.SaveChangesAsync();
                 }
 
+                // تعليم الجزاءات النظامية الداخلة في هذا الراتب Applied
+                // (داخل نفس معاملة الحفظ — تتراجع معها عند أي فشل لاحق)
+                await MarkEmployeePenaltiesAppliedAsync(calc, payroll.PayrollId);
+
                 sumGross += calc.GrossSalary;
                 sumDed   += totalDed;
                 sumNet   += netVal;
@@ -465,6 +543,8 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     int cashBoxId,
     string user)
 {
+    if (!CanProcessPayroll())
+        return (false, PayrollDeniedMessage, null);
     var selected = data.Where(d => d.IsSelected && !d.HasExistingPayroll).ToList();
     if (!selected.Any())
         return (false, "لم يتم اختيار أي موظف", null);
@@ -559,6 +639,10 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
                 _db.PayrollDetails.AddRange(details);
                 await _db.SaveChangesAsync();
             }
+
+            // تعليم الجزاءات النظامية الداخلة في هذا الراتب Applied
+            // (داخل نفس معاملة المعالجة — تتراجع معها عند أي فشل لاحق)
+            await MarkEmployeePenaltiesAppliedAsync(calc, payroll.PayrollId);
 
             // 4. حركة الخزينة
             var cashTx = new CashboxTransaction
@@ -686,6 +770,8 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     // ============================================================
     public async Task<(bool Ok, string Msg)> PayOneAsync(int payrollId, int cashBoxId, string user)
     {
+        if (!CanReviewOrPayPayroll())
+            return (false, PayrollDeniedMessage);
         var reviewer = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Username == user);
         if (!IsPayrollReviewerRole(reviewer?.Role))
             return (false, "ليس لديك صلاحية صرف الرواتب");
@@ -795,6 +881,8 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     public async Task<(bool Ok, string Msg)> PayOneWithLoanAllocationAsync(
         int payrollId, int cashBoxId, List<OutOfPayrollPaymentItemDto> allocations, string user)
     {
+        if (!CanReviewOrPayPayroll())
+            return (false, PayrollDeniedMessage);
         if (allocations is null || allocations.Count == 0)
             return await PayOneAsync(payrollId, cashBoxId, user);
 
@@ -994,6 +1082,8 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
 
     public async Task<(bool Ok, string Msg)> ApprovePayrollAsync(int payrollId, string user)
     {
+        if (!CanReviewOrPayPayroll())
+            return (false, PayrollDeniedMessage);
         var reviewer = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Username == user);
         if (!IsPayrollReviewerRole(reviewer?.Role))
             return (false, "ليس لديك صلاحية اعتماد الرواتب");
@@ -1024,6 +1114,8 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
 
     public async Task<(bool Ok, string Msg)> RejectPayrollAsync(int payrollId, string user, string? reason = null)
     {
+        if (!CanReviewOrPayPayroll())
+            return (false, PayrollDeniedMessage);
         var reviewer = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Username == user);
         if (!IsPayrollReviewerRole(reviewer?.Role))
             return (false, "ليس لديك صلاحية رفض الرواتب");
@@ -1057,6 +1149,8 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     // ============================================================
     public async Task<(bool Ok, string Msg)> CancelAsync(int payrollId, string user)
     {
+        if (!CanEnterPayroll())
+            return (false, PayrollDeniedMessage);
         var p = await _db.Payrolls.FirstOrDefaultAsync(x => x.PayrollId == payrollId);
         if (p is null) return (false, "الراتب غير موجود");
 
@@ -1239,6 +1333,8 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
 
     public async Task<(bool Ok, string Msg, int? PayrollId)> SaveOffPayrollPaymentAsync(OffPayrollPaymentFormDto dto, string user)
     {
+        if (!CanEnterPayroll())
+            return (false, PayrollDeniedMessage, null);
         if (!dto.EmployeeID.HasValue)
             return (false, "يجب اختيار الموظف", null);
 
@@ -1399,6 +1495,8 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
     public async Task<(bool Ok, string Msg)> SaveManualAttendanceAsync(
         ManualAttendanceDto dto, string user)
     {
+        if (!IsInternalPayrollUser())
+            return (false, PayrollDeniedMessage);
         var rec = await _db.AttendanceManuals.FirstOrDefaultAsync(
             a => a.EmployeeId == dto.EmployeeID && a.AttendanceMonth == dto.AttendanceMonth);
 
@@ -1777,6 +1875,46 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
         return string.Join("\n", lines);
     }
 
+    // ============================================================
+    // جزاءات الموظفين النظامية (EmployeePenalties)
+    // ============================================================
+    // أرقام الجزاءات النظامية المحمولة على نتيجة الحساب: بند الجزاء
+    // النظامي في Penalties يحمل DetailID = رقم الجزاء ووسمًا في Notes
+    // (سابقة بنود السلف: LoanItems تحمل DetailID = رقم القسط)، بينما
+    // الجزاء اليدوي من شاشة المعالجة DetailID = 0 وبلا وسم.
+    private static List<int> GetSystemPenaltyIds(PayrollCalculationDto calc)
+        => calc.Penalties
+            .Where(p => p.DetailID > 0
+                     && p.Notes != null
+                     && p.Notes.StartsWith(SystemPenaltyMarkerPrefix))
+            .Select(p => p.DetailID)
+            .Distinct()
+            .ToList();
+
+    // تعليم الجزاءات النظامية Applied وربطها بالراتب المحفوظ.
+    // يُستدعى بعد حفظ الراتب وبنوده داخل معاملة مسار الحفظ نفسه.
+    // إعادة التحقق من Status == "Approved" عند التعليم تضمن أن
+    // جزاءً سبق تطبيقه (Applied) لا يُعاد تطبيقه أو ربطه براتب آخر.
+    private async Task MarkEmployeePenaltiesAppliedAsync(PayrollCalculationDto calc, int payrollId)
+    {
+        var ids = GetSystemPenaltyIds(calc);
+        if (!ids.Any()) return;
+
+        var penalties = await _db.EmployeePenalties
+            .Where(p => ids.Contains(p.Id) && p.Status == "Approved")
+            .ToListAsync();
+
+        if (!penalties.Any()) return;
+
+        foreach (var penalty in penalties)
+        {
+            penalty.Status           = "Applied";
+            penalty.AppliedPayrollId = payrollId;
+        }
+
+        await _db.SaveChangesAsync();
+    }
+
     private List<PayrollDetail> BuildPayrollDetails(int payrollId, PayrollCalculationDto calc, string user)
     {
         var details = new List<PayrollDetail>();
@@ -1921,7 +2059,9 @@ var lateDed  = Math.Round(minRate * att.LateMinutes, 2);
         CreatedAt         = DateTime.Now
     };
 
-    private async Task<int> GetWorkingDaysAsync(int employeeId, string month)
+    // عامة ليعيد استخدامها نظام الجزاءات (EmployeePenaltyService) —
+    // نفس تعريف أيام العمل الذي يحسب به المحرك خصم الغياب، بلا نسخة موازية.
+    public async Task<int> GetWorkingDaysAsync(int employeeId, string month)
 {
     if (!DateTime.TryParseExact(month + "-01", "yyyy-MM-dd",
         null, System.Globalization.DateTimeStyles.None, out var monthStart))

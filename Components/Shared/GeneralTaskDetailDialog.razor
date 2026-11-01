@@ -1,0 +1,516 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ITaskService TaskService
+@inject IOpportunityService OppService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+
+<style>
+    .gtd-band { background: linear-gradient(135deg,#1B2A4A,#0F1D36); border-radius: 14px; color: #fff; padding: 18px 20px; }
+    .gtd-band .gtd-desc { font-size: 1.15rem; font-weight: 800; line-height: 1.5; }
+    .gtd-meta { color: #F0DBA8; font-size: .82rem; }
+    .gtd-link-chip { background: #FEFBF3 !important; border: 1.5px solid #D4A853 !important; color: #7c5e10 !important; font-weight: 700; cursor: pointer; }
+    .gtd-link-chip:hover { border-color: #B8912A !important; box-shadow: 0 4px 14px rgba(212,168,83,.35); }
+    .gtd-timeline { position: relative; padding-inline-start: 22px; }
+    .gtd-timeline::before { content: ""; position: absolute; inset-inline-start: 7px; top: 6px; bottom: 6px; width: 2px; background: linear-gradient(#D4A853, #e7eef7); }
+    .gtd-entry { position: relative; margin-bottom: 14px; animation: gtdFadeUp .45s ease both; }
+    .gtd-entry::before { content: ""; position: absolute; inset-inline-start: -20px; top: 14px; width: 10px; height: 10px; border-radius: 50%; background: #D4A853; border: 2px solid #fff; box-shadow: 0 0 0 2px #D4A85355; }
+    .gtd-entry.system::before { background: #90a4c4; box-shadow: 0 0 0 2px #90a4c455; }
+    .gtd-comment { background: #fff; border: 1px solid #e7eef7; border-radius: 12px; padding: 10px 14px; }
+    .gtd-comment.progress { border-inline-start: 4px solid #D4A853; background: #FEFBF3; }
+    .gtd-system { color: #5b6b87; font-size: .82rem; background: #f2f6fb; border-radius: 999px; padding: 4px 12px; display: inline-block; }
+    .gt-mention { color: #B8912A; font-weight: 800; background: #FEFBF3; border-radius: 6px; padding: 0 4px; }
+    .gtd-avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg,#2D4A7A,#1B2A4A); color: #F0DBA8; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: .8rem; flex: 0 0 auto; }
+    @@keyframes gtdFadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    @@media (prefers-reduced-motion: reduce) { .gtd-entry { animation: none; } }
+</style>
+
+<MudDialog>
+    <DialogContent>
+        @if (_loading)
+        {
+            <div class="d-flex justify-center pa-8"><MudProgressCircular Indeterminate="true" Color="Color.Primary" /></div>
+        }
+        else if (_detail is null)
+        {
+            <MudAlert Severity="Severity.Error">التكليف غير موجود أو لم تعد طرفًا فيه.</MudAlert>
+        }
+        else
+        {
+            var t = _detail.Task;
+            <div class="gtd-band mb-3">
+                <div class="d-flex align-center gap-2 flex-wrap">
+                    <MudChip T="string" Size="Size.Small" Color="@StatusColor(t.Status)" Variant="Variant.Filled">@StatusName(t.Status)</MudChip>
+                    <MudChip T="string" Size="Size.Small" Color="@PriorityColor(t.Priority)" Variant="Variant.Outlined" Style="color:#F0DBA8;border-color:#D4A853;">@PriorityName(t.Priority)</MudChip>
+                    @if (!string.IsNullOrWhiteSpace(t.TaskTypeNameAr ?? t.TaskTypeName))
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Style="color:#dbe6f5;">@(t.TaskTypeNameAr ?? t.TaskTypeName)</MudChip>
+                    }
+                    @if (t.TaskDueStatus == "Overdue")
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">متأخر @Math.Abs(t.DaysUntilDue ?? 0) يوم</MudChip>
+                    }
+                </div>
+                <div class="gtd-desc mt-2">@t.TaskDescription</div>
+                <div class="gtd-meta mt-2 d-flex gap-4 flex-wrap">
+                    <span>المكلَّف: <b>@t.AssignedToName</b></span>
+                    <span>المنشئ: <b>@t.CreatedBy</b></span>
+                    <span>الاستحقاق: <b>@t.DueDate.ToString("yyyy/MM/dd")@(t.DueTime.HasValue ? " — " + t.DueTime.Value.ToString("hh:mm tt") : "")</b></span>
+                    @if (t.AcknowledgedAt.HasValue)
+                    {
+                        <span>✔ مُستلم @t.AcknowledgedAt.Value.ToString("MM/dd HH:mm")</span>
+                    }
+                </div>
+                @if (!string.IsNullOrWhiteSpace(t.LinkedEntityType) && t.LinkedEntityId.HasValue)
+                {
+                    <div class="mt-3">
+                        <MudChip T="string" Class="gtd-link-chip" Icon="@Icons.Material.Filled.Link"
+                                 OnClick="OpenLinked">🔗 @t.LinkedEntityTitle</MudChip>
+                    </div>
+                }
+            </div>
+
+            @if (t.Status == "Cancelled")
+            {
+                <MudAlert Severity="Severity.Error" Class="mb-3" Dense="true">
+                    أُلغي هذا التكليف@(string.IsNullOrWhiteSpace(t.CancellationReason) ? "" : $": {t.CancellationReason}")
+                </MudAlert>
+            }
+            @if (!string.IsNullOrWhiteSpace(t.ReturnReason) && t.Status != "Cancelled")
+            {
+                <MudAlert Severity="Severity.Warning" Class="mb-3" Dense="true">
+                    أُرجع من المكلَّف@(t.ReturnedAt.HasValue ? $" ({t.ReturnedAt.Value:yyyy/MM/dd})" : ""): @t.ReturnReason
+                </MudAlert>
+            }
+            @if (t.Status == "Completed" && !string.IsNullOrWhiteSpace(t.CompletionLink))
+            {
+                <MudAlert Severity="Severity.Success" Class="mb-3" Dense="true">
+                    دليل الإتمام: <a href="@t.CompletionLink" target="_blank" rel="noopener">@t.CompletionLink</a>
+                </MudAlert>
+            }
+
+            @* ─── شريط الإجراءات حسب الدور والحالة ─── *@
+            @if (t.Status != "Completed" && t.Status != "Cancelled")
+            {
+                <div class="d-flex gap-2 flex-wrap mb-3">
+                    @if (_detail.ViewerIsAssignee && !t.AcknowledgedAt.HasValue && t.Status == "Pending")
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Info" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Visibility" OnClick="AcknowledgeAsync">استلام</MudButton>
+                    }
+                    @if (CanAct && t.Status == "Pending")
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="@(() => SetMode("start"))">بدء التنفيذ</MudButton>
+                    }
+                    @if (CanAct && t.Status == "In Progress")
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.CheckCircle" OnClick="@(() => SetMode("complete"))">إتمام</MudButton>
+                    }
+                    @if (_detail.ViewerIsAssignee)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Undo" OnClick="@(() => SetMode("return"))">إرجاع</MudButton>
+                    }
+                    @if (_detail.ViewerCanAdminister)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Edit" OnClick="@(() => SetMode("edit"))">تعديل</MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Cancel" OnClick="@(() => SetMode("cancel"))">إلغاء التكليف</MudButton>
+                    }
+                </div>
+
+                @if (_mode == "start" || _mode == "complete")
+                {
+                    <MudPaper Class="pa-3 mb-3" Elevation="1" Style="border-radius:12px;">
+                        <MudTextField @bind-Value="_actionNote" Label="@(_mode == "start" ? "ملاحظة بدء التنفيذ (إلزامية)" : "ملاحظة الإتمام (إلزامية)")"
+                                      Lines="2" Variant="Variant.Outlined" Immediate="true" />
+                        @if (_mode == "complete")
+                        {
+                            <MudTextField @bind-Value="_completionLink" Label="رابط دليل الإتمام (اختياري)" Placeholder="https://…"
+                                          Variant="Variant.Outlined" Class="mt-2" Dir="ltr" />
+                        }
+                        <div class="d-flex gap-2 mt-2">
+                            <MudButton Variant="Variant.Filled" Color="@(_mode == "start" ? Color.Primary : Color.Success)"
+                                       Disabled="_busy" OnClick="SubmitActionAsync">تأكيد</MudButton>
+                            <MudButton Variant="Variant.Text" OnClick="@(() => _mode = null)">تراجع</MudButton>
+                        </div>
+                    </MudPaper>
+                }
+                else if (_mode == "return" || _mode == "cancel")
+                {
+                    <MudPaper Class="pa-3 mb-3" Elevation="1" Style="border-radius:12px;">
+                        <MudTextField @bind-Value="_actionReason" Label="@(_mode == "return" ? "سبب الإرجاع (إلزامي)" : "سبب الإلغاء (إلزامي)")"
+                                      Lines="2" Variant="Variant.Outlined" Immediate="true" />
+                        <div class="d-flex gap-2 mt-2">
+                            <MudButton Variant="Variant.Filled" Color="@(_mode == "return" ? Color.Warning : Color.Error)"
+                                       Disabled="_busy" OnClick="SubmitActionAsync">تأكيد</MudButton>
+                            <MudButton Variant="Variant.Text" OnClick="@(() => _mode = null)">تراجع</MudButton>
+                        </div>
+                    </MudPaper>
+                }
+                else if (_mode == "edit")
+                {
+                    <MudPaper Class="pa-3 mb-3" Elevation="1" Style="border-radius:12px;">
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="int" @bind-Value="_editAssignee" Label="المكلَّف" Variant="Variant.Outlined" Dense="true">
+                                    @foreach (var emp in _employees)
+                                    {
+                                        <MudSelectItem T="int" Value="@emp.EmployeeId">@emp.FullName</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="int?" @bind-Value="_editTypeId" Label="نوع التكليف" Variant="Variant.Outlined" Dense="true" Clearable="true">
+                                    @foreach (var tt in _taskTypes)
+                                    {
+                                        <MudSelectItem T="int?" Value="@((int?)tt.TaskTypeId)">@(tt.TaskTypeNameAr ?? tt.TaskTypeName)</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12">
+                                <MudTextField @bind-Value="_editDescription" Label="الوصف" Lines="2" Variant="Variant.Outlined" />
+                            </MudItem>
+                            <MudItem xs="6" sm="4">
+                                <MudDatePicker @bind-Date="_editDueDate" Label="تاريخ الاستحقاق" Variant="Variant.Outlined" />
+                            </MudItem>
+                            <MudItem xs="6" sm="4">
+                                <MudTimePicker @bind-Time="_editDueTime" Label="الوقت" Variant="Variant.Outlined" Clearable="true" />
+                            </MudItem>
+                            <MudItem xs="12" sm="4">
+                                <MudSelect T="string" @bind-Value="_editPriority" Label="الأولوية" Variant="Variant.Outlined" Dense="true">
+                                    <MudSelectItem T="string" Value="@("Low")">منخفضة</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("Normal")">عادية</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("Medium")">متوسطة</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("High")">عالية</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("Urgent")">عاجلة</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                        </MudGrid>
+                        <div class="d-flex gap-2 mt-3">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="SaveEditAsync">حفظ التعديل</MudButton>
+                            <MudButton Variant="Variant.Text" OnClick="@(() => _mode = null)">تراجع</MudButton>
+                        </div>
+                    </MudPaper>
+                }
+            }
+
+            @* ─── خيط النقاش والخط الزمني ─── *@
+            <MudText Typo="Typo.subtitle1" Class="mt-2 mb-2" Style="font-weight:800;color:#1B2A4A;">خيط النقاش والتقدم</MudText>
+            <div class="gtd-timeline">
+                @foreach (var entry in Timeline())
+                {
+                    if (entry.Comment is not null)
+                    {
+                        var c = entry.Comment;
+                        <div class="gtd-entry" style="animation-delay:@(entry.Index * 60)ms">
+                            <div class="gtd-comment @(c.Kind == "Progress" ? "progress" : "")">
+                                <div class="d-flex align-center gap-2">
+                                    <div class="gtd-avatar">@Initials(c.AuthorName ?? c.AuthorUserName)</div>
+                                    <b>@(c.AuthorName ?? c.AuthorUserName)</b>
+                                    @if (c.Kind == "Progress")
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Style="background:#D4A853;color:#fff;" Variant="Variant.Filled">تحديث تقدم</MudChip>
+                                    }
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ms-auto">@c.CreatedAt.ToString("yyyy/MM/dd HH:mm")</MudText>
+                                </div>
+                                <div class="mt-2" style="white-space:normal;line-height:1.7;">@RenderBody(c)</div>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="gtd-entry system" style="animation-delay:@(entry.Index * 60)ms">
+                            <span class="gtd-system">@entry.Text — @entry.When.ToString("MM/dd HH:mm")</span>
+                        </div>
+                    }
+                }
+                @if (_detail.Comments.Count == 0)
+                {
+                    <div class="gtd-entry system"><span class="gtd-system">لا تعليقات بعد — كن أول من يكتب في الخيط.</span></div>
+                }
+            </div>
+
+            @* ─── كاتب التعليق ─── *@
+            <MudPaper Class="pa-3 mt-2" Elevation="1" Style="border-radius:12px;background:#fbfcfe;">
+                <div class="d-flex align-center gap-2 mb-2">
+                    <MudChipSet T="string" SelectedValue="@_commentKind" SelectedValueChanged="v => _commentKind = v" CheckMark="false">
+                        <MudChip T="string" Value="@("Comment")" Variant="Variant.Outlined" SelectedColor="Color.Primary">تعليق</MudChip>
+                        <MudChip T="string" Value="@("Progress")" Variant="Variant.Outlined" SelectedColor="Color.Warning">تحديث تقدم</MudChip>
+                    </MudChipSet>
+                    <MudMenu Icon="@Icons.Material.Filled.AlternateEmail" Label="مناداة" Color="Color.Warning" Variant="Variant.Outlined" Size="Size.Small">
+                        @foreach (var emp in _employees)
+                        {
+                            <MudMenuItem OnClick="@(() => PickMention(emp))">@emp.FullName</MudMenuItem>
+                        }
+                    </MudMenu>
+                    @if (_pickedMentions.Count > 0)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">سيُشعر: @string.Join("، ", _pickedMentions.Values)</MudText>
+                    }
+                </div>
+                <MudTextField @bind-Value="_commentBody" Placeholder="اكتب تعليقك… استخدم زر «مناداة» لذكر زميل وسيصله إشعار"
+                              Lines="3" Variant="Variant.Outlined" Immediate="true" />
+                <div class="d-flex mt-2">
+                    <MudButton Variant="Variant.Filled" Style="background:#D4A853;color:#fff;" Disabled="_busy"
+                               StartIcon="@Icons.Material.Filled.Send" OnClick="SendCommentAsync">إرسال</MudButton>
+                </div>
+            </MudPaper>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">إغلاق</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public int TaskId { get; set; }
+
+    private TaskDetailDto? _detail;
+    private bool _loading = true;
+    private bool _busy;
+    private bool _dirty;
+    private string _userName = "System";
+
+    private string? _mode;
+    private string _actionNote = "";
+    private string _actionReason = "";
+    private string _completionLink = "";
+
+    private string _commentBody = "";
+    private string _commentKind = "Comment";
+    private readonly Dictionary<int, string> _pickedMentions = new();
+
+    private List<Employee> _employees = new();
+    private List<TaskType> _taskTypes = new();
+
+    private int _editAssignee;
+    private int? _editTypeId;
+    private string _editDescription = "";
+    private DateTime? _editDueDate;
+    private TimeSpan? _editDueTime;
+    private string _editPriority = "Medium";
+
+    private bool CanAct => _detail is not null && (_detail.ViewerIsAssignee || _detail.ViewerCanManage);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _userName = state.User.Identity?.Name ?? "System";
+        try { _employees = await OppService.GetActiveEmployeesAsync(); } catch { _employees = new(); }
+        try { _taskTypes = await OppService.GetTaskTypesAsync(); } catch { _taskTypes = new(); }
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try { _detail = await TaskService.GetTaskDetailAsync(TaskId, _userName); }
+        catch { _detail = null; }
+        _loading = false;
+    }
+
+    private void SetMode(string mode)
+    {
+        _mode = _mode == mode ? null : mode;
+        if (_mode == "edit" && _detail is not null)
+        {
+            var t = _detail.Task;
+            _editAssignee = t.AssignedTo;
+            _editTypeId = t.TaskTypeId;
+            _editDescription = t.TaskDescription ?? "";
+            _editDueDate = t.DueDate;
+            _editDueTime = t.DueTime.HasValue ? t.DueTime.Value.ToTimeSpan() : null;
+            _editPriority = string.IsNullOrWhiteSpace(t.Priority) ? "Medium" : t.Priority;
+        }
+    }
+
+    private async Task AcknowledgeAsync()
+    {
+        _busy = true;
+        var (ok, msg) = await TaskService.AcknowledgeTaskAsync(TaskId, _userName);
+        _busy = false;
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) { _dirty = true; await LoadAsync(); }
+    }
+
+    private async Task SubmitActionAsync()
+    {
+        if (_detail is null) return;
+        _busy = true;
+        (bool ok, string msg) result;
+        switch (_mode)
+        {
+            case "start":
+                result = await TaskService.StartAsync(TaskId, _actionNote, _userName);
+                break;
+            case "complete":
+                result = await TaskService.CompleteAsync(TaskId, _actionNote, _userName,
+                    string.IsNullOrWhiteSpace(_completionLink) ? null : _completionLink.Trim());
+                break;
+            case "return":
+                result = await TaskService.ReturnTaskAsync(TaskId, _actionReason, _userName);
+                break;
+            case "cancel":
+                result = await TaskService.CancelGeneralTaskAsync(TaskId, _actionReason, _userName);
+                break;
+            default:
+                _busy = false;
+                return;
+        }
+        _busy = false;
+        Snackbar.Add(result.msg, result.ok ? Severity.Success : Severity.Error);
+        if (result.ok)
+        {
+            _dirty = true;
+            _mode = null;
+            _actionNote = ""; _actionReason = ""; _completionLink = "";
+            await LoadAsync();
+        }
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (!_editDueDate.HasValue) { Snackbar.Add("برجاء تحديد تاريخ الاستحقاق.", Severity.Warning); return; }
+        _busy = true;
+        var dto = new UpdateGeneralTaskDto
+        {
+            TaskId = TaskId,
+            AssignedTo = _editAssignee,
+            TaskTypeId = _editTypeId,
+            TaskDescription = _editDescription,
+            DueDate = _editDueDate.Value,
+            DueTime = _editDueTime.HasValue ? TimeOnly.FromTimeSpan(_editDueTime.Value) : null,
+            Priority = _editPriority
+        };
+        var (ok, msg) = await TaskService.UpdateGeneralTaskAsync(dto, _userName);
+        _busy = false;
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok) { _dirty = true; _mode = null; await LoadAsync(); }
+    }
+
+    private void PickMention(Employee emp)
+    {
+        _pickedMentions[emp.EmployeeId] = emp.FullName;
+        var token = $"@{emp.FullName} ";
+        if (!_commentBody.Contains(token.Trim()))
+            _commentBody = (_commentBody ?? "") + token;
+    }
+
+    private async Task SendCommentAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_commentBody)) { Snackbar.Add("اكتب نص التعليق أولًا.", Severity.Warning); return; }
+        _busy = true;
+        var mentionIds = _pickedMentions
+            .Where(kv => _commentBody.Contains("@" + kv.Value))
+            .Select(kv => kv.Key)
+            .ToList();
+        var dto = new AddTaskCommentDto
+        {
+            TaskId = TaskId,
+            Body = _commentBody.Trim(),
+            Kind = _commentKind,
+            MentionedEmployeeIds = mentionIds
+        };
+        var (ok, msg) = await TaskService.AddTaskCommentAsync(dto, _userName);
+        _busy = false;
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
+        if (ok)
+        {
+            _dirty = true;
+            _commentBody = "";
+            _pickedMentions.Clear();
+            await LoadAsync();
+        }
+    }
+
+    private void OpenLinked()
+    {
+        var t = _detail?.Task;
+        if (t is null) return;
+        var route = GeneralTaskLinks.RouteFor(t.LinkedEntityType, t.LinkedEntityId);
+        if (route is not null) { MudDialog.Close(DialogResult.Ok("navigate")); Nav.NavigateTo(route); }
+    }
+
+    private void Close() => MudDialog.Close(_dirty ? DialogResult.Ok("changed") : DialogResult.Cancel());
+
+    // ─── الخط الزمني: أحداث النظام من طوابع التكليف + التعليقات مرتبة زمنيًا ───
+    private sealed record TimelineEntry(DateTime When, int Index, TaskCommentDto? Comment, string? Text);
+
+    private List<TimelineEntry> Timeline()
+    {
+        var t = _detail!.Task;
+        var entries = new List<TimelineEntry>();
+        entries.Add(new(t.CreatedAt, 0, null, $"أُنشئ التكليف بواسطة {t.CreatedBy}"));
+        if (t.AcknowledgedAt.HasValue)
+            entries.Add(new(t.AcknowledgedAt.Value, 0, null, $"استلم {t.AcknowledgedBy ?? t.AssignedToName} التكليف"));
+        if (t.StartedAt.HasValue)
+            entries.Add(new(t.StartedAt.Value, 0, null, $"بدأ {t.StartedBy ?? t.AssignedToName} التنفيذ" + (string.IsNullOrWhiteSpace(t.StartNotes) ? "" : $": {t.StartNotes}")));
+        if (t.ReturnedAt.HasValue)
+            entries.Add(new(t.ReturnedAt.Value, 0, null, $"أرجع {t.ReturnedBy ?? t.AssignedToName} التكليف: {t.ReturnReason}"));
+        if (t.CompletedDate.HasValue)
+            entries.Add(new(t.CompletedDate.Value, 0, null, $"أتمّ {t.CompletedBy ?? t.AssignedToName} التكليف" + (string.IsNullOrWhiteSpace(t.CompletionNotes) ? "" : $": {t.CompletionNotes}")));
+        if (t.CancelledAt.HasValue)
+            entries.Add(new(t.CancelledAt.Value, 0, null, $"ألغى {t.CancelledBy} التكليف: {t.CancellationReason}"));
+        foreach (var c in _detail.Comments)
+            entries.Add(new(c.CreatedAt, 0, c, null));
+        return entries.OrderBy(e => e.When).Select((e, i) => e with { Index = i }).ToList();
+    }
+
+    private MarkupString RenderBody(TaskCommentDto c)
+    {
+        var encoded = System.Net.WebUtility.HtmlEncode(c.Body);
+        foreach (var name in c.MentionedNames.Distinct())
+        {
+            var token = System.Net.WebUtility.HtmlEncode("@" + name);
+            encoded = encoded.Replace(token, $"<span class=\"gt-mention\">{token}</span>");
+        }
+        return (MarkupString)encoded.Replace("\n", "<br/>");
+    }
+
+    private static string Initials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "؟";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 1 ? parts[0][..1] : $"{parts[0][0]}{parts[^1][0]}";
+    }
+
+    private static Color StatusColor(string? status) => status switch
+    {
+        "Completed" => Color.Success,
+        "In Progress" => Color.Info,
+        "Cancelled" => Color.Error,
+        _ => Color.Warning
+    };
+
+    private static string StatusName(string? status) => status switch
+    {
+        "Completed" => "مكتمل",
+        "In Progress" => "قيد التنفيذ",
+        "Cancelled" => "ملغي",
+        _ => "قيد الانتظار"
+    };
+
+    private static Color PriorityColor(string? priority) => priority switch
+    {
+        "Urgent" => Color.Error,
+        "High" => Color.Warning,
+        _ => Color.Default
+    };
+
+    private static string PriorityName(string? priority) => priority switch
+    {
+        "Urgent" => "عاجلة",
+        "High" => "عالية",
+        "Low" => "منخفضة",
+        "Normal" => "عادية",
+        _ => "متوسطة"
+    };
+}

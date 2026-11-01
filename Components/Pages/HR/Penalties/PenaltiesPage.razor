@@ -1,0 +1,911 @@
+@page "/hr/penalties"
+@using COCOBOLOERPNEW.Services
+@using COCOBOLOERPNEW.DTOs
+@using MudBlazor
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Web
+@attribute [Authorize]
+
+@inject IEmployeePenaltyService PenaltyService
+@inject IEmployeeService EmployeeService
+@inject AuthenticationStateProvider AuthState
+@inject ISnackbar Snackbar
+
+<PageTitle>جزاءات الموظفين</PageTitle>
+
+<AuthorizeView>
+    <Authorized>
+        @if (!_canAccess)
+        {
+            <MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+                <MudPaper Class="pa-8 text-center" Elevation="3" Style="border-radius:20px;">
+                    <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Large"
+                             Style="font-size:64px; color:#EF5350;" Class="mb-4" />
+                    <MudText Typo="Typo.h5" Color="Color.Error" Class="mb-2">غير مصرح</MudText>
+                    <MudText Typo="Typo.body1" Color="Color.Secondary">
+                        ليس لديك صلاحية الوصول إلى شاشة جزاءات الموظفين
+                    </MudText>
+                </MudPaper>
+            </MudContainer>
+        }
+        else
+        {
+            <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-4 hr-page-shell">
+
+                @* ═══ HERO ═══ *@
+                <div class="pen-hero mb-4">
+                    <div class="pen-hero__glow pen-glow1"></div>
+                    <div class="pen-hero__glow pen-glow2"></div>
+                    <div class="pen-hero__content">
+                        <div class="d-flex align-center gap-3">
+                            <div class="pen-hero__avatar">
+                                <MudIcon Icon="@Icons.Material.Filled.Gavel" Size="Size.Large" />
+                            </div>
+                            <div>
+                                <div class="pen-hero__titlerow">
+                                    <MudText Typo="Typo.h5" Class="font-weight-bold">جزاءات الموظفين</MudText>
+                                    <span class="pen-hero__tag">توقيع مباشر · دورة اعتماد</span>
+                                </div>
+                                <MudText Typo="Typo.body2" Style="opacity:.85">
+                                    خصم أيام أو مبلغ مقطوع يُرحَّل إلى الراتب عند الحساب — يولد معتمدًا لصاحب التوقيع المباشر، ومعلّقًا لغيره حتى الاعتماد
+                                </MudText>
+                            </div>
+                        </div>
+                        <div class="d-flex gap-2 flex-wrap align-center">
+                            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh"
+                                       OnClick="LoadData" type="button" Class="pen-btn-ghost">
+                                تحديث
+                            </MudButton>
+                            @if (_actor.CanCreate)
+                            {
+                                <MudButton Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Add"
+                                           OnClick="OpenCreateDialog" type="button" Class="pen-btn-gold">
+                                    <span class="pen-shine"></span>إضافة جزاء
+                                </MudButton>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_errorMessage))
+                {
+                    <MudAlert Severity="Severity.Error" Class="mb-4">@_errorMessage</MudAlert>
+                }
+
+                @* ═══ KPI / Status Tabs ═══ *@
+                <MudGrid Spacing="2" Class="mb-3">
+                    <MudItem xs="4" sm="2">
+                        <div class="pen-kpi" style="@GetKpiStyle(null, "#3B82F6")" @onclick="() => FilterByStatus(null)">
+                            <div class="pen-kpi__ic" style="color:#3B82F6"><MudIcon Icon="@Icons.Material.Filled.ListAlt" Size="Size.Small" /></div>
+                            <div>
+                                <div class="pen-kpi__v" style="color:#3B82F6">@_stats.TotalCount</div>
+                                <div class="pen-kpi__l">الإجمالي</div>
+                            </div>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="4" sm="2">
+                        <div class="pen-kpi" style="@GetKpiStyle(PenaltyStatuses.Pending, "#F59E0B")" @onclick="() => FilterByStatus(PenaltyStatuses.Pending)">
+                            <div class="pen-kpi__ic" style="color:#F59E0B"><MudIcon Icon="@Icons.Material.Filled.HourglassTop" Size="Size.Small" /></div>
+                            <div>
+                                <div class="pen-kpi__v" style="color:#F59E0B">@_stats.PendingCount</div>
+                                <div class="pen-kpi__l">بانتظار الاعتماد</div>
+                            </div>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="4" sm="2">
+                        <div class="pen-kpi" style="@GetKpiStyle(PenaltyStatuses.Approved, "#10B981")" @onclick="() => FilterByStatus(PenaltyStatuses.Approved)">
+                            <div class="pen-kpi__ic" style="color:#10B981"><MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" /></div>
+                            <div>
+                                <div class="pen-kpi__v" style="color:#10B981">@_stats.ApprovedCount</div>
+                                <div class="pen-kpi__l">معتمدة</div>
+                            </div>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="4" sm="2">
+                        <div class="pen-kpi" style="@GetKpiStyle(PenaltyStatuses.Applied, "#6366F1")" @onclick="() => FilterByStatus(PenaltyStatuses.Applied)">
+                            <div class="pen-kpi__ic" style="color:#6366F1"><MudIcon Icon="@Icons.Material.Filled.ReceiptLong" Size="Size.Small" /></div>
+                            <div>
+                                <div class="pen-kpi__v" style="color:#6366F1">@_stats.AppliedCount</div>
+                                <div class="pen-kpi__l">مطبقة</div>
+                            </div>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="4" sm="2">
+                        <div class="pen-kpi" style="@GetKpiStyle(PenaltyStatuses.Rejected, "#EF4444")" @onclick="() => FilterByStatus(PenaltyStatuses.Rejected)">
+                            <div class="pen-kpi__ic" style="color:#EF4444"><MudIcon Icon="@Icons.Material.Filled.Cancel" Size="Size.Small" /></div>
+                            <div>
+                                <div class="pen-kpi__v" style="color:#EF4444">@_stats.RejectedCount</div>
+                                <div class="pen-kpi__l">مرفوضة</div>
+                            </div>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="4" sm="2">
+                        <div class="pen-kpi" style="@GetKpiStyle(PenaltyStatuses.Cancelled, "#94A3B8")" @onclick="() => FilterByStatus(PenaltyStatuses.Cancelled)">
+                            <div class="pen-kpi__ic" style="color:#94A3B8"><MudIcon Icon="@Icons.Material.Filled.Block" Size="Size.Small" /></div>
+                            <div>
+                                <div class="pen-kpi__v" style="color:#94A3B8">@_stats.CancelledCount</div>
+                                <div class="pen-kpi__l">ملغية</div>
+                            </div>
+                        </div>
+                    </MudItem>
+                </MudGrid>
+
+                @* ═══ Filter Bar ═══ *@
+                <div class="sticky-filter-shell">
+                    <MudPaper Class="pa-3 mb-4" Elevation="2" Style="border-radius:14px;">
+                        <div class="pen-filter-row">
+                            <MudTextField T="string"
+                                          Class="pfr-search"
+                                          Label="بحث باسم الموظف"
+                                          @bind-Value="_filter.SearchText"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Adornment="Adornment.Start"
+                                          AdornmentIcon="@Icons.Material.Filled.Search"
+                                          OnKeyUp="OnSearchKey"
+                                          Clearable="true" />
+                            <MudSelect T="string" Class="pfr-f" Label="الشهر المستهدف" @bind-Value="_filter.Month"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true">
+                                @foreach (var m in _monthOptions)
+                                {
+                                    <MudSelectItem T="string" Value="@m.Value">@m.Label</MudSelectItem>
+                                }
+                            </MudSelect>
+                            <MudButton Class="pfr-btn" Variant="Variant.Filled" Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="ApplyFilters" type="button">
+                                فلتر
+                            </MudButton>
+                            <MudButton Class="pfr-btn" Variant="Variant.Outlined" Color="Color.Default"
+                                       StartIcon="@Icons.Material.Filled.ClearAll" OnClick="ClearFilters" type="button">
+                                مسح
+                            </MudButton>
+                        </div>
+                    </MudPaper>
+                </div>
+
+                @if (_loading && _items.Count == 0)
+                {
+                    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mb-4" />
+                }
+
+                @* ═══ Table ═══ *@
+                <div class="pen-table-shell">
+                <MudTable Items="@_items" Hover="true" Elevation="0" Dense="true">
+                    <ToolBarContent>
+                        <div class="d-flex align-center justify-space-between w-100 flex-wrap" style="gap:8px;">
+                            <MudText Typo="Typo.h6" Style="font-weight:600;">قائمة الجزاءات</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                عرض @_fromRecord - @_toRecord من @_totalCount
+                            </MudText>
+                        </div>
+                    </ToolBarContent>
+                    <HeaderContent>
+                        <MudTh>الموظف</MudTh>
+                        <MudTh>القسم</MudTh>
+                        <MudTh>النوع</MudTh>
+                        <MudTh>القيمة</MudTh>
+                        <MudTh>المبلغ المحسوب</MudTh>
+                        <MudTh>الشهر المستهدف</MudTh>
+                        <MudTh>السبب</MudTh>
+                        <MudTh>أنشأه</MudTh>
+                        <MudTh>الحالة</MudTh>
+                        <MudTh>تاريخ الإنشاء</MudTh>
+                        <MudTh>إجراءات</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="item">
+                        <MudTd DataLabel="الموظف">
+                            <MudText Typo="Typo.body2" Style="font-weight:600;">@item.EmployeeName</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="القسم">@item.Department</MudTd>
+                        <MudTd DataLabel="النوع">
+                            <MudChip T="string" Color="@(item.PenaltyType == PenaltyTypes.Days ? Color.Primary : Color.Secondary)" Size="Size.Small" Variant="Variant.Outlined">
+                                @item.TypeAr
+                            </MudChip>
+                        </MudTd>
+                        <MudTd DataLabel="القيمة">
+                            <MudText Typo="Typo.body2" Style="font-weight:500;">@item.ValueDisplay</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="المبلغ المحسوب">
+                            @if (item.ComputedAmount.HasValue)
+                            {
+                                <MudText Typo="Typo.body2" Style="color:#B8912A; font-weight:700;">@item.ComputedAmount.Value.ToString("N2") ج.م</MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">—</MudText>
+                                @if (item.IsPendingStatus)
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">يُحسب عند الاعتماد</MudText>
+                                }
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="الشهر المستهدف">
+                            <div>@MonthLabel(item.TargetMonth)</div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@item.TargetMonth</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="السبب">
+                            <div style="max-width:220px;">
+                                <MudText Typo="Typo.caption">@item.Reason</MudText>
+                            </div>
+                        </MudTd>
+                        <MudTd DataLabel="أنشأه">
+                            <MudText Typo="Typo.caption">@(string.IsNullOrWhiteSpace(item.CreatedByName) ? "—" : item.CreatedByName)</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="الحالة">
+                            <MudChip T="string" Color="@GetStatusColor(item.Status)" Size="Size.Small">
+                                @item.StatusAr
+                            </MudChip>
+                            @if (!string.IsNullOrWhiteSpace(item.ApprovedByName))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">بواسطة: @item.ApprovedByName</MudText>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="تاريخ الإنشاء">
+                            <div>@(item.CreatedAt?.ToString("yyyy/MM/dd"))</div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@(item.CreatedAt?.ToString("HH:mm"))</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="إجراءات">
+                            <div class="d-flex" style="gap:4px;">
+                                @if (item.CanApprove)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Check" Color="Color.Success"
+                                                   Size="Size.Small" @onclick="() => ApprovePenalty(item)"
+                                                   type="button" Title="اعتماد" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Color="Color.Error"
+                                                   Size="Size.Small" @onclick="() => OpenConfirm(item, ConfirmAction.Reject)"
+                                                   type="button" Title="رفض" />
+                                }
+                                @if (item.CanCancel)
+                                {
+                                    <MudIconButton Icon="@Icons.Material.Filled.Block" Color="Color.Warning"
+                                                   Size="Size.Small" @onclick="() => OpenConfirm(item, ConfirmAction.Cancel)"
+                                                   type="button" Title="إلغاء الجزاء" />
+                                }
+                            </div>
+                        </MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body1" Align="Align.Center" Class="py-4">
+                            @if (_loading)
+                            {
+                                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                            }
+                            else if (!string.IsNullOrWhiteSpace(_errorMessage))
+                            {
+                                <span style="color:#EF4444;">@_errorMessage</span>
+                            }
+                            else
+                            {
+                                <span>لا توجد جزاءات مطابقة للفلاتر الحالية</span>
+                            }
+                        </MudText>
+                    </NoRecordsContent>
+                </MudTable>
+                </div>
+
+                @if (_totalCount > 0)
+                {
+                    <MudPaper Class="pa-3 mt-3 d-flex align-center justify-space-between flex-wrap" Elevation="1" Style="gap:12px;">
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">
+                            الصفحة @_filter.PageNumber من @_totalPages — عرض @_fromRecord إلى @_toRecord من @_totalCount
+                        </MudText>
+
+                        <div class="d-flex align-center" style="gap:8px;">
+                            <MudSelect T="int" Value="@_filter.PageSize" ValueChanged="OnPageSizeChanged" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:110px;">
+                                <MudSelectItem T="int" Value="25">25</MudSelectItem>
+                                <MudSelectItem T="int" Value="50">50</MudSelectItem>
+                                <MudSelectItem T="int" Value="100">100</MudSelectItem>
+                            </MudSelect>
+
+                            <MudButton Variant="Variant.Outlined" Disabled="@(!_hasPreviousPage)" OnClick="PreviousPage" type="button">
+                                السابق
+                            </MudButton>
+                            <MudButton Variant="Variant.Outlined" Disabled="@(!_hasNextPage)" OnClick="NextPage" type="button">
+                                التالي
+                            </MudButton>
+                        </div>
+                    </MudPaper>
+                }
+            </MudContainer>
+        }
+    </Authorized>
+    <NotAuthorized>
+        <MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+            <MudPaper Class="pa-8 text-center" Elevation="3" Style="border-radius:20px;">
+                <MudIcon Icon="@Icons.Material.Filled.Login" Size="Size.Large"
+                         Style="font-size:64px; color:#FF9800;" Class="mb-4" />
+                <MudText Typo="Typo.h5" Color="Color.Warning" Class="mb-2">تسجيل الدخول مطلوب</MudText>
+                <MudText Typo="Typo.body1" Color="Color.Secondary">
+                    يرجى تسجيل الدخول للوصول إلى شاشة جزاءات الموظفين
+                </MudText>
+            </MudPaper>
+        </MudContainer>
+    </NotAuthorized>
+</AuthorizeView>
+
+@* ═══ Create Dialog ═══ *@
+<MudDialog @bind-Visible="_createDialogOpen">
+    <DialogContent>
+        <div class="pen-dlg-head">
+            <div class="pen-dlg-head__ic"><MudIcon Icon="@Icons.Material.Filled.Gavel" /></div>
+            <div>
+                <MudText Typo="Typo.h6" Style="font-weight:800;">إضافة جزاء جديد</MudText>
+                <MudText Typo="Typo.caption" Style="opacity:.8;">يُسجَّل الجزاء للموظف — الاعتماد والإشعارات تتم فورًا</MudText>
+            </div>
+        </div>
+        <MudForm @ref="_createForm">
+            <MudGrid>
+                <MudItem xs="12" sm="6">
+                    <MudAutocomplete T="EmployeeSimple"
+                                     Label="الموظف"
+                                     Value="_form.Employee"
+                                     ValueChanged="OnEmployeeChanged"
+                                     SearchFunc="@SearchEmployees"
+                                     ToStringFunc="@(e => e?.Name ?? "")"
+                                     Required="true"
+                                     RequiredError="اختر الموظف"
+                                     Clearable="true">
+                        <ItemTemplate Context="emp">
+                            <div style="padding:8px 12px;">
+                                <strong>@emp.Name</strong>
+                                <br />
+                                <small style="color:#757575;">@(string.IsNullOrWhiteSpace(emp.Department) ? "بدون قسم" : emp.Department)</small>
+                            </div>
+                        </ItemTemplate>
+                    </MudAutocomplete>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string" Label="نوع الجزاء" Value="_form.Type" ValueChanged="OnTypeChanged">
+                        <MudSelectItem T="string" Value="@PenaltyTypes.Days">أيام</MudSelectItem>
+                        <MudSelectItem T="string" Value="@PenaltyTypes.Amount">مبلغ مقطوع</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                @if (_form.Type == PenaltyTypes.Days)
+                {
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="decimal?" Label="عدد الأيام" Value="_form.Days" ValueChanged="OnDaysChanged"
+                                         Min="0m" Step="0.5m" Required="true" RequiredError="حدد عدد الأيام" />
+                    </MudItem>
+                }
+                else
+                {
+                    <MudItem xs="12" sm="6">
+                        <MudNumericField T="decimal?" Label="المبلغ المقطوع (ج.م)" @bind-Value="_form.Amount"
+                                         Min="0m" Step="50m" Required="true" RequiredError="حدد المبلغ" />
+                    </MudItem>
+                }
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string" Label="الشهر المستهدف" Value="_form.Month" ValueChanged="OnMonthChanged">
+                        @foreach (var m in _monthOptions)
+                        {
+                            <MudSelectItem T="string" Value="@m.Value">@m.Label</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField T="string" Label="سبب الجزاء" @bind-Value="_form.Reason" Lines="3"
+                                  Required="true" RequiredError="سبب الجزاء مطلوب" />
+                </MudItem>
+            </MudGrid>
+        </MudForm>
+
+        @if (_form.Employee != null)
+        {
+            <div class="pen-confirm">
+                <MudIcon Icon="@Icons.Material.Filled.Calculate" Size="Size.Small" Style="color:#D4A853;" />
+                <MudText Typo="Typo.body2">
+                    @if (_previewLoading)
+                    {
+                        <text>جارٍ حساب المعاينة…</text>
+                    }
+                    else if (_form.Type == PenaltyTypes.Days && (!_form.Days.HasValue || _form.Days.Value <= 0))
+                    {
+                        <text>حدد عدد الأيام لعرض معاينة المبلغ المحسوب.</text>
+                    }
+                    else if (_preview != null)
+                    {
+                        @if (_form.Type == PenaltyTypes.Days)
+                        {
+                            <text>أيام العمل في @MonthLabel(_preview.FinalMonth): <b>@_preview.WorkingDays</b> يوم — قيمة اليوم <b>@_preview.DayValue.ToString("N2")</b> ج.م — سيُخصم <b>@_preview.ComputedAmount.ToString("N2")</b> ج.م من راتب @MonthLabel(_preview.FinalMonth).</text>
+                        }
+                        else
+                        {
+                            <text>سيُخصم مبلغ <b>@((_form.Amount ?? 0).ToString("N2"))</b> ج.م من راتب @MonthLabel(_preview.FinalMonth).</text>
+                        }
+                        @if (_preview.RolledFrom != null)
+                        {
+                            <text><br />تنبيه: راتب @MonthLabel(_preview.RolledFrom) محفوظ — سيُطبَّق الجزاء على @MonthLabel(_preview.FinalMonth).</text>
+                        }
+                        <text><br /></text>
+                        @if (_preview.WillBeApproved)
+                        {
+                            <text>سيُولد الجزاء <b>معتمدًا فورًا</b> — لديك توقيع مباشر على هذا الموظف.</text>
+                        }
+                        else
+                        {
+                            <text>سيُولد الجزاء <b>بانتظار الاعتماد</b> من صاحب توقيع مباشر — المبلغ تقديري ويُحسب نهائيًا عند الاعتماد.</text>
+                        }
+                    }
+                </MudText>
+            </div>
+        }
+
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" OnClick="SubmitCreate" Disabled="@_savingCreate" type="button" Class="pen-btn-gold">
+            @if (_savingCreate)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            <span class="pen-shine"></span>حفظ الجزاء
+        </MudButton>
+        <MudButton OnClick="CloseCreateDialog" type="button">إلغاء</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@* ═══ Confirm Dialog (رفض / إلغاء) ═══ *@
+<MudDialog @bind-Visible="_confirmOpen">
+    <DialogContent>
+        <div class="pen-dlg-head @(_confirmAction == ConfirmAction.Reject ? "pen-dlg-head--red" : "")">
+            <div class="pen-dlg-head__ic @(_confirmAction == ConfirmAction.Reject ? "pen-dlg-head__ic--red" : "")">
+                <MudIcon Icon="@(_confirmAction == ConfirmAction.Reject ? Icons.Material.Filled.Cancel : Icons.Material.Filled.Block)" />
+            </div>
+            <div>
+                <MudText Typo="Typo.h6" Style="font-weight:800;">@(_confirmAction == ConfirmAction.Reject ? "رفض الجزاء" : "إلغاء الجزاء")</MudText>
+                <MudText Typo="Typo.caption" Style="opacity:.8;">@(_confirmAction == ConfirmAction.Reject ? "سيصل إشعار بالرفض إلى منشئ الجزاء" : "لن يدخل هذا الجزاء أي راتب")</MudText>
+            </div>
+        </div>
+        @if (_confirmItem != null)
+        {
+            <MudText Typo="Typo.body1">
+                @(_confirmAction == ConfirmAction.Reject ? "رفض" : "إلغاء") جزاء الموظف <b>@_confirmItem.EmployeeName</b>
+                (@_confirmItem.TypeAr — @_confirmItem.ValueDisplay) عن شهر @MonthLabel(_confirmItem.TargetMonth)؟
+            </MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="@(_confirmAction == ConfirmAction.Reject ? Color.Error : Color.Warning)" Variant="Variant.Filled" OnClick="SubmitConfirm" Disabled="@_confirmSaving" type="button">
+            @if (_confirmSaving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            @(_confirmAction == ConfirmAction.Reject ? "رفض" : "إلغاء الجزاء")
+        </MudButton>
+        <MudButton OnClick="CloseConfirm" type="button">تراجع</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private List<PenaltyListDto> _items = new();
+    private PenaltyFilterDto _filter = new() { PageNumber = 1, PageSize = 25 };
+    private PenaltyStatsDto _stats = new();
+    private PenaltyActorDto _actor = new();
+    private List<MonthOption> _monthOptions = new();
+
+    private bool _loading = true;
+    private bool _canAccess = false;
+    private string _username = "";
+    private string? _errorMessage;
+
+    private int _totalCount;
+    private int _totalPages => Math.Max(1, (int)Math.Ceiling(_totalCount / (double)_filter.PageSize));
+    private bool _hasPreviousPage => _filter.PageNumber > 1;
+    private bool _hasNextPage => _filter.PageNumber < _totalPages;
+    private int _fromRecord => _totalCount == 0 ? 0 : ((_filter.PageNumber - 1) * _filter.PageSize) + 1;
+    private int _toRecord => Math.Min(_filter.PageNumber * _filter.PageSize, _totalCount);
+
+    private bool _createDialogOpen = false;
+    private MudForm _createForm = default!;
+    private bool _savingCreate = false;
+    private PenaltyForm _form = new();
+    private PenaltyPreviewDto? _preview;
+    private bool _previewLoading = false;
+
+    private enum ConfirmAction { Reject, Cancel }
+    private bool _confirmOpen = false;
+    private bool _confirmSaving = false;
+    private ConfirmAction _confirmAction;
+    private PenaltyListDto? _confirmItem;
+
+    public class EmployeeSimple
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+        public string? Department { get; set; }
+    }
+
+    public class PenaltyForm
+    {
+        public EmployeeSimple? Employee { get; set; }
+        public string Type { get; set; } = PenaltyTypes.Days;
+        public decimal? Days { get; set; }
+        public decimal? Amount { get; set; }
+        public string Reason { get; set; } = "";
+        public string Month { get; set; } = "";
+    }
+
+    public class MonthOption
+    {
+        public string Value { get; set; } = "";
+        public string Label { get; set; } = "";
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        BuildMonthOptions();
+
+        var authState = await AuthState.GetAuthenticationStateAsync();
+        var user = authState.User;
+        _username = user.Identity?.Name ?? "";
+
+        _actor = await PenaltyService.GetActorAsync(_username);
+        _canAccess = _actor.CanAccessPage
+                     || user.HasClaim("Permission", "frm_EmployeePenalties:View");
+
+        if (!_canAccess)
+        {
+            _loading = false;
+            return;
+        }
+
+        _form.Month = DateTime.Now.ToString("yyyy-MM");
+        await LoadData();
+    }
+
+    private void BuildMonthOptions()
+    {
+        var ar = new System.Globalization.CultureInfo("ar-EG");
+        var start = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-12);
+        _monthOptions = Enumerable.Range(0, 25)
+            .Select(i => start.AddMonths(i))
+            .Select(d => new MonthOption
+            {
+                Value = d.ToString("yyyy-MM"),
+                Label = d.ToString("MMMM yyyy", ar)
+            })
+            .ToList();
+    }
+
+    private static string MonthLabel(string? month)
+    {
+        if (string.IsNullOrWhiteSpace(month)) return "—";
+        if (DateTime.TryParseExact(month + "-01", "yyyy-MM-dd",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var dt))
+            return dt.ToString("MMMM yyyy", new System.Globalization.CultureInfo("ar-EG"));
+        return month;
+    }
+
+    private async Task LoadData()
+    {
+        if (!_canAccess) return;
+
+        _loading = true;
+        _errorMessage = null;
+
+        try
+        {
+            var result = await PenaltyService.GetPenaltiesAsync(_filter, _username);
+            _items = result?.Items?.ToList() ?? new List<PenaltyListDto>();
+            _totalCount = result?.TotalCount ?? 0;
+
+            _stats = await PenaltyService.GetStatsAsync(_filter, _username) ?? new PenaltyStatsDto();
+        }
+        catch (Exception ex)
+        {
+            _items = new();
+            _totalCount = 0;
+            _stats = new PenaltyStatsDto();
+            _errorMessage = $"خطأ في تحميل البيانات: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task FilterByStatus(string? status)
+    {
+        _filter.Status = status;
+        _filter.PageNumber = 1;
+        await LoadData();
+    }
+
+    private async Task ApplyFilters()
+    {
+        _filter.PageNumber = 1;
+        await LoadData();
+    }
+
+    private async Task ClearFilters()
+    {
+        var pageSize = _filter.PageSize;
+        _filter = new PenaltyFilterDto { PageNumber = 1, PageSize = pageSize };
+        await LoadData();
+    }
+
+    private async Task OnSearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await ApplyFilters();
+    }
+
+    private async Task OnPageSizeChanged(int size)
+    {
+        _filter.PageSize = size;
+        _filter.PageNumber = 1;
+        await LoadData();
+    }
+
+    private async Task PreviousPage()
+    {
+        if (!_hasPreviousPage) return;
+        _filter.PageNumber--;
+        await LoadData();
+    }
+
+    private async Task NextPage()
+    {
+        if (!_hasNextPage) return;
+        _filter.PageNumber++;
+        await LoadData();
+    }
+
+    // ─── إنشاء ───────────────────────────────────────────────
+    private void OpenCreateDialog()
+    {
+        _form = new PenaltyForm { Month = DateTime.Now.ToString("yyyy-MM") };
+        _preview = null;
+        _createDialogOpen = true;
+    }
+
+    private void CloseCreateDialog() => _createDialogOpen = false;
+
+    private async Task OnEmployeeChanged(EmployeeSimple? employee)
+    {
+        _form.Employee = employee;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task OnTypeChanged(string type)
+    {
+        _form.Type = type;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task OnDaysChanged(decimal? days)
+    {
+        _form.Days = days;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task OnMonthChanged(string month)
+    {
+        _form.Month = month;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task RefreshPreviewAsync()
+    {
+        _preview = null;
+        if (_form.Employee == null) return;
+        if (_form.Type == PenaltyTypes.Days && (!_form.Days.HasValue || _form.Days.Value <= 0)) return;
+
+        _previewLoading = true;
+        try
+        {
+            var days = _form.Type == PenaltyTypes.Days ? _form.Days!.Value : 1m;
+            _preview = await PenaltyService.GetPreviewAsync(_form.Employee.Id, _form.Month, days, _username);
+        }
+        catch
+        {
+            _preview = null; // المعاينة مساعدة فقط — لا تعيق الحفظ أبدًا
+        }
+        finally
+        {
+            _previewLoading = false;
+        }
+    }
+
+    private async Task SubmitCreate()
+    {
+        await _createForm.ValidateAsync();
+        if (!_createForm.IsValid) return;
+
+        if (_form.Employee == null || string.IsNullOrWhiteSpace(_form.Reason))
+        {
+            Snackbar.Add("يرجى ملء جميع الحقول المطلوبة", Severity.Warning);
+            return;
+        }
+
+        if (_form.Type == PenaltyTypes.Days && (!_form.Days.HasValue || _form.Days.Value <= 0))
+        {
+            Snackbar.Add("عدد أيام الجزاء مطلوب ويجب أن يكون أكبر من صفر.", Severity.Warning);
+            return;
+        }
+
+        if (_form.Type == PenaltyTypes.Amount && (!_form.Amount.HasValue || _form.Amount.Value <= 0))
+        {
+            Snackbar.Add("مبلغ الجزاء مطلوب ويجب أن يكون أكبر من صفر.", Severity.Warning);
+            return;
+        }
+
+        _savingCreate = true;
+        try
+        {
+            var dto = new PenaltyCreateDto
+            {
+                EmployeeId = _form.Employee.Id,
+                PenaltyType = _form.Type,
+                DaysCount = _form.Type == PenaltyTypes.Days ? _form.Days : null,
+                FixedAmount = _form.Type == PenaltyTypes.Amount ? _form.Amount : null,
+                Reason = _form.Reason.Trim(),
+                TargetMonth = _form.Month
+            };
+
+            var result = await PenaltyService.CreateAsync(dto, _username);
+            Snackbar.Add(WithRollNote(result), result.Success ? Severity.Success : Severity.Error);
+
+            if (result.Success)
+            {
+                _createDialogOpen = false;
+                _filter.PageNumber = 1;
+                await LoadData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _savingCreate = false;
+        }
+    }
+
+    private async Task<IEnumerable<EmployeeSimple>> SearchEmployees(string search, CancellationToken ct)
+    {
+        if (!_actor.CanCreate)
+            return Enumerable.Empty<EmployeeSimple>();
+
+        var employees = await EmployeeService.SearchEmployeesAsync(search ?? string.Empty, 20);
+        return employees.Select(e => new EmployeeSimple
+        {
+            Id = e.EmployeeId,
+            Name = e.FullName,
+            Department = e.Department
+        });
+    }
+
+    // ─── اعتماد / رفض / إلغاء ────────────────────────────────
+    private async Task ApprovePenalty(PenaltyListDto item)
+    {
+        if (!item.CanApprove)
+        {
+            Snackbar.Add("غير مصرح لك باعتماد جزاءات هذا الموظف.", Severity.Error);
+            return;
+        }
+
+        try
+        {
+            var result = await PenaltyService.ApproveAsync(item.Id, _username);
+            Snackbar.Add(WithRollNote(result), result.Success ? Severity.Success : Severity.Error);
+            if (result.Success) await LoadData();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void OpenConfirm(PenaltyListDto item, ConfirmAction action)
+    {
+        _confirmItem = item;
+        _confirmAction = action;
+        _confirmOpen = true;
+    }
+
+    private void CloseConfirm() => _confirmOpen = false;
+
+    private async Task SubmitConfirm()
+    {
+        if (_confirmItem == null) return;
+
+        _confirmSaving = true;
+        try
+        {
+            var result = _confirmAction == ConfirmAction.Reject
+                ? await PenaltyService.RejectAsync(_confirmItem.Id, _username)
+                : await PenaltyService.CancelAsync(_confirmItem.Id, _username);
+
+            Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+            if (result.Success)
+            {
+                _confirmOpen = false;
+                await LoadData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _confirmSaving = false;
+        }
+    }
+
+    private static string WithRollNote(PenaltyMutationResult result)
+    {
+        if (result.Success && result.RolledFrom != null)
+            return $"{result.Message} (نُقل من شهر {result.RolledFrom} إلى {result.FinalMonth} — راتب الشهر الأصلي محفوظ)";
+        return result.Message;
+    }
+
+    // ─── العرض ───────────────────────────────────────────────
+    private Color GetStatusColor(string? status) => status switch
+    {
+        PenaltyStatuses.Pending => Color.Warning,
+        PenaltyStatuses.Approved => Color.Success,
+        PenaltyStatuses.Rejected => Color.Error,
+        PenaltyStatuses.Applied => Color.Info,
+        _ => Color.Default
+    };
+
+    private string GetKpiStyle(string? status, string activeColor)
+    {
+        var isActive = _filter.Status == status;
+        return isActive ? $"border:1.5px solid {activeColor};" : "";
+    }
+}
+
+<style>
+    /* ═══ HERO — Navy/Gold · هوية ثابتة في الوضعين الليلي والنهاري ═══ */
+    .pen-hero { position: relative; border-radius: 20px; overflow: hidden; background: linear-gradient(135deg, #070D1A 0%, #1B2A4A 45%, #2D4A7A 100%); color: #fff; box-shadow: 0 12px 32px rgba(15,26,46,.28); }
+    .pen-hero__glow { position: absolute; border-radius: 50%; pointer-events: none; }
+    .pen-glow1 { width: 340px; height: 340px; top: -150px; left: -80px; background: radial-gradient(circle, rgba(212,168,83,.30), transparent 60%); animation: penFloat 9s ease-in-out infinite; }
+    .pen-glow2 { width: 240px; height: 240px; bottom: -110px; right: 8%; background: radial-gradient(circle, rgba(212,168,83,.14), transparent 60%); }
+    .pen-hero__content { position: relative; z-index: 2; padding: 1.4rem 1.6rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .pen-hero__avatar { width: 56px; height: 56px; border-radius: 18px; background: linear-gradient(135deg, #D4A853, #B8912A); display: flex; align-items: center; justify-content: center; color: #0F1D36; box-shadow: 0 8px 24px rgba(212,168,83,.35); flex: 0 0 auto; }
+    .pen-hero__titlerow { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+    .pen-hero__tag { display: inline-flex; align-items: center; padding: .2rem .7rem; background: linear-gradient(135deg, #D4A853, #B8912A); color: #0F1D36; font-size: .68rem; font-weight: 800; border-radius: 14px; }
+    @@keyframes penFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
+    @@keyframes penShine { 0% { transform: translateX(-140px); } 55%,100% { transform: translateX(340px); } }
+
+    /* ═══ الأزرار الذهبية بلمعة ═══ */
+    .pen-btn-gold { background: linear-gradient(135deg, #D4A853, #B8912A) !important; color: #0F1D36 !important; font-weight: 700 !important; border-radius: 12px !important; position: relative; overflow: hidden; box-shadow: 0 8px 20px rgba(212,168,83,.30) !important; text-transform: none !important; }
+    .pen-btn-gold:hover { box-shadow: 0 10px 26px rgba(212,168,83,.42) !important; }
+    .pen-shine { position: absolute; top: 0; bottom: 0; width: 60px; background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent); transform: translateX(-140px); animation: penShine 3.2s ease-in-out infinite; pointer-events: none; }
+    .pen-btn-ghost { color: #fff !important; border-color: rgba(255,255,255,.4) !important; border-radius: 12px !important; text-transform: none !important; }
+
+    /* ═══ KPI — الكروت تتبع الثيم · اللون في الأيقونة والرقم فقط ═══ */
+    .pen-kpi { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: 14px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: .15s; box-shadow: 0 1px 3px rgba(15,26,46,.05); height: 100%; }
+    .pen-kpi:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(15,26,46,.12); }
+    .pen-kpi__ic { width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+    .pen-kpi__v { font-size: 19px; font-weight: 900; line-height: 1.1; }
+    .pen-kpi__l { font-size: 11.5px; color: var(--mud-palette-text-secondary); font-weight: 700; }
+
+    /* ═══ الفلاتر — سطر واحد ═══ */
+    .pen-filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .pen-filter-row .pfr-search { flex: 1.8 1 200px; min-width: 180px; }
+    .pen-filter-row .pfr-f { flex: 1 1 160px; min-width: 140px; }
+    .pen-filter-row .pfr-btn { flex: 0 0 auto; height: 40px; border-radius: 8px; }
+
+    /* ═══ الجدول ═══ */
+    .pen-table-shell { border: 1px solid var(--mud-palette-divider); border-radius: 14px; overflow: hidden; background: var(--mud-palette-surface); }
+
+    /* ═══ الدايلوجات ═══ */
+    .pen-dlg-head { position: relative; overflow: hidden; background: linear-gradient(135deg, #070D1A, #1B2A4A 60%, #2D4A7A); color: #fff; border-radius: 14px; padding: .9rem 1.1rem; display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .pen-dlg-head--red { background: linear-gradient(135deg, #2A0A0A, #5C1A1A 60%, #7F2A2A); }
+    .pen-dlg-head__ic { width: 42px; height: 42px; border-radius: 12px; background: linear-gradient(135deg, #D4A853, #B8912A); display: flex; align-items: center; justify-content: center; color: #0F1D36; flex: 0 0 auto; }
+    .pen-dlg-head__ic--red { background: linear-gradient(135deg, #F87171, #DC2626); color: #fff; }
+
+    /* ═══ سطر المعاينة/التأكيد — ذهبية شفافة تناسب الوضعين ═══ */
+    .pen-confirm { background: rgba(212,168,83,.10); border: 1px solid rgba(212,168,83,.40); border-radius: 12px; padding: 10px 14px; margin-top: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .pen-confirm b { color: #B8912A; }
+
+    @@media (max-width: 600px) {
+        .pen-hero__content { padding: 1.1rem 1.2rem; }
+        .pen-hero__avatar { width: 46px; height: 46px; }
+    }
+</style>

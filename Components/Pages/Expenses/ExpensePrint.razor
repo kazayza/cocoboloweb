@@ -9,6 +9,15 @@
 @inject IBranchService BranchService
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
+@if (_accessDenied)
+{
+    <div dir="rtl" style="padding:3rem; text-align:center; font-family:'Tajawal','Segoe UI',Tahoma,Arial,sans-serif;">
+        <h2>ليس لديك صلاحية لعرض تقرير المصروفات</h2>
+    </div>
+}
+else
+{
 <div class="print-container" dir="rtl">
     <div class="letterhead-bg"></div>
 
@@ -165,6 +174,7 @@
         </tfoot>
     </table>
 </div>
+}
 
 <style>
     /* إعدادات الشاشة والطباعة الأساسية */
@@ -264,6 +274,7 @@
     private bool IsSummary => string.Equals(Mode, "summary", StringComparison.OrdinalIgnoreCase);
 
     private bool _isLoading = true;
+    private bool _accessDenied;
     private List<ExpenseListDto> _expenses = new();
     private ExpenseSummaryReportDto? _summary;
     private decimal _totalAmount = 0;
@@ -271,6 +282,23 @@
 
     protected override async Task OnInitializedAsync()
     {
+        // ⛔ بوابة الصلاحية قبل أي تحميل — نفس بوابة قائمة/تقرير المصروفات: frm_ExpensesList:View أو Admin.
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            var returnUrl = new Uri(Navigation.Uri).PathAndQuery;
+            Navigation.NavigateTo($"/login?ReturnUrl={Uri.EscapeDataString(returnUrl)}", forceLoad: true);
+            return;
+        }
+
+        if (!user.IsInRole("Admin") && !user.HasClaim("Permission", "frm_ExpensesList:View"))
+        {
+            _accessDenied = true;
+            _isLoading = false;
+            return;
+        }
+
         if (BranchId.HasValue)
         {
             var branch = (await BranchService.GetBranchesAsync())
@@ -312,7 +340,7 @@
             ? _summary is { Months.Count: > 0 }
             : _expenses.Count > 0;
 
-        if (!_isLoading && hasData && firstRender)
+        if (!_accessDenied && !_isLoading && hasData && firstRender)
         {
             await Task.Delay(500); // إعطاء فرصة لتحميل الصورة
             await JS.InvokeVoidAsync("window.print");

@@ -51,6 +51,9 @@ public partial class Employee
 
     public int? BranchId { get; set; }
 
+    // المدير المباشر (عمود DirectManagerID — أضافه penalties-schema.sql)
+    public int? DirectManagerId { get; set; }
+
     public virtual ICollection<ComplaintFollowUp> ComplaintFollowUps { get; set; } = new List<ComplaintFollowUp>();
 
     public virtual ICollection<Complaint> Complaints { get; set; } = new List<Complaint>();

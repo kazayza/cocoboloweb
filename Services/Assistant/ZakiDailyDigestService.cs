@@ -3,6 +3,7 @@ using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
 using COCOBOLOERPNEW.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using static COCOBOLOERPNEW.Services.Assistant.ZakiInvoiceQueries;
 
@@ -23,22 +24,29 @@ public class ZakiDailyDigestService : BackgroundService
     private const string DigestCreator = "زكي";
     private const int UndeliveredAfterDays = 7;
 
+    private const string StatusDelivered = "تم التسليم";
+    private const string StatusReturned = "مرتجع";
+
     private readonly IDbContextFactory<db24804Context> _dbFactory;
     private readonly AssistantOptions _opt;
     private readonly ILogger<ZakiDailyDigestService> _logger;
     private readonly ZakiDigestPreferences _prefs;
+    private readonly int _dateBufferDays;
     private DateTime _lastRunDate = DateTime.MinValue;
 
     public ZakiDailyDigestService(
         IDbContextFactory<db24804Context> dbFactory,
         IOptions<AssistantOptions> options,
         ZakiDigestPreferences prefs,
+        IConfiguration config,
         ILogger<ZakiDailyDigestService> logger)
     {
         _dbFactory = dbFactory;
         _opt = options.Value;
         _prefs = prefs;
         _logger = logger;
+        // نفس هامش إخفاء تاريخ الاستحقاق في الشاشات وأدوات زكي (Delivery:DateBufferDays)
+        _dateBufferDays = config.GetValue<int?>("Delivery:DateBufferDays") is int b && b >= 0 ? b : 4;
     }
 
     private sealed record UserRow(int UserId, string Username, string? Role, DateTime? CrmAccessFromDate);
@@ -138,7 +146,7 @@ public class ZakiDailyDigestService : BackgroundService
     }
 
     /// <summary>البنود المستعجلة للمستخدم، كل بند بنفس شروط الشاشة/الأداة المقابلة</summary>
-    private static async Task<List<string>> BuildLinesAsync(
+    private async Task<List<string>> BuildLinesAsync(
         db24804Context db, ClaimsPrincipal principal, DateTime day, CancellationToken ct)
     {
         var lines = new List<string>();
@@ -183,6 +191,10 @@ public class ZakiDailyDigestService : BackgroundService
                 lines.Add($"• فواتير لم تُسلَّم من أكتر من {UndeliveredAfterDays} أيام: {count} فاتورة");
         }
 
+        // قسم التسليمات (Phase 2): مخطط النهاردة + المتأخرة — لنفس صلاحيات شاشة متابعة التسليمات
+        if (DeliveryPermissions.CanView(principal))
+            lines.AddRange(await BuildDeliveryLinesAsync(db, principal, day, ct));
+
         if (ZakiApprovalsService.CanViewPriceRequests(principal))
         {
             var pending = await db.PriceChangeRequests.AsNoTracking()
@@ -215,6 +227,74 @@ public class ZakiDailyDigestService : BackgroundService
         }
 
         return lines;
+    }
+
+    /// <summary>
+    /// قسم التسليمات في الملخص: مخطط النهاردة + عدد المتأخرة + أهم 3 متأخرات (عميل/موعد/مسؤول).
+    /// نفس قواعد شاشة متابعة التسليمات وأدوات التسليمات في زكي بالظبط:
+    /// - المصدر هو VwSalesDeliveryStatus، والأرقام على «التاريخ المعروض» للمستخدم ده
+    ///   (المستثنون: الحقيقي — غيرهم: منقوص هامش الأيام، ولا يسبق تاريخ الفاتورة).
+    /// - مفيش مبالغ ولا أرقام تليفونات في الملخص.
+    /// </summary>
+    private async Task<List<string>> BuildDeliveryLinesAsync(
+        db24804Context db, ClaimsPrincipal principal, DateTime day, CancellationToken ct)
+    {
+        var lines = new List<string>();
+        var seeReal = DeliveryPermissions.CanSeeRealDeliveryDate(principal);
+        var shift = seeReal ? 0 : _dateBufferDays;
+
+        // مخطط النهاردة على التاريخ المعروض: الحقيقي في نافذة مُزاحة +الهامش للمخفيين
+        var plannedRaw = await db.VwSalesDeliveryStatuses.AsNoTracking()
+            .Where(x => x.DueDate.HasValue
+                && x.DueDate.Value >= day.AddDays(shift) && x.DueDate.Value < day.AddDays(1 + shift))
+            .Select(x => new { x.TransactionDate, x.DueDate })
+            .ToListAsync(ct);
+
+        var plannedCount = plannedRaw
+            .Count(x => ShownDue(x.DueDate!.Value, x.TransactionDate, seeReal).Date == day);
+
+        if (plannedCount > 0)
+            lines.Add($"• تسليمات مخططة النهاردة: {plannedCount}");
+
+        // المتأخرة: لسه مش نهائية وموعدها المعروض فات
+        var overdueRaw = await db.VwSalesDeliveryStatuses.AsNoTracking()
+            .Where(x => x.DueDate.HasValue && x.DueDate.Value < day.AddDays(shift)
+                && x.DeliveryStatus != StatusDelivered && x.DeliveryStatus != StatusReturned)
+            .Select(x => new { x.TransactionDate, x.PartyName, x.DueDate, x.DeliveryEmployeeName })
+            .ToListAsync(ct);
+
+        var overdue = overdueRaw
+            .Select(x => new
+            {
+                x.PartyName,
+                x.DeliveryEmployeeName,
+                Shown = ShownDue(x.DueDate!.Value, x.TransactionDate, seeReal)
+            })
+            .Where(x => x.Shown.Date < day)
+            .OrderBy(x => x.Shown)
+            .ToList();
+
+        if (overdue.Count > 0)
+        {
+            lines.Add($"• تسليمات متأخرة: {overdue.Count}");
+            foreach (var o in overdue.Take(3))
+            {
+                var emp = string.IsNullOrWhiteSpace(o.DeliveryEmployeeName)
+                    ? "غير مُسند لمسؤول تسليم"
+                    : o.DeliveryEmployeeName;
+                lines.Add($"  - {o.PartyName} — الموعد {o.Shown:yyyy-MM-dd} — {emp}");
+            }
+        }
+
+        return lines;
+    }
+
+    /// <summary>التاريخ المعروض للمستخدم: الحقيقي للمستثنين، ومنقوصًا الهامش لغيرهم (ولا يسبق تاريخ الفاتورة)</summary>
+    private DateTime ShownDue(DateTime realDue, DateTime transactionDate, bool seeReal)
+    {
+        if (seeReal) return realDue;
+        var shown = realDue.AddDays(-_dateBufferDays);
+        return shown < transactionDate ? transactionDate : shown;
     }
 
     /// <summary>

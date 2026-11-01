@@ -23,6 +23,13 @@ public partial class TransactionDetail
 
     public string PricingTier { get; set; } = null!;
 
+    // ⭐ جدولة تسليم البند: التاريخ الخاص بالبند لا يُخزَّن إلا إن فُصل يدويًا عن
+    // تاريخ استحقاق الفاتورة (DeliveryDateIsCustom = true)؛ وإلا فالبند «وارث»
+    // (DeliveryDate = NULL) ويتحرك تلقائيًا مع تاريخ الفاتورة — انظر DeliveryScheduleResolver.
+    public DateTime? DeliveryDate { get; set; }
+
+    public bool DeliveryDateIsCustom { get; set; }
+
     public virtual Product Product { get; set; } = null!;
 
     public virtual Transaction Transaction { get; set; } = null!;

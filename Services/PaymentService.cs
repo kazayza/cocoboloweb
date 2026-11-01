@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services;
@@ -9,13 +11,48 @@ public class PaymentService : IPaymentService
     private readonly db24804Context _db;
     private readonly IAuditService _audit;
     private readonly NotificationService _notify;
+    private readonly IHttpContextAccessor _http;
 
-    public PaymentService(db24804Context db, IAuditService audit, NotificationService notify)
+    public PaymentService(db24804Context db, IAuditService audit, NotificationService notify, IHttpContextAccessor http)
     {
         _db = db;
         _audit = audit;
         _notify = notify;
+        _http = http;
     }
+
+    // ⭐ بوابة سند المدفوعات — نفس بوابة قائمة المدفوعات: frm_Payments:View أو Admin
+    private bool CanViewPaymentReceipt()
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+        if (user.IsInRole("Admin")) return true;
+        return user.HasClaim("Permission", "frm_Payments:View");
+    }
+
+    // ⛔ F-09 (دفاع في العمق): كتابات المدفوعات — داخلي فقط (لا بوابة B2B ولا مجهول).
+    // الإضافة/التعديل: صفحتا النموذج والقائمة تفتحانها بأدوار
+    // (بيع: Admin/AccountManager/Account/Sales — شراء: بدون Sales)
+    // أو بصلاحية frm_Payments:Add/Edit في القائمة؛ نأخذ اتحاد البوابتين حتى لا
+    // ينكسر أي مسار شرعي قائم. الإلغاء: زر القائمة محكوم بصلاحية
+    // frm_Payments:Delete فقط (+ Admin) فنطابقها كما هي.
+    private ClaimsPrincipal? CurrentUser => _http.HttpContext?.User;
+
+    private bool CanMutatePayment(string action, string? transactionType)
+    {
+        var user = CurrentUser;
+        if (!AppAuthorization.IsInternalUser(user)) return false;
+        if (user!.IsInRole("Admin")) return true;
+        if (user.HasClaim("Permission", $"frm_Payments:{action}")) return true;
+        if (action == "Delete") return false;
+
+        var isPurchase = transactionType == TransactionTypes.Purchase
+                         || transactionType == TransactionTypes.PurchaseReturn;
+        if (user.IsInRole("AccountManager") || user.IsInRole("Account")) return true;
+        return !isPurchase && user.IsInRole("Sales");
+    }
+
+    private const string PaymentDeniedMessage = "غير مصرح لك بتنفيذ هذا الإجراء على المدفوعات.";
 
     // ============================================================
     //  قائمة المدفوعات
@@ -272,6 +309,9 @@ var items = rawData.Select(x =>
     // ============================================================
     public async Task<PaymentReceiptDto?> GetPaymentForReceiptAsync(int paymentId)
     {
+        // ⛔ دفاع في العمق لصفحة سند القبض/الصرف (المستدعي الوحيد لهذه الطريقة)
+        if (!CanViewPaymentReceipt()) return null;
+
         var payment = await GetPaymentByIdAsync(paymentId);
         if (payment == null) return null;
 
@@ -623,6 +663,8 @@ public async Task<IEnumerable<PartyLookupDto>> SearchPartiesAsync(string search)
     public async Task<(bool Success, string Message, int? PaymentId)> CreatePaymentAsync(
     PaymentFormDto dto, string currentUserName)
 {
+    if (!CanMutatePayment("Add", dto.TransactionType))
+        return (false, PaymentDeniedMessage, null);
     if (dto.TransactionId == null || dto.TransactionId == 0)
         return (false, "يرجى اختيار الفاتورة.", null);
     if (dto.Amount <= 0)
@@ -754,6 +796,8 @@ public async Task<IEnumerable<PartyLookupDto>> SearchPartiesAsync(string search)
     public async Task<(bool Success, string Message)> CancelPaymentAsync(
         int paymentId, string reason, string currentUserName)
     {
+        if (!CanMutatePayment("Delete", null))
+            return (false, PaymentDeniedMessage);
         var payment = await _db.Payments.FirstOrDefaultAsync(p => p.PaymentId == paymentId);
         if (payment == null) return (false, "الدفعة غير موجودة.");
 
@@ -862,6 +906,8 @@ public async Task<PaymentFormDto?> GetPaymentForEditAsync(int paymentId)
 public async Task<(bool Success, string Message)> UpdatePaymentAsync(
     int paymentId, PaymentFormDto dto, string currentUserName)
 {
+    if (!CanMutatePayment("Edit", dto.TransactionType))
+        return (false, PaymentDeniedMessage);
     if (dto.Amount <= 0)
         return (false, "المبلغ يجب أن يكون أكبر من صفر.");
     if (dto.CashBoxId == null || dto.CashBoxId == 0)

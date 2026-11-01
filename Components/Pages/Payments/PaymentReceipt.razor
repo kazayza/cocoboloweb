@@ -7,10 +7,15 @@
 @inject IPaymentService PaymentService
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthProvider
 
 @if (_isLoading)
 {
     <div style="padding:3rem; text-align:center;">جاري التحميل...</div>
+}
+else if (_accessDenied)
+{
+    <div style="padding:2rem; text-align:center;" dir="rtl"><h2>ليس لديك صلاحية لعرض هذا السند</h2></div>
 }
 else if (_data == null)
 {
@@ -394,10 +399,27 @@ else
     [Parameter] public int Id { get; set; }
 
     private bool _isLoading = true;
+    private bool _accessDenied;
     private PaymentReceiptDto? _data;
 
     protected override async Task OnInitializedAsync()
     {
+        // ⛔ بوابة الصلاحية قبل أي تحميل — نفس بوابة قائمة المدفوعات: frm_Payments:View أو Admin.
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            Navigation.NavigateTo($"/login?ReturnUrl={Uri.EscapeDataString($"/payments/{Id}/receipt")}", forceLoad: true);
+            return;
+        }
+
+        if (!user.IsInRole("Admin") && !user.HasClaim("Permission", "frm_Payments:View"))
+        {
+            _accessDenied = true;
+            _isLoading = false;
+            return;
+        }
+
         _data = await PaymentService.GetPaymentForReceiptAsync(Id);
         _isLoading = false;
     }

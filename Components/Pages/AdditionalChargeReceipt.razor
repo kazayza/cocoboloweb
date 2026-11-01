@@ -7,11 +7,18 @@
 @inject IAdditionalChargeService ChargeService
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthState
 
 @if (_isLoading)
 {
     <div class="loading-container">
         <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+    </div>
+}
+else if (_accessDenied)
+{
+    <div class="not-found">
+        <h2>ليس لديك صلاحية لعرض هذا الإيصال</h2>
     </div>
 }
 else if (_data == null)
@@ -435,10 +442,28 @@ else
     [Parameter] public int Id { get; set; }
 
     private bool _isLoading = true;
+    private bool _accessDenied;
     private AdditionalChargeReceiptDto? _data;
 
     protected override async Task OnInitializedAsync()
     {
+        // ⛔ بوابة الصلاحية قبل أي تحميل — صلاحية عرض وحدة الرسوم الإضافية/المعاينة
+        // (نفس frmInspectionCharge:View التي تفتح شاشة القائمة في القائمة الجانبية) أو Admin.
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        var user = auth.User;
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            Navigation.NavigateTo($"/login?ReturnUrl={Uri.EscapeDataString($"/additional-charges/{Id}/receipt")}", forceLoad: true);
+            return;
+        }
+
+        if (!user.IsInRole("Admin") && !user.HasClaim("Permission", "frmInspectionCharge:View"))
+        {
+            _accessDenied = true;
+            _isLoading = false;
+            return;
+        }
+
         _data = await ChargeService.GetChargeReceiptAsync(Id);
         _isLoading = false;
     }

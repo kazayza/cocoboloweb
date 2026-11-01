@@ -8,6 +8,7 @@
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Configuration
 @using ClosedXML.Excel
 
 @inject db24804Context Db
@@ -16,6 +17,8 @@
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
 @inject NotificationService NotifyService
+@inject IDialogService DialogService
+@inject IConfiguration Config
 
 <PageTitle>أوامر التشغيل</PageTitle>
 
@@ -44,14 +47,14 @@ else
                     <p>الافتراضي: عرض أوامر التشغيل التي لم يتم التسليم بعد مع إمكانية البحث والتصفية</p>
                 </div>
                 <div class="jo-header-actions">
-                    <MudTooltip Text="تصدير أوامر التشغيل غير المسلّمة (حسب الفلتر الحالي) إلى Excel — بدون مبالغ">
+                    <MudTooltip Text="تصدير أوامر التشغيل حسب الفلتر الحالي إلى Excel — بدون مبالغ">
                         <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
                                    StartIcon="@Icons.Material.Filled.FileDownload"
-                                   OnClick="ExportUndeliveredToExcelAsync" Disabled="@_isExporting">
+                                   OnClick="ExportToExcelAsync" Disabled="@_isExporting">
                             @(_isExporting ? "جاري التصدير..." : "تصدير Excel")
                         </MudButton>
                     </MudTooltip>
-                    <MudTooltip Text="طباعة أوامر التشغيل غير المسلّمة (حسب الفلتر الحالي) — بدون مبالغ">
+                    <MudTooltip Text="طباعة أوامر التشغيل حسب الفلتر الحالي — بدون مبالغ">
                         <MudButton Variant="Variant.Outlined" Color="Color.Inherit"
                                    StartIcon="@Icons.Material.Filled.Print"
                                    OnClick="OpenPrint" Disabled="@_isExporting">
@@ -67,19 +70,32 @@ else
             </div>
         </div>
 
-        <div class="jo-stats-row">
-            <div class="jo-stat-card">
-                <span class="jo-stat-label">النتائج المعروضة</span>
-                <strong class="jo-stat-value">@_items.Count</strong>
-            </div>
-            <div class="jo-stat-card">
+        <div class="jo-stats-row" aria-label="فلاتر سريعة حسب حالة أوامر التشغيل">
+            <button type="button" class="jo-stat-card @(_isAllQuickActive ? "active" : "")"
+                    @onclick="ShowAllQuickAsync" title="عرض كل أوامر التشغيل وإلغاء فلاتر الحالة السريعة">
+                <span class="jo-stat-label">الكل</span>
+                <strong class="jo-stat-value">@_countAll</strong>
+            </button>
+            <button type="button" class="jo-stat-card @(_isUndeliveredQuickActive ? "active" : "")"
+                    @onclick="@(() => SetDeliveryQuickAsync("undelivered"))" title="تصفية الأوامر التي لم يتم تسليمها بعد">
                 <span class="jo-stat-label">لم يتم التسليم بعد</span>
-                <strong class="jo-stat-value">@_items.Count(x => !x.IsDelivered)</strong>
-            </div>
-            <div class="jo-stat-card">
+                <strong class="jo-stat-value">@_countUndelivered</strong>
+            </button>
+            <button type="button" class="jo-stat-card @(_isDeliveredQuickActive ? "active" : "")"
+                    @onclick="@(() => SetDeliveryQuickAsync("delivered"))" title="تصفية الأوامر التي تم تسليمها">
+                <span class="jo-stat-label">تم التسليم</span>
+                <strong class="jo-stat-value">@_countDelivered</strong>
+            </button>
+            <button type="button" class="jo-stat-card overdue @(_overdueOnly ? "active" : "")"
+                    @onclick="ToggleOverdueAsync" title="تصفية الأوامر المتأخرة التي مر موعد تسليمها ولم تُسلّم">
+                <span class="jo-stat-label">متأخرة</span>
+                <strong class="jo-stat-value">@_countOverdue</strong>
+            </button>
+            <button type="button" class="jo-stat-card @(_alternativesOnly ? "active" : "")"
+                    @onclick="ToggleAlternativesAsync" title="تصفية الأوامر التي تحتوي على بدائل مختارة">
                 <span class="jo-stat-label">بها بدائل مختارة</span>
-                <strong class="jo-stat-value">@_items.Count(x => x.AlternativeItemsCount > 0)</strong>
-            </div>
+                <strong class="jo-stat-value">@_countAlternatives</strong>
+            </button>
         </div>
 
         <MudPaper Class="jo-filter-box" Elevation="0">
@@ -91,35 +107,101 @@ else
                               Adornment="Adornment.Start"
                               AdornmentIcon="@Icons.Material.Filled.Search"
                               Clearable="true"
-                              Class="jo-search-field" />
+                              Immediate="true"
+                              DebounceInterval="400"
+                              OnDebounceIntervalElapsed="OnSearchDebouncedAsync"
+                              Class="jo-filter-control jo-search-field" />
 
-                <MudSelect T="string" @bind-Value="_deliveryFilter" Label="حالة التسليم" Variant="Variant.Outlined">
+                <MudSelect T="string" @bind-Value="_deliveryFilter" Label="حالة التسليم" Variant="Variant.Outlined" Class="jo-filter-control">
                     <MudSelectItem T="string" Value='@("undelivered")'>لم يتم التسليم بعد</MudSelectItem>
                     <MudSelectItem T="string" Value='@("delivered")'>تم التسليم</MudSelectItem>
                     <MudSelectItem T="string" Value='@("all")'>الكل</MudSelectItem>
                 </MudSelect>
 
-                <MudSelect T="string" @bind-Value="_typeFilter" Label="نوع الأمر" Variant="Variant.Outlined">
+                <MudSelect T="string" @bind-Value="_typeFilter" Label="نوع الأمر" Variant="Variant.Outlined" Class="jo-filter-control">
                     <MudSelectItem T="string" Value='@("all")'>كل الأنواع</MudSelectItem>
                     <MudSelectItem T="string" Value='@("sale")'>أوامر بيع</MudSelectItem>
                     <MudSelectItem T="string" Value='@("purchase")'>أوامر توريد</MudSelectItem>
                 </MudSelect>
 
-                <MudDatePicker T="DateTime?" @bind-Date="_dueDateFrom" Label="من تاريخ التسليم" Variant="Variant.Outlined" />
-                <MudDatePicker T="DateTime?" @bind-Date="_dueDateTo" Label="إلى تاريخ التسليم" Variant="Variant.Outlined" />
+                <MudDatePicker T="DateTime?" @bind-Date="_dueDateFrom" Label="من تاريخ التسليم" Variant="Variant.Outlined" Class="jo-filter-control" />
+                <MudDatePicker T="DateTime?" @bind-Date="_dueDateTo" Label="إلى تاريخ التسليم" Variant="Variant.Outlined" Class="jo-filter-control" />
 
                 <MudButton Variant="Variant.Filled" Color="Color.Primary"
                            StartIcon="@Icons.Material.Filled.Search"
-                           OnClick="LoadAsync">
+                           OnClick="LoadAsync"
+                           Class="jo-filter-action">
                     بحث
                 </MudButton>
 
                 <MudButton Variant="Variant.Outlined" Color="Color.Default"
                            StartIcon="@Icons.Material.Filled.Clear"
-                           OnClick="ClearSearch">
+                           OnClick="ClearSearch"
+                           Class="jo-filter-action">
                     مسح
                 </MudButton>
             </div>
+
+            @if (HasActiveFilters)
+            {
+                <div class="jo-active-filters" aria-label="الفلاتر النشطة">
+                    <span class="jo-active-filters-title">الفلاتر النشطة:</span>
+
+                    @if (!string.IsNullOrWhiteSpace(_searchText))
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                 OnClose="ClearSearchTextAsync">
+                            بحث: @_searchText.Trim()
+                        </MudChip>
+                    }
+
+                    @if (!string.Equals(_deliveryFilter, DefaultDeliveryFilter, StringComparison.OrdinalIgnoreCase))
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Secondary"
+                                 OnClose="ClearDeliveryFilterAsync">
+                            حالة التسليم: @DeliveryFilterLabel
+                        </MudChip>
+                    }
+
+                    @if (!string.Equals(_typeFilter, "all", StringComparison.OrdinalIgnoreCase))
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+                                 OnClose="ClearTypeFilterAsync">
+                            نوع الأمر: @TypeFilterLabel
+                        </MudChip>
+                    }
+
+                    @if (_dueDateFrom.HasValue || _dueDateTo.HasValue)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info"
+                                 OnClose="ClearDueDateRangeAsync">
+                            موعد التسليم: @DueDateRangeLabel
+                        </MudChip>
+                    }
+
+                    @if (_overdueOnly)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                                 OnClose="ClearOverdueFilterAsync">
+                            متأخرة فقط
+                        </MudChip>
+                    }
+
+                    @if (_alternativesOnly)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success"
+                                 OnClose="ClearAlternativesFilterAsync">
+                            بها بدائل مختارة فقط
+                        </MudChip>
+                    }
+
+                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.ClearAll"
+                               OnClick="ClearSearch">
+                        مسح الكل
+                    </MudButton>
+                </div>
+            }
         </MudPaper>
 
         <MudPaper Class="jo-table-shell" Elevation="0">
@@ -221,6 +303,24 @@ else
                                                    Size="Size.Small"
                                                    OnClick="@(() => OpenCustomerJobOrder(context.PartyId))" />
                                 </MudTooltip>
+                                @if (_canCreateTask)
+                                {
+                                    <MudTooltip Text="تكليف جديد على أمر التشغيل">
+                                        <MudIconButton Icon="@Icons.Material.Filled.AddTask"
+                                                       Color="Color.Warning"
+                                                       Size="Size.Small"
+                                                       OnClick="@(() => OpenCreateTaskAsync(context))" />
+                                    </MudTooltip>
+                                }
+                            }
+                            @if (context.IsPurchase && _canOpenPurchaseJobOrder)
+                            {
+                                <MudTooltip Text="فتح أمر التشغيل">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Factory"
+                                                   Color="Color.Primary"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => OpenJobOrder(context.TransactionId))" />
+                                </MudTooltip>
                             }
                             @if (_canEditDueDate && !context.IsDelivered)
                             {
@@ -282,15 +382,23 @@ else
     .jo-header-content h1 { margin:0; font-size:1.45rem; font-weight:900; }
     .jo-header-content p { margin:.25rem 0 0; opacity:.86; }
 
-    .jo-stats-row { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.75rem; margin-bottom:1rem; }
-    .jo-stat-card { background:var(--mud-palette-surface); border:1px solid var(--mud-palette-lines-default); border-radius:16px; padding:1rem 1.1rem; box-shadow:0 2px 10px rgba(0,0,0,.04); }
+    .jo-stats-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:.75rem; margin-bottom:1rem; }
+    .jo-stat-card { width:100%; font:inherit; text-align:right; cursor:pointer; background:var(--mud-palette-surface); border:1px solid var(--mud-palette-lines-default); border-radius:16px; padding:1rem 1.1rem; box-shadow:0 2px 10px rgba(0,0,0,.04); transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease, background-color .18s ease; }
+    .jo-stat-card:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(15,23,42,.10); }
+    .jo-stat-card:focus-visible { outline:3px solid var(--mud-palette-primary); outline-offset:2px; }
+    .jo-stat-card.active { border-color:var(--mud-palette-primary); background:color-mix(in srgb, var(--mud-palette-primary) 9%, var(--mud-palette-surface)); box-shadow:0 0 0 2px color-mix(in srgb, var(--mud-palette-primary) 28%, transparent), 0 8px 20px rgba(15,23,42,.08); }
+    .jo-stat-card.overdue.active { border-color:var(--mud-palette-error); background:color-mix(in srgb, var(--mud-palette-error) 8%, var(--mud-palette-surface)); box-shadow:0 0 0 2px color-mix(in srgb, var(--mud-palette-error) 25%, transparent), 0 8px 20px rgba(15,23,42,.08); }
     .jo-stat-label { display:block; color:var(--mud-palette-text-secondary); font-size:.8rem; font-weight:700; }
     .jo-stat-value { display:block; color:var(--mud-palette-text-primary); font-size:1.35rem; font-weight:900; margin-top:.15rem; }
 
-    .jo-filter-box { border-radius:18px; border:1px solid var(--mud-palette-lines-default); padding:1rem; margin-bottom:1rem; }
+    .jo-filter-box { position:sticky; top:.75rem; z-index:20; background:var(--mud-palette-surface); border-radius:18px; border:1px solid var(--mud-palette-lines-default); padding:1rem; margin-bottom:1rem; box-shadow:0 10px 28px rgba(15,23,42,.10); }
     .jo-filter-grid { display:grid; gap:.75rem; align-items:center; }
-    .jo-filter-grid.single-row { grid-template-columns:minmax(260px,2fr) minmax(170px,1fr) minmax(170px,1fr) minmax(170px,1fr) auto auto; }
+    .jo-filter-grid.single-row { grid-template-columns:minmax(220px,2.2fr) minmax(150px,1fr) minmax(150px,1fr) minmax(140px,.9fr) minmax(140px,.9fr) auto auto; }
+    .jo-filter-control, .jo-filter-action { min-width:0; }
+    .jo-filter-action { white-space:nowrap; }
     .jo-search-field { min-width:0; }
+    .jo-active-filters { display:flex; align-items:center; flex-wrap:wrap; gap:.45rem; margin-top:.85rem; padding-top:.85rem; border-top:1px solid var(--mud-palette-lines-default); }
+    .jo-active-filters-title { color:var(--mud-palette-text-secondary); font-size:.78rem; font-weight:800; }
 
     .jo-table-shell { border-radius:18px; border:1px solid var(--mud-palette-lines-default); overflow:hidden; background:var(--mud-palette-surface); box-shadow:0 4px 16px rgba(0,0,0,.04); }
     .jo-cell-primary { display:flex; flex-direction:column; gap:.12rem; }
@@ -298,10 +406,21 @@ else
     .jo-row-actions { display:flex; align-items:center; gap:.2rem; }
     .jo-empty-box { padding:2rem; display:flex; flex-direction:column; gap:.5rem; align-items:center; justify-content:center; color:var(--mud-palette-text-secondary); }
 
-    @@media (max-width: 900px) {
-        .jo-stats-row { grid-template-columns:1fr; }
-        .jo-filter-grid.single-row { grid-template-columns:1fr; }
+    @@media (min-width: 900px) and (max-width: 1279px) {
+        .jo-filter-grid.single-row { grid-template-columns:repeat(6,minmax(0,1fr)); }
+        .jo-filter-grid.single-row .jo-search-field { grid-column:1 / -1; }
+    }
+
+    @@media (max-width: 899px) {
+        .jo-filter-box { top:.5rem; padding:.85rem; }
+        .jo-filter-grid.single-row { grid-template-columns:repeat(2,minmax(0,1fr)); }
+        .jo-filter-grid.single-row .jo-search-field { grid-column:1 / -1; }
         .jo-header-content { padding:1.25rem 1rem; }
+    }
+
+    @@media (max-width: 420px) {
+        .jo-stats-row { grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); }
+        .jo-stat-card { padding:.85rem .9rem; }
     }
 </style>
 
@@ -310,20 +429,89 @@ else
     private bool _isExporting;
     private bool _canView;
     private bool _canOpenInvoices;
+    private bool _canOpenPurchaseJobOrder;
     private bool _canSeeAmounts;
     private bool _canEditDueDate;
-    private string _deliveryFilter = "undelivered";
+    private bool _canCreateTask;
+    private bool _canSeeRealDate = true;
+    private int _dateBufferDays = 4;
+    private const string DefaultDeliveryFilter = "undelivered";
+    private const string FiltersStorageKey = "jobOrdersFilters.v1";
+    private string _deliveryFilter = DefaultDeliveryFilter;
     private string _typeFilter = "all";
     private DateTime? _dueDateFrom;
     private DateTime? _dueDateTo;
     private string? _searchText;
+    private bool _alternativesOnly;
+    private bool _overdueOnly;
+    private bool _filtersRestored;
+    private int _countAll;
+    private int _countUndelivered;
+    private int _countDelivered;
+    private int _countOverdue;
+    private int _countAlternatives;
     private bool _showDueDateDialog;
     private bool _isSavingDueDate;
+    private bool _dueDateSaved;
     private int _editTransactionId;
     private string _editReferenceNumber = "";
     private DateTime? _editDueDate;
     private string? _editDueDateNotes;
     private List<JobOrderRowVm> _items = new();
+
+    // ⭐ بوابة تسلسل الوصول إلى قاعدة البيانات: الصفحة تستخدم نسخة DbContext واحدة مشتركة،
+    // فتُسلسَل كل العمليات عليها (تحميل/تصدير/حفظ تاريخ) حتى لا تتداخل عمليتان في نفس اللحظة
+    // فيظهر خطأ «A second operation was started on this context instance».
+    private readonly SemaphoreSlim _dbGate = new(1, 1);
+
+    private bool _isAllQuickActive =>
+        !_overdueOnly && !_alternativesOnly
+        && string.Equals(_deliveryFilter, "all", StringComparison.OrdinalIgnoreCase);
+
+    private bool _isUndeliveredQuickActive =>
+        !_overdueOnly
+        && string.Equals(_deliveryFilter, "undelivered", StringComparison.OrdinalIgnoreCase);
+
+    private bool _isDeliveredQuickActive =>
+        !_overdueOnly
+        && string.Equals(_deliveryFilter, "delivered", StringComparison.OrdinalIgnoreCase);
+
+    private bool HasActiveFilters =>
+        !string.IsNullOrWhiteSpace(_searchText)
+        || !string.Equals(_deliveryFilter, DefaultDeliveryFilter, StringComparison.OrdinalIgnoreCase)
+        || !string.Equals(_typeFilter, "all", StringComparison.OrdinalIgnoreCase)
+        || _dueDateFrom.HasValue
+        || _dueDateTo.HasValue
+        || _overdueOnly
+        || _alternativesOnly;
+
+    private string DeliveryFilterLabel => _deliveryFilter switch
+    {
+        "delivered" => "تم التسليم",
+        "all" => "الكل",
+        _ => "لم يتم التسليم بعد"
+    };
+
+    private string TypeFilterLabel => _typeFilter switch
+    {
+        "sale" => "أوامر بيع",
+        "purchase" => "أوامر توريد",
+        _ => "كل الأنواع"
+    };
+
+    private string DueDateRangeLabel
+    {
+        get
+        {
+            if (_dueDateFrom.HasValue && _dueDateTo.HasValue)
+                return $"من {_dueDateFrom.Value:yyyy/MM/dd} إلى {_dueDateTo.Value:yyyy/MM/dd}";
+            if (_dueDateFrom.HasValue)
+                return $"من {_dueDateFrom.Value:yyyy/MM/dd}";
+            if (_dueDateTo.HasValue)
+                return $"إلى {_dueDateTo.Value:yyyy/MM/dd}";
+            return string.Empty;
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -343,14 +531,26 @@ else
         _canOpenInvoices = user.IsInRole(SystemRoles.Admin)
                            || user.HasClaim("Permission", "frm_PartiesInvoices:View");
 
+        // فتح «أمر تشغيل الفاتورة» لسطور التوريد (فواتير شراء المصنع) — الصفحة نفسها تدعم الشراء
+        _canOpenPurchaseJobOrder = user.IsInRole(SystemRoles.Admin)
+                           || user.IsInRole(SystemRoles.ProductionManager)
+                           || user.IsInRole(SystemRoles.FactoryManager);
+
         _canSeeAmounts = user.IsInRole(SystemRoles.Admin)
                          || user.IsInRole(SystemRoles.AccountManager)
                          || user.IsInRole(SystemRoles.Account);
 
+        // ⭐ تعديل تاريخ التسليم/الاستلام — مدير الإنتاج أُزيل بقرار المالك:
+        // تغييرات التاريخ للإنتاج تمر عبر مسار «طلب تعديل الفاتورة» فقط، لا تعديلًا مباشرًا من هنا
         _canEditDueDate = user.IsInRole(SystemRoles.Admin)
-                          || user.IsInRole(SystemRoles.ProductionManager)
                           || user.IsInRole(SystemRoles.FactoryManager)
                           || user.HasClaim("Permission", "frm_JobOrders:Edit");   // 🧾 تعديل تاريخ التسليم/الاستلام
+
+        _canCreateTask = GeneralTaskPermissions.CanCreate(user);
+
+        // ⭐ إخفاء تاريخ الاستحقاق لغير المستثنين — نفس قاعدة شاشة التسليمات (عرض فقط، لا يُكتب أبدًا)
+        _canSeeRealDate = DeliveryPermissions.CanSeeRealDeliveryDate(user);
+        _dateBufferDays = Config.GetValue<int?>("Delivery:DateBufferDays") is int buffer && buffer >= 0 ? buffer : 4;
 
         if (_canView)
             await LoadAsync();
@@ -358,11 +558,52 @@ else
         _isLoading = false;
     }
 
+    /// <summary>
+    /// التاريخ المعروض لغير المستثنين: الحقيقي منقوصًا هامش الأيام، ولا يسبق تاريخ الفاتورة أبدًا.
+    /// الإخفاء للعرض فقط — التاريخ الحقيقي يبقى في RealDueDate ولا يُكتب أي تاريخ مخفي في قاعدة البيانات.
+    /// </summary>
+    private DateTime? GetDisplayDueDate(DateTime? realDueDate, DateTime transactionDate)
+    {
+        if (_canSeeRealDate || realDueDate == null) return realDueDate;
+        var shown = realDueDate.Value.AddDays(-_dateBufferDays);
+        return shown < transactionDate ? transactionDate : shown;
+    }
+
+    /// <summary>
+    /// حدود نطاق تاريخ الاستحقاق كما تُقارن بقاعدة البيانات: المستخدم يختار من التواريخ المعروضة له،
+    /// فتُزاح الحدود +الهامش للمخفيين قبل الاستعلام حتى تطابق النتائج ما يراه.
+    /// </summary>
+    private DateTime? ShiftRangeBound(DateTime? bound) =>
+        _canSeeRealDate || bound == null ? bound : bound.Value.AddDays(_dateBufferDays);
+
+    /// <summary>عتبة «متأخرة» على التاريخ الحقيقي بحيث تطابق دلالة التاريخ المعروض للمستخدم الحالي.</summary>
+    private DateTime OverdueThreshold =>
+        DateTime.Today.AddDays(_canSeeRealDate ? 0 : _dateBufferDays);
+
     private async Task LoadAsync()
+    {
+        // كل منافذ التحميل (التهيئة، استعادة الفلاتر بعد أول عرض، البحث الفوري، الكروت، الأزرار)
+        // تمر من هنا وتتسلسل على البوابة — فلا يعمل تحميلان على نفس DbContext في وقت واحد.
+        await _dbGate.WaitAsync();
+        try
+        {
+            await LoadCoreAsync();
+        }
+        finally
+        {
+            _dbGate.Release();
+        }
+    }
+
+    private async Task LoadCoreAsync()
     {
         try
         {
             _isLoading = true;
+
+            // عند تفعيل «متأخرة» تكون دلالة التسليم دائماً «غير المسلّمة» مهما كانت القائمة.
+            if (_overdueOnly)
+                _deliveryFilter = DefaultDeliveryFilter;
 
             var query = Db.Transactions
                 .AsNoTracking()
@@ -378,18 +619,41 @@ else
                 _ => query
             };
 
-            query = _deliveryFilter switch
+            // المستخدم يختار نطاق التاريخ من التواريخ المعروضة له — تُزاح الحدود للمخفيين قبل المقارنة بالتاريخ الحقيقي.
+            var rangeFrom = ShiftRangeBound(_dueDateFrom);
+            var rangeTo = ShiftRangeBound(_dueDateTo);
+
+            if (rangeFrom.HasValue)
+                query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= rangeFrom.Value.Date);
+
+            if (rangeTo.HasValue)
+                query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value <= rangeTo.Value.Date.AddDays(1).AddTicks(-1));
+
+            // أعداد الكروت من قاعدة البيانات ضمن سياق النوع ونطاق التاريخ والبحث فقط،
+            // دون أبعاد الحالة السريعة (التسليم/المتأخرة/البدائل) حتى يمثل كل كارت إجمالي بعده.
+            await LoadCountsAsync(query);
+
+            if (_overdueOnly)
             {
-                "delivered" => query.Where(t => t.IsDelivered == true),
-                "all" => query,
-                _ => query.Where(t => t.IsDelivered != true)
-            };
+                // «متأخرة» تُقيَّم على التاريخ المعروض: الحقيقي قبل (اليوم + الهامش) للمخفيين.
+                var threshold = OverdueThreshold;
+                query = query.Where(t => t.DueDate.HasValue
+                    && t.DueDate.Value.Date < threshold
+                    && t.IsDelivered != true);
+            }
+            else
+            {
+                query = _deliveryFilter switch
+                {
+                    "delivered" => query.Where(t => t.IsDelivered == true),
+                    "all" => query,
+                    _ => query.Where(t => t.IsDelivered != true)
+                };
+            }
 
-            if (_dueDateFrom.HasValue)
-                query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= _dueDateFrom.Value.Date);
-
-            if (_dueDateTo.HasValue)
-                query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value <= _dueDateTo.Value.Date.AddDays(1).AddTicks(-1));
+            if (_alternativesOnly)
+                query = query.Where(t => Db.TransactionDetails.Any(d =>
+                    d.TransactionId == t.TransactionId && d.SelectedAlternativeId != null));
 
             var projected = query.Select(t => new JobOrderRowVm
             {
@@ -399,6 +663,7 @@ else
                 TransactionType = t.TransactionType,
                 TransactionDate = t.TransactionDate,
                 DueDate = t.DueDate,
+                RealDueDate = t.DueDate,
                 IsDelivered = t.IsDelivered == true,
                 PartyName = Db.Parties.Where(p => p.PartyId == t.PartyId).Select(p => p.PartyName).FirstOrDefault() ?? "",
                 Phone = Db.Parties.Where(p => p.PartyId == t.PartyId).Select(p => p.Phone).FirstOrDefault(),
@@ -424,7 +689,12 @@ else
                     .ToList();
             }
 
+            // العرض فقط: DueDate يصبح التاريخ المعروض، والحقيقي محفوظ في RealDueDate (تستخدمه نافذة التعديل).
+            foreach (var row in rows)
+                row.DueDate = GetDisplayDueDate(row.RealDueDate, row.TransactionDate);
+
             _items = rows;
+            await SaveFiltersAsync();
         }
         catch (Exception ex)
         {
@@ -437,19 +707,240 @@ else
         }
     }
 
-    // ⭐ تصدير أوامر التشغيل غير المسلّمة فقط — حسب الفلتر الحالي — بدون أي مبالغ
-    private async Task ExportUndeliveredToExcelAsync()
+    private async Task LoadCountsAsync(IQueryable<Transaction> contextQuery)
+    {
+        // عدد «متأخرة» يتبع دلالة التاريخ المعروض للمستخدم الحالي (إزاحة الهامش للمخفيين).
+        var overdueThreshold = OverdueThreshold;
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            // البحث النصي يستخدم المطابقة العربية المحلية القائمة نفسها في القائمة،
+            // لذلك تُجلب الحقول اللازمة فقط من سياق الفلاتر ثم تُحسب الإجماليات دون حد 400.
+            var term = _searchText.Trim();
+            var countRows = await contextQuery
+                .Select(t => new JobOrderCountVm
+                {
+                    ReferenceNumber = t.ReferenceNumber ?? $"#{t.TransactionId}",
+                    PartyName = Db.Parties.Where(p => p.PartyId == t.PartyId).Select(p => p.PartyName).FirstOrDefault() ?? "",
+                    Phone = Db.Parties.Where(p => p.PartyId == t.PartyId).Select(p => p.Phone).FirstOrDefault(),
+                    IsDelivered = t.IsDelivered == true,
+                    DueDate = t.DueDate,
+                    HasAlternatives = Db.TransactionDetails.Any(d =>
+                        d.TransactionId == t.TransactionId && d.SelectedAlternativeId != null)
+                })
+                .ToListAsync();
+
+            countRows = countRows.Where(x =>
+                    x.ReferenceNumber.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || x.PartyName.ContainsArabic(term)
+                    || (x.Phone ?? string.Empty).ContainsArabic(term))
+                .ToList();
+
+            _countAll = countRows.Count;
+            _countUndelivered = countRows.Count(x => !x.IsDelivered);
+            _countDelivered = countRows.Count(x => x.IsDelivered);
+            _countOverdue = countRows.Count(x => x.DueDate.HasValue
+                && x.DueDate.Value.Date < overdueThreshold
+                && !x.IsDelivered);
+            _countAlternatives = countRows.Count(x => x.HasAlternatives);
+            return;
+        }
+
+        _countAll = await contextQuery.CountAsync();
+        _countUndelivered = await contextQuery.CountAsync(t => t.IsDelivered != true);
+        _countDelivered = await contextQuery.CountAsync(t => t.IsDelivered == true);
+        _countOverdue = await contextQuery.CountAsync(t => t.DueDate.HasValue
+            && t.DueDate.Value.Date < overdueThreshold
+            && t.IsDelivered != true);
+        _countAlternatives = await contextQuery.CountAsync(t => Db.TransactionDetails.Any(d =>
+            d.TransactionId == t.TransactionId && d.SelectedAlternativeId != null));
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        if (!_canView)
+        {
+            _filtersRestored = true;
+            return;
+        }
+
+        var shouldReload = false;
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("localStorage.getItem", FiltersStorageKey);
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                var saved = System.Text.Json.JsonSerializer.Deserialize<JobOrderFilterState>(json);
+                if (saved is not null)
+                {
+                    _searchText = saved.SearchText;
+                    _deliveryFilter = NormalizeDeliveryFilter(saved.DeliveryFilter);
+                    _typeFilter = NormalizeTypeFilter(saved.TypeFilter);
+                    _dueDateFrom = saved.DueDateFrom;
+                    _dueDateTo = saved.DueDateTo;
+                    _alternativesOnly = saved.AlternativesOnly;
+                    _overdueOnly = saved.OverdueOnly;
+                    if (_overdueOnly)
+                        _deliveryFilter = DefaultDeliveryFilter;
+                    shouldReload = true;
+                }
+            }
+        }
+        catch
+        {
+            // فشل localStorage لا يجب أن يمنع تشغيل الشاشة أبداً.
+        }
+        finally
+        {
+            _filtersRestored = true;
+        }
+
+        if (shouldReload)
+            await LoadAsync();
+    }
+
+    private static string NormalizeDeliveryFilter(string? value) => value switch
+    {
+        "delivered" => "delivered",
+        "all" => "all",
+        _ => DefaultDeliveryFilter
+    };
+
+    private static string NormalizeTypeFilter(string? value) => value switch
+    {
+        "sale" => "sale",
+        "purchase" => "purchase",
+        _ => "all"
+    };
+
+    private async Task SaveFiltersAsync()
+    {
+        if (!_filtersRestored)
+            return;
+
+        try
+        {
+            var state = new JobOrderFilterState
+            {
+                SearchText = _searchText,
+                DeliveryFilter = _deliveryFilter,
+                TypeFilter = _typeFilter,
+                DueDateFrom = _dueDateFrom,
+                DueDateTo = _dueDateTo,
+                AlternativesOnly = _alternativesOnly,
+                OverdueOnly = _overdueOnly
+            };
+
+            var json = System.Text.Json.JsonSerializer.Serialize(state);
+            await JS.InvokeVoidAsync("localStorage.setItem", FiltersStorageKey, json);
+        }
+        catch
+        {
+            // الحفظ اختياري ولا يجب أن يؤثر على نتيجة التحميل.
+        }
+    }
+
+    private async Task RemoveStoredFiltersAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.removeItem", FiltersStorageKey);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task OnSearchDebouncedAsync() => await LoadAsync();
+
+    private async Task ShowAllQuickAsync()
+    {
+        _deliveryFilter = "all";
+        _overdueOnly = false;
+        _alternativesOnly = false;
+        await LoadAsync();
+    }
+
+    private async Task SetDeliveryQuickAsync(string mode)
+    {
+        var wasActive = mode switch
+        {
+            "delivered" => _isDeliveredQuickActive,
+            _ => _isUndeliveredQuickActive
+        };
+
+        _overdueOnly = false;
+        _deliveryFilter = wasActive ? "all" : mode;
+        await LoadAsync();
+    }
+
+    private async Task ToggleOverdueAsync()
+    {
+        _overdueOnly = !_overdueOnly;
+        if (_overdueOnly)
+            _deliveryFilter = DefaultDeliveryFilter;
+        await LoadAsync();
+    }
+
+    private async Task ToggleAlternativesAsync()
+    {
+        _alternativesOnly = !_alternativesOnly;
+        await LoadAsync();
+    }
+
+    private async Task ClearSearchTextAsync()
+    {
+        _searchText = null;
+        await LoadAsync();
+    }
+
+    private async Task ClearDeliveryFilterAsync()
+    {
+        _deliveryFilter = DefaultDeliveryFilter;
+        await LoadAsync();
+    }
+
+    private async Task ClearTypeFilterAsync()
+    {
+        _typeFilter = "all";
+        await LoadAsync();
+    }
+
+    private async Task ClearDueDateRangeAsync()
+    {
+        _dueDateFrom = null;
+        _dueDateTo = null;
+        await LoadAsync();
+    }
+
+    private async Task ClearOverdueFilterAsync()
+    {
+        _overdueOnly = false;
+        await LoadAsync();
+    }
+
+    private async Task ClearAlternativesFilterAsync()
+    {
+        _alternativesOnly = false;
+        await LoadAsync();
+    }
+
+    // ⭐ تصدير أوامر التشغيل حسب الفلتر الحالي بالكامل — بدون أي مبالغ
+    private async Task ExportToExcelAsync()
     {
         if (!_canView || _isExporting)
             return;
 
         _isExporting = true;
+        await _dbGate.WaitAsync();
         try
         {
             var query = Db.Transactions
                 .AsNoTracking()
                 .Where(t => t.InvoiceStatus != InvoiceStatuses.Cancelled
-                    && t.IsDelivered != true // ⭐ غير المسلّمة فقط — دائماً
                     && ((t.TransactionType == TransactionTypes.Sale)
                      || (t.TransactionType == TransactionTypes.Purchase
                          && (t.ReferenceType == null || !t.ReferenceType.StartsWith("MirrorOf:")))));
@@ -461,11 +952,36 @@ else
                 _ => query
             };
 
-            if (_dueDateFrom.HasValue)
-                query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= _dueDateFrom.Value.Date);
+            // نفس دلالة القائمة: حدود النطاق وعتبة «متأخرة» على التواريخ المعروضة للمستخدم الحالي.
+            var rangeFrom = ShiftRangeBound(_dueDateFrom);
+            var rangeTo = ShiftRangeBound(_dueDateTo);
 
-            if (_dueDateTo.HasValue)
-                query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value <= _dueDateTo.Value.Date.AddDays(1).AddTicks(-1));
+            if (rangeFrom.HasValue)
+                query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= rangeFrom.Value.Date);
+
+            if (rangeTo.HasValue)
+                query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value <= rangeTo.Value.Date.AddDays(1).AddTicks(-1));
+
+            if (_overdueOnly)
+            {
+                var threshold = OverdueThreshold;
+                query = query.Where(t => t.DueDate.HasValue
+                    && t.DueDate.Value.Date < threshold
+                    && t.IsDelivered != true);
+            }
+            else
+            {
+                query = _deliveryFilter switch
+                {
+                    "delivered" => query.Where(t => t.IsDelivered == true),
+                    "all" => query,
+                    _ => query.Where(t => t.IsDelivered != true)
+                };
+            }
+
+            if (_alternativesOnly)
+                query = query.Where(t => Db.TransactionDetails.Any(d =>
+                    d.TransactionId == t.TransactionId && d.SelectedAlternativeId != null));
 
             // ⭐ القناع على مستوى البيانات: GrandTotal لا يُختار من قاعدة البيانات نهائياً
             var projected = query.Select(t => new JobOrderRowVm
@@ -475,7 +991,8 @@ else
                 TransactionType = t.TransactionType,
                 TransactionDate = t.TransactionDate,
                 DueDate = t.DueDate,
-                IsDelivered = false,
+                RealDueDate = t.DueDate,
+                IsDelivered = t.IsDelivered == true,
                 PartyName = Db.Parties.Where(p => p.PartyId == t.PartyId).Select(p => p.PartyName).FirstOrDefault() ?? "",
                 Phone = Db.Parties.Where(p => p.PartyId == t.PartyId).Select(p => p.Phone).FirstOrDefault(),
                 EmpName = t.EmpId == null ? null : Db.Employees.Where(e => e.EmployeeId == t.EmpId).Select(e => e.FullName).FirstOrDefault(),
@@ -499,8 +1016,12 @@ else
                     .ToList();
             }
 
+            // التصدير يعرض نفس التواريخ المعروضة في القائمة — الإخفاء يطال الملف أيضًا.
+            foreach (var exportRow in rows)
+                exportRow.DueDate = GetDisplayDueDate(exportRow.RealDueDate, exportRow.TransactionDate);
+
             using var workbook = new XLWorkbook();
-            var sheet = workbook.Worksheets.Add("أوامر التشغيل غير المسلمة");
+            var sheet = workbook.Worksheets.Add("أوامر التشغيل");
             sheet.RightToLeft = true;
             sheet.ColumnWidth = 14;
             sheet.Column(2).Width = 18;
@@ -545,7 +1066,7 @@ else
             workbook.SaveAs(stream);
             stream.Seek(0, SeekOrigin.Begin);
             var bytes = stream.ToArray();
-            var fileName = $"JobOrders_Undelivered_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
+            var fileName = $"JobOrders_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx";
 
             await JS.InvokeVoidAsync("eval", $@"
     var a = document.createElement('a');
@@ -556,7 +1077,7 @@ else
     document.body.removeChild(a);
 ");
 
-            Snackbar.Add($"تم تصدير {rows.Count} أمر تشغيل غير مسلّم (بدون مبالغ)", Severity.Success);
+            Snackbar.Add($"تم تصدير {rows.Count} أمر تشغيل حسب الفلتر الحالي (بدون مبالغ)", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -564,12 +1085,13 @@ else
         }
         finally
         {
+            _dbGate.Release();
             _isExporting = false;
             StateHasChanged();
         }
     }
 
-    // ⭐ طباعة غير المسلّمة فقط — نفس الفلتر الحالي — بدون أي مبالغ
+    // ⭐ طباعة حسب الفلتر الحالي بالكامل — بدون أي مبالغ
     private async Task OpenPrint()
     {
         if (!_canView)
@@ -584,6 +1106,12 @@ else
             qs.Add("to=" + Uri.EscapeDataString(_dueDateTo.Value.ToString("yyyy-MM-dd")));
         if (!string.Equals(_typeFilter, "all", StringComparison.OrdinalIgnoreCase))
             qs.Add("type=" + Uri.EscapeDataString(_typeFilter));
+        if (!string.Equals(_deliveryFilter, DefaultDeliveryFilter, StringComparison.OrdinalIgnoreCase))
+            qs.Add("delivery=" + Uri.EscapeDataString(_deliveryFilter));
+        if (_overdueOnly)
+            qs.Add("overdue=1");
+        if (_alternativesOnly)
+            qs.Add("alt=1");
 
         var url = "/production/job-orders/print" + (qs.Count > 0 ? "?" + string.Join("&", qs) : "");
         await JS.InvokeVoidAsync("open", url, "_blank");
@@ -591,6 +1119,18 @@ else
 
     private async Task OpenJobOrderPrint(int invoiceId)
         => await JS.InvokeVoidAsync("open", $"/sales/invoices/{invoiceId}/job-order/print", "_blank");
+
+    private async Task OpenCreateTaskAsync(JobOrderRowVm row)
+    {
+        var parameters = new DialogParameters
+        {
+            ["PresetLinkedType"] = GeneralTaskLinks.JobOrder,
+            ["PresetLinkedId"] = row.TransactionId,
+            ["PresetLinkedTitle"] = $"أمر تشغيل {row.ReferenceNumber} — {row.PartyName}"
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseButton = true };
+        await DialogService.ShowAsync<CreateGeneralTaskDialog>("تكليف جديد", parameters, options);
+    }
 
     private void OpenJobOrder(int invoiceId)
         => Navigation.NavigateTo($"/sales/invoices/{invoiceId}/job-order");
@@ -605,7 +1145,9 @@ else
     {
         _editTransactionId = row.TransactionId;
         _editReferenceNumber = row.ReferenceNumber;
-        _editDueDate = row.DueDate;
+        // ⭐ نافذة التعديل سطح إدخال بيانات: تفتح دائمًا بالتاريخ الحقيقي المخزّن، لا المعروض المخفي —
+        // حتى لا يُكتب تاريخ مخفي في قاعدة البيانات عند الحفظ.
+        _editDueDate = row.RealDueDate;
         _editDueDateNotes = null;
         _showDueDateDialog = true;
     }
@@ -625,6 +1167,7 @@ else
             return;
 
         _isSavingDueDate = true;
+        await _dbGate.WaitAsync();
         try
         {
             var auth = await AuthProvider.GetAuthenticationStateAsync();
@@ -675,8 +1218,7 @@ else
             }
 
             Snackbar.Add("تم تعديل تاريخ التسليم وإرسال الإشعارات", Severity.Success);
-            CloseDueDateDialog();
-            await LoadAsync();
+            _dueDateSaved = true;
         }
         catch (Exception ex)
         {
@@ -685,16 +1227,50 @@ else
         finally
         {
             _isSavingDueDate = false;
+            _dbGate.Release();
+        }
+
+        // إعادة التحميل تتم بعد تحرير البوابة — لأن LoadAsync يستحوذ عليها بنفسه.
+        if (_dueDateSaved)
+        {
+            _dueDateSaved = false;
+            CloseDueDateDialog();
+            await LoadAsync();
         }
     }
 
     private async Task ClearSearch()
     {
         _searchText = null;
-        _deliveryFilter = "undelivered";
+        _deliveryFilter = DefaultDeliveryFilter;
+        _typeFilter = "all";
         _dueDateFrom = null;
         _dueDateTo = null;
+        _alternativesOnly = false;
+        _overdueOnly = false;
         await LoadAsync();
+        await RemoveStoredFiltersAsync();
+    }
+
+    private sealed class JobOrderCountVm
+    {
+        public string ReferenceNumber { get; set; } = "";
+        public string PartyName { get; set; } = "";
+        public string? Phone { get; set; }
+        public bool IsDelivered { get; set; }
+        public DateTime? DueDate { get; set; }
+        public bool HasAlternatives { get; set; }
+    }
+
+    private sealed class JobOrderFilterState
+    {
+        public string? SearchText { get; set; }
+        public string DeliveryFilter { get; set; } = DefaultDeliveryFilter;
+        public string TypeFilter { get; set; } = "all";
+        public DateTime? DueDateFrom { get; set; }
+        public DateTime? DueDateTo { get; set; }
+        public bool AlternativesOnly { get; set; }
+        public bool OverdueOnly { get; set; }
     }
 
     private sealed class JobOrderRowVm
@@ -705,7 +1281,10 @@ else
         public string TransactionType { get; set; } = TransactionTypes.Sale;
         public bool IsPurchase => string.Equals(TransactionType, TransactionTypes.Purchase, StringComparison.OrdinalIgnoreCase);
         public DateTime TransactionDate { get; set; }
+        /// <summary>التاريخ كما يُعرض للمستخدم الحالي (مخفي لغير المستثنين).</summary>
         public DateTime? DueDate { get; set; }
+        /// <summary>التاريخ الحقيقي المخزّن — تستخدمه نافذة التعديل حتى لا يُحفظ تاريخ مخفي أبدًا.</summary>
+        public DateTime? RealDueDate { get; set; }
         public bool IsDelivered { get; set; }
         public string PartyName { get; set; } = "";
         public string? Phone { get; set; }

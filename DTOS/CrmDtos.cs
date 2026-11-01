@@ -85,6 +85,19 @@ public class TaskListDto
     public DateTime CreatedAt { get; set; }
     public string? AssignmentSource { get; set; }
     public string? TaskScope { get; set; }
+    // ─── تطوير التكليفات العامة ───
+    public DateTime? CancelledAt { get; set; }
+    public string? CancelledBy { get; set; }
+    public string? CancellationReason { get; set; }
+    public DateTime? AcknowledgedAt { get; set; }
+    public string? AcknowledgedBy { get; set; }
+    public DateTime? ReturnedAt { get; set; }
+    public string? ReturnedBy { get; set; }
+    public string? ReturnReason { get; set; }
+    public string? CompletionLink { get; set; }
+    public string? LinkedEntityType { get; set; }
+    public int? LinkedEntityId { get; set; }
+    public string? LinkedEntityTitle { get; set; }
     public bool IsGeneralTask => string.Equals(TaskScope, TaskScopes.General, StringComparison.OrdinalIgnoreCase);
     public bool IsGeneralManagerAssignment => string.Equals(AssignmentSource, "GeneralManager", StringComparison.OrdinalIgnoreCase);
     public string TaskDueStatus { get; set; } = "";
@@ -154,6 +167,100 @@ public class GeneralEmployeeTaskDto
     public int? TaskTypeId { get; set; }
     public string? TaskDescription { get; set; }
     public DateTime DueDate { get; set; } = DateTime.Today.AddDays(1);
+    public TimeOnly? DueTime { get; set; }
+    public string Priority { get; set; } = "Medium";
+    /// <summary>ربط اختياري بمستند (مفردات GeneralTaskLinks) — العنوان يُحسم خادميًا وقت الإنشاء</summary>
+    public string? LinkedEntityType { get; set; }
+    public int? LinkedEntityId { get; set; }
+    /// <summary>دقائق التذكير قبل الموعد (اختياري — الافتراضي من إعداد العمود)</summary>
+    public int? ReminderMinutes { get; set; }
+}
+
+/// <summary>نتيجة تحقق ربط مستند: العنوان الرسمي للمستند كما سيُحفظ لقطة على التكليف</summary>
+public class LinkedEntityLookupDto
+{
+    public string EntityType { get; set; } = "";
+    public int EntityId { get; set; }
+    public string Title { get; set; } = "";
+}
+
+/// <summary>قوائم صفحة «مهامي»: وارد (مُسندة إليّ بكل النطاقات) / صادر (أنشأتها) / إشاراتي</summary>
+public class MyTasksDto
+{
+    public List<TaskListDto> Assigned { get; set; } = new();
+    public List<TaskListDto> Created { get; set; } = new();
+    public List<TaskListDto> Mentioned { get; set; } = new();
+}
+
+/// <summary>عدّادات «مهامي» لشريط الصفحة الرئيسية</summary>
+public class MyTasksSummaryDto
+{
+    public int OpenAssigned { get; set; }
+    public int OverdueAssigned { get; set; }
+    public int OpenCreated { get; set; }
+    public int MentionedTasks { get; set; }
+}
+
+/// <summary>حِمل موظف واحد في ملخص إدارة التكليفات العامة (لمن يرى الكل فقط)</summary>
+public class EmployeeTaskLoadDto
+{
+    public int EmployeeId { get; set; }
+    public string EmployeeName { get; set; } = "";
+    public int OpenCount { get; set; }
+    public int InProgressCount { get; set; }
+    public int OverdueCount { get; set; }
+    public int CompletedCount { get; set; }
+    /// <summary>أرجعها المكلَّف وما زالت بانتظار قرار المنشئ</summary>
+    public int ReturnedPendingCount { get; set; }
+}
+
+/// <summary>إضافة تعليق/تحديث تقدم لخيط نقاش تكليف — المناداة تُرسل صراحة من واجهة الاختيار</summary>
+public class AddTaskCommentDto
+{
+    public int TaskId { get; set; }
+    public string Body { get; set; } = "";
+    /// <summary>Comment | Progress</summary>
+    public string Kind { get; set; } = "Comment";
+    public List<int> MentionedEmployeeIds { get; set; } = new();
+}
+
+/// <summary>تعليق واحد في خيط النقاش مع أسماء المنادَين فيه</summary>
+public class TaskCommentDto
+{
+    public int Id { get; set; }
+    public int TaskId { get; set; }
+    public string AuthorUserName { get; set; } = "";
+    public int? AuthorEmployeeId { get; set; }
+    public string? AuthorName { get; set; }
+    public string Body { get; set; } = "";
+    public string Kind { get; set; } = "Comment";
+    public DateTime CreatedAt { get; set; }
+    public List<int> MentionedEmployeeIds { get; set; } = new();
+    public List<string> MentionedNames { get; set; } = new();
+}
+
+/// <summary>تفاصيل تكليف كاملة: بياناته + خيط النقاش + صلاحيات العارض لحسم أزرار الإجراءات</summary>
+public class TaskDetailDto
+{
+    public TaskListDto Task { get; set; } = new();
+    public List<TaskCommentDto> Comments { get; set; } = new();
+    /// <summary>موظف العارض (إن كان حسابه مربوطًا)</summary>
+    public int? ViewerEmployeeId { get; set; }
+    public bool ViewerIsAssignee { get; set; }
+    /// <summary>العارض هو المنشئ أو مدير (تعديل/إلغاء)</summary>
+    public bool ViewerCanAdminister { get; set; }
+    /// <summary>العارض مدير بأدوار الإدارة (يرى الكل ويتصرف)</summary>
+    public bool ViewerCanManage { get; set; }
+}
+
+/// <summary>تعديل تكليف عام قائم (المنشئ أو مدير) — الحقول القابلة للتعديل فقط</summary>
+public class UpdateGeneralTaskDto
+{
+    public int TaskId { get; set; }
+    public int AssignedTo { get; set; }
+    public int? TaskTypeId { get; set; }
+    public string? TaskDescription { get; set; }
+    public DateTime DueDate { get; set; }
     public TimeOnly? DueTime { get; set; }
     public string Priority { get; set; } = "Medium";
 }

@@ -14,6 +14,7 @@ public interface IPayrollService
     // ── حساب (بدون حفظ) ─────────────────────────────────────
     Task<List<PayrollCalculationDto>>   CalculateMonthAsync(string month);
     Task<PayrollCalculationDto>         CalculateOneAsync(int employeeId, string month);
+    Task<int>                           GetWorkingDaysAsync(int employeeId, string month);
 
     // ── حفظ وصرف ────────────────────────────────────────────
     Task<(bool Ok, string Msg, int? RunId)>

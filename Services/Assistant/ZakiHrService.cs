@@ -137,8 +137,21 @@ public class ZakiHrService
             PageSize = 500
         });
 
+        // ⭐ المعفون من البصمة نهائيًا: حضورهم يُرصد يدويًا فلا يظهرون
+        //    في قائمة الغياب أبدًا، وتُخصم سجلاتهم من أعداد اليوم ومن
+        //    أساس نسبة الحضور (نفس قاعدة لوحة القيادة التنفيذية).
+        var exempt = await LoadExemptAsync(ct);
+        var adj = await ExemptTodayAdjustmentsAsync(today, exempt.BioCodes, ct);
+        var present = Math.Max(stats.TodayPresent - adj.Present, 0);
+        var absent = Math.Max(stats.TodayAbsent - adj.Absent, 0);
+        var late = Math.Max(stats.TodayLate - adj.Late, 0);
+        var workingBase = adj.WorkingTotal - adj.Working;
+        var rate = workingBase == 0 ? 0 : Math.Round(present * 100m / workingBase, 1);
+        var tracked = Math.Max(stats.TotalEmployees - exempt.WithBioCount, 0);
+
         var exceptions = page.Items
-            .Where(a => a.IsAbsent || a.IsLate)
+            .Where(a => (a.IsAbsent || a.IsLate)
+                     && !(a.EmployeeId.HasValue && exempt.EmployeeIds.Contains(a.EmployeeId.Value)))
             .OrderByDescending(a => a.IsAbsent)
             .ThenByDescending(a => a.LateMinutes ?? 0)
             .ToList();
@@ -157,11 +170,12 @@ public class ZakiHrService
         var json = ToJson(new Dictionary<string, object?>
         {
             ["التاريخ"] = Date(today),
-            ["حاضرين"] = stats.TodayPresent,
-            ["غايبين"] = stats.TodayAbsent,
-            ["متأخرين"] = stats.TodayLate,
-            ["نسبة الحضور %"] = stats.AttendanceRate,
-            ["الموظفين المتابَعين"] = stats.TotalEmployees,
+            ["حاضرين"] = present,
+            ["غايبين"] = absent,
+            ["متأخرين"] = late,
+            ["نسبة الحضور %"] = rate,
+            ["الموظفين المتابَعين"] = tracked,
+            ["معفون من البصمة"] = exempt.Count,
             ["عدد الغياب والتأخير المعروض"] = rows.Count,
             ["الغياب والتأخير"] = ToObjects(headers, rows)
         });
@@ -185,6 +199,17 @@ public class ZakiHrService
         var (employeeId, employeeName, error) = await FindEmployeeAsync(search, ct);
         if (error != null) return error;
 
+        // المعفى من البصمة نهائيًا: حضوره يُرصد يدويًا فلا تُعرض له
+        // أيام غياب أبدًا (سجلات «غائب» في بياناته ناتج معالجة البصمة).
+        var isExempt = false;
+        await using (var db = await _dbFactory.CreateDbContextAsync(ct))
+        {
+            isExempt = await db.Employees.AsNoTracking()
+                .Where(e => e.EmployeeId == employeeId!.Value)
+                .Select(e => e.IsPermanentlyExempt == true)
+                .FirstOrDefaultAsync(ct);
+        }
+
         var page = await _attendance.GetAttendanceAsync(new AttendanceFilterDto
         {
             EmployeeId = employeeId,
@@ -195,6 +220,8 @@ public class ZakiHrService
         });
 
         var items = page.Items.OrderByDescending(a => a.LogDate).ToList();
+        if (isExempt)
+            items = items.Where(a => !a.IsAbsent).ToList();
 
         var presentDays = items.Count(a => a.IsPresent);
         var absentDays = items.Count(a => a.IsAbsent);
@@ -215,7 +242,7 @@ public class ZakiHrService
             a.LateDisplay
         }).ToList();
 
-        var json = ToJson(new Dictionary<string, object?>
+        var payload = new Dictionary<string, object?>
         {
             ["الموظف"] = employeeName,
             ["الفترة"] = label,
@@ -227,10 +254,69 @@ public class ZakiHrService
             ["إجمالي ساعات العمل"] = hours.ToString("#,0.0", Culture),
             ["عدد السجلات"] = items.Count,
             ["آخر السجلات"] = ToObjects(headers, rows)
-        });
+        };
+        if (isExempt)
+            payload["معفى من البصمة"] = "نعم — حضوره يُرصد يدويًا ولا يُحتسب غائبًا أبدًا";
+        var json = ToJson(payload);
 
         return new ZakiToolOutcome(json,
             rows.Count == 0 ? null : new ZakiTable("حضور " + employeeName + " — " + label, headers, rows));
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // المعفون من البصمة نهائيًا (IsPermanentlyExempt == true)
+    // حضورهم يُرصد يدويًا (نمط المرتبات: AttendanceManuals) — فلا
+    // يُحتسبون غائبين ولا يدخلون أساس نسبة الحضور في أي إجابة هنا.
+    // ════════════════════════════════════════════════════════════
+    private sealed record ExemptSet(
+        HashSet<int> EmployeeIds, HashSet<int> BioCodes, int Count, int WithBioCount);
+
+    private async Task<ExemptSet> LoadExemptAsync(CancellationToken ct)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        // نفس تعريف «المتابَعين» في GetTodayStatisticsAsync للحالة
+        // (نشط بالصيغتين المخزنتين) — وCount يشمل المعفيين بلا كود
+        // بصمة أيضًا (نفس تعريف ExemptCount في لوحة القيادة).
+        var rows = await db.Employees.AsNoTracking()
+            .Where(e => (e.Status == EmployeeStatuses.Active || e.Status == "Active")
+                     && e.IsPermanentlyExempt == true)
+            .Select(e => new { e.EmployeeId, e.BioEmployeeId })
+            .ToListAsync(ct);
+        return new ExemptSet(
+            rows.Select(r => r.EmployeeId).ToHashSet(),
+            rows.Where(r => r.BioEmployeeId.HasValue).Select(r => r.BioEmployeeId!.Value).ToHashSet(),
+            rows.Count,
+            rows.Count(r => r.BioEmployeeId.HasValue));
+    }
+
+    private sealed record ExemptTodayAdj(int Working, int Present, int Absent, int Late, int WorkingTotal);
+
+    // خصوم اليوم من سجلات المعفين + إجمالي سجلات العمل اليوم —
+    // بنفس تعريفات AttendanceService حرفيًا (IsWorking/IsPresent/
+    // IsAbsent) حتى تبقى الأرقام المعدّلة متسقة مع إحصاءات الخدمة.
+    private async Task<ExemptTodayAdj> ExemptTodayAdjustmentsAsync(
+        DateTime today, HashSet<int> exemptBioCodes, CancellationToken ct)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var recs = await db.Attendances.AsNoTracking()
+            .Where(a => a.LogDate == today)
+            .Select(a => new { a.BiometricCode, a.Status, a.TimeIn, a.LateMinutes })
+            .ToListAsync(ct);
+
+        static bool IsWorking(string? s) =>
+            s != AttendanceStatus.OffDay && s != AttendanceStatus.Weekend && s != AttendanceStatus.Holiday;
+        static bool IsPresentRec(string? s, TimeOnly? timeIn) =>
+            timeIn != null || s == AttendanceStatus.Present || s == AttendanceStatus.Late
+            || s == AttendanceStatus.Errand || s == AttendanceStatus.EarlyLeave;
+
+        var working = recs.Where(r => IsWorking(r.Status)).ToList();
+        var ex = working.Where(r => exemptBioCodes.Contains(r.BiometricCode)).ToList();
+        return new ExemptTodayAdj(
+            Working: ex.Count,
+            Present: ex.Count(r => IsPresentRec(r.Status, r.TimeIn)),
+            Absent: ex.Count(r => r.Status == AttendanceStatus.Absent),
+            Late: ex.Count(r => r.Status == AttendanceStatus.Late || (r.LateMinutes ?? 0) > 0),
+            WorkingTotal: working.Count);
     }
 
     // ════════════════════════════════════════════════════════════

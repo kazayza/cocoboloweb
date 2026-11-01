@@ -46,6 +46,7 @@ public static class ZakiLabels
         ["get_cashflow_summary"] = "التدفق النقدي",
         ["get_cashbox_summary"] = "ملخص الخزائن",
         ["get_cashbox_transactions"] = "حركات الخزينة",
+        ["get_cashbox_day_closing"] = "إقفال الخزينة اليومي",
         ["get_expenses_summary"] = "ملخص المصروفات",
         ["get_personal_accounts"] = "الحسابات الشخصية",
 

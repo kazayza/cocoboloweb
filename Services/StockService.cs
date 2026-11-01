@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services;
@@ -8,12 +10,36 @@ public class StockService : IStockService
 {
     private readonly db24804Context _db;
     private readonly IAuditService _audit;
+    private readonly IHttpContextAccessor _http;
 
-    public StockService(db24804Context db, IAuditService audit)
+    public StockService(db24804Context db, IAuditService audit, IHttpContextAccessor http)
     {
         _db = db;
         _audit = audit;
+        _http = http;
     }
+
+    // ⛔ F-09 (دفاع في العمق): كتابات المخزون — داخلي فقط، ومطابقة لبوابات
+    // الصفحات نفسها: صفحتا إدخال/تحويل المخزون محكومتان بالأدوار فقط
+    // (GeneralManager/AccountManager/Account/ProductionManager/factory + Admin)
+    // بلا صلاحيات claims، وصفحة الجرد بنفس الأدوار تقريبًا أو frm_StockCount:View.
+    // القراءات غير محروسة: زكي (أدوات قراءة فقط) ولوحة الإدارة التنفيذية
+    // (قيمة المخزون) ومطابقات الفواتير تعتمد عليها لمستخدمين داخليين أوسع.
+    // ملحوظة فخّ مُتحقَّق منه: لا توجد خدمة أخرى تستدعي كتابات المخزون هذه —
+    // الفواتير والإنتاج يعدّلان المخزون مباشرة عبر DbContext لا عبر هذه الخدمة.
+    private ClaimsPrincipal? CurrentUser => _http.HttpContext?.User;
+
+    private static readonly string[] StockMovementRoles =
+        { "GeneralManager", "AccountManager", "Account", "ProductionManager", "factory" };
+
+    private bool CanMoveStock()
+        => AppAuthorization.HasClaimOrRole(CurrentUser, Array.Empty<string>(), StockMovementRoles);
+
+    private bool CanCountStock()
+        => AppAuthorization.HasClaimOrRole(CurrentUser,
+            new[] { "frm_StockCount:View" }, new[] { "AccountManager", "Account" });
+
+    private const string StockDeniedMessage = "غير مصرح لك بتنفيذ هذا الإجراء على المخزون.";
 
     public async Task<List<BranchListDto>> GetBranchesAsync()
     {
@@ -139,6 +165,8 @@ public class StockService : IStockService
 
     public async Task<StockEntryResultDto> AddStockEntryAsync(StockEntryFormDto dto, string currentUserName)
     {
+        if (!CanMoveStock())
+            return new StockEntryResultDto { Success = false, Message = StockDeniedMessage };
         if (!dto.BranchId.HasValue || dto.BranchId.Value <= 0)
             return new StockEntryResultDto { Success = false, Message = "اختيار الفرع مطلوب." };
 
@@ -272,6 +300,8 @@ public class StockService : IStockService
 
     public async Task<StockTransferResultDto> TransferStockAsync(StockTransferFormDto dto, string currentUserName)
     {
+        if (!CanMoveStock())
+            return new StockTransferResultDto { Success = false, Message = StockDeniedMessage };
         if (!dto.FromBranchId.HasValue || dto.FromBranchId.Value <= 0)
             return new StockTransferResultDto { Success = false, Message = "اختيار فرع المصدر مطلوب." };
 
@@ -619,6 +649,8 @@ public class StockService : IStockService
 
     public async Task<(bool Success, string Message, int? StockCountId)> SaveStockCountDraftAsync(StockCountWorkspaceDto dto, string currentUserName)
     {
+        if (!CanCountStock())
+            return (false, StockDeniedMessage, null);
         if (dto.BranchId <= 0)
             return (false, "اختيار الفرع مطلوب.", null);
         if (dto.WarehouseId <= 0)
@@ -724,6 +756,8 @@ public class StockService : IStockService
 
     public async Task<(bool Success, string Message)> FinalizeStockCountAsync(int stockCountId, string currentUserName)
     {
+        if (!CanCountStock())
+            return (false, StockDeniedMessage);
         var header = await _db.StockCountHeaders
             .Include(h => h.Branch)
             .Include(h => h.Warehouse)

@@ -12,15 +12,18 @@ public class InvoiceService : IInvoiceService
     private readonly IAuditService _audit;
     private readonly NotificationService _notify;
     private readonly IHttpContextAccessor _http;
+    private readonly ISalesDeliveryStatusService _deliveryStatus;   // ملخصات أحداث التسليم الجزئي لقائمة الفواتير
 
     public InvoiceService(db24804Context db, IDbContextFactory<db24804Context> dbFactory,
-        IAuditService audit, NotificationService notify, IHttpContextAccessor http)
+        IAuditService audit, NotificationService notify, IHttpContextAccessor http,
+        ISalesDeliveryStatusService deliveryStatus)
     {
         _db = db;
         _dbFactory = dbFactory;
         _audit = audit;
         _notify = notify;
         _http = http;
+        _deliveryStatus = deliveryStatus;
     }
 
     // ============================================================
@@ -115,6 +118,30 @@ public class InvoiceService : IInvoiceService
                 EditDone = t.EditDone
             })
             .ToListAsync();
+
+        // ⭐ التسليم الجزئي: ملخصات أحداث تسليم فواتير الصفحة دفعة واحدة (نفس
+        // اشتقاق شاشة متابعة التسليمات) — الفاتورة الجزئية تحمل وسمها وكمياتها،
+        // والمكتملة تبقى على إسقاط IsDelivered كما هي. تدهور آمن عند غياب الجداول.
+        if (filter.TransactionType == TransactionTypes.Sale && items.Count > 0)
+        {
+            try
+            {
+                var progress = await _deliveryStatus.GetDeliveryProgressBatchAsync(
+                    items.Select(i => i.TransactionId).ToList());
+                foreach (var it in items)
+                {
+                    if (it.IsDelivered == true) continue;
+                    if (progress.TryGetValue(it.TransactionId, out var p)
+                        && p.EffectiveStatus == DeliveryEffectiveStatuses.Partial)
+                    {
+                        it.IsPartiallyDelivered = true;
+                        it.DeliveredQty = p.TotalDeliveredQty;
+                        it.InvoicedQty = p.TotalInvoicedQty;
+                    }
+                }
+            }
+            catch { /* جداول التسليم الجزئي غير مهيأة — القائمة تعمل بدون الوسم */ }
+        }
 
         // ⭐ ربح فاتورة البيع — يُحسب فقط لـ Admin/AccountManager (بدون الرسوم: صافي الأصناف − التكلفة)
         // نفس منهجية عروض الأسعار: التكلفة = Σ(الكمية × سعر الشراء حسب tier الصنف)
@@ -360,6 +387,8 @@ public class InvoiceService : IInvoiceService
                                   d.Notes,
                                   d.PricingTier,
                                   d.SelectedAlternativeId,
+                                  d.DeliveryDate,
+                                  d.DeliveryDateIsCustom,
                                   p.SuggestedSalePriceCClass,
                                   p.SuggestedSalePrice,
                                   p.SuggestedSalePriceElite,
@@ -390,6 +419,8 @@ public class InvoiceService : IInvoiceService
                 Quantity = d.Quantity,
                 UnitPrice = d.UnitPrice,
                 Notes = d.Notes,
+                DeliveryDate = d.DeliveryDate,
+                DeliveryDateIsCustom = d.DeliveryDateIsCustom,
                 SelectedAlternativeId = d.SelectedAlternativeId,
                 SelectedAlternativeName = alt?.AlternativeName,
                 SelectedAlternativeSummary = alt?.SpecificationSummary,
@@ -506,6 +537,24 @@ public class InvoiceService : IInvoiceService
         };
     }
 
+    // ⭐ بوابة طباعة الفاتورة حسب نوعها — مرآة لمنطق InvoiceDetails (بيع/شراء منفصلتان، وطاقم المصنع للشراء فقط)
+    private bool CanViewInvoiceForPrint(string? transactionType)
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+        if (user.IsInRole("Admin")) return true;
+
+        if (transactionType == TransactionTypes.Purchase)
+        {
+            var isSupplyViewer = user.IsInRole("factory")
+                                 || user.IsInRole(SystemRoles.ProductionManager)
+                                 || user.IsInRole(SystemRoles.FactoryManager);
+            return user.HasClaim("Permission", "frm_SupplierInvoices:View") || isSupplyViewer;
+        }
+
+        return user.HasClaim("Permission", "frm_PartiesInvoices:View");
+    }
+
     // ============================================================
     //  للطباعة - مع بيانات الشركة والعميل
     // ============================================================
@@ -513,6 +562,10 @@ public class InvoiceService : IInvoiceService
     {
         var details = await GetInvoiceDetailsAsync(transactionId);
         if (details == null) return null;
+
+        // ⛔ دفاع في العمق لصفحة الطباعة: نفس بوابة شاشة تفاصيل الفاتورة حسب نوعها —
+        // بيع: frm_PartiesInvoices:View · شراء: frm_SupplierInvoices:View أو طاقم المصنع · Admin للكل.
+        if (!CanViewInvoiceForPrint(details.Invoice.TransactionType)) return null;
 
         var party = await _db.Parties.AsNoTracking()
             .FirstOrDefaultAsync(p => p.PartyId == details.Invoice.PartyId);
@@ -713,7 +766,14 @@ public class InvoiceService : IInvoiceService
         if (dto.TransactionType == TransactionTypes.Purchase)
             return await CreateShowroomPurchaseInvoiceAsync(dto, currentUserName);
 
-        using var tx = await _db.Database.BeginTransactionAsync();
+        // ⭐ (دفعة 2 — 2-1) لو توجد معاملة محيطة على نفس السياق المشترك
+        //    (حاليًا: تحويل عرض سعر لفاتورة) ننضم لها بدل فتح معاملة جديدة،
+        //    والمستدعي هو من يثبّت/يتراجع. بدون معاملة محيطة يبقى السلوك
+        //    كما كان تمامًا: معاملة مستقلة تُثبَّت/تُراجَع هنا.
+        var joinedAmbientTransaction = _db.Database.CurrentTransaction != null;
+        using var tx = joinedAmbientTransaction
+            ? null
+            : await _db.Database.BeginTransactionAsync();
         try
         {
             CalculateTotals(dto);
@@ -882,6 +942,11 @@ public class InvoiceService : IInvoiceService
             {
                 var effectiveTier = NormalizePricingTier(item.PricingTier);
 
+                // ⭐ جدولة تسليم البند: الافتراضي «وارث» لتاريخ الفاتورة (لا يُخزَّن
+                // تاريخ)؛ لا يُحفظ تاريخ خاص إلا إن فصله المستخدم صراحة في النموذج
+                var (lineDate, lineDateCustom) = DeliveryScheduleResolver.Normalize(
+                    item.DeliveryDate, item.DeliveryDateIsCustom);
+
                 var detail = new TransactionDetail
                 {
                     TransactionId = saleTransaction.TransactionId,
@@ -890,6 +955,8 @@ public class InvoiceService : IInvoiceService
                     UnitPrice = item.UnitPrice,
                     TotalAmount = item.TotalAmount,
                     SelectedAlternativeId = item.SelectedAlternativeId,
+                    DeliveryDate = lineDate,
+                    DeliveryDateIsCustom = lineDateCustom,
                     PricingTier = effectiveTier,
                     Notes = string.IsNullOrEmpty(item.Notes)
                         ? $"[{effectiveTier}]"
@@ -1011,7 +1078,9 @@ public class InvoiceService : IInvoiceService
             saleTransaction.InvoiceStatus = ComputeStatus(saleTransaction.GrandTotal, saleTransaction.PaidAmount);
 
             await _db.SaveChangesAsync();
-            await tx.CommitAsync();
+            // ⭐ (دفعة 2) عند الانضمام لمعاملة محيطة لا نثبّت هنا — التثبيت للمستدعي
+            if (!joinedAmbientTransaction)
+                await tx!.CommitAsync();
 
             // ⭐ Audit للفواتير
             await _audit.LogAsync("Transactions", "Insert",
@@ -1041,7 +1110,9 @@ public class InvoiceService : IInvoiceService
         }
         catch (Exception ex)
         {
-            await tx.RollbackAsync();
+            // ⭐ (دفعة 2) عند الانضمام لمعاملة محيطة لا نراجع هنا — المستدعي يراجع الكل
+            if (!joinedAmbientTransaction && tx != null)
+                await tx.RollbackAsync();
             return (false, $"حدث خطأ: {ex.Message}", null, null);
         }
     }
@@ -1256,6 +1327,77 @@ public class InvoiceService : IInvoiceService
 }
 
     // ============================================================
+    //  ⭐ حارس التسليم الجزئي في التعديل الكامل: كميات كل بند سُلّمت فعليًا
+    //  من أحداث التسليم غير الملغاة. يُرجع رسالة رفض عربية واضحة عند أي
+    //  حذف/استبدال/تخفيض يمس بندًا له مسلَّم، وnull عند السلامة.
+    //  غياب جداول الأحداث (قبل تشغيل سكربتات SQL) = لا أحداث = لا حارس.
+    // ============================================================
+    private async Task<string?> CheckDeliveredLinesGuardAsync(
+        int transactionId,
+        List<TransactionDetail> oldDetails,
+        List<InvoiceItemDto> newItems,
+        List<TransactionDetail> removedDetails,
+        Func<int, string> productName)
+    {
+        const decimal qtyEpsilon = 0.0005m;   // نفس مسامحة خدمة التسليمات
+
+        Dictionary<int, decimal> deliveredByDetail;
+        try
+        {
+            deliveredByDetail = await (from i in _db.InvoiceDeliveryItems.AsNoTracking()
+                                       join dl in _db.InvoiceDeliveries.AsNoTracking()
+                                           on i.DeliveryId equals dl.DeliveryId
+                                       where dl.TransactionId == transactionId && !dl.IsVoided
+                                       group i by i.TransactionDetailId into g
+                                       select new { DetailId = g.Key, Total = g.Sum(x => x.Quantity) })
+                .ToDictionaryAsync(x => x.DetailId, x => x.Total);
+        }
+        catch (Exception ex) when (IsMissingDeliveryTablesError(ex))
+        {
+            return null;   // جداول التسليم الجزئي غير مهيأة بعد — لا أحداث أصلًا
+        }
+
+        if (deliveredByDetail.Count == 0) return null;
+
+        // حذف بند له مسلَّم
+        foreach (var d in removedDetails)
+        {
+            if (deliveredByDetail.TryGetValue(d.DetailId, out var q) && q > qtyEpsilon)
+                return $"لا يمكن حذف الصنف «{productName(d.ProductId)}» من الفاتورة — تم تسليم {q:0.###} منه فعليًا. " +
+                       "لتصحيح التسليم ألغِ التسليمة أولًا من شاشة متابعة التسليمات، ثم عدّل الفاتورة.";
+        }
+
+        // استبدال/تخفيض بند قائم له مسلَّم
+        var oldById = oldDetails.ToDictionary(d => d.DetailId);
+        foreach (var i in newItems)
+        {
+            if (i.DetailId == 0) continue;
+            if (!deliveredByDetail.TryGetValue(i.DetailId, out var delivered) || delivered <= qtyEpsilon)
+                continue;
+            if (!oldById.TryGetValue(i.DetailId, out var old)) continue;
+
+            if (i.ProductId != old.ProductId)
+                return $"لا يمكن استبدال الصنف «{productName(old.ProductId)}» في هذا السطر — تم تسليم {delivered:0.###} منه فعليًا. " +
+                       "لتصحيح التسليم ألغِ التسليمة أولًا من شاشة متابعة التسليمات، ثم عدّل الفاتورة.";
+
+            if (i.Quantity < delivered - qtyEpsilon)
+                return $"لا يمكن تقليل كمية الصنف «{productName(old.ProductId)}» إلى {i.Quantity:0.###} — تم تسليم {delivered:0.###} منه فعليًا، " +
+                       "فلا يمكن أن تقل كمية السطر عن الكمية المسلَّمة.";
+        }
+
+        return null;
+    }
+
+    /// <summary>خطأ «الجدول غير موجود» (SQL 208) — جداول أحداث التسليم قبل تشغيل سكربتاتها.</summary>
+    private static bool IsMissingDeliveryTablesError(Exception ex)
+    {
+        for (Exception? e = ex; e != null; e = e.InnerException)
+            if (e is Microsoft.Data.SqlClient.SqlException sql && sql.Number == 208)
+                return true;
+        return false;
+    }
+
+    // ============================================================
     //  ⭐ التعديل الكامل — Admin/AccountManager فقط
     //  الأصناف (كمية/سعر/استبدال صنف) + الخصم + المخزن + التواريخ + الدفع + التسليم
     //  مع تصحيح المخزون تلقائياً — فاتورة المرآة مستقلة تماماً (لا تُلمس)
@@ -1354,7 +1496,7 @@ public class InvoiceService : IInvoiceService
             transaction.Notes,
             transaction.OpportunityId,
             Reason = oldSnapshotReason,
-            Items = oldDetails.Select(d => new { d.DetailId, d.ProductId, ProductName = ProdName(d.ProductId), d.Quantity, d.UnitPrice, d.PricingTier, d.SelectedAlternativeId }).ToList()
+            Items = oldDetails.Select(d => new { d.DetailId, d.ProductId, ProductName = ProdName(d.ProductId), d.Quantity, d.UnitPrice, d.PricingTier, d.SelectedAlternativeId, d.DeliveryDate, d.DeliveryDateIsCustom }).ToList()
         };
 
         // ⭐ الأصناف المحذوفة: رصيدها يرجع في حلقات المخزون أعلاه والصفوف تُحذف أدناه بتسجيل تدقيق (للبيع والشراء)
@@ -1364,6 +1506,18 @@ public class InvoiceService : IInvoiceService
         var newItems = dto.Items
             .Where(i => i.DetailId == 0 || oldDetails.All(d => d.DetailId != i.DetailId))
             .ToList();
+
+        // ⭐ التسليم الجزئي — حارس البنود المسلَّمة فعليًا (فواتير البيع فقط):
+        // أحداث التسليم مرتبطة بصف البند نفسه (DetailId)، فلا يجوز أن يختفي
+        // البند أو تتغير هويته أو تنقص كميته عمّا خرج للعميل فعلًا — وإلا صارت
+        // سجلات التسليم كاذبة. التصحيح الوحيد المشروع: إلغاء التسليمة أولًا من
+        // شاشة متابعة التسليمات (بصلاحيتها وسببها)، ثم التعديل هنا.
+        if (transaction.TransactionType == TransactionTypes.Sale)
+        {
+            var guardFailure = await CheckDeliveredLinesGuardAsync(
+                dto.TransactionId, oldDetails, dto.Items, removedDetails, ProdName);
+            if (guardFailure != null) return (false, guardFailure);
+        }
         // ⭐ منتجات باسم العميل: تُصنع خصيصاً — لا رصيد مخزني لها ولا تُفحص ضده (نفس قاعدة الإنشاء)
         var allInvolvedProductIds = dto.Items.Select(i => i.ProductId)
             .Union(oldDetails.Select(d => d.ProductId)).Distinct().ToList();
@@ -1476,6 +1630,16 @@ public class InvoiceService : IInvoiceService
                 });
             }
 
+            // ⭐ جدولة تسليم البنود: تطبيع أزواج (التاريخ/مفصول؟) في الـDTO نفسه قبل
+            // الكتابة واللقطة — الوارث لا يخزّن تاريخًا فيتحرك مع تاريخ الفاتورة،
+            // والمفصول يحتفظ بتاريخه مهما تغيّر تاريخ الفاتورة في هذا التعديل نفسه
+            foreach (var i in dto.Items)
+            {
+                var (nd, nc) = DeliveryScheduleResolver.Normalize(i.DeliveryDate, i.DeliveryDateIsCustom);
+                i.DeliveryDate = nd;
+                i.DeliveryDateIsCustom = nc;
+            }
+
             // 🧾 تحديث تفاصيل الأصناف (استبدال مسموح + صفوف جديدة تُدرج)
             var detailMap = oldDetails.ToDictionary(d => d.DetailId);
             foreach (var i in dto.Items)
@@ -1492,6 +1656,8 @@ public class InvoiceService : IInvoiceService
                 d.UnitPrice = i.UnitPrice;
                 d.TotalAmount = i.TotalAmount;
                 d.SelectedAlternativeId = i.SelectedAlternativeId;
+                d.DeliveryDate = i.DeliveryDate;
+                d.DeliveryDateIsCustom = i.DeliveryDateIsCustom;
                 d.PricingTier = tier;
                 d.Notes = string.IsNullOrWhiteSpace(i.Notes) ? $"[{tier}]" : $"[{tier}] {i.Notes}";
             }
@@ -1575,7 +1741,7 @@ public class InvoiceService : IInvoiceService
                 transaction.Notes,
                 transaction.OpportunityId,
                 Reason = dto.FullEditReason,
-                Items = dto.Items.Select(i => new { i.DetailId, i.ProductId, ProductName = string.IsNullOrWhiteSpace(i.ProductName) ? ProdName(i.ProductId) : i.ProductName, i.Quantity, i.UnitPrice, i.PricingTier, i.SelectedAlternativeId }).ToList()
+                Items = dto.Items.Select(i => new { i.DetailId, i.ProductId, ProductName = string.IsNullOrWhiteSpace(i.ProductName) ? ProdName(i.ProductId) : i.ProductName, i.Quantity, i.UnitPrice, i.PricingTier, i.SelectedAlternativeId, i.DeliveryDate, i.DeliveryDateIsCustom }).ToList()
             };
 
             await _audit.LogAsync<object>("Transactions", "FullEdit",
@@ -1708,7 +1874,10 @@ public class InvoiceService : IInvoiceService
                 Quantity = i.Quantity,
                 UnitPrice = i.UnitPrice,
                 PricingTier = string.IsNullOrWhiteSpace(i.PricingTier) ? PricingTiers.Premium : i.PricingTier,
-                SelectedAlternativeId = i.SelectedAlternativeId
+                SelectedAlternativeId = i.SelectedAlternativeId,
+                // نسخ ما قبل الميزة بلا الحقلين → تُقرأ «وارثة» وهي حالتها وقتها
+                DeliveryDate = i.DeliveryDate,
+                DeliveryDateIsCustom = i.DeliveryDateIsCustom
             }).ToList(),
             FullEditReason = $"استرجاع نسخة من سجل التعديلات ({entry.ActionDate:yyyy/MM/dd HH:mm}) — {reason} — بواسطة {currentUserName}"
         };
@@ -1742,8 +1911,8 @@ public class InvoiceService : IInvoiceService
         await _audit.LogAsync("Transactions", "EditRequest",
             transactionId.ToString(), null, new { Reason = reason, RequestedBy = currentUserName }, currentUserName);
 
-        // ⭐ إشعار طلب التعديل يوجَّه لمدير الإنتاج (مالك تدفق التسليم) — يعدّل التاريخ من أوامر التشغيل
-        await SendInvoiceEditRequestToProductionAsync(transaction, currentUserName, reason);
+        // ⭐ إشعار طلب التعديل يوجَّه للإدارة (أدمن + مدير حسابات + مدير عام) لمراجعته من شاشة الفواتير
+        await SendInvoiceEditRequestNotificationAsync(transaction, currentUserName, reason);
 
         return (true, "تم إرسال طلب التعديل وتسجيله في النظام بنجاح.");
     }
@@ -1852,14 +2021,36 @@ public class InvoiceService : IInvoiceService
         }
     }
 
+    // ⛔ حارس صلاحية إلغاء الفواتير: مستخدم داخلي (مُصادَق وليس مستخدم بوابة B2B)
+    // ويحمل صلاحية frm_PartiesInvoices:Delete أو دور Admin — الإلغاء يركب صلاحية
+    // الحذف القائمة نفسها حسب إعداد المالك (لا توجد صلاحية إلغاء مستقلة) — يُقيَّم
+    // محليًا داخل الخدمة بنفس نمط CanViewInvoiceProfit، دون أي اعتماد على مساعدات خارجية.
+    private bool CanCancelInvoices()
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true) return false;
+        if (B2BPermissions.IsPortalUser(user)) return false;
+        return user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin)
+            || user.HasClaim("Permission", "frm_PartiesInvoices:Delete");
+    }
+
     public async Task<(bool Success, string Message)> CancelInvoiceAsync(
         int transactionId, string reason, string currentUserName)
     {
+        // ⛔ صلاحية الإلغاء (إعداد المالك): الإلغاء يركب صلاحية الحذف القائمة —
+        // frm_PartiesInvoices:Delete أو Admin، ولمستخدم داخلي فقط.
+        if (!CanCancelInvoices())
+            return (false, "غير مصرح لك بإلغاء الفواتير — يلزم صلاحية حذف الفواتير أو دور المدير.");
+
         var transaction = await _db.Transactions
             .FirstOrDefaultAsync(t => t.TransactionId == transactionId);
         if (transaction == null) return (false, "الفاتورة غير موجودة.");
         if (transaction.InvoiceStatus == InvoiceStatuses.Cancelled)
             return (false, "الفاتورة ملغية بالفعل.");
+
+        // ⛔ فاتورة مسددة بالكامل لا تُلغى (طلب المالك): المدفوع يغطي الإجمالي كله فلا متبقّي لها
+        if (transaction.GrandTotal > 0 && transaction.PaidAmount >= transaction.GrandTotal)
+            return (false, "لا يمكن إلغاء فاتورة مسددة بالكامل.");
 
         using var tx = await _db.Database.BeginTransactionAsync();
         try
@@ -2643,8 +2834,9 @@ public class InvoiceService : IInvoiceService
         }
     }
 
-    // ⭐ إشعار طلب تعديل الفاتورة يوجَّه لمدير الإنتاج (مالك تدفق التسليم) — يعدّل التاريخ من شاشة أوامر التشغيل
-    private async Task SendInvoiceEditRequestToProductionAsync(Transaction transaction, string requester, string reason)
+    // ⭐ إشعار طلب تعديل الفاتورة — كان يذهب لمدير الإنتاج، وبقرار المالك أصبح للإدارة:
+    // الأدمن + مدير الحسابات + المدير العام (المدير العام حلّ محل مدير الإنتاج)
+    private async Task SendInvoiceEditRequestNotificationAsync(Transaction transaction, string requester, string reason)
     {
         try
         {
@@ -2656,10 +2848,14 @@ public class InvoiceService : IInvoiceService
             var title = "🧾 طلب تعديل فاتورة";
             var message = $"طلب تعديل الفاتورة {transaction.ReferenceNumber} للعميل {partyName} بواسطة {requester}." +
                           $"\nالسبب: {reason}" +
-                          "\nبرجاء تعديل تاريخ التسليم من شاشة أوامر التشغيل (زر 📅 تعديل التاريخ).";
+                          "\nبرجاء مراجعة طلب التعديل من شاشة الفواتير.";
 
-            await _notify.NotifyRoleAsync(title, message, SystemRoles.ProductionManager, requester,
-                "production/job-orders", "Transactions", transaction.TransactionId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.Admin, requester,
+                "sales/invoices", "Transactions", transaction.TransactionId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, requester,
+                "sales/invoices", "Transactions", transaction.TransactionId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.GeneralManager, requester,
+                "sales/invoices", "Transactions", transaction.TransactionId);
         }
         catch (Exception ex)
         {

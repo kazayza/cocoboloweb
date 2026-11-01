@@ -12,6 +12,10 @@ public sealed record ZakiErrorCount(string ErrorCode, int Count);
 /// <summary>رد اتعلّم عليه 👎</summary>
 public sealed record ZakiBadAnswer(DateTime CreatedAt, string UserName, string? QuestionText, string? ErrorCode);
 
+/// <summary>تقييم 👎 واحد بالتفصيل: السؤال والمستخدم والتاريخ والأدوات اللي اتنادت في الرد (Phase 2)</summary>
+public sealed record ZakiNegativeFeedback(
+    DateTime CreatedAt, string UserName, string? QuestionText, IReadOnlyList<string> Tools);
+
 /// <summary>نظرة الجودة للأدمن</summary>
 public sealed record ZakiQualityOverview(
     int Days,
@@ -483,6 +487,86 @@ public class ZakiLogService
         {
             _logger.LogError(ex, "Zaki log: SaveFeedback failed");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// آخر N تقييم 👎 (الأحدث أولاً) مع السؤال والمستخدم والتاريخ وأدوات الرد —
+    /// بتتعرض في صفحة اختبار زكي عشان السلبيات تتحول لحالات Golden.
+    /// أي خطأ (جدول AssistantFeedback لسه ماتعملش مثلًا) بيرجع قايمة فاضية ومابيكسرش أي شاشة.
+    /// </summary>
+    public async Task<IReadOnlyList<ZakiNegativeFeedback>> GetRecentNegativeFeedbackAsync(
+        int take = 20, CancellationToken ct = default)
+    {
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            var conn = await OpenAsync(db, ct);
+
+            var rows = new List<(long MessageId, DateTime At, string User, string? Question)>();
+
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = $@"
+                    SELECT TOP ({Math.Clamp(take, 1, 50)}) f.MessageId, f.CreatedAt, f.UserName, m.QuestionText
+                    FROM dbo.AssistantFeedback AS f
+                    JOIN dbo.AssistantMessages AS m ON m.MessageId = f.MessageId
+                    WHERE f.IsUseful = 0
+                    ORDER BY f.CreatedAt DESC;";
+
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                while (await r.ReadAsync(ct))
+                {
+                    rows.Add((
+                        Convert.ToInt64(r.GetValue(0)),
+                        r.GetDateTime(1),
+                        r.IsDBNull(2) ? "—" : r.GetString(2),
+                        r.IsDBNull(3) ? null : r.GetString(3)));
+                }
+            }
+
+            if (rows.Count == 0)
+                return Array.Empty<ZakiNegativeFeedback>();
+
+            // أدوات كل رسالة من سجل استدعاءات الأدوات (المعرّفات أرقام من قاعدة البيانات نفسها)
+            var toolsByMessage = new Dictionary<long, List<string>>();
+            var ids = string.Join(",", rows.Select(x => x.MessageId));
+
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = $@"
+                    SELECT MessageId, ToolName
+                    FROM dbo.AssistantToolCalls
+                    WHERE MessageId IN ({ids});";
+
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                while (await r.ReadAsync(ct))
+                {
+                    var mid = Convert.ToInt64(r.GetValue(0));
+                    if (!toolsByMessage.TryGetValue(mid, out var list))
+                        toolsByMessage[mid] = list = new List<string>();
+
+                    var tool = r.IsDBNull(1) ? null : r.GetString(1);
+                    if (!string.IsNullOrWhiteSpace(tool) && !list.Contains(tool))
+                        list.Add(tool);
+                }
+            }
+
+            return rows
+                .Select(x => new ZakiNegativeFeedback(
+                    x.At,
+                    x.User,
+                    x.Question,
+                    toolsByMessage.TryGetValue(x.MessageId, out var tools)
+                        ? tools
+                        : (IReadOnlyList<string>)Array.Empty<string>()))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            // غالباً جدول AssistantFeedback لسه ماتعملش (شغّل zaki-feedback-table.sql)
+            _logger.LogError(ex, "Zaki log: recent negative feedback failed");
+            return Array.Empty<ZakiNegativeFeedback>();
         }
     }
 

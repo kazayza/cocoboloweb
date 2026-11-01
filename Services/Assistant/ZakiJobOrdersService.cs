@@ -3,6 +3,7 @@ using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
 using COCOBOLOERPNEW.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using static COCOBOLOERPNEW.Services.Assistant.ZakiInvoiceQueries;
 
 namespace COCOBOLOERPNEW.Services.Assistant;
@@ -13,6 +14,9 @@ namespace COCOBOLOERPNEW.Services.Assistant;
 /// - الفلترة بحالة التسليم (افتراضي: اللي لسه ماتسلمتش) وبموعد التسليم (DueDate).
 /// - الصلاحية: نفس شروط الشاشة (frm_JobOrders:View أو الأدوار).
 /// - المبالغ بتظهر بس لـ Admin / AccountManager / Account (زي الشاشة).
+/// - موعد التسليم بيخضع لنفس قاعدة إخفاء الشاشات (DeliveryPermissions.CanSeeRealDeliveryDate):
+///   غير المستثنين يشوفون التاريخ منقوصًا هامش الأيام، وتصنيفات «متأخرة/النهاردة/الأسبوع»
+///   بتتحسب على التاريخ المعروض لهم مش الحقيقي — زي شاشة أوامر التشغيل وشاشة التسليمات بالظبط.
 /// </summary>
 public class ZakiJobOrdersService
 {
@@ -20,13 +24,16 @@ public class ZakiJobOrdersService
 
     private readonly IDbContextFactory<db24804Context> _dbFactory;
     private readonly ILogger<ZakiJobOrdersService> _logger;
+    private readonly int _dateBufferDays;
 
     public ZakiJobOrdersService(
         IDbContextFactory<db24804Context> dbFactory,
-        ILogger<ZakiJobOrdersService> logger)
+        ILogger<ZakiJobOrdersService> logger,
+        IConfiguration config)
     {
         _dbFactory = dbFactory;
         _logger = logger;
+        _dateBufferDays = config.GetValue<int?>("Delivery:DateBufferDays") is int b && b >= 0 ? b : 4;
     }
 
     public static bool Handles(string toolName) => toolName == GetJobOrders;
@@ -76,7 +83,7 @@ public class ZakiJobOrdersService
 
     private sealed record ItemCount(int TransactionId, int Items, int Alternatives);
 
-    private static async Task<ZakiToolOutcome> JobOrdersAsync(
+    private async Task<ZakiToolOutcome> JobOrdersAsync(
         db24804Context db, ClaimsPrincipal user, System.Text.Json.JsonElement args, CancellationToken ct)
     {
         var typeRaw = ReadString(args, "type", "all");                   // sale / purchase / all
@@ -84,6 +91,12 @@ public class ZakiJobOrdersService
         var dueRaw = ReadString(args, "due", "all");                     // overdue / today / week / all
         var limit = ReadInt(args, "limit", 15, 1, 30);
         var today = DateTime.Today;
+
+        // ⭐ نفس قاعدة إخفاء تاريخ الاستحقاق في الشاشات (أوامر التشغيل + متابعة التسليمات):
+        // المستثنون (DeliveryPermissions.CanSeeRealDeliveryDate) يرون التاريخ الحقيقي،
+        // ومن عداهم يُزاح هامش الأيام: عتبات الفلاتر بتتحرك +الهامش، والتاريخ المعروض = الحقيقي − الهامش.
+        var seeReal = DeliveryPermissions.CanSeeRealDeliveryDate(user);
+        var shift = seeReal ? 0 : _dateBufferDays;
 
         // نفس قاعدة الشاشة: مش ملغاة، والشراء المرآة (MirrorOf:) مستبعد
         var query = db.Transactions.AsNoTracking().Where(t =>
@@ -117,11 +130,16 @@ public class ZakiJobOrdersService
             _ => query.Where(t => t.IsDelivered != true)
         };
 
+        // عتبات «الموعد» على التاريخ المعروض للمستخدم الحالي: للمخفيين تُزاح +الهامش
+        // (معروض < النهاردة ⟺ حقيقي < النهاردة + الهامش) — نفس منطق فلاتر الشاشة.
+        var overdueThreshold = today.AddDays(shift);
+        var windowFrom = today.AddDays(shift);
+
         var (dueLabel, dueFilter) = dueRaw switch
         {
-            "overdue" => ("المتأخرة في التسليم", query.Where(t => t.DueDate.HasValue && t.DueDate.Value < today)),
-            "today" => ("مواعيدها النهاردة", query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= today && t.DueDate.Value < today.AddDays(1))),
-            "week" => ("مواعيدها خلال 7 أيام", query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= today && t.DueDate.Value < today.AddDays(7))),
+            "overdue" => ("المتأخرة في التسليم", query.Where(t => t.DueDate.HasValue && t.DueDate.Value < overdueThreshold)),
+            "today" => ("مواعيدها النهاردة", query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= windowFrom && t.DueDate.Value < windowFrom.AddDays(1))),
+            "week" => ("مواعيدها خلال 7 أيام", query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= windowFrom && t.DueDate.Value < windowFrom.AddDays(7))),
             _ => ("كل المواعيد", query)
         };
         query = dueFilter;
@@ -131,7 +149,7 @@ public class ZakiJobOrdersService
             return Message("مفيش أوامر تشغيل مطابقة للفلتر ده.");
 
         var overdueCount = await query
-            .Where(t => t.DueDate.HasValue && t.DueDate.Value < today)
+            .Where(t => t.DueDate.HasValue && t.DueDate.Value < overdueThreshold)
             .CountAsync(ct);
 
         var withAlternatives = await query
@@ -170,14 +188,16 @@ public class ZakiJobOrdersService
         var rows = rowsRaw.Select(r =>
         {
             counts.TryGetValue(r.TransactionId, out var c);
-            var overdue = !r.Delivered && r.DueDate.HasValue && r.DueDate.Value < today;
+            // التاريخ المعروض وحالة التأخير على التاريخ المعروض — مش الحقيقي (نفس قاعدة الشاشات)
+            var shownDue = DisplayDueDate(r.DueDate, r.TransactionDate, seeReal);
+            var overdue = !r.Delivered && shownDue.HasValue && shownDue.Value.Date < today;
 
             var cells = new List<string>
             {
                 string.IsNullOrWhiteSpace(r.ReferenceNumber) ? $"#{r.TransactionId}" : r.ReferenceNumber!,
                 r.TransactionType == TransactionTypes.Purchase ? "شراء" : "بيع",
                 Date(r.TransactionDate),
-                Date(r.DueDate),
+                Date(shownDue),
                 NameOf(r.PartyId, partyNames),
                 r.EmpId.HasValue ? NameOf(r.EmpId.Value, empNames) : "—",
                 (c?.Items ?? 0).ToString(Culture),
@@ -198,10 +218,23 @@ public class ZakiJobOrdersService
             ["أوامر التشغيل"] = ToObjects(headers, rows),
             ["ملاحظة"] = total > rows.Count
                 ? $"الجدول بيعرض أول {rows.Count} من {total}."
-                : "الجدول بيعرض كل النتايج."
+                : "الجدول بيعرض كل النتايج.",
+            ["المصدر"] = "[شاشة أوامر التشغيل](/production/job-orders)"
         });
 
         return new ZakiToolOutcome(json, new ZakiTable("أوامر التشغيل — " + dueLabel, headers, rows));
+    }
+
+    /// <summary>
+    /// التاريخ المعروض للمستخدم: الحقيقي للمستثنين، ومنقوصًا هامش الأيام لغيرهم
+    /// (ولا يسبق تاريخ الفاتورة أبدًا) — نفس MaskValues/GetDisplayDueDate في الشاشات.
+    /// الإخفاء للعرض والتصنيف فقط؛ لا يُكتب أي تاريخ مخفي في قاعدة البيانات.
+    /// </summary>
+    private DateTime? DisplayDueDate(DateTime? realDue, DateTime transactionDate, bool seeReal)
+    {
+        if (seeReal || realDue == null) return realDue;
+        var shown = realDue.Value.AddDays(-_dateBufferDays);
+        return shown < transactionDate ? transactionDate : shown;
     }
 
     private static AiToolDefinition Definition() => new(

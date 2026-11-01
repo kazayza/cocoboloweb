@@ -4,12 +4,15 @@
 
 @using COCOBOLOERPNEW.DTOs
 @using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Configuration
 
 @inject db24804Context Db
 @inject AuthenticationStateProvider AuthProvider
+@inject IConfiguration Config
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 
@@ -43,7 +46,7 @@ else
                     <h3>بيانات العميل</h3>
                     <div class="party-line"><strong>الاسم:</strong> @_invoice.PartyName</div>
                     <div class="party-line"><strong>الموظف:</strong> @(_invoice.EmpName ?? "-")</div>
-                    <div class="party-line"><strong>تاريخ التنفيذ المتوقع:</strong> @(_invoice.DueDate?.ToString("yyyy/MM/dd") ?? "-")</div>
+                    <div class="party-line"><strong>تاريخ التنفيذ المتوقع:</strong> @(_displayDueDate?.ToString("yyyy/MM/dd") ?? "-")</div>
                 </div>
 
                 <div class="party-box">
@@ -168,6 +171,9 @@ else
 
     private bool _isLoading = true;
     private bool _canView;
+    private bool _canSeeRealDate = true;
+    private int _dateBufferDays = 4;
+    private DateTime? _displayDueDate;
     private InvoiceFormDto? _invoice;
     private List<InvoiceJobOrderPrintItemVm> _items = new();
     private int _maxPeriodDays;
@@ -186,6 +192,10 @@ else
                    || user.IsInRole(SystemRoles.FactoryManager)
                    || user.IsInRole("factory");
 
+        // ⭐ إخفاء تاريخ الاستحقاق لغير المستثنين — نفس قاعدة شاشات التسليمات وأوامر التشغيل (عرض فقط)
+        _canSeeRealDate = DeliveryPermissions.CanSeeRealDeliveryDate(user);
+        _dateBufferDays = Config.GetValue<int?>("Delivery:DateBufferDays") is int buffer && buffer >= 0 ? buffer : 4;
+
         if (!_canView)
         {
             _isLoading = false;
@@ -194,6 +204,16 @@ else
 
         await LoadAsync();
         _isLoading = false;
+    }
+
+    /// <summary>
+    /// التاريخ المعروض لغير المستثنين: الحقيقي منقوصًا هامش الأيام، ولا يسبق تاريخ الفاتورة أبدًا (عرض فقط — لا يُكتب في قاعدة البيانات).
+    /// </summary>
+    private DateTime? GetDisplayDueDate(DateTime? realDueDate, DateTime transactionDate)
+    {
+        if (_canSeeRealDate || realDueDate == null) return realDueDate;
+        var shown = realDueDate.Value.AddDays(-_dateBufferDays);
+        return shown < transactionDate ? transactionDate : shown;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -224,6 +244,8 @@ else
                           }).FirstOrDefaultAsync();
 
         if (_invoice == null) return;
+
+        _displayDueDate = GetDisplayDueDate(_invoice.DueDate, _invoice.TransactionDate);
 
         var items = await (from d in Db.TransactionDetails.AsNoTracking()
                            join pr in Db.Products.AsNoTracking() on d.ProductId equals pr.ProductId

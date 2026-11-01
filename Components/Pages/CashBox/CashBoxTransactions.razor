@@ -370,6 +370,35 @@ else
                 <p>لم يتم العثور على حركات بالفلاتر الحالية</p>
             </div>
         }
+
+        <!-- شريط إقفال المدة (حسب الفلتر الحالي) -->
+        <div class="closing-wrap">
+            <div class="closing-strip">
+                <div class="cs-item">
+                    <span class="cs-label">رصيد أول المدة</span>
+                    <span class="cs-value">@FormatMoney(_periodStartBalance) <small>ج.م</small></span>
+                </div>
+                <span class="cs-op">+</span>
+                <div class="cs-item">
+                    <span class="cs-label">وارد المدة</span>
+                    <span class="cs-value cs-in">+@FormatMoney(_totalIn) <small>ج.م</small></span>
+                </div>
+                <span class="cs-op">-</span>
+                <div class="cs-item">
+                    <span class="cs-label">صادر المدة</span>
+                    <span class="cs-value cs-out">-@FormatMoney(_totalOut) <small>ج.م</small></span>
+                </div>
+                <span class="cs-op">=</span>
+                <div class="cs-item cs-end">
+                    <span class="cs-label">رصيد آخر المدة</span>
+                    <span class="cs-value">@FormatMoney(PeriodEndBalance) <small>ج.م</small></span>
+                </div>
+            </div>
+            @if (ShowPeriodEndNote)
+            {
+                <p class="cs-note">رصيد آخر المدة لا يشمل الحركات اللاحقة لنهاية المدة، لذلك قد يختلف عن الرصيد الفعلي الحالي.</p>
+            }
+        </div>
     </div>
 
     <!-- Pagination -->
@@ -560,6 +589,21 @@ else
     .empty-state h3 { font-size:1.15rem; font-weight:700; margin:0 0 0.5rem; color:var(--mud-palette-text-primary); }
     .empty-state p { color:var(--mud-palette-text-secondary); margin:0; font-size:0.9rem; }
 
+    /* Period closing strip */
+    .closing-wrap { border-top:3px solid var(--gold); background:linear-gradient(90deg,var(--gold-bg),rgba(212,168,83,0.03)); }
+    .closing-strip { display:flex; align-items:center; gap:1rem; flex-wrap:wrap; padding:1.1rem 1.5rem; }
+    .closing-wrap:has(.cs-note) .closing-strip { padding-bottom:0.35rem; }
+    .cs-item { display:flex; flex-direction:column; gap:0.15rem; }
+    .cs-label { font-size:0.72rem; font-weight:700; color:var(--mud-palette-text-secondary); }
+    .cs-value { font-size:1.15rem; font-weight:900; color:var(--mud-palette-text-primary); line-height:1.2; }
+    .cs-value small { font-size:0.68rem; font-weight:600; color:var(--mud-palette-text-disabled); }
+    .cs-in { color:#059669; }
+    .cs-out { color:#dc2626; }
+    .cs-op { font-size:1.2rem; font-weight:900; color:var(--mud-palette-text-secondary); }
+    .cs-end { background:var(--mud-palette-surface); border:1px solid rgba(212,168,83,0.45); border-radius:12px; padding:0.5rem 0.9rem; }
+    .cs-end .cs-value { color:var(--gold-dark); }
+    .cs-note { margin:0; padding:0 1.5rem 1rem; font-size:0.75rem; color:var(--mud-palette-text-secondary); }
+
     /* Pagination */
     .pagination-bar { display:flex; align-items:center; justify-content:center; gap:1.5rem; margin-bottom:1.5rem; flex-wrap:wrap; }
     .pag-info { font-size:0.82rem; color:var(--mud-palette-text-secondary); }
@@ -595,6 +639,10 @@ else
     private List<CashBoxListDto> _boxes = new();
     private DateTime? _dateFrom, _dateTo;
     private decimal _totalIn = 0, _totalOut = 0;
+    private decimal _periodStartBalance = 0;
+    private decimal PeriodEndBalance => _periodStartBalance + _totalIn - _totalOut;
+    private bool ShowPeriodEndNote =>
+        _filter.DateTo.HasValue && _filter.DateTo.Value.Date < DateTime.Today;
     private decimal _actualBalance = 0;
     private string _actualBalanceLabel = "الرصيد الفعلي";
 
@@ -662,6 +710,7 @@ else
             _totalOut = totals.TotalOut;
             _boxes = boxes;
             UpdateActualBalanceCard();
+            await UpdatePeriodStripAsync(filterSnapshot);
         }
         catch (ObjectDisposedException)
         {
@@ -858,6 +907,41 @@ else
         var boxesToSum = activeBoxes.Any() ? activeBoxes : _boxes;
         _actualBalance = boxesToSum.Sum(b => b.CurrentBalance);
         _actualBalanceLabel = "إجمالي الأرصدة الفعلية";
+    }
+
+    // شريط إقفال المدة: رصيد أول المدة = مجموع الأرصدة الافتتاحية لنطاق الخزينة
+    // + صافي كل الحركات السابقة لبداية المدة. النطاق هيكلي فقط: الخزينة المختارة
+    // في الفلتر، أو كل الخزن النشطة (نفس نطاق بطاقة الرصيد الفعلي). لا يتأثر
+    // بفلاتر قائمة الحركات (نوع الحركة/المصدر/نص البحث/المبلغ) لأنها فلاتر عرض
+    // للقائمة لا تعريف لمدة مالية. دون تاريخ بداية، أول المدة هو الافتتاحي نفسه.
+    private async Task UpdatePeriodStripAsync(CashBoxTransactionFilterDto filter)
+    {
+        List<CashBoxListDto> scope;
+        if (filter.CashBoxId.HasValue)
+        {
+            var selected = _boxes.FirstOrDefault(b => b.CashBoxId == filter.CashBoxId.Value);
+            scope = selected is null ? new List<CashBoxListDto>() : new List<CashBoxListDto> { selected };
+        }
+        else
+        {
+            var active = _boxes.Where(b => b.IsActive).ToList();
+            scope = active.Any() ? active : _boxes;
+        }
+
+        _periodStartBalance = scope.Sum(b => b.OpeningBalance);
+        if (!filter.DateFrom.HasValue)
+            return;
+
+        foreach (var box in scope)
+        {
+            var beforeFilter = new CashBoxTransactionFilterDto
+            {
+                CashBoxId = box.CashBoxId,
+                DateTo = filter.DateFrom.Value.AddDays(-1)
+            };
+            var before = await CashBoxService.GetTransactionsTotalsAsync(beforeFilter);
+            _periodStartBalance += before.TotalIn - before.TotalOut;
+        }
     }
 
     private bool _isExporting = false;

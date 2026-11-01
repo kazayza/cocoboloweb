@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services;
@@ -8,11 +10,30 @@ public class CompanyInfoService : ICompanyInfoService
 {
     private readonly db24804Context _db;
     private readonly IAuditService _audit;
+    private readonly IHttpContextAccessor _httpContext;
 
-    public CompanyInfoService(db24804Context db, IAuditService audit)
+    public CompanyInfoService(db24804Context db, IAuditService audit, IHttpContextAccessor httpContext)
     {
         _db = db;
         _audit = audit;
+        _httpContext = httpContext;
+    }
+
+    private ClaimsPrincipal? CurrentUser => _httpContext.HttpContext?.User;
+
+    /// <summary>
+    /// F-02 (دفاع في العمق): كتابات بيانات الشركة/الفروع مسموحة فقط لمستخدم داخلي
+    /// Admin أو حامل صلاحية frm_CompanyInfo حسب نوع العملية (Add/Edit/Delete) —
+    /// نفس قواعد سياسات الـ endpoints وبوابات واجهة الصفحة نفسها، حتى لو استُدعيت
+    /// الخدمة مباشرة من أي صفحة. القراءات غير محروسة: GetCompanyInfoAsync يُستخدم
+    /// كترويسة في PayslipDialog لعموم مستخدمي الرواتب الداخليين، وتقييدها قد يكسر
+    /// مسارًا شرعيًا أوسع من قاعدة الكتابة.
+    /// الرفض بـ UnauthorizedAccessException يلتقطه تدفق أخطاء الصفحة الحالي (Snackbar).
+    /// </summary>
+    private void EnsureCompanyWrite(string action)
+    {
+        if (!AppAuthorization.CanWriteCompany(CurrentUser, action))
+            throw new UnauthorizedAccessException("غير مصرح لك بتعديل بيانات الشركة.");
     }
 
     /// <summary>
@@ -50,6 +71,7 @@ public class CompanyInfoService : ICompanyInfoService
     /// </summary>
     public async Task<CompanyInfoDto> UpdateCompanyInfoAsync(CompanyInfoUpdateDto dto)
     {
+        EnsureCompanyWrite("Edit");
         var company = await _db.CompanyInfos.FirstOrDefaultAsync(c => c.CompanyId == dto.CompanyId);
         if (company is null)
             throw new KeyNotFoundException("لم يتم العثور على بيانات الشركة");
@@ -117,6 +139,7 @@ public class CompanyInfoService : ICompanyInfoService
     /// </summary>
     public async Task<string> UploadLogoAsync(int companyId, string base64Image)
     {
+        EnsureCompanyWrite("Edit");
         var company = await _db.CompanyInfos.FirstOrDefaultAsync(c => c.CompanyId == companyId);
         if (company is null)
             throw new KeyNotFoundException("لم يتم العثور على بيانات الشركة");
@@ -158,6 +181,7 @@ public class CompanyInfoService : ICompanyInfoService
     /// </summary>
     public async Task<CompanyLocationDto> AddLocationAsync(CompanyLocationFormDto dto)
     {
+        EnsureCompanyWrite("Add");
         var location = new CompanyLocation
         {
             LocationName = dto.LocationName,
@@ -198,6 +222,7 @@ public class CompanyInfoService : ICompanyInfoService
     /// </summary>
     public async Task<CompanyLocationDto> UpdateLocationAsync(CompanyLocationFormDto dto)
     {
+        EnsureCompanyWrite("Edit");
         if (!dto.LocationId.HasValue)
             throw new ArgumentException("معرف الفرع مطلوب للتعديل");
 
@@ -249,6 +274,7 @@ public class CompanyInfoService : ICompanyInfoService
     /// </summary>
     public async Task<bool> DeleteLocationAsync(int locationId)
     {
+        EnsureCompanyWrite("Delete");
         var location = await _db.CompanyLocations.FirstOrDefaultAsync(l => l.LocationId == locationId);
         if (location is null) return false;
 

@@ -9,6 +9,7 @@ public interface IQuotationService
     Task<QuotationFormDto?> GetQuotationForEditAsync(int quotationId);
     Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId);
     Task<QuotationPrintDto?> GetQuotationForPrintAsync(int quotationId);
+    Task<QuotationPrintDto?> GetQuotationForPrintPublicAsync(int quotationId);
     Task<QuotationStatsDto> GetStatsAsync(DateTime? from = null, DateTime? to = null);
     Task<QuotationStatsDto> GetStatsAsync(QuotationFilterDto filter);
     Task<string> GenerateNextQuotationNumberAsync();
@@ -22,7 +23,8 @@ public interface IQuotationService
         QuotationFormDto dto, string currentUserName);
 
    Task<(bool Success, string Message)> ChangeStatusAsync(
-    int quotationId, string newStatus, string currentUserName, bool isPublic = false);
+    int quotationId, string newStatus, string currentUserName, bool isPublic = false,
+    string? rejectionReason = null);
 
     Task<(bool Success, string Message)> DeleteQuotationAsync(
         int quotationId, string currentUserName);

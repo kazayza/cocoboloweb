@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using ClosedXML.Excel;
 
@@ -9,12 +11,22 @@ public class ExpenseService : IExpenseService
 {
     private readonly db24804Context _db;
     private readonly IAuditService _audit;
+    private readonly IHttpContextAccessor _http;
 
-    public ExpenseService(db24804Context db, IAuditService audit)
+    public ExpenseService(db24804Context db, IAuditService audit, IHttpContextAccessor http)
     {
         _db = db;
         _audit = audit;
+        _http = http;
     }
+
+    // ⛔ F-09 (دفاع في العمق): كتابات المصروفات — داخلي + Admin أو صلاحية الوحدة
+    // حسب نوع العملية، مطابقة لبوابات الصفحات نفسها:
+    // النموذج frm_Expenses:Add/Edit، حذف القائمة frm_ExpensesList:Delete،
+    // المجموعات frm_ExpensesGroup:Add/Edit/Delete. القراءات غير محروسة.
+    private ClaimsPrincipal? CurrentUser => _http.HttpContext?.User;
+    private bool CanMutateExpenses(string claim) => AppAuthorization.HasClaim(CurrentUser, claim);
+    private const string ExpenseDeniedMessage = "غير مصرح لك بتنفيذ هذا الإجراء على المصروفات.";
 
     private IQueryable<Expense> BuildRecognizedExpensesQuery(int? branchId = null)
     {
@@ -569,6 +581,8 @@ public class ExpenseService : IExpenseService
     public async Task<(bool Success, string Message, int? Id)> SaveExpenseAsync(
         ExpenseFormDto dto, string userName)
     {
+        if (!CanMutateExpenses(dto.ExpenseId == 0 ? "frm_Expenses:Add" : "frm_Expenses:Edit"))
+            return (false, ExpenseDeniedMessage, null);
         if (string.IsNullOrWhiteSpace(dto.ExpenseName))
             return (false, "اسم المصروف مطلوب", null);
         if (!dto.BranchId.HasValue) return (false, "الفرع مطلوب", null);
@@ -824,6 +838,8 @@ public class ExpenseService : IExpenseService
 
     public async Task<(bool Success, string Message)> DeleteExpenseAsync(int id, string userName)
     {
+        if (!CanMutateExpenses("frm_ExpensesList:Delete"))
+            return (false, ExpenseDeniedMessage);
         var expense = await _db.Expenses.FindAsync(id);
         if (expense == null) return (false, "المصروف غير موجود");
 
@@ -951,6 +967,8 @@ public class ExpenseService : IExpenseService
     public async Task<(bool Success, string Message, int? Id)> SaveExpenseGroupAsync(
         ExpenseGroupFormDto dto, string userName)
     {
+        if (!CanMutateExpenses(dto.ExpenseGroupId == 0 ? "frm_ExpensesGroup:Add" : "frm_ExpensesGroup:Edit"))
+            return (false, ExpenseDeniedMessage, null);
         if (string.IsNullOrWhiteSpace(dto.ExpenseGroupName))
             return (false, "اسم المجموعة مطلوب", null);
 
@@ -1016,6 +1034,8 @@ public class ExpenseService : IExpenseService
 
     public async Task<(bool Success, string Message)> DeleteExpenseGroupAsync(int id, string userName)
     {
+        if (!CanMutateExpenses("frm_ExpensesGroup:Delete"))
+            return (false, ExpenseDeniedMessage);
         var group = await _db.ExpenseGroups.FindAsync(id);
         if (group == null) return (false, "المجموعة غير موجودة");
 

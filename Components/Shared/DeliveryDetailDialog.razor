@@ -97,7 +97,7 @@
                     {
                         <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">
                             <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
-                                <span>🚫 لا يمكن التسليم — يوجد مبالغ متبقية على هذه الفاتورة. برجاء مراجعة مدير الحسابات أو مسئول الحسابات أو المدير.</span>
+                                <span>🚫 التسليم مشروط بالتغطية: لا تُسلَّم دفعة إلا إذا غطّى المدفوع قيمة ما سُلّم + هذه الدفعة — وإلا يلزم إذن. برجاء مراجعة مدير الحسابات أو مسئول الحسابات أو المدير.</span>
                                 @if (_canConfirm)
                                 {
                                     <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
@@ -145,7 +145,7 @@
                             <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Start">
                                 <MudIcon Icon="@Icons.Material.Filled.Badge" Color="Color.Secondary" />
                                 <div style="flex:1;">
-                                    <MudText Typo="Typo.subtitle2" Color="Color.Secondary">مندوب المبيعات</MudText>
+                                    <MudText Typo="Typo.subtitle2" Color="Color.Secondary"> مسؤول المبيعات</MudText>
                                     <MudText Typo="Typo.body1"><b>@(_detail.SalesEmployeeName ?? "—")</b></MudText>
                                     @if (_detail.DaysRemaining.HasValue && _detail.DeliveryStatus != "تم التسليم")
                                     {
@@ -170,6 +170,7 @@
                     <thead>
                         <tr>
                             <th>المنتج</th>
+                            <th>موعد التسليم</th>
                             <th style="text-align:end;">الكمية</th>
                             @if (_canSeeAmounts)
                             {
@@ -181,12 +182,28 @@
                     <tbody>
                         @if (_detail.Products.Count == 0)
                         {
-                            <tr><td colspan="@(_canSeeAmounts ? 4 : 2)" style="text-align:center; color:#999;">لا توجد منتجات</td></tr>
+                            <tr><td colspan="@(_canSeeAmounts ? 5 : 3)" style="text-align:center; color:#999;">لا توجد منتجات</td></tr>
                         }
                         @foreach (var p in _detail.Products)
                         {
                             <tr>
                                 <td>@p.ProductName</td>
+                                <td>
+                                    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+                                        <DeliveryDateChip Date="@p.ScheduledDate"
+                                                          IsOverdue="@p.IsScheduleOverdue"
+                                                          IsDelivered="@(p.RemainingQty <= DeliveryScheduleResolver.QtyEpsilon)"
+                                                          Size="Size.Small" />
+                                        @if (p.ScheduledDateIsCustom)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">موعد خاص</MudChip>
+                                        }
+                                        @if (p.DeliveredLate)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">سُلّم متأخرًا</MudChip>
+                                        }
+                                    </MudStack>
+                                </td>
                                 <td style="text-align:end;">@p.Quantity.ToString("N2") @p.UnitName</td>
                                 @if (_canSeeAmounts)
                                 {
@@ -243,7 +260,6 @@
                                    Adornment="Adornment.Start">
                             <MudSelectItem T="string" Value='"جارى"'>جارى</MudSelectItem>
                             <MudSelectItem T="string" Value='"متأخر"'>متأخر</MudSelectItem>
-                            <MudSelectItem T="string" Value='"تم التسليم"'>تم التسليم</MudSelectItem>
                             <MudSelectItem T="string" Value='"مرتجع"'>مرتجع</MudSelectItem>
                         </MudSelect>
                     </MudItem>
@@ -259,8 +275,6 @@
                                          Clearable="true"
                                          CoerceText="true"
                                          CoerceValue="true"
-                                         Required="@(_model.Status == "تم التسليم")"
-                                         RequiredError="المندوب مطلوب عند التسليم"
                                          AdornmentIcon="@Icons.Material.Filled.DeliveryDining"
                                          Adornment="Adornment.Start">
                             <ItemTemplate Context="emp">
@@ -271,17 +285,6 @@
                             </ItemTemplate>
                         </MudAutocomplete>
                     </MudItem>
-
-                    @if (_model.Status == "تم التسليم")
-                    {
-                        <MudItem xs="12" md="6">
-                            <MudDatePicker @bind-Date="_model.DeliveredAt"
-                                           Label="تاريخ التسليم"
-                                           Variant="Variant.Outlined"
-                                           Margin="Margin.Dense"
-                                           MaxDate="DateTime.Today" />
-                        </MudItem>
-                    }
 
                     <MudItem xs="12">
                         <MudTextField T="string"
@@ -301,6 +304,16 @@
     <DialogActions>
         @if (_detail is not null)
         {
+            @if (_canConfirm && _detail.DeliveryStatus != "تم التسليم" && _detail.DeliveryStatus != "مرتجع")
+            {
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Success"
+                           StartIcon="@Icons.Material.Filled.LocalShipping"
+                           OnClick="OpenRecordDeliveryAsync"
+                           Disabled="_saving">
+                    تسجيل تسليمة
+                </MudButton>
+            }
             <MudButton OnClick="ResetForm"
                        StartIcon="@Icons.Material.Filled.Restore"
                        Disabled="_saving">
@@ -449,7 +462,9 @@
 
         _model = new UpdateModel
         {
-            Status        = _detail.DeliveryStatus,
+            // الحالات غير الكمية فقط — «جزئي/تم التسليم» تُدار من حوار تسجيل التسليمة
+            Status        = _detail.DeliveryStatus is "جارى" or "متأخر" or "مرتجع"
+                              ? _detail.DeliveryStatus : "جارى",
             Notes         = _detail.DeliveredNotes ?? "",
             DeliveredAt   = _detail.DeliveredAt ?? DateTime.Today
         };
@@ -481,27 +496,6 @@
         await _form.ValidateAsync();
         if (!_form.IsValid) return;
 
-        // 🔒 قاعدة المبالغ المتبقية (نفس قفل الخدمة)
-        if (_model.Status == "تم التسليم" && _remaining > 0 && !_canOverride && _permState?.GrantedBy == null)
-        {
-            Snackbar.Add("لا يمكن التسليم — يوجد مبالغ متبقية على هذه الفاتورة. برجاء مراجعة مدير الحسابات أو مسئول الحسابات أو المدير.", Severity.Warning);
-            return;
-        }
-        if (_model.Status == "تم التسليم" && _remaining > 0 && _canOverride && _permState?.GrantedBy == null)
-        {
-            var ap = new DialogParameters<MudMessageBox>
-            {
-                { x => x.Title,      "موافقة على التسليم" },
-                { x => x.Message,    $"يوجد مبلغ متبقٍ {_remaining:N2} ج على هذه الفاتورة. هل توافق على التسليم؟" },
-                { x => x.YesText,    "نعم، موافقة والتسليم" },
-                { x => x.CancelText, "إلغاء" }
-            };
-            var ad = await DialogService.ShowAsync<MudMessageBox>("موافقة على التسليم", ap,
-                new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
-            var ar = await ad.Result;
-            if (ar is null || ar.Canceled) return;
-        }
-
         _saving = true;
         try
         {
@@ -513,7 +507,7 @@
                 Status               = _model.Status,
                 DeliveryEmployeeId   = _selectedEmployee?.EmployeeId,
                 DeliveryEmployeeName = _selectedEmployee?.FullName,
-                DeliveredAt          = _model.Status == "تم التسليم" ? (_model.DeliveredAt ?? DateTime.Now) : null,
+                DeliveredAt          = null,
                 Notes                = string.IsNullOrWhiteSpace(_model.Notes) ? null : _model.Notes.Trim(),
                 UserName             = userName
             };
@@ -541,6 +535,27 @@
         }
     }
 
+    private async Task OpenRecordDeliveryAsync()
+    {
+        var parameters = new DialogParameters<RecordDeliveryDialog>
+        {
+            { x => x.TransactionId, TransactionId }
+        };
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseOnEscapeKey = true,
+            BackdropClick = false
+        };
+        var dialog = await DialogService.ShowAsync<RecordDeliveryDialog>("تسجيل تسليمة", parameters, options);
+        var result = await dialog.Result;
+
+        // سُجّلت تسليمة من الحوار الداخلي → أغلق هذا الحوار بنجاح ليتحدث تحديث القائمة
+        if (result is not null && !result.Canceled && result.Data is true)
+            MudDialog.Close(DialogResult.Ok(true));
+    }
+
     private void Cancel() => MudDialog.Cancel();
 
     private async Task<string> GetCurrentUserNameAsync()
@@ -560,6 +575,7 @@
     private static Color GetChipColor(string? s) => s switch
     {
         "جارى"        => Color.Warning,
+        "جزئي"        => Color.Info,
         "متأخر"       => Color.Error,
         "تم التسليم"  => Color.Success,
         "مرتجع"       => Color.Dark,
@@ -569,6 +585,7 @@
     private static string GetStatusIcon(string? s) => s switch
     {
         "جارى"        => Icons.Material.Filled.Pending,
+        "جزئي"        => Icons.Material.Filled.PieChart,
         "متأخر"       => Icons.Material.Filled.Warning,
         "تم التسليم"  => Icons.Material.Filled.CheckCircle,
         "مرتجع"       => Icons.Material.Filled.AssignmentReturn,

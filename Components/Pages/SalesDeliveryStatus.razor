@@ -78,7 +78,7 @@
     <MudGrid Spacing="2" Class="mb-4">
         @foreach (var card in BuildCards())
         {
-            <MudItem xs="6" md="3">
+            <MudItem xs="6" sm="4" md="2">
                 <MudPaper Elevation="@(card.IsActive ? 6 : 1)"
                           Class="@($"pa-4 rounded-lg cursor-pointer status-card {(card.IsActive ? "status-card--active" : "")}")"
                           Style="@($"background:var(--mud-palette-surface); border-right:4px solid var(--mud-palette-{card.ColorKey}); transition:all .2s;")"
@@ -181,13 +181,23 @@
                      Color="@(_debtFilter == "all" ? Color.Primary : Color.Default)"
                      Variant="@(_debtFilter == "all" ? Variant.Filled : Variant.Outlined)"
                      OnClick="@(() => SetDebtFilter("all"))">الكل</MudChip>
+
+            <span class="df-chips-label df-chips-label--gap"><MudIcon Icon="@Icons.Material.Filled.EventRepeat" Size="Size.Small" Style="vertical-align:-2px;" /> المواعيد:</span>
+            <MudChip T="string" Size="Size.Small"
+                     Color="@(!_multiOnly ? Color.Primary : Color.Default)"
+                     Variant="@(!_multiOnly ? Variant.Filled : Variant.Outlined)"
+                     OnClick="@(() => SetMultiOnly(false))">الكل</MudChip>
+            <MudChip T="string" Size="Size.Small"
+                     Color="@(_multiOnly ? Color.Secondary : Color.Default)"
+                     Variant="@(_multiOnly ? Variant.Filled : Variant.Outlined)"
+                     OnClick="@(() => SetMultiOnly(true))">متعددة المواعيد</MudChip>
         </div>
     </MudPaper>
 
     @* ── Data Table ────────────────────────────────────────── *@
     <MudPaper Elevation="1">
-        <MudTable T="VwSalesDeliveryStatus"
-                  Items="_displayItems"
+        <MudTable T="DeliveryListRow"
+                  Items="_displayRows"
                   Dense="true"
                   Hover="true"
                   Striped="true"
@@ -212,19 +222,73 @@
                     <MudTh Style="text-align:end;">المتبقي</MudTh>
                 }
                 <MudTh>الحالة</MudTh>
+                <MudTh>التقدم</MudTh>
                 <MudTh Style="text-align:center;">إجراءات</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd DataLabel="رقم">@context.TransactionId</MudTd>
-                <MudTd DataLabel="التاريخ">@context.TransactionDate.ToString("yyyy/MM/dd")</MudTd>
+                <MudTd DataLabel="رقم">@context.Item.TransactionId</MudTd>
+                <MudTd DataLabel="التاريخ">@context.Item.TransactionDate.ToString("yyyy/MM/dd")</MudTd>
                 <MudTd DataLabel="التسليم">
-                    @if (context.DueDate.HasValue)
+                    @if (context.Group is not null)
                     {
-                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
-                            <span>@context.DueDate.Value.ToString("yyyy/MM/dd")</span>
-                            @if (context.DaysRemaining.HasValue && context.DeliveryStatus != StatusDelivered)
+                        @* ⭐ صف الموعد: موعد هذا الصف وحده — شيب التاريخ + حالة الموعد + عدّاد من التاريخ المعروض *@
+                        var g = context.Group;
+                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+                            <DeliveryDateChip Date="@g.DisplayDate"
+                                              IsOverdue="@(context.FilterStatus == StatusOverdue)"
+                                              IsDelivered="@(g.PendingLineCount == 0)"
+                                              Size="Size.Small" />
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                                     Color="@context.StateColor" Icon="@context.StateIcon" Class="appt-state">
+                                @context.StateText
+                            </MudChip>
+                            @if (context.AppointmentCount >= 2)
                             {
-                                var d = context.DaysRemaining.Value;
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Secondary"
+                                         Icon="@Icons.Material.Filled.EventRepeat">
+                                    موعد @context.AppointmentIndex من @context.AppointmentCount
+                                </MudChip>
+                            }
+                            @if (g.DisplayDate.HasValue && g.PendingLineCount > 0 && context.Item.DeliveryStatus != StatusDelivered)
+                            {
+                                var dd = (g.DisplayDate.Value.Date - DateTime.Today).Days;
+                                <MudChip T="string" Size="Size.Small"
+                                         Color="@(dd < 0 ? Color.Error : dd <= 2 ? Color.Warning : Color.Default)">
+                                    @(dd < 0 ? $"متأخر {Math.Abs(dd)} يوم" : $"باقي {dd} يوم")
+                                </MudChip>
+                            }
+                        </MudStack>
+                        <div class="appt-meta-line">
+                            بنود مستحقة: @g.PendingLineCount@(g.LineCount != g.PendingLineCount ? $" (من {g.LineCount})" : "")
+                            • كمية متبقية: @g.PendingQty.ToString("0.###")
+                        </div>
+                        @if (context.NextDate.HasValue)
+                        {
+                            <div class="appt-meta-line">
+                                الموعد التالي: @DeliveryDisplay.FormatWeekdayDate(context.NextDate.Value)
+                            </div>
+                        }
+                        @if (context.OtherDates.Count > 0)
+                        {
+                            <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap" Class="mt-1">
+                                @foreach (var od in context.OtherDates)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info"
+                                             Icon="@Icons.Material.Filled.EventRepeat">
+                                        لها موعد آخر: @(od.HasValue ? DeliveryDisplay.FormatWeekdayDate(od.Value) : "بلا موعد")
+                                    </MudChip>
+                                }
+                            </MudStack>
+                        }
+                    }
+                    else if (context.Item.DueDate.HasValue)
+                    {
+                        @* لا بيانات جدولة (تخزين الميزة غائب) — عرض تاريخ الفاتورة كما كان قبل التقسيم *@
+                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                            <span>@context.Item.DueDate.Value.ToString("yyyy/MM/dd")</span>
+                            @if (context.Item.DaysRemaining.HasValue && context.Item.DeliveryStatus != StatusDelivered)
+                            {
+                                var d = context.Item.DaysRemaining.Value;
                                 <MudChip T="string" Size="Size.Small"
                                          Color="@(d < 0 ? Color.Error : d <= 2 ? Color.Warning : Color.Default)">
                                     @(d < 0 ? $"متأخر {Math.Abs(d)} يوم" : $"باقي {d} يوم")
@@ -235,16 +299,16 @@
                     else { <span>—</span> }
                 </MudTd>
                 <MudTd DataLabel="العميل">
-                    <MudLink Href="@($"/sales-delivery-status/{context.TransactionId}")"
-                             Style="text-decoration:none; color:inherit;">@context.PartyName</MudLink>
+                    <MudLink Href="@($"/sales-delivery-status/{context.Item.TransactionId}")"
+                             Style="text-decoration:none; color:inherit;">@context.Item.PartyName</MudLink>
                 </MudTd>
-                <MudTd DataLabel="المندوب">@(string.IsNullOrWhiteSpace(context.DeliveryEmployeeName) ? "—" : context.DeliveryEmployeeName)</MudTd>
+                <MudTd DataLabel="المندوب">@(string.IsNullOrWhiteSpace(context.Item.DeliveryEmployeeName) ? "—" : context.Item.DeliveryEmployeeName)</MudTd>
 
                 @if (_canSeeAmounts)
                 {
-                    <MudTd DataLabel="الإجمالي" Style="text-align:end;">@context.GrandTotal.ToString("N2")</MudTd>
+                    <MudTd DataLabel="الإجمالي" Style="text-align:end;">@context.Item.GrandTotal.ToString("N2")</MudTd>
                     <MudTd DataLabel="المتبقي" Style="text-align:end;">
-                        @{ var remaining = context.GrandTotal - context.PaidAmount; }
+                        @{ var remaining = context.Item.GrandTotal - context.Item.PaidAmount; }
                         <span style="@(remaining > 0 ? "color:#d32f2f; font-weight:600;" : "color:#388e3c;")">
                             @remaining.ToString("N2")
                         </span>
@@ -256,18 +320,18 @@
                         <MudChip T="string"
                                  Size="Size.Small"
                                  Variant="Variant.Filled"
-                                 Icon="@GetStatusIcon(context.DeliveryStatus)"
-                                 Color="@GetStatusColor(context.DeliveryStatus)">
-                            @context.DeliveryStatus
+                                 Icon="@GetStatusIcon(context.Item.DeliveryStatus)"
+                                 Color="@GetStatusColor(context.Item.DeliveryStatus)">
+                            @context.Item.DeliveryStatus
                         </MudChip>
-                        @if (!_canSeeAmounts && context.GrandTotal - context.PaidAmount > 0)
+                        @if (!_canSeeAmounts && context.Item.GrandTotal - context.Item.PaidAmount > 0)
                         {
                             <MudChip T="string" Size="Size.Small" Variant="Variant.Filled"
                                      Color="Color.Error" Icon="@Icons.Material.Filled.Payments">
                                 عليها مديونية
                             </MudChip>
                         }
-                        @if (_permStates.TryGetValue(context.TransactionId, out var pst))
+                        @if (_permStates.TryGetValue(context.Item.TransactionId, out var pst))
                         {
                             @if (pst.HasPendingRequest)
                             {
@@ -276,7 +340,7 @@
                                     طلب إذن معلق
                                 </MudChip>
                             }
-                            else if (!string.IsNullOrWhiteSpace(pst.GrantedBy) && context.DeliveryStatus != StatusDelivered)
+                            else if (!string.IsNullOrWhiteSpace(pst.GrantedBy) && context.Item.DeliveryStatus != StatusDelivered)
                             {
                                 <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
                                          Color="Color.Success" Icon="@Icons.Material.Filled.Verified">
@@ -284,7 +348,31 @@
                                 </MudChip>
                             }
                         }
+                        @if (_schedStates.TryGetValue(context.Item.TransactionId, out var sst) && sst.HasPendingRequest)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                                     Color="Color.Warning" Icon="@Icons.Material.Filled.EditCalendar">
+                                طلب تعديل موعد قيد الانتظار
+                            </MudChip>
+                        }
                     </MudStack>
+                </MudTd>
+                <MudTd DataLabel="التقدم">
+                    @if (_progress.TryGetValue(context.Item.TransactionId, out var pg) && pg.HasEvents)
+                    {
+                        <div style="min-width:120px;">
+                            <MudProgressLinear Value="@pg.PercentDelivered"
+                                               Color="@(pg.TotalRemainingQty <= 0 ? Color.Success : Color.Info)"
+                                               Size="Size.Small" Rounded="true" />
+                            <MudText Typo="Typo.caption">
+                                سُلّم @pg.TotalDeliveredQty.ToString("0.###") من @pg.TotalInvoicedQty.ToString("0.###")
+                            </MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        <span>—</span>
+                    }
                 </MudTd>
                 <MudTd DataLabel="إجراءات" Style="text-align:center;">
                     <MudStack Row="true" Spacing="0" Justify="Justify.Center">
@@ -292,7 +380,7 @@
                             <MudIconButton Icon="@Icons.Material.Filled.OpenInFull"
                                            Size="Size.Small"
                                            Color="Color.Primary"
-                                           OnClick="@(() => OpenFullPage(context.TransactionId))" />
+                                           OnClick="@(() => OpenFullPage(context.Item.TransactionId))" />
                         </MudTooltip>
                         @if (_canEditFull)
                         {
@@ -300,16 +388,17 @@
                                 <MudIconButton Icon="@Icons.Material.Filled.Edit"
                                                Size="Size.Small"
                                                Color="Color.Secondary"
-                                               OnClick="@(() => OpenDialogAsync(context.TransactionId))" />
+                                               OnClick="@(() => OpenDialogAsync(context.Item.TransactionId))" />
                             </MudTooltip>
                         }
-                        @if (_canConfirmDelivery && context.DeliveryStatus != StatusDelivered)
+                        @if (_canConfirmDelivery && context.Item.DeliveryStatus != StatusDelivered
+                             && (context.Group is null || context.Group.PendingLineCount > 0))
                         {
-                            <MudTooltip Text="تأكيد التسليم">
+                            <MudTooltip Text="تسجيل تسليمة">
                                 <MudIconButton Icon="@Icons.Material.Filled.CheckCircle"
                                                Size="Size.Small"
                                                Color="Color.Success"
-                                               OnClick="@(() => QuickConfirmDeliveryAsync(context))" />
+                                               OnClick="@(() => QuickConfirmDeliveryAsync(context.Item, context.Group))" />
                             </MudTooltip>
                         }
                     </MudStack>
@@ -330,7 +419,7 @@
             <div class="dds-title">كشف التسليمات غير المسلَّمة</div>
             <div class="dds-meta">
                 الفترة: @((_from ?? _to ?? DateTime.Today).ToString("yyyy/MM/dd")) — @((_to ?? DateTime.Today).ToString("yyyy/MM/dd"))
-                &nbsp;|&nbsp; عدد الفواتير: @_sheetRows.Count
+                &nbsp;|&nbsp; عدد سطور الكشف: @_sheetRows.Count
                 &nbsp;|&nbsp; طُبع في: @_sheetPrintedAt?.ToString("yyyy/MM/dd HH:mm")
             </div>
             <table>
@@ -341,7 +430,8 @@
                         <th>العميل</th>
                         <th style="width:110px;">التليفون</th>
                         <th>العنوان</th>
-                        <th style="width:88px;">تاريخ التسليم</th>
+                        <th>البنود المستحقة</th>
+                        <th style="width:88px;">موعد التسليم</th>
                         <th style="width:64px;">الحالة</th>
                         <th style="width:110px;">مندوب التسليم</th>
                     </tr>
@@ -357,8 +447,9 @@
                             <td>@r.PartyName</td>
                             <td>@(r.Phone ?? "—")</td>
                             <td>@(string.IsNullOrWhiteSpace(r.Address) ? "—" : r.Address)</td>
+                            <td>@(r.DueLinesSummary ?? "—")</td>
                             <td style="text-align:center;">@(r.DueDate?.ToString("yyyy/MM/dd") ?? "—")</td>
-                            <td style="text-align:center;">@r.DeliveryStatus</td>
+                            <td style="text-align:center;">@(r.IsPartial ? $"جزئي — متبقي {r.TotalRemainingQty:0.###}" : r.DeliveryStatus)</td>
                             <td>@(r.DeliveryEmployeeName ?? "—")</td>
                         </tr>
                     }
@@ -387,6 +478,10 @@
     .status-card--active { outline: 3px solid var(--gold); outline-offset: -3px; }
     .cursor-pointer { cursor: pointer; }
 
+    /* ── صف الموعد: حالة الموعد وسطر بنوده/كميته داخل خلية التسليم ── */
+    .appt-state { font-weight: 700; }
+    .appt-meta-line { font-size: .78rem; opacity: .85; margin-top: 2px; }
+
     /* ── ورقة كشف التسليم (طباعة فقط) ── */
     .dds-print-sheet { display: none; }
 
@@ -413,8 +508,10 @@
 @code {
     // ─── Constants ─────────────────────────────────────────
     private const string StatusPending   = "جارى";
+    private const string StatusPartial   = "جزئي";
     private const string StatusDelivered = "تم التسليم";
     private const string StatusOverdue   = "متأخر";
+    private const string StatusReturned  = "مرتجع";
 
     // ─── State ─────────────────────────────────────────────
     private const string FilterStorageKey = "sales_delivery_status_filters_v2";
@@ -427,6 +524,7 @@
     private string?     _search;
     private string?     _status;
     private string      _debtFilter = "all";   // all | yes | no — نعم/لا بدون أي مبالغ
+    private bool        _multiOnly;            // فلتر «متعددة المواعيد»
 
     // ─── Permissions ───────────────────────────────────────
     private bool _canSeeAmounts;
@@ -436,6 +534,9 @@
     private bool _canOverride;
     private string _currentUserName = "system";
     private Dictionary<int, DeliveryPermissionStateDto> _permStates = new();
+    private Dictionary<int, ScheduleChangePendingStateDto> _schedStates = new();
+    private Dictionary<int, DeliveryProgressSummaryDto> _progress = new();
+    private Dictionary<int, InvoiceScheduleSummaryDto> _schedules = new();
     private List<DailyDeliverySheetRowDto> _sheetRows = new();
     private DateTime? _sheetPrintedAt;
 
@@ -519,6 +620,30 @@
             }
             catch { _permStates = new(); }
 
+            // حالات طلبات تعديل المواعيد المعلّقة — تدهور آمن إن غابت الجداول
+            try
+            {
+                _schedStates = await DeliveryService.GetPendingScheduleRequestStatesAsync(
+                    _items.Select(i => i.TransactionId).ToList());
+            }
+            catch { _schedStates = new(); }
+
+            // تقدم التسليم الجزئي (عمود التقدم) — تدهور آمن إن غابت الجداول
+            try
+            {
+                _progress = await DeliveryService.GetDeliveryProgressBatchAsync(
+                    _items.Select(i => i.TransactionId).ToList());
+            }
+            catch { _progress = new(); }
+
+            // جدولة البنود (مواعيد الفاتورة المميزة) — تدهور آمن إن غاب التخزين
+            try
+            {
+                _schedules = await DeliveryService.GetLineScheduleSummariesBatchAsync(
+                    _items.Select(i => i.TransactionId).ToList());
+            }
+            catch { _schedules = new(); }
+
             await SaveFilterStateAsync();
         }
         catch (OperationCanceledException) { /* normal */ }
@@ -545,6 +670,7 @@
         _search = null;
         _status = null;
         _debtFilter = "all";
+        _multiOnly = false;
         _dateFilterType = DeliveryDateFilterTypes.DueDate;
         await RefreshAsync();
     }
@@ -584,17 +710,129 @@
         await RefreshAsync();
     }
 
-    // ── فلتر المديونية: client-side — نعم/لا فقط بدون أي مبالغ ──
-    private IEnumerable<VwSalesDeliveryStatus> _displayItems => _debtFilter switch
+    // ════════════════════════════════════════════════════════════
+    // ⭐ وحدة الصف في القائمة = (فاتورة × موعد): الفاتورة التي لبنودها موعدان
+    // مميزان تظهر صفين كاملين — صف لكل موعد بحالته وبنوده وإجراء تسجيله —
+    // فيرى المستخدم المواعيد واضحة من القائمة نفسها دون فتح التفاصيل.
+    // كروت الملخص تبقى محسوبة من خدمة الملخص على مستوى الفاتورة (مميزة) —
+    // لا تُحسب من الصفوف أبدًا فلا تتضاعف الأعداد.
+    // ════════════════════════════════════════════════════════════
+    private sealed class DeliveryListRow
     {
-        "yes" => _items.Where(i => i.GrandTotal - i.PaidAmount > 0),
-        "no"  => _items.Where(i => i.GrandTotal - i.PaidAmount <= 0),
-        _     => _items
-    };
+        public required VwSalesDeliveryStatus Item { get; init; }
+        public DeliveryScheduleGroupDto? Group { get; init; }
+        public string StateText { get; init; } = "";
+        public Color StateColor { get; init; } = Color.Default;
+        public string StateIcon { get; init; } = "";
+        /// <summary>حالة الصف التي يُقيَّم عليها فلتر الحالة (على مستوى الموعد لا الفاتورة)</summary>
+        public string FilterStatus { get; init; } = "";
+        /// <summary>مواعيد الفاتورة الأخرى (معروضة) لتلميح «لها موعد آخر»</summary>
+        public List<DateTime?> OtherDates { get; init; } = new();
+        /// <summary>ترتيب هذا الموعد بين مواعيد فاتورته (1-based) وعددها — لشيب «موعد X من N»</summary>
+        public int AppointmentIndex { get; init; }
+        public int AppointmentCount { get; init; }
+        /// <summary>الموعد التالي بعد موعد هذا الصف (معروض) إن وجد</summary>
+        public DateTime? NextDate { get; init; }
+        public DateTime? SortDate => Group?.DisplayDate ?? Item.DueDate;
+    }
+
+    private IEnumerable<DeliveryListRow> _displayRows => BuildDisplayRows();
+
+    private List<DeliveryListRow> BuildDisplayRows()
+    {
+        var rows = new List<DeliveryListRow>();
+        foreach (var item in _items)
+        {
+            // فلتر المديونية: client-side على مستوى الفاتورة — نعم/لا فقط بدون أي مبالغ
+            if (_debtFilter == "yes" && item.GrandTotal - item.PaidAmount <= 0) continue;
+            if (_debtFilter == "no"  && item.GrandTotal - item.PaidAmount > 0)  continue;
+
+            if (_schedules.TryGetValue(item.TransactionId, out var sched) && sched.Groups.Count > 0)
+            {
+                // فلتر «متعددة المواعيد»: فواتير بلا موعدين مميزين على الأقل تُستبعد كلية
+                if (_multiOnly && sched.Groups.Count < 2) continue;
+
+                var allDates = sched.Groups.Select(g => g.DisplayDate).ToList();
+                for (var i = 0; i < sched.Groups.Count; i++)
+                {
+                    var g = sched.Groups[i];
+                    rows.Add(MakeRow(item, g,
+                        allDates.Where(d => d != g.DisplayDate).ToList(),
+                        apptIndex: i + 1,
+                        apptCount: sched.Groups.Count,
+                        nextDate: i + 1 < sched.Groups.Count ? sched.Groups[i + 1].DisplayDate : null));
+                }
+            }
+            else
+            {
+                if (_multiOnly) continue;
+                // لا بيانات جدولة (فواتير بلا بنود/تخزين الميزة غائب) — صف واحد بتاريخ الفاتورة
+                rows.Add(MakeRow(item, null, new List<DateTime?>()));
+            }
+        }
+
+        // فلتر الحالة يُقيَّم على صف الموعد نفسه (خدمة القائمة ضمنت الفاتورة
+        // بحالتها المعروضة — وهنا يُنتقى من صفوفها ما يطابق على مستوى موعده)
+        if (!string.IsNullOrWhiteSpace(_status))
+            rows = rows.Where(r => r.FilterStatus == _status).ToList();
+
+        // الترتيب: تاريخ الموعد ثم رقم الفاتورة — الترقيم يعدّ الصفوف
+        return rows.OrderBy(r => r.SortDate ?? DateTime.MaxValue)
+                   .ThenBy(r => r.Item.TransactionId)
+                   .ToList();
+    }
+
+    private DeliveryListRow MakeRow(
+        VwSalesDeliveryStatus item, DeliveryScheduleGroupDto? g, List<DateTime?> otherDates,
+        int apptIndex = 0, int apptCount = 0, DateTime? nextDate = null)
+    {
+        string text, filter;
+        Color color;
+        string icon;
+
+        if (item.DeliveryStatus == StatusReturned)
+        {
+            // المرتجع حالة فاتورة نهائية — تظهر على صفوف مواعيدها كما هي
+            text = filter = StatusReturned;
+            color = Color.Dark;
+            icon = Icons.Material.Filled.AssignmentReturn;
+        }
+        else if (g is null)
+        {
+            text = filter = item.DeliveryStatus;
+            color = GetStatusColor(item.DeliveryStatus);
+            icon = GetStatusIcon(item.DeliveryStatus);
+        }
+        else
+        {
+            // حالة الموعد بنفس اشتقاق مداخل المواعيد السابقة (التأخر على التاريخ المعروض)
+            var st = DeliveryDisplay.AppointmentState(g.DisplayDate, g.PendingLineCount, g.HasOverdue);
+            text = st.Text; color = st.Color; icon = st.Icon;
+            filter = g.PendingLineCount == 0            ? StatusDelivered
+                   : g.HasOverdue                        ? StatusOverdue
+                   : item.DeliveryStatus == StatusPartial   ? StatusPartial
+                   : item.DeliveryStatus == StatusDelivered ? StatusDelivered
+                   : StatusPending;
+        }
+
+        return new DeliveryListRow
+        {
+            Item = item, Group = g,
+            StateText = text, StateColor = color, StateIcon = icon,
+            FilterStatus = filter, OtherDates = otherDates,
+            AppointmentIndex = apptIndex, AppointmentCount = apptCount, NextDate = nextDate
+        };
+    }
 
     private void SetDebtFilter(string f)
     {
         _debtFilter = f;
+        _ = SaveFilterStateAsync();
+    }
+
+    private void SetMultiOnly(bool multi)
+    {
+        _multiOnly = multi;
         _ = SaveFilterStateAsync();
     }
 
@@ -609,7 +847,8 @@
                 DateFilterType = _dateFilterType,
                 Search = _search,
                 Status = _status,
-                DebtFilter = _debtFilter
+                DebtFilter = _debtFilter,
+                MultiOnly = _multiOnly
             });
             await JS.InvokeVoidAsync("localStorage.setItem", FilterStorageKey, state);
         }
@@ -640,6 +879,7 @@
             _search = saved.Search;
             _status = saved.Status;
             _debtFilter = string.IsNullOrWhiteSpace(saved.DebtFilter) ? "all" : saved.DebtFilter;
+            _multiOnly = saved.MultiOnly;
         }
         catch { }
     }
@@ -695,99 +935,47 @@
             await RefreshAsync();
     }
 
-    private async Task QuickConfirmDeliveryAsync(VwSalesDeliveryStatus item)
+    private async Task QuickConfirmDeliveryAsync(
+        VwSalesDeliveryStatus item, DeliveryScheduleGroupDto? appointment = null)
     {
-        // 🔒 قاعدة المبالغ المتبقية: لا تسليم إلا بموافقة المدير/مدير الحسابات أو بإذن ممنوح
-        var remaining = item.GrandTotal - item.PaidAmount;
-        var permState = _permStates.TryGetValue(item.TransactionId, out var ps) ? ps : null;
+        // بوابة التغطية المالية صارت على مستوى الدفعة (المدفوع مقابل المسلَّم +
+        // هذه الدفعة) ولا تُحسم من القائمة — حوار التسجيل نفسه يعرض حالة التغطية
+        // وزر إرسال طلب الإذن، وخادم التسجيل يفرضها عند الحفظ.
 
-        if (remaining > 0 && !_canOverride && permState?.GrantedBy == null)
+        // ⭐ التسليم الجزئي: التأكيد الكلي الفوري استُبدل بحوار تسجيل تسليمة
+        // بكميات البنود (قد تكون دفعة جزئية) — الحوار مهيأ بالمتبقي كاملًا افتراضيًا.
+        // من مدخل «موعد» يُفتح الحوار مُنطقًا على بنود ذلك الموعد وحده.
+        await OpenRecordDeliveryAsync(item.TransactionId, appointment);
+    }
+
+    private async Task OpenRecordDeliveryAsync(
+        int transactionId, DeliveryScheduleGroupDto? appointment = null)
+    {
+        var parameters = new DialogParameters<RecordDeliveryDialog>
         {
-            var reqParams = new DialogParameters<MudMessageBox>
-            {
-                { x => x.Title,      "لا يمكن التسليم" },
-                { x => x.Message,    $"الفاتورة رقم {item.TransactionId} — يوجد مبالغ متبقية على هذه الفاتورة. برجاء مراجعة مدير الحسابات أو مسئول الحسابات أو المدير." },
-                { x => x.YesText,    "إرسال طلب إذن تسليم" },
-                { x => x.CancelText, "إغلاق" }
-            };
-            var reqDlg = await DialogService.ShowAsync<MudMessageBox>("لا يمكن التسليم", reqParams,
-                new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
-            var reqRes = await reqDlg.Result;
-            if (reqRes is null || reqRes.Canceled) return;
-
-            try
-            {
-                var (ok, msg) = await DeliveryService.RequestDeliveryPermissionAsync(item.TransactionId, _currentUserName);
-                Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
-                if (ok) await RefreshAsync();
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "Request delivery permission failed for {Id}", item.TransactionId);
-                Snackbar.Add("حدث خطأ أثناء إرسال الطلب: " + ex.Message, Severity.Error);
-            }
-            return;
+            { x => x.TransactionId, transactionId }
+        };
+        if (appointment is not null)
+        {
+            // الموعد بصيغة العرض لهذا المستخدم — والحوار يقارنه بمواعيد بنوده المعروضة
+            // بنفس الصيغة (ScheduledDate في DTO التقدم)، فالتطابق متسق داخل جلسة المستخدم
+            parameters.Add(x => x.AppointmentDate, appointment.DisplayDate);
+            parameters.Add(x => x.HasAppointmentScope, true);
         }
 
-        var parameters = new DialogParameters<MudMessageBox>
+        var options = new DialogOptions
         {
-            { x => x.Title,      "تأكيد التسليم" },
-            { x => x.Message,    remaining > 0
-                                 ? $"يوجد مبلغ متبقٍ {remaining:N2} ج على الفاتورة رقم {item.TransactionId} (العميل {item.PartyName}). هل توافق على التسليم؟"
-                                 : $"هل تريد تأكيد تسليم الفاتورة رقم {item.TransactionId} للعميل {item.PartyName}؟" },
-            { x => x.YesText,    remaining > 0 ? "نعم، موافقة والتسليم" : "نعم، تم التسليم" },
-            { x => x.CancelText, "إلغاء" }
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseOnEscapeKey = true,
+            BackdropClick = false
         };
 
-        var msgDialog = await DialogService.ShowAsync<MudMessageBox>(
-            "تأكيد التسليم", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall });
+        var dialog = await DialogService.ShowAsync<RecordDeliveryDialog>("تسجيل تسليمة", parameters, options);
+        var result = await dialog.Result;
 
-        var msgResult = await msgDialog.Result;
-        if (msgResult is null || msgResult.Canceled) return;
-
-        try
-        {
-            // ⭐ تسجيل الموظف في التسليم السريع:
-            // 1) مندوب متحدد أصلاً → نحتفظ بكوده واسمه
-            // 2) مفيش مندوب → نجيب الموظف (كود + اسم) المرتبط بحساب اللي داس الزرار
-            int? empId   = item.DeliveryEmployeeId;
-            string? empName = item.DeliveryEmployeeName;
-            if (empId == null && string.IsNullOrWhiteSpace(empName))
-            {
-                var (id, name) = await DeliveryService.GetEmployeeByUserNameAsync(_currentUserName);
-                empId   = id;
-                empName = string.IsNullOrWhiteSpace(name) ? _currentUserName : name;
-            }
-
-            var dto = new DeliveryUpdateDto
-            {
-                TransactionId        = item.TransactionId,
-                Status               = StatusDelivered,
-                DeliveryEmployeeId   = empId,
-                DeliveryEmployeeName = empName,
-                DeliveredAt          = DateTime.Now,
-                Notes                = item.DeliveredNotes,
-                UserName             = _currentUserName
-            };
-
-            var (success, message) = await DeliveryService.UpdateDeliveryStatusAsync(dto);
-
-            if (success)
-            {
-                Snackbar.Add(message, Severity.Success);
-                await RefreshAsync();
-            }
-            else
-            {
-                Snackbar.Add(message, Severity.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Quick confirm delivery failed for {Id}", item.TransactionId);
-            Snackbar.Add("حدث خطأ أثناء تأكيد التسليم: " + ex.Message, Severity.Error);
-        }
+        if (result is not null && !result.Canceled && result.Data is true)
+            await RefreshAsync();
     }
 
     // ─── UI Helpers ────────────────────────────────────────
@@ -797,6 +985,7 @@
     {
         new CardModel("الكل",           null,             _summary.TotalCount,     "primary", Icons.Material.Filled.ListAlt,    _status is null),
         new CardModel(StatusPending,    StatusPending,    _summary.PendingCount,   "warning", Icons.Material.Filled.Pending,    _status == StatusPending),
+        new CardModel(StatusPartial,    StatusPartial,    _summary.PartialCount,   "info",    Icons.Material.Filled.PieChart,   _status == StatusPartial),
         new CardModel(StatusDelivered,  StatusDelivered,  _summary.DeliveredCount, "success", Icons.Material.Filled.CheckCircle,_status == StatusDelivered),
         new CardModel(StatusOverdue,    StatusOverdue,    _summary.OverdueCount,   "error",   Icons.Material.Filled.Warning,    _status == StatusOverdue),
     };
@@ -804,16 +993,20 @@
     private static Color GetStatusColor(string? status) => status switch
     {
         StatusPending   => Color.Warning,
+        StatusPartial   => Color.Info,
         StatusOverdue   => Color.Error,
         StatusDelivered => Color.Success,
+        StatusReturned  => Color.Dark,
         _               => Color.Default
     };
 
     private static string GetStatusIcon(string? status) => status switch
     {
         StatusPending   => Icons.Material.Filled.Pending,
+        StatusPartial   => Icons.Material.Filled.PieChart,
         StatusOverdue   => Icons.Material.Filled.Warning,
         StatusDelivered => Icons.Material.Filled.CheckCircle,
+        StatusReturned  => Icons.Material.Filled.AssignmentReturn,
         _               => Icons.Material.Filled.HelpOutline
     };
 
@@ -825,5 +1018,6 @@
         public string? Search { get; set; }
         public string? Status { get; set; }
         public string? DebtFilter { get; set; }
+        public bool MultiOnly { get; set; }
     }
 }

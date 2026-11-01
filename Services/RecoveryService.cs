@@ -1371,7 +1371,7 @@ public class RecoveryService
         }
         else if (dto.NextFollowUpDate.HasValue)
         {
-            // ⭐ متابعة الاسترداد تظهر لموظف خدمة العملاء المسؤول (وليس لمندوب المبيعات)
+            // ⭐ متابعة الاسترداد تظهر لموظف خدمة العملاء المسؤول (وليس ل مسؤول المبيعات)
             var empId = actorEmpId != 0 ? actorEmpId : opp.EmployeeId ?? 0;
             opp.NextFollowUpDate = dto.NextFollowUpDate.Value;
 

@@ -104,8 +104,17 @@ public class ZakiSalesDocumentsService
         {
             await using var db = await _dbFactory.CreateDbContextAsync(ct);
 
+            // نطاق البائع: مستخدم Sales (من غير Admin أو مدير حسابات) المربوط بموظف
+            // بيشوف مستندات البيع بتاعته هو بس (EmpId) — نفس مقصد ZakiInvoiceScope.
+            // Admin ومدير الحسابات بلا قيد، وباقي الأدوار تفضل زي ما هي بالظبط.
+            var isUnrestricted = user.IsInRole(SystemRoles.Admin)
+                                 || user.IsInRole(SystemRoles.AccountManager);
+            int? employeeScope = !isUnrestricted && user.IsInRole(SystemRoles.Sales)
+                ? info.EmployeeId
+                : null;
+
             // نفس نطاق الشاشات: تاريخ الاطلاع + فواتير مديري الحسابات المخفية (الكل زي الشاشة)
-            var scope = await BuildScopeAsync(db, user, null);
+            var scope = await BuildScopeAsync(db, user, employeeScope);
 
             // فلتر الفرع اختياري: لو مش مكتوب = كل الفروع (نفس شاشة الفواتير)
             var branchSearch = ReadRawString(args, "branch_name");
@@ -756,7 +765,8 @@ public class ZakiSalesDocumentsService
             ["أرقام مشابهة"] = matches.Select(m => m.ReferenceNumber)
                 .Where(r => r != null && r != inv.ReferenceNumber)
                 .Take(5)
-                .ToList()
+                .ToList(),
+            ["المصدر"] = $"[الفاتورة {refNo}](/sales/invoices/{inv.TransactionId})"
         });
 
         var title = "أصناف الفاتورة " + refNo + " — العميل: " + customerName

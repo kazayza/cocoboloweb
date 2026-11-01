@@ -1,0 +1,101 @@
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject ISalesDeliveryStatusService DeliveryService
+@inject ISnackbar Snackbar
+@inject ILogger<VoidDeliveryEventDialog> Logger
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog Style="min-width: 480px;">
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Undo" Color="Color.Error" />
+            <MudText Typo="Typo.h6">إلغاء تسليمة</MudText>
+        </MudStack>
+    </TitleContent>
+
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">
+            الإلغاء منطقي فقط: تبقى التسليمة في السجل موسومة «ملغاة» بسببها،
+            وتعود كمياتها للمتبقي وتُعاد حالة الفاتورة للحساب من جديد.
+        </MudAlert>
+
+        @if (!string.IsNullOrWhiteSpace(Summary))
+        {
+            <MudText Typo="Typo.body2" Class="mb-3">@Summary</MudText>
+        }
+
+        <MudTextField T="string"
+                      @bind-Value="_reason"
+                      Label="سبب الإلغاء (إلزامي)"
+                      Variant="Variant.Outlined"
+                      Lines="3"
+                      MaxLength="500"
+                      Counter="500"
+                      Required="true"
+                      RequiredError="سبب الإلغاء إلزامي" />
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_saving">رجوع</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Error"
+                   StartIcon="@Icons.Material.Filled.Undo"
+                   OnClick="ConfirmAsync"
+                   Disabled="@(_saving || string.IsNullOrWhiteSpace(_reason))">
+            @if (_saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                <span>جارٍ الإلغاء...</span>
+            }
+            else
+            {
+                <span>تأكيد الإلغاء</span>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public int DeliveryId { get; set; }
+
+    /// <summary>وصف مختصر للتسليمة (تاريخ/مندوب/إجمالي) يظهر للتأكيد قبل الإلغاء</summary>
+    [Parameter] public string? Summary { get; set; }
+
+    private string _reason = "";
+    private bool   _saving = false;
+
+    private async Task ConfirmAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_reason)) return;
+
+        _saving = true;
+        try
+        {
+            var state = await AuthProvider.GetAuthenticationStateAsync();
+            var userName = state.User?.Identity?.Name ?? "system";
+
+            var (ok, msg) = await DeliveryService.VoidDeliveryEventAsync(DeliveryId, _reason, userName);
+            if (ok)
+            {
+                Snackbar.Add(msg, Severity.Success);
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(msg, Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Void delivery event {Id} failed", DeliveryId);
+            Snackbar.Add("حدث خطأ أثناء إلغاء التسليمة: " + ex.Message, Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

@@ -80,6 +80,15 @@ public static class ZakiInvoiceQueries
             q = q.Where(t => !scope.ProtectedCreators.Contains(t.CreatedBy));
         }
 
+        // نطاق البائع (بيتفعّل بس لما الخدمة المستدعية تمرّر EmployeeId — حاليًا
+        // أدوات مستندات المبيعات لمستخدم Sales): البيع ومرتجع البيع بتوعه هو بس.
+        // المشتريات وباقي الأنواع لا تتأثر، وكل المستدعين الآخرين بيمرّروا null.
+        if (scope.EmployeeId.HasValue
+            && (txType == TransactionTypes.Sale || txType == TransactionTypes.SaleReturn))
+        {
+            q = q.Where(t => t.EmpId == scope.EmployeeId.Value);
+        }
+
         // فواتير الشراء المرآة (MirrorOf:) داخلة في الأرقام زي شاشة فواتير الشراء
 
         return q;

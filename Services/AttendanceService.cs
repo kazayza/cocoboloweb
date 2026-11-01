@@ -1022,7 +1022,8 @@ public class AttendanceService : IAttendanceService
                          && bioCodes.Contains(s.BiometricCode.Value)
                          && s.EffectiveFrom <= date
                          && (s.EffectiveTo == null || s.EffectiveTo >= date))
-                .Select(s => new { s.BiometricCode, s.StartTime, s.EndTime, s.OffDay1, s.OffDay2 })
+                .OrderByDescending(s => s.EffectiveFrom)
+                .Select(s => new { s.BiometricCode, s.StartTime, s.EndTime, s.OffDay1, s.OffDay2, s.EffectiveFrom })
                 .ToListAsync();
 
             var approvedExemptions = (await _db.DailyExemptions
@@ -1230,8 +1231,13 @@ public class AttendanceService : IAttendanceService
 
     private async Task<(List<(int EmployeeId, int BioEmployeeId, string FullName)> Items, string? Error)> LoadTrackedEmployeesAsync(int? employeeId)
     {
+        // ⭐ استبعاد المعفيين من البصمة نهائيًا (IsPermanentlyExempt) من المصدر نفسه:
+        // كل مسارات المعالجة التلقائية (يوم واحد/فترة/استيراد) تمر من هنا، فلا يُنشأ
+        // للمعفى أي سجل تغطية (غائب/إجازة/راحة) ولا تُعالج له بصمات — نفس القاعدة
+        // المطبقة في الكوكبيت وزكي، لكن من الخدمة المشتركة نفسها (F-23).
         var query = _db.Employees.AsNoTracking()
-            .Where(e => (e.Status == "نشط" || e.Status == "Active") && e.BioEmployeeId.HasValue);
+            .Where(e => (e.Status == "نشط" || e.Status == "Active") && e.BioEmployeeId.HasValue
+                        && e.IsPermanentlyExempt != true);
         if (employeeId.HasValue)
             query = query.Where(e => e.EmployeeId == employeeId.Value);
 
@@ -1240,7 +1246,14 @@ public class AttendanceService : IAttendanceService
             .ToListAsync();
 
         if (employeeId.HasValue && items.Count == 0)
+        {
+            var isExempt = await _db.Employees.AsNoTracking()
+                .AnyAsync(e => e.EmployeeId == employeeId.Value && e.IsPermanentlyExempt == true);
+            if (isExempt)
+                return (new(), "الموظف معفى من البصمة نهائيًا — لا تتم معالجة حضور له من البصمة.");
+
             return (new(), "الموظف غير موجود، أو غير نشط، أو غير مربوط بكود بصمة.");
+        }
 
         return (items.Select(e => (e.EmployeeId, e.Bio, e.FullName)).ToList(), null);
     }

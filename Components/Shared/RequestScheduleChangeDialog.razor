@@ -1,0 +1,266 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject ISalesDeliveryStatusService DeliveryService
+@inject ISnackbar Snackbar
+@inject ILogger<RequestScheduleChangeDialog> Logger
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog Style="min-width: 840px;">
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.EditCalendar" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">طلب تعديل موعد / تقسيم</MudText>
+            @if (_detail is not null)
+            {
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary">
+                    فاتورة @(_detail.ReferenceNumber ?? $"#{TransactionId}")
+                </MudChip>
+            }
+        </MudStack>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Style="min-height:240px;" Spacing="2">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary">جارٍ التحميل...</MudText>
+            </MudStack>
+        }
+        else if (_detail is null)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Filled">
+                لا توجد بيانات لهذه الفاتورة
+            </MudAlert>
+        }
+        else
+        {
+            @* ── شريط الترويسة: العميل والفاتورة وحالة التسليم ── *@
+            <div class="sc-head">
+                <div class="sc-head-main">
+                    <MudText Typo="Typo.h6" Style="color:#fff;">@_detail.PartyName</MudText>
+                    <MudText Typo="Typo.caption" Style="color:rgba(255,255,255,.78);">
+                        فاتورة @(_detail.ReferenceNumber ?? $"#{TransactionId}")
+                        • تاريخ الفاتورة @_detail.TransactionDate.ToString("yyyy/MM/dd")
+                        @if (_detail.DueDate.HasValue)
+                        {
+                            <span> • الاستحقاق الحالي: @_detail.DueDate.Value.ToString("yyyy/MM/dd")</span>
+                        }
+                    </MudText>
+                </div>
+                <div class="sc-head-side">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info">
+                        @_detail.DeliveryStatus
+                    </MudChip>
+                </div>
+            </div>
+
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                اقترح المواعيد الجديدة — الطلب يصل للمدير ومدير الحسابات، ولا يتغيّر أي موعد
+                على الفاتورة إلا بعد الاعتماد. البنود التي لا تعدّلها تبقى على مواعيدها الحالية.
+            </MudAlert>
+
+            @* ── التاريخ الكلي للفاتورة ── *@
+            <MudPaper Class="pa-3 mb-3" Elevation="0" Outlined="true">
+                <MudDatePicker @bind-Date="_proposedDueDate"
+                               Label="تاريخ الفاتورة الكلي الجديد (اختياري)"
+                               Variant="Variant.Outlined"
+                               Clearable="true"
+                               Editable="true"
+                               DateFormat="yyyy/MM/dd"
+                               HelperText="اتركه فارغًا إن لم يتغيّر — تغييره يحرّك كل البنود التابعة له تلقائيًا" />
+            </MudPaper>
+
+            @* ── مواعيد البنود ── *@
+            <MudText Typo="Typo.subtitle1" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Small" /> مواعيد البنود
+            </MudText>
+            @foreach (var row in _rows)
+            {
+                <div class="sc-line @(row.Locked ? "sc-line--locked" : "")">
+                    <div class="sc-line-top">
+                        <MudText Typo="Typo.body1"><b>@row.Product.ProductName</b></MudText>
+                        @if (row.Locked)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+                                     Icon="@Icons.Material.Filled.CheckCircle">مكتمل التسليم</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info">
+                                المتبقي: @row.Product.RemainingQty.ToString("0.###")
+                            </MudChip>
+                        }
+                    </div>
+                    <div class="sc-line-cur">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">الموعد الحالي:</MudText>
+                        <DeliveryDateChip Date="@row.Product.ScheduledDate" Size="Size.Small"
+                                          IsOverdue="@row.Product.IsScheduleOverdue"
+                                          IsDelivered="@row.Locked" />
+                        @if (row.Product.ScheduledDateIsCustom)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">موعد خاص</MudChip>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">يتبع تاريخ الفاتورة</MudText>
+                        }
+                    </div>
+                    @if (!row.Locked)
+                    {
+                        <MudGrid Spacing="2" Class="mt-1">
+                            <MudItem xs="12" sm="6">
+                                <MudDatePicker @bind-Date="row.ProposedDate"
+                                               Label="الموعد المقترح"
+                                               Variant="Variant.Outlined"
+                                               Clearable="true"
+                                               Editable="true"
+                                               DateFormat="yyyy/MM/dd"
+                                               Disabled="@row.FollowHeader" />
+                            </MudItem>
+                            <MudItem xs="12" sm="6" Class="d-flex align-center">
+                                <MudSwitch @bind-Value="row.FollowHeader" Color="Color.Primary"
+                                           Label="اتباع تاريخ الفاتورة (إلغاء الموعد الخاص)" />
+                            </MudItem>
+                        </MudGrid>
+                    }
+                </div>
+            }
+
+            @* ── سبب الطلب ── *@
+            <MudTextField @bind-Value="_reason"
+                          Label="سبب طلب التعديل *"
+                          Variant="Variant.Outlined"
+                          Lines="3"
+                          MaxLength="1000"
+                          Counter="1000"
+                          Class="mt-3"
+                          Placeholder="مثال: تأخر إنتاج صنفين — نقترح تسليم الجاهز أولًا والباقي في الموعد الثاني" />
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_submitting">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Send"
+                   OnClick="SubmitAsync" Disabled="_submitting || _loading || _detail is null">
+            @if (_submitting)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+            }
+            إرسال الطلب
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .sc-head {
+        background: linear-gradient(135deg,#060C18 0%,#0D1B30 60%,#132A47 100%);
+        border-bottom: 2px solid var(--gold);
+        border-radius: 12px;
+        padding: 14px 16px;
+        display: flex; justify-content: space-between; align-items: flex-start;
+        gap: 12px; flex-wrap: wrap;
+        margin-bottom: 12px;
+    }
+    .sc-head-main { min-width: 0; }
+    .sc-head-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+
+    .sc-line {
+        border: 1px solid var(--mud-palette-lines-default);
+        border-inline-start: 4px solid var(--mud-palette-primary);
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+    }
+    .sc-line--locked { border-inline-start-color: var(--mud-palette-success); opacity: .75; }
+    .sc-line-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .sc-line-cur { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+</style>
+
+@code {
+    [Parameter] public int TransactionId { get; set; }
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private DeliveryDetailDto? _detail;
+    private bool _loading = true;
+    private bool _submitting;
+    private string _userName = "system";
+    private string _reason = "";
+    private DateTime? _proposedDueDate;
+    private List<LineRow> _rows = new();
+
+    private sealed class LineRow
+    {
+        public DeliveryProductDto Product = null!;
+        public DateTime? ProposedDate;
+        public bool FollowHeader;
+        public bool Locked => Product.RemainingQty <= 0.0005m;
+        public bool Changed => !Locked && (FollowHeader || ProposedDate.HasValue);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            _userName = auth.User.Identity?.Name ?? "system";
+            _detail = await DeliveryService.GetDeliveryDetailsAsync(TransactionId);
+            if (_detail is not null)
+                _rows = _detail.Products.Select(p => new LineRow { Product = p }).ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Load schedule-change dialog failed {Id}", TransactionId);
+            _detail = null;
+        }
+        _loading = false;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task SubmitAsync()
+    {
+        var lines = _rows.Where(r => r.Changed).Select(r => new ScheduleChangeLineInputDto
+        {
+            TransactionDetailId = r.Product.TransactionDetailId,
+            ProposedDate = r.FollowHeader ? null : r.ProposedDate?.Date,
+            ProposedIsCustom = !r.FollowHeader
+        }).ToList();
+
+        if (!_proposedDueDate.HasValue && lines.Count == 0)
+        {
+            Snackbar.Add("برجاء إدخال تعديل واحد على الأقل: تاريخ كلي جديد أو موعد جديد لبند.", Severity.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_reason))
+        {
+            Snackbar.Add("سبب طلب التعديل إلزامي.", Severity.Warning);
+            return;
+        }
+
+        _submitting = true;
+        try
+        {
+            var (ok, msg) = await DeliveryService.CreateScheduleChangeRequestAsync(new CreateScheduleChangeRequestDto
+            {
+                TransactionId = TransactionId,
+                ProposedDueDate = _proposedDueDate?.Date,
+                Reason = _reason.Trim(),
+                RequesterUserName = _userName,
+                Lines = lines
+            });
+            Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+            if (ok) MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Create schedule change request failed {Id}", TransactionId);
+            Snackbar.Add("تعذّر إرسال الطلب: " + ex.Message, Severity.Error);
+        }
+        _submitting = false;
+    }
+}

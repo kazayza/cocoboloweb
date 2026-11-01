@@ -10,13 +10,15 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.WebUtilities
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Configuration
 
 @inject db24804Context Db
 @inject AuthenticationStateProvider AuthProvider
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject IConfiguration Config
 
-<PageTitle>طباعة أوامر التشغيل غير المسلّمة</PageTitle>
+<PageTitle>طباعة أوامر التشغيل</PageTitle>
 
 @if (_isLoading)
 {
@@ -54,7 +56,7 @@ else
                 </div>
             </div>
             <div class="jo-print-title">
-                <h1>أوامر التشغيل غير المسلّمة</h1>
+                <h1>@PrintTitle</h1>
                 <span>تقرير تشغيلي — بدون مبالغ مالية</span>
             </div>
             <div class="jo-print-meta">
@@ -102,11 +104,11 @@ else
 
         @if (_rows.Count == 0)
         {
-            <div class="jo-print-empty">لا توجد أوامر تشغيل غير مسلّمة مطابقة للتصفية الحالية.</div>
+            <div class="jo-print-empty">لا توجد أوامر تشغيل مطابقة للتصفية الحالية.</div>
         }
 
         <div class="jo-print-foot">
-            يعرض هذا التقرير أوامر التشغيل غير المسلّمة فقط، ولا يتضمن أي مبالغ مالية.
+            يعرض هذا التقرير أوامر التشغيل حسب التصفية المحددة، ولا يتضمن أي مبالغ مالية.
         </div>
     </div>
 }
@@ -153,6 +155,8 @@ else
 @code {
     private bool _isLoading = true;
     private bool _canView;
+    private bool _canSeeRealDate = true;
+    private int _dateBufferDays = 4;
     private bool _didAutoPrint;
     private string? _companyName;
     private string? _companyContact;
@@ -162,7 +166,19 @@ else
     private DateTime? _from;
     private DateTime? _to;
     private string _type = "all";
+    private string _delivery = "undelivered";
+    private bool _overdueOnly;
+    private bool _alternativesOnly;
     private List<JobOrderRow> _rows = new();
+
+    private string PrintTitle => _overdueOnly
+        ? "أوامر التشغيل المتأخرة"
+        : _delivery switch
+        {
+            "delivered" => "أوامر التشغيل المسلّمة",
+            "all" => "كل أوامر التشغيل",
+            _ => "أوامر التشغيل غير المسلّمة"
+        };
 
     private sealed class JobOrderRow
     {
@@ -192,6 +208,10 @@ else
                    || user.IsInRole(SystemRoles.FactoryManager)
                    || user.IsInRole("factory");
 
+        // ⭐ إخفاء تاريخ الاستحقاق لغير المستثنين — نفس قاعدة شاشتَي التسليمات وأوامر التشغيل (عرض فقط)
+        _canSeeRealDate = DeliveryPermissions.CanSeeRealDeliveryDate(user);
+        _dateBufferDays = Config.GetValue<int?>("Delivery:DateBufferDays") is int buffer && buffer >= 0 ? buffer : 4;
+
         var uri = new Uri(Navigation.Uri);
         var pars = QueryHelpers.ParseQuery(uri.Query);
         if (pars.TryGetValue("q", out var qv))
@@ -202,6 +222,15 @@ else
             _to = t;
         if (pars.TryGetValue("type", out var tyv))
             _type = tyv.ToString().ToLowerInvariant();
+        if (pars.TryGetValue("delivery", out var dv))
+        {
+            var delivery = dv.ToString().ToLowerInvariant();
+            _delivery = delivery is "delivered" or "all" ? delivery : "undelivered";
+        }
+        if (pars.TryGetValue("overdue", out var ov))
+            _overdueOnly = ov.ToString() is "1" or "true";
+        if (pars.TryGetValue("alt", out var av))
+            _alternativesOnly = av.ToString() is "1" or "true";
 
         if (_canView)
             await LoadAsync();
@@ -218,12 +247,21 @@ else
         }
     }
 
+    /// <summary>
+    /// التاريخ المعروض لغير المستثنين: الحقيقي منقوصًا هامش الأيام، ولا يسبق تاريخ الفاتورة أبدًا (عرض فقط).
+    /// </summary>
+    private DateTime? GetDisplayDueDate(DateTime? realDueDate, DateTime transactionDate)
+    {
+        if (_canSeeRealDate || realDueDate == null) return realDueDate;
+        var shown = realDueDate.Value.AddDays(-_dateBufferDays);
+        return shown < transactionDate ? transactionDate : shown;
+    }
+
     private async Task LoadAsync()
     {
         var query = Db.Transactions
             .AsNoTracking()
             .Where(t => t.InvoiceStatus != InvoiceStatuses.Cancelled
-                && t.IsDelivered != true // ⭐ غير المسلّمة فقط — دائماً
                 && ((t.TransactionType == TransactionTypes.Sale)
                  || (t.TransactionType == TransactionTypes.Purchase
                      && (t.ReferenceType == null || !t.ReferenceType.StartsWith("MirrorOf:")))));
@@ -233,11 +271,38 @@ else
         else if (string.Equals(_type, "purchase", StringComparison.OrdinalIgnoreCase))
             query = query.Where(t => t.TransactionType == TransactionTypes.Purchase);
 
-        if (_from.HasValue)
-            query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= _from.Value.Date);
+        // باراميترات النطاق وصلت من شاشة القائمة بقيم التواريخ المعروضة للمستخدم،
+        // فتُزاح +الهامش للمخفيين قبل المقارنة بالتاريخ الحقيقي (نفس دلالة القائمة).
+        var fromBound = _canSeeRealDate || !_from.HasValue ? _from : _from.Value.AddDays(_dateBufferDays);
+        var toBound = _canSeeRealDate || !_to.HasValue ? _to : _to.Value.AddDays(_dateBufferDays);
 
-        if (_to.HasValue)
-            query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value <= _to.Value.Date.AddDays(1).AddTicks(-1));
+        if (fromBound.HasValue)
+            query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value >= fromBound.Value.Date);
+
+        if (toBound.HasValue)
+            query = query.Where(t => t.DueDate.HasValue && t.DueDate.Value <= toBound.Value.Date.AddDays(1).AddTicks(-1));
+
+        if (_overdueOnly)
+        {
+            // «متأخرة» تُقيَّم على التاريخ المعروض: الحقيقي قبل (اليوم + الهامش) للمخفيين.
+            var threshold = DateTime.Today.AddDays(_canSeeRealDate ? 0 : _dateBufferDays);
+            query = query.Where(t => t.DueDate.HasValue
+                && t.DueDate.Value.Date < threshold
+                && t.IsDelivered != true);
+        }
+        else if (string.Equals(_delivery, "delivered", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query.Where(t => t.IsDelivered == true);
+        }
+        else if (!string.Equals(_delivery, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            // غياب باراميتر التسليم يحافظ على السلوك التاريخي: غير المسلّمة فقط.
+            query = query.Where(t => t.IsDelivered != true);
+        }
+
+        if (_alternativesOnly)
+            query = query.Where(t => Db.TransactionDetails.Any(d =>
+                d.TransactionId == t.TransactionId && d.SelectedAlternativeId != null));
 
         // ⭐ القناع على مستوى البيانات: GrandTotal لا يُختار من قاعدة البيانات نهائياً
         var projected = query.Select(t => new JobOrderRow
@@ -268,6 +333,10 @@ else
                 .ToList();
         }
 
+        // المطبوع يعرض نفس التواريخ المعروضة في القائمة — الإخفاء يطال الطباعة أيضًا (عرض فقط).
+        foreach (var r in _rows)
+            r.DueDate = GetDisplayDueDate(r.DueDate, r.TransactionDate);
+
         var info = await Db.CompanyInfos.AsNoTracking().OrderBy(c => c.CompanyId).FirstOrDefaultAsync();
         if (info != null)
         {
@@ -289,7 +358,12 @@ else
         if (_to.HasValue) fparts.Add($"إلى: {_to.Value:yyyy/MM/dd}");
         if (string.Equals(_type, "sale", StringComparison.OrdinalIgnoreCase)) fparts.Add("النوع: بيع");
         else if (string.Equals(_type, "purchase", StringComparison.OrdinalIgnoreCase)) fparts.Add("النوع: توريد");
-        _filterSummary = fparts.Count > 0 ? string.Join(" | ", fparts) : "بدون تصفية (كل غير المسلّمة)";
+        if (_overdueOnly) fparts.Add("الحالة: متأخرة");
+        else if (string.Equals(_delivery, "delivered", StringComparison.OrdinalIgnoreCase)) fparts.Add("الحالة: تم التسليم");
+        else if (string.Equals(_delivery, "all", StringComparison.OrdinalIgnoreCase)) fparts.Add("الحالة: الكل");
+        else fparts.Add("الحالة: لم يتم التسليم بعد");
+        if (_alternativesOnly) fparts.Add("بها بدائل مختارة فقط");
+        _filterSummary = string.Join(" | ", fparts);
     }
 
     private async Task PrintNow() => await JS.InvokeVoidAsync("window.print");

@@ -90,7 +90,9 @@ public static class QuotationEndpoints
             if (payload == null || payload.Type != "quotation")
                 return Results.NotFound(new { error = "الرابط غير صحيح أو منتهي الصلاحية." });
 
-            var q = await quotations.GetQuotationForEditAsync(payload.Id);
+            // ⭐ دفعة 1: التحميل العام المخصص — GetQuotationForEditAsync محمي بصلاحية
+            //    مستخدم مسجّل، فكان هذا المسار يرد 404 دائمًا للزائر المجهول.
+            var q = await quotations.GetQuotationPublicAsync(payload.Id);
             if (q == null) return Results.NotFound(new { error = "عرض السعر غير موجود." });
 
             return Results.Ok(new
@@ -115,7 +117,7 @@ public static class QuotationEndpoints
             if (payload == null || payload.Type != "quotation")
                 return Results.NotFound("الرابط غير صحيح أو منتهي الصلاحية.");
 
-            var (ok, error, pdf, fileName) = await export.GeneratePdfAsync(payload.Id);
+            var (ok, error, pdf, fileName) = await export.GeneratePdfAsync(payload.Id, publicAccess: true);
             if (!ok || pdf == null)
                 return Results.NotFound(error);
 
@@ -133,7 +135,7 @@ public static class QuotationEndpoints
             if (payload == null || payload.Type != "quotation")
                 return Results.NotFound("الرابط غير صحيح أو منتهي الصلاحية.");
 
-            var (ok, error, xlsx, fileName) = await export.GenerateExcelAsync(payload.Id);
+            var (ok, error, xlsx, fileName) = await export.GenerateExcelAsync(payload.Id, publicAccess: true);
             if (!ok || xlsx == null)
                 return Results.NotFound(error);
 

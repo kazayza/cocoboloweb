@@ -1,0 +1,259 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject IDeliveryMaintenanceService MaintenanceService
+@inject ISalesDeliveryStatusService DeliveryService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthProvider
+
+<MudDialog Style="min-width: 480px;">
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Build" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">@Title</MudText>
+        </MudStack>
+    </TitleContent>
+
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-1">
+            <b>@ProductName</b> × @Quantity.ToString("0.###") — @ClassName
+        </MudText>
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-3">
+            فاتورة @(string.IsNullOrWhiteSpace(TransactionRef) ? $"#{TransactionId}" : TransactionRef)
+        </MudText>
+
+        @switch (Mode)
+        {
+            case "start":
+                <MudSelect T="int?" @bind-Value="_employeeId" Label="العامل على البند في المصنع (اختياري)"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true"
+                           AnchorOrigin="Origin.BottomCenter">
+                    @foreach (var emp in _employees)
+                    {
+                        <MudSelectItem T="int?" Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
+                    }
+                </MudSelect>
+                break;
+
+            case "ready":
+                @if (CanSeeCost)
+                {
+                    <MudNumericField T="decimal?" @bind-Value="_repairCost"
+                                     Label="التكلفة الداخلية للإصلاح (اختياري — لا يراها المندوب ولا المبيعات)"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     Min="0m" Step="50m" Adornment="Adornment.End" AdornmentText="ج.م" />
+                    <MudTextField T="string" @bind-Value="_repairCostNotes" Label="تفصيل التكلفة"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-2"
+                                  MaxLength="500" Counter="500" />
+                }
+                <MudSelect T="int?" @bind-Value="_employeeId" Label="العامل على البند (اختياري)"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" Class="mt-2"
+                           AnchorOrigin="Origin.BottomCenter">
+                    @foreach (var emp in _employees)
+                    {
+                        <MudSelectItem T="int?" Value="@((int?)emp.EmployeeId)">@emp.FullName</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                    سيُشعر بائع الفاتورة ومسؤول التسليمات أن البند جاهز لإعادة التسليم.
+                </MudAlert>
+                break;
+
+            case "unrepairable":
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                    البند سينتظر قرارًا لكل حالة من الإدارة/الحسابات: استبدال أو ردّ نهائي (D11) — لا قرار تلقائي.
+                </MudAlert>
+                <MudTextField T="string" @bind-Value="_notes" Label="سبب التعذّر / ملاحظات"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              MaxLength="500" Counter="500" Lines="2" />
+                break;
+
+            case "replace":
+                <MudText Typo="Typo.body2" Class="mb-2">
+                    ستخرج وحدة بديلة مكان التالفة: كمية السجل تعود «بانتظار التسليم» وتُسلَّم بحدث تسليم عادي.
+                </MudText>
+                <MudTextField T="string" @bind-Value="_notes" Label="ملاحظات القرار"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              MaxLength="500" Counter="500" Lines="2" />
+                break;
+
+            case "credit":
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                    قرار مالي الأثر: الكمية لن تُسلَّم أبدًا وستُسوّى مع العميل عبر مسار
+                    المرتجعات/المال القائم — هذا الإغلاق يوثّق القرار فقط، وقد يُكمل تسليم الفاتورة.
+                </MudAlert>
+                <MudTextField T="string" @bind-Value="_notes" Label="ملاحظات القرار"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              MaxLength="500" Counter="500" Lines="2" />
+                break;
+
+            case "cancel":
+                <MudTextField T="string" @bind-Value="_notes" Label="سبب الإلغاء (إلزامي)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              MaxLength="500" Counter="500" Lines="2" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    كمية البند تعود «بانتظار التسليم» كما هي — تُعاد للعميل بحدث إعادة تسليم عادي عند الحاجة.
+                </MudText>
+                break;
+
+            case "reclassify":
+                <MudSelect T="string" @bind-Value="_newClass" Label="التصنيف الصحيح"
+                           Variant="Variant.Outlined" Margin="Margin.Dense"
+                           AnchorOrigin="Origin.BottomCenter">
+                    @foreach (var cls in DeliveryDispositions.All.Where(kv => kv.Key != DeliveryDispositions.Accepted))
+                    {
+                        <MudSelectItem T="string" Value="@cls.Key">@cls.Value</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudTextField T="string" @bind-Value="_notes" Label="سبب إعادة التصنيف (إلزامي)"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Class="mt-2"
+                              MaxLength="500" Counter="500" Lines="2" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    التصنيف يوزّع المسؤولية بين المصنع وعمالة التسليم — التغيير يُدقَّق بلقطة قبل/بعد (D12).
+                </MudText>
+                break;
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_saving">إغلاق</MudButton>
+        <MudButton Variant="Variant.Filled" Color="@ConfirmColor" OnClick="ConfirmAsync" Disabled="_saving">
+            @if (_saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                <span>جارٍ التنفيذ...</span>
+            }
+            else
+            {
+                <span>@ConfirmText</span>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public int MaintenanceId { get; set; }
+
+    /// <summary>start / ready / unrepairable / replace / credit / cancel / reclassify</summary>
+    [Parameter, EditorRequired] public string Mode { get; set; } = "start";
+    [Parameter] public string ProductName { get; set; } = "";
+    [Parameter] public decimal Quantity { get; set; }
+    [Parameter] public string ClassName { get; set; } = "";
+    [Parameter] public string CurrentClass { get; set; } = "";
+    [Parameter] public int TransactionId { get; set; }
+    [Parameter] public string? TransactionRef { get; set; }
+    [Parameter] public bool CanSeeCost { get; set; }
+
+    private bool _saving;
+    private string _userName = "system";
+    private List<EmployeeLookupDto> _employees = new();
+
+    private int? _employeeId;
+    private decimal? _repairCost;
+    private string _repairCostNotes = "";
+    private string _notes = "";
+    private string _newClass = "";
+
+    private string Title => Mode switch
+    {
+        "start" => "بدء صيانة البند",
+        "ready" => "جاهز لإعادة التسليم",
+        "unrepairable" => "تعذّر إصلاح البند",
+        "replace" => "إغلاق باستبدال",
+        "credit" => "إغلاق بردّ نهائي/رصيد",
+        "cancel" => "إلغاء طلب الصيانة",
+        "reclassify" => "إعادة تصنيف سبب الرجوع",
+        _ => "إجراء صيانة"
+    };
+
+    private string ConfirmText => Mode switch
+    {
+        "start" => "بدء الصيانة",
+        "ready" => "تعليم كجاهز",
+        "unrepairable" => "تعليم التعذّر",
+        "replace" => "إغلاق باستبدال",
+        "credit" => "إغلاق بردّ نهائي",
+        "cancel" => "إلغاء الطلب",
+        "reclassify" => "إعادة التصنيف",
+        _ => "تنفيذ"
+    };
+
+    private Color ConfirmColor => Mode is "credit" or "cancel" ? Color.Error
+        : Mode == "replace" ? Color.Warning
+        : Color.Success;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var state = await AuthProvider.GetAuthenticationStateAsync();
+            _userName = state.User?.Identity?.Name ?? "system";
+        }
+        catch { }
+
+        _newClass = CurrentClass;
+
+        if (Mode is "start" or "ready")
+        {
+            try { _employees = await DeliveryService.GetDeliveryEmployeesAsync(); }
+            catch { _employees = new(); }
+        }
+    }
+
+    private async Task ConfirmAsync()
+    {
+        if ((Mode is "cancel" or "reclassify") && string.IsNullOrWhiteSpace(_notes))
+        {
+            Snackbar.Add("السبب إلزامي لهذا الإجراء.", Severity.Warning);
+            return;
+        }
+        if (Mode == "reclassify" && (string.IsNullOrWhiteSpace(_newClass) || _newClass == CurrentClass))
+        {
+            Snackbar.Add("اختر تصنيفًا مختلفًا عن الحالي.", Severity.Warning);
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            var (ok, msg) = Mode switch
+            {
+                "start" => await MaintenanceService.StartAsync(MaintenanceId, _employeeId, _userName),
+                "ready" => await MaintenanceService.MarkReadyAsync(MaintenanceId,
+                               _repairCost,
+                               string.IsNullOrWhiteSpace(_repairCostNotes) ? null : _repairCostNotes.Trim(),
+                               _employeeId, _userName),
+                "unrepairable" => await MaintenanceService.MarkUnrepairableAsync(MaintenanceId,
+                               string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(), _userName),
+                "replace" => await MaintenanceService.CloseByReplacementAsync(MaintenanceId,
+                               string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(), _userName),
+                "credit" => await MaintenanceService.CloseByCreditAsync(MaintenanceId,
+                               string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(), _userName),
+                "cancel" => await MaintenanceService.CancelAsync(MaintenanceId, _notes.Trim(), _userName),
+                "reclassify" => await MaintenanceService.ReclassifyAsync(MaintenanceId, _newClass, _notes.Trim(), _userName),
+                _ => (false, "إجراء غير معروف.")
+            };
+
+            if (ok)
+            {
+                Snackbar.Add(msg, Severity.Success);
+                MudDialog.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add(msg, Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("حدث خطأ: " + ex.Message, Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}
