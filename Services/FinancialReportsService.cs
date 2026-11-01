@@ -1,3 +1,4 @@
+using ClosedXML.Excel;
 using System.Globalization;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
@@ -5,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace COCOBOLOERPNEW.Services;
 
-public class FinancialReportsService : IFinancialReportsService
+public partial class FinancialReportsService : IFinancialReportsService
 {
     private readonly db24804Context _db;
     private readonly IHttpContextAccessor _http;

@@ -69,6 +69,12 @@ else if (_report != null)
                                OnClick="Print">
                         طباعة
                     </MudButton>
+                    <MudButton Variant="MudBlazor.Variant.Filled" Color="MudBlazor.Color.Success"
+                               StartIcon="@Icons.Material.Filled.TableView"
+                               Disabled="@(_isReloading || _isExporting || _report == null)"
+                               OnClick="ExportExcel">
+                        @(_isExporting ? "جاري التصدير..." : "Excel")
+                    </MudButton>
                     <MudButton Variant="MudBlazor.Variant.Filled"
                                Class="income-back-button"
                                StartIcon="@Icons.Material.Filled.Dashboard"
@@ -1104,6 +1110,7 @@ else if (_report != null)
 @code {
     private bool _isLoading = true;
     private bool _isReloading = false;
+    private bool _isExporting = false;
     private bool _disposed;
     private readonly SemaphoreSlim _reportLoadGate = new(1, 1);
     private IncomeStatementDto? _report;
@@ -1266,6 +1273,30 @@ else if (_report != null)
     }
 
     private async Task Print() => await JS.InvokeVoidAsync("window.print");
+
+    private async Task ExportExcel()
+    {
+        if (_report == null) return;
+        _isExporting = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var bytes = await FinancialService.ExportIncomeStatementToExcelAsync(_filter);
+            var base64 = Convert.ToBase64String(bytes);
+            var fileName = $"IncomeStatement_{_filter.FromDate:yyyy-MM-dd}_{_filter.ToDate:yyyy-MM-dd}.xlsx";
+            await JS.InvokeVoidAsync("downloadFileFromBase64", base64, fileName);
+            Snackbar.Add("تم تصدير قائمة الدخل إلى Excel", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"خطأ في التصدير: {ex.GetBaseException().Message}", Severity.Error);
+        }
+        finally
+        {
+            _isExporting = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
 
     private string FormatMoney(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture);
 

@@ -31,4 +31,8 @@ public interface IFinancialReportsService
 
     /// <summary>اقتراح رأس المال من بضاعة المعرض الافتتاحية (حركات OpeningBalance)</summary>
     Task<decimal> GetOpeningStockValueAsync(int? branchId = null);
+    /// <summary>
+    /// تصدير قائمة الدخل إلى Excel حسب الفترة (شهر واحد أو عدة أشهر) وفلتر الفرع
+    /// </summary>
+    Task<byte[]> ExportIncomeStatementToExcelAsync(IncomeStatementFilterDto filter);
 }
