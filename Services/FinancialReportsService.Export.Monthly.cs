@@ -10,7 +10,7 @@ public partial class FinancialReportsService
         var ws = workbook.Worksheets.Add("تفصيل شهري");
         ws.RightToLeft = true;
 
-        string[] h = { "الشهر", "الإيرادات", "COGS", "المصروفات", "الرواتب", "إجمالي المصروفات", "صافي الربح", "الهامش %" };
+        string[] h = { "الشهر", "الإيرادات", "تكلفة المبيعات", "المصروفات", "الرواتب", "إجمالي المصروفات", "صافي الربح", "الهامش %" };
         for (int i = 0; i < h.Length; i++)
             ws.Cell(1, i + 1).Value = h[i];
         var hdr = ws.Row(1);
