@@ -219,7 +219,8 @@ namespace COCOBOLOERPNEW.Services
                 Notes = employee.Notes,
                 CreatedBy = employee.CreatedBy,
                 OldSalary = employee.CurrentSalaryBase,
-                BranchId = employee.BranchId
+                BranchId = employee.BranchId,
+                DirectManagerId = employee.DirectManagerId
             };
         }
 
@@ -271,7 +272,8 @@ namespace COCOBOLOERPNEW.Services
                     Notes = dto.Notes?.Trim(),
                     CreatedBy = userName,
                     CreatedAt = DateTime.Now,
-                    BranchId = dto.BranchId
+                    BranchId = dto.BranchId,
+                    DirectManagerId = dto.DirectManagerId
                 };
 
                 _db.Employees.Add(employee);
@@ -415,6 +417,7 @@ namespace COCOBOLOERPNEW.Services
                 employee.Status = dto.Status;
                 employee.Notes = dto.Notes?.Trim();
                 employee.BranchId = dto.BranchId;
+                employee.DirectManagerId = dto.DirectManagerId;
 
                 // تتبع تغيير المرتب
                 var newSalary = dto.CurrentSalaryBase ?? 0;

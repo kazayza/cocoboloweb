@@ -78,6 +78,9 @@ namespace COCOBOLOERPNEW.DTOs
         // ⭐ الفرع
         public int? BranchId { get; set; }
 
+        // ⭐ المدير المباشر
+        public int? DirectManagerId { get; set; }
+
         // Salary change tracking
         public bool SalaryChanged { get; set; }
         public decimal? OldSalary { get; set; }
