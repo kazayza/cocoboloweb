@@ -170,7 +170,7 @@ public partial class FinancialReportsService : IFinancialReportsService
             })
             .ToListAsync();
 
-        dto.TotalRevenue = sales.Sum(s => s.GrandTotal);
+        dto.TotalRevenue = sales.Sum(s => s.NetTotalAmount ?? s.GrandTotal);
         dto.NetRevenue = sales.Sum(s => s.NetTotalAmount ?? s.GrandTotal);
         dto.InvoicesCount = sales.Count;
         dto.AverageInvoiceValue = dto.InvoicesCount == 0 ? 0
@@ -178,26 +178,27 @@ public partial class FinancialReportsService : IFinancialReportsService
     }
 
     // ============================================================
-    //  الإيرادات الأخرى المكتسبة من الرسوم غير المرتبطة بفواتير
+    //  الإيرادات الأخرى المكتسبة من الرسوم الإضافية
     // ============================================================
     private async Task CalculateOtherRevenueAsync(IncomeStatementDto dto, BranchScope scope)
     {
-        // الرسوم المرتبطة بفواتير لا تدخل هنا حتى لا يتم احتسابها مرتين؛
-        // فهي موجودة بالفعل داخل GrandTotal/TotalChargesAmount للفواتير.
-        // الدفعات المقدمة غير المكتسبة لا تدخل قائمة الدخل.
-        // ⭐ (12-ح7/ج) الرسوم المستقلة (بلا فاتورة) تُسند لفرع الموظف المنشئ —
-        //    نفس منطق الفواتير: CreatedBy ← Users ← Employee ← Branch.
-        //    رسوم منشئها غير مربوط بموظف/فرع تُحسب مع "كل الفروع" فقط (لا تضيع).
+        // من Revenue other: (12-ح7/ج)
+        // - رسوم المعاينة (Inspection): إيراد فقط إذا كانت غير مرتبطة بفاتورة (TransactionId == null)
+        // - أي رسم آخر (شحن، تركيب، تعديل، أخرى): إيراد آخر حتى لو مربوط بفاتورة (TransactionId != null)
+        // - دفعة مقدمة (Advance): ليست إيراداً → تُستبعد نهائياً لأنها التزام (ديون على العميل)
         var query = _db.AdditionalCharges.AsNoTracking()
-            .Where(c => c.TransactionId == null
-                     && c.AppliedToTransactionId == null
-                     && (c.Status == ChargeStatuses.Paid
-                         || c.Status == ChargeStatuses.NonRefundable)
-                     // ⭐ دفعة مقدمة مدفوعة ولم تُطبق = التزام (إيراد غير مكتسب) — تُستبعد من الإيراد
-                     && !(c.ChargeType == ChargeTypes.Advance && c.Status == ChargeStatuses.Paid)
-                     && c.CreatedAt.HasValue
-                     && c.CreatedAt.Value >= dto.FromDate
-                     && c.CreatedAt.Value < dto.ToDate.Date.AddDays(1));
+            .Where(c =>
+                // Advance تستبعد نهائياً (ليست إيراداً)
+                c.ChargeType != ChargeTypes.Advance
+                // شرط رسوم المعاينة: فقط تُحسب إذا كانت غير مرتبطة بفاتورة
+                && (c.ChargeType != ChargeTypes.Inspection || c.TransactionId == null)
+                // الحالة:Paid أو NonRefundable أو Applied (مطبقة على فاتورة)
+                && (c.Status == ChargeStatuses.Paid
+                    || c.Status == ChargeStatuses.NonRefundable
+                    || c.Status == ChargeStatuses.Applied)
+                && c.CreatedAt.HasValue
+                && c.CreatedAt.Value >= dto.FromDate
+                && c.CreatedAt.Value < dto.ToDate.Date.AddDays(1));
 
         if (scope.IsScoped)
             query = query.Where(c => c.CreatedBy != null
@@ -478,7 +479,8 @@ public partial class FinancialReportsService : IFinancialReportsService
                 p.Allowances,
                 p.BonusInPayroll,
                 p.NetSalary,
-                p.PaymentStatus
+                p.PaymentStatus,
+                p.Notes
             })
             .ToListAsync();
 
@@ -486,16 +488,48 @@ public partial class FinancialReportsService : IFinancialReportsService
         // Allowances و BonusInPayroll متداخلان في بعض السجلات القديمة، لذلك نستخدم
         // البدلات أولاً ثم المكافأة كبديل حتى لا يتم احتسابها مرتين.
         // ⭐ استحقاق بالتناسب: الفترات الجزئية (اليوم/أسبوع/مخصصة) تحسب نسبة أيام الفترة من كل شهر
-        //    (الشهر الكامل = 100% — نفس الأرقام القديمة تمامًا للفترات الكاملة)
-        dto.PayrollExpense = Math.Round(SumPayrollProRated(
-            payrolls.Select(p => (p.PayrollMonth, p.BasicSalary + (p.Allowances ?? p.BonusInPayroll ?? 0m))),
-            dto.FromDate, dto.ToDate), 2);
-        dto.PayrollPaidAmount = payrolls
+        // ⭐ PayrollExpense = الصافي الذي تم صرفه فعلياً ( Net Salary Actually Paid ) — وليس المبلغ المستحق
+        dto.PayrollExpense = payrolls
             .Where(p => p.PaymentStatus == PayrollPaymentStatuses.Paid)
             .Sum(p => p.NetSalary ?? p.BasicSalary);
+        dto.PayrollPaidAmount = dto.PayrollExpense;
         dto.PayrollOutstandingAmount = payrolls
             .Where(p => p.PaymentStatus != PayrollPaymentStatuses.Paid)
             .Sum(p => p.NetSalary ?? p.BasicSalary);
+
+        // ⭐ OffPayrollPayments = دفعات خارج الراتب (عمولة/مكافأة/بونص) — فقط المصروف فعلياً
+        //    المبلغ مخزّن في PayrollDetail.Amount (PaymentType="Separate")،
+        //    لأن Payroll.NetSalary عمود محسوب = 0 لهذه الصفوف.
+        var offPayrollRows = await (
+            from d in _db.PayrollDetails.AsNoTracking()
+            join p in _db.Payrolls.AsNoTracking() on d.PayrollID equals p.PayrollId
+            where d.PaymentType == "Separate"
+               && string.Compare(p.PayrollMonth, monthFrom) >= 0
+               && string.Compare(p.PayrollMonth, monthTo) <= 0
+               && p.PaymentStatus == PayrollPaymentStatuses.Paid
+            select new { d.DetailType, d.Amount, BranchId = p.Employee.BranchId })
+            .ToListAsync();
+
+        if (scope.IsScoped)
+            offPayrollRows = offPayrollRows.Where(x => x.BranchId == scope.BranchId.Value).ToList();
+
+        dto.OffPayrollPayments = offPayrollRows.Sum(x => x.Amount);
+        dto.OffPayrollPaymentsByType = offPayrollRows
+            .GroupBy(x => x.DetailType ?? "BonusSeparate")
+            .Select(g => new OffPayrollBreakdownDto
+            {
+                PaymentType = g.Key,
+                PaymentTypeAr = g.Key switch
+                {
+                    "CommissionSeparate" => "عمولة منفصلة",
+                    "BonusSeparate" => "مكافأة منفصلة",
+                    _ => "دفعة خارج الراتب"
+                },
+                Amount = g.Sum(x => x.Amount),
+                Count = g.Count()
+            })
+            .OrderByDescending(x => x.Amount)
+            .ToList();
 
         var loansQuery = _db.EmployeeLoans.AsNoTracking()
             .Where(l => l.LoanDate >= dto.FromDate && l.LoanDate < dto.ToDate.Date.AddDays(1));
@@ -615,6 +649,18 @@ public partial class FinancialReportsService : IFinancialReportsService
                 Amount = dto.PayrollExpense,
                 Count = 0,
                 Color = "#7c3aed"
+            });
+        }
+
+        if (dto.OffPayrollPayments > 0)
+        {
+            dto.ExpensesByGroup.Add(new ExpenseGroupBreakdownDto
+            {
+                GroupId = -2,
+                GroupName = "دفعات خارج الراتب",
+                Amount = dto.OffPayrollPayments,
+                Count = 0,
+                Color = "#f59e0b"
             });
         }
 
@@ -895,13 +941,39 @@ public partial class FinancialReportsService : IFinancialReportsService
         if (scope.IsScoped)
             payrollQuery = payrollQuery.Where(p => p.Employee.BranchId == scope.BranchId.Value);
 
-        var rows = await payrollQuery
-            .Select(p => new { p.PayrollMonth, p.BasicSalary, p.Allowances, p.BonusInPayroll })
+        var payrollRows = await payrollQuery
+            .Select(p => new { p.PayrollId, p.PayrollMonth, p.PaymentStatus, p.BasicSalary, p.NetSalary })
             .ToListAsync();
+
+        var rowsForProrate = new List<(string Month, decimal Amount)>();
+
+        // رواتب مدفوعة
+        foreach (var p in payrollRows.Where(p => p.PaymentStatus == PayrollPaymentStatuses.Paid))
+        {
+            rowsForProrate.Add((p.PayrollMonth, p.NetSalary ?? p.BasicSalary));
+        }
+
+        // دفعات خارج الراتب (من PayrollDetail)
+        var offPayrollDetailQuery = _db.PayrollDetails.AsNoTracking()
+            .Where(d => d.PaymentType == "Separate")
+            .Join(_db.Payrolls.AsNoTracking(), d => d.PayrollID, p => p.PayrollId, (d, p) => new { d, p })
+            .Where(x => string.Compare(x.p.PayrollMonth, monthFrom) >= 0
+                     && string.Compare(x.p.PayrollMonth, monthTo) <= 0
+                     && x.p.PaymentStatus == PayrollPaymentStatuses.Paid);
+
+        if (scope.IsScoped)
+            offPayrollDetailQuery = offPayrollDetailQuery.Where(x => x.p.Employee.BranchId == scope.BranchId.Value);
+
+        var offRows = await offPayrollDetailQuery
+            .Select(x => new { x.p.PayrollMonth, x.d.Amount })
+            .ToListAsync();
+
+        foreach (var o in offRows)
+            rowsForProrate.Add((o.PayrollMonth, o.Amount));
 
         // ⭐ نفس التناسب — اتساق المقارنات والترند مع القائمة الرئيسية
         return Math.Round(SumPayrollProRated(
-            rows.Select(p => (p.PayrollMonth, p.BasicSalary + (p.Allowances ?? p.BonusInPayroll ?? 0m))),
+            rowsForProrate,
             fromDate, toDate), 2);
     }
 
@@ -1493,3 +1565,8 @@ public partial class FinancialReportsService : IFinancialReportsService
             userName);
     }
 }
+
+
+
+
+

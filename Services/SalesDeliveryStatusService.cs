@@ -2661,6 +2661,8 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
                 "sales-delivery-status", "Transactions", transaction.TransactionId);
             await _notify.NotifyRoleAsync(title, message, SystemRoles.AccountManager, dto.UserName,
                 "sales-delivery-status", "Transactions", transaction.TransactionId);
+            await _notify.NotifyRoleAsync(title, message, SystemRoles.GeneralManager, dto.UserName,
+                "sales-delivery-status", "Transactions", transaction.TransactionId);
             await _notify.NotifyRoleAsync(title, message, SystemRoles.SalesManager, dto.UserName,
                 "sales-delivery-status", "Transactions", transaction.TransactionId);
 
@@ -2828,10 +2830,12 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
                 requester, formName: "sales-delivery-status", relatedTable: "Transactions", relatedId: dto.TransactionId);
             await _notify.NotifyRoleAsync("طلب تعديل مواعيد تسليم", msg, "AccountManager",
                 requester, formName: "sales-delivery-status", relatedTable: "Transactions", relatedId: dto.TransactionId);
+            await _notify.NotifyRoleAsync("طلب تعديل مواعيد تسليم", msg, "GeneralManager",
+                requester, formName: "sales-delivery-status", relatedTable: "Transactions", relatedId: dto.TransactionId);
 
             _logger.LogInformation("Schedule change requested for {TxId} by {User} (request {ReqId})",
                 dto.TransactionId, requester, request.Id);
-            return (true, "تم إرسال طلب تعديل المواعيد للمدير ومدير الحسابات — سيصلك إشعار عند البتّ فيه.");
+            return (true, "تم إرسال طلب تعديل المواعيد للمدير العام ومدير الحسابات — سيصلك إشعار عند البتّ فيه.");
         }
         catch (Exception ex) when (IsMissingTablesError(ex))
         {

@@ -28,9 +28,11 @@ public class IncomeStatementDto
 
     // ────────────── المصروفات التشغيلية ──────────────
     public decimal TotalOperatingExpenses { get; set; }
-    public decimal PayrollExpense { get; set; }
-    public decimal PayrollPaidAmount { get; set; }
-    public decimal PayrollOutstandingAmount { get; set; }
+    public decimal PayrollExpense { get; set; }                 // صافي المرتبات التي تم صرفها فعلياً (Net Salary Paid)
+    public decimal PayrollPaidAmount { get; set; }              // (نفس PayrollExpense للتوافق)
+    public decimal PayrollOutstandingAmount { get; set; }       // المرتبات المستحقة وغير المصروفة
+    public decimal OffPayrollPayments { get; set; }             // دفعات خارج الراتب (كوميشن، مكافأة، إلخ)
+    public List<OffPayrollBreakdownDto> OffPayrollPaymentsByType { get; set; } = new();
     public List<ExpenseGroupBreakdownDto> ExpensesByGroup { get; set; } = new();
     public EmployeeLoansSummaryDto EmployeeLoans { get; set; } = new();
 
@@ -58,6 +60,18 @@ public class IncomeStatementDto
 // ============================
 // تفصيل المصروفات بالمجموعة
 // ============================
+
+
+/// <summary>
+/// تفصيل دفعة خارج الراتب حسب النوع (عمولة / مكافأة / إلخ)
+/// </summary>
+public class OffPayrollBreakdownDto
+{
+    public string PaymentType { get; set; } = "";           // "BonusSeparate" / "CommissionSeparate"
+    public string PaymentTypeAr { get; set; } = "";         // "������ ������" / "����� ������"
+    public decimal Amount { get; set; }                     // المبلغ المصروف فعلياً
+    public int Count { get; set; }                          // عدد الدفعات
+}
 public class EmployeeLoansSummaryDto
 {
     public decimal LoansDisbursed { get; set; }
@@ -238,3 +252,5 @@ public static class RecommendationTypes
     public const string Success = "Success";
     public const string Info = "Info";
 }
+
+

@@ -104,7 +104,7 @@ public static class DeliveryPermissions
     /// نفس ثنائي CanOverrideRemaining: المدير ومدير الحسابات فقط.
     /// </summary>
     public static bool CanDecideScheduleChange(ClaimsPrincipal user) =>
-        user.IsInRole(RoleAdmin) || user.IsInRole(RoleAccountManager);
+        user.IsInRole(RoleAdmin) || user.IsInRole(RoleGeneralManager) || user.IsInRole(RoleAccountManager);
 
     // ════════════════════════════════════════════════════════
     //        صيانة التسليمات — حلقة المرتجعات (القسم 11.6)
