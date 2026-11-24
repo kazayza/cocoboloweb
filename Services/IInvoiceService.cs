@@ -62,6 +62,8 @@ public interface IInvoiceService
     // warehouseId = مخزن الفاتورة (وجهة التسليم) — لحساب StockInInvoiceWarehouse فقط (ليس فلترة)
     // searchWarehouseId = فلتر عرض اختياري: يعرض المنتجات المتوفرة في مخزن محدد مرتبة برصيده فيه
     Task<List<ProductLookupDto>> SearchShowroomProductsAsync(string? search, int max = 200, int? warehouseId = null, int? searchWarehouseId = null);
+    // عرض السعر: أصناف غير مربوطة بعميل، من أي مخزن. البحث بالاسم مش محدود بأول دفعة أسماء.
+    Task<List<ProductLookupDto>> SearchQuotationStockProductsAsync(string? search, int max = 200);
 
     Task<List<Models.Warehouse>> GetWarehousesAsync();
     Task<List<Models.Warehouse>> GetWarehousesForUserAsync(string userName);

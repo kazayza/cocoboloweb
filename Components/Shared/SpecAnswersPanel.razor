@@ -1,0 +1,114 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@inject ISpecService SpecService
+
+@if (_questions.Count > 0)
+{
+    <MudText Typo="Typo.subtitle2" Class="mt-2">متغيرات المجموعة</MudText>
+    <MudText Typo="Typo.caption" Color="Color.Secondary">@Hint</MudText>
+    <MudGrid Class="mt-1">
+        @foreach (var q in _questions)
+        {
+            <MudItem xs="12" sm="6" md="4">
+                @if (q.DataType == SpecDataTypes.Choice)
+                {
+                    <MudSelect T="int?" Label="@q.QuestionNameAr" Value="@GetOption(q.QuestionId)"
+                               ValueChanged="v => SetOption(q.QuestionId, v)" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" Disabled="ReadOnly">
+                        @foreach (var opt in q.Options)
+                        {
+                            <MudSelectItem T="int?" Value="@opt.OptionId">@opt.OptionNameAr</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+                else if (q.DataType == SpecDataTypes.Number)
+                {
+                    <MudNumericField T="decimal?" Label="@Label(q)" Value="@GetNumber(q.QuestionId)"
+                                     ValueChanged="v => SetNumber(q.QuestionId, v)" Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="ReadOnly" />
+                }
+                else
+                {
+                    <MudTextField T="string" Label="@q.QuestionNameAr" Value="@GetText(q.QuestionId)"
+                                  ValueChanged="v => SetText(q.QuestionId, v)" Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="ReadOnly" />
+                }
+            </MudItem>
+        }
+    </MudGrid>
+}
+
+@code {
+    [Parameter] public int GroupId { get; set; }
+    [Parameter] public string OwnerType { get; set; } = SpecOwners.Product;
+    [Parameter] public int OwnerId { get; set; }
+    [Parameter] public string Hint { get; set; } = "القوائم مشتركة، والإجابة خاصة بهذا السجل.";
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public Dictionary<int, SpecAnswerDto>? SharedDrafts { get; set; }
+    [Parameter] public EventCallback OnDraftsReady { get; set; }
+
+    private int _loadedGroup;
+    private int _loadedOwner;
+    private List<SpecQuestionDto> _questions = new();
+    private readonly Dictionary<int, SpecAnswerDto> _localDrafts = new();
+    private Dictionary<int, SpecAnswerDto> Drafts => SharedDrafts ?? _localDrafts;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        try
+        {
+            if (GroupId != _loadedGroup)
+            {
+                _loadedGroup = GroupId;
+                _questions = await SpecService.GetQuestionsAsync(GroupId);
+            }
+            if (OwnerId > 0 && OwnerId != _loadedOwner)
+            {
+                _loadedOwner = OwnerId;
+                foreach (var a in await SpecService.GetAnswersAsync(OwnerType, OwnerId))
+                {
+                    if (!Drafts.ContainsKey(a.QuestionId))
+                        Drafts[a.QuestionId] = a;
+                }
+            }
+            if (_questions.Count > 0 && OnDraftsReady.HasDelegate)
+                await OnDraftsReady.InvokeAsync();
+        }
+        catch
+        {
+            _questions = new();
+        }
+    }
+
+    public async Task<(bool Ok, string Message)> SaveAsync(int ownerId)
+    {
+        if (ReadOnly || ownerId <= 0) return (true, "");
+        try
+        {
+            if (_questions.Count == 0 && GroupId > 0)
+                _questions = await SpecService.GetQuestionsAsync(GroupId);
+            if (_questions.Count == 0) return (true, "");
+            foreach (var a in await SpecService.GetAnswersAsync(OwnerType, ownerId))
+            {
+                if (!Drafts.ContainsKey(a.QuestionId))
+                    Drafts[a.QuestionId] = a;
+            }
+            var answers = _questions.Select(q =>
+            {
+                Drafts.TryGetValue(q.QuestionId, out var d);
+                return d ?? new SpecAnswerDto { QuestionId = q.QuestionId };
+            }).ToList();
+            return await SpecService.SaveAnswersAsync(OwnerType, ownerId, answers);
+        }
+        catch (Exception ex)
+        {
+            return (false, "تعذر حفظ المتغيرات: " + ex.Message);
+        }
+    }
+
+    private string Label(SpecQuestionDto q) => string.IsNullOrWhiteSpace(q.UnitName) ? q.QuestionNameAr : $"{q.QuestionNameAr} ({q.UnitName})";
+    private SpecAnswerDto Draft(int questionId) => Drafts.TryGetValue(questionId, out var d) ? d : Drafts[questionId] = new SpecAnswerDto { QuestionId = questionId };
+    private int? GetOption(int id) => Drafts.TryGetValue(id, out var d) ? d.OptionId : null;
+    private decimal? GetNumber(int id) => Drafts.TryGetValue(id, out var d) ? d.NumberValue : null;
+    private string? GetText(int id) => Drafts.TryGetValue(id, out var d) ? d.TextValue : null;
+    private void SetOption(int id, int? value) => Draft(id).OptionId = value;
+    private void SetNumber(int id, decimal? value) => Draft(id).NumberValue = value;
+    private void SetText(int id, string? value) => Draft(id).TextValue = value;
+}

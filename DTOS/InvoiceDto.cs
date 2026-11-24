@@ -240,6 +240,8 @@ public class InvoiceFilterDto
     public bool? IsDelivered { get; set; }
     public bool? HasRemaining { get; set; }
     public bool? IsOverdue { get; set; }
+    // شراء مباشر من المصنع، مش مرآة فاتورة بيع. null = الكل.
+    public bool? IsDirectFactoryPurchase { get; set; }
     public string TransactionType { get; set; } = "Sale";
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 25;
@@ -539,6 +541,8 @@ public static class SystemRoles
     public const string ProductionManager = "ProductionManager";
     public const string FactoryManager = "FactoryManager";
     public const string DeliveryOfficer = "DeliveryOfficer";
+    public const string DesignEngineer = "DesignEngineer";
+    public const string ExecutionEngineer = "ExecutionEngineer";
 }
 // === قائمة الرسوم ===
 public class AdditionalChargeListDto

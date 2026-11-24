@@ -1,0 +1,497 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Hosting
+@inject ISpecService SpecService
+@inject ISnackbar Snackbar
+@inject IWebHostEnvironment Env
+
+<section class="spec-value-wrap">
+    <div class="spec-value-head">
+        <div>
+            <h3>@Title</h3>
+            <p>ابحث في الحقل فتظهر القيم. لو القيمة غير موجودة، اكتبها ثم اضغط إضافة. أو اختر لا يوجد.</p>
+        </div>
+    </div>
+    @if (_rows.Count == 0)
+    {
+        <p class="spec-value-foot">لا توجد أنواع متغيرات بعد. أضفها من إدارة المتغيرات.</p>
+    }
+    else
+    {
+        @if (!ReadOnly && Missing.Count > 0)
+        {
+            <div class="spec-miss">@SpecVariableRules.MissingMessage("", Missing)</div>
+        }
+        <div class="spec-all-grid">
+            @foreach (var row in _rows)
+            {
+                var matches = Matches(row).ToList();
+                var isNew = IsNew(row);
+                var empty = string.IsNullOrWhiteSpace(row.Text);
+                var images = ImagesOf(row.QuestionId);
+                <div class="spec-card @(empty && !ReadOnly ? "is-empty" : !empty ? "is-done" : "")">
+                    <label>@row.Name</label>
+                    <div class="spec-pick">
+                        <div class="spec-pick-field">
+                            <MudTextField T="string" Value="@Display(row)" ValueChanged="@(v => OnText(row, v))" Immediate="true"
+                                          Variant="Variant.Outlined" Placeholder="ابحث أو اكتب قيمة جديدة"
+                                          Disabled="ReadOnly" MaxLength="300" Margin="Margin.Dense"
+                                          OnFocus="@(() => Open(row))"
+                                          OnBlur="@(_ => Close(row))" />
+                        </div>
+                        @if (!ReadOnly)
+                        {
+                            <label class="var-upload @(images.Count > 0 ? "has-photos" : null)" title="@(images.Count > 0 ? $"إضافة صور أخرى ({images.Count})" : "إضافة صور للمتغير")" aria-label="إضافة صور للمتغير">
+                                <InputFile OnChange="@(e => UploadImages(e, row.QuestionId))" accept="image/*" multiple />
+                                <span class="var-upload-face">
+                                    @if (images.Count > 0)
+                                    {
+                                        <img src="@images[images.Count - 1].Path" alt="" />
+                                    }
+                                    else
+                                    {
+                                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                                            <rect x="2.6" y="5.1" width="13.6" height="13.8" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                                            <circle cx="6.7" cy="9.15" r="1.15" fill="currentColor"/>
+                                            <path d="M5.15 15.55l2.55-2.55 1.7 1.65 2.05-2.25 2.45 3.15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                            <circle cx="17.85" cy="7.15" r="4.15" fill="#d4af37"/>
+                                            <path d="M17.85 5.2v3.9M15.9 7.15h3.9" fill="none" stroke="#1c1917" stroke-width="1.6" stroke-linecap="round"/>
+                                        </svg>
+                                    }
+                                </span>
+                                @if (images.Count > 0)
+                                {
+                                    <span class="var-upload-badge">@images.Count</span>
+                                }
+                            </label>
+                        }
+                    </div>
+                    @if (!ReadOnly && row.Open && (matches.Count > 0 || isNew))
+                    {
+                        <div class="spec-suggest">
+                            @foreach (var match in matches)
+                            {
+                                <button type="button" @onmousedown:preventDefault @onmousedown="@(() => Pick(row, match))">@match</button>
+                            }
+                            @if (isNew)
+                            {
+                                <button type="button" class="is-add" @onmousedown:preventDefault @onmousedown="@(() => AddNew(row))">إضافة «@Typed(row)»</button>
+                            }
+                        </div>
+                    }
+                    @if (!ReadOnly)
+                    {
+                        <div class="spec-actions">
+                            @if (isNew)
+                            {
+                                <button type="button" class="spec-add-btn" @onmousedown:preventDefault @onmousedown="@(() => AddNew(row))">إضافة القيمة</button>
+                            }
+                            <button type="button" class="spec-none-btn" @onmousedown:preventDefault @onmousedown="@(() => SetNone(row))">لا يوجد</button>
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(row.Note))
+                    {
+                        <small class="spec-note">@row.Note</small>
+                    }
+                    @if (images.Count > 0)
+                    {
+                        <div class="var-gallery">
+                            @foreach (var image in images)
+                            {
+                                <figure class="var-shot">
+                                    <img src="@image.Path" alt="@row.Name" />
+                                    @if (!ReadOnly)
+                                    {
+                                        <button type="button" title="حذف الصورة" @onclick="@(() => RemoveImage(image))">×</button>
+                                    }
+                                </figure>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</section>
+
+<style>
+    .spec-value-wrap {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-right: 4px solid var(--gold, #d4af37);
+        border-radius: 16px;
+        padding: .95rem 1rem 1rem;
+        margin-bottom: 1rem;
+    }
+    .spec-value-head h3 { margin: 0; font-size: 1rem; font-weight: 800; color: var(--mud-palette-text-primary); }
+    .spec-value-head p, .spec-value-foot { margin: .25rem 0 0; font-size: .82rem; color: var(--mud-palette-text-secondary); }
+    .spec-miss {
+        margin-top: .8rem;
+        background: #fff7ed;
+        color: #9a3412;
+        border: 1px solid #fdba74;
+        border-radius: 12px;
+        padding: .7rem .85rem;
+        font-weight: 700;
+    }
+    .spec-all-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: .75rem;
+        margin-top: .9rem;
+    }
+    .spec-card {
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 14px;
+        padding: .7rem .75rem .55rem;
+        background: var(--mud-palette-background);
+        min-width: 0;
+    }
+    .spec-card.is-empty { border-color: #fdba74; background: #fffaf5; }
+    .spec-card.is-done { border-color: #bbf7d0; }
+    .spec-card label { display: block; font-weight: 800; margin-bottom: .15rem; color: var(--mud-palette-text-primary); }
+    .spec-suggest {
+        margin-top: .35rem;
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 10px;
+        max-height: 9.5rem;
+        overflow: auto;
+        background: var(--mud-palette-surface);
+    }
+    .spec-suggest button {
+        display: block;
+        width: 100%;
+        text-align: right;
+        background: transparent;
+        border: 0;
+        border-bottom: 1px solid var(--mud-palette-divider);
+        padding: .45rem .65rem;
+        cursor: pointer;
+        color: var(--mud-palette-text-primary);
+    }
+    .spec-suggest button.is-add { color: #9a3412; font-weight: 800; }
+    .spec-actions { display: flex; gap: .35rem; align-items: center; margin-top: .35rem; flex-wrap: wrap; }
+    .spec-add-btn, .spec-none-btn {
+        border-radius: 8px;
+        padding: .35rem .7rem;
+        cursor: pointer;
+        font-weight: 700;
+    }
+    .spec-add-btn { border: 0; background: var(--mud-palette-primary); color: var(--mud-palette-primary-text); }
+    .spec-none-btn { border: 1px solid var(--mud-palette-divider); background: transparent; color: var(--mud-palette-text-primary); }
+    .spec-note { display: block; margin-top: .25rem; color: #166534; font-weight: 700; }
+    .spec-pick { display: flex; align-items: center; gap: .45rem; }
+    .spec-pick-field { flex: 1; min-width: 0; }
+    .spec-pick-field .mud-input-control { margin-top: 0; margin-bottom: 0; }
+    .var-upload {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        padding: 3px;
+        border: 1.5px solid #d4af37;
+        border-radius: 12px;
+        background: var(--mud-palette-surface);
+        color: var(--mud-palette-text-primary);
+        cursor: pointer;
+        flex: 0 0 auto;
+        box-shadow: 0 1px 2px rgba(28, 25, 23, .06);
+        transition: box-shadow .15s ease, transform .15s ease, background .15s ease;
+    }
+    .var-upload:hover {
+        background: color-mix(in srgb, #d4af37 14%, var(--mud-palette-surface));
+        box-shadow: 0 6px 16px rgba(212, 175, 55, .28);
+        transform: translateY(-1px);
+    }
+    .var-upload:focus-within { outline: 2px solid #d4af37; outline-offset: 2px; }
+    .var-upload input { display: none; }
+    .var-upload-face { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 8px; overflow: hidden; }
+    .var-upload svg { width: 26px; height: 26px; display: block; }
+    .var-upload.has-photos { border-color: #d4af37; background: #fff; }
+    .var-upload-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .var-upload-badge {
+        position: absolute;
+        top: -7px;
+        inset-inline-end: -7px;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 4px;
+        border-radius: 999px;
+        background: #1c1917;
+        color: #f6e7b4;
+        border: 2px solid #fff;
+        font-size: 10px;
+        font-weight: 800;
+        line-height: 14px;
+        text-align: center;
+        pointer-events: none;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, .18);
+    }
+    .var-gallery { display: flex; gap: .5rem; overflow-x: auto; margin-top: .6rem; padding-bottom: .15rem; }
+    .var-shot { position: relative; flex: 0 0 132px; height: 96px; margin: 0; border-radius: 12px; overflow: hidden; border: 1px solid var(--mud-palette-divider); background: #f8fafc; box-shadow: 0 6px 16px rgba(15, 23, 42, .08); }
+    .var-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .var-shot button { position: absolute; top: 5px; left: 5px; width: 22px; height: 22px; border: 0; border-radius: 50%; background: rgba(15, 23, 42, .72); color: #fff; font-size: .95rem; line-height: 1; cursor: pointer; }
+    @@media (max-width: 1100px) { .spec-all-grid { grid-template-columns: 1fr 1fr; } }
+    @@media (max-width: 700px) { .spec-all-grid { grid-template-columns: 1fr; } }
+</style>
+
+@code {
+    [Parameter] public List<SpecQuestionDto> Questions { get; set; } = new();
+    [Parameter] public Dictionary<int, SpecAnswerDto> Drafts { get; set; } = new();
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public string Title { get; set; } = "المتغيرات";
+    [Parameter] public List<SpecVariableImageDto> VariableImages { get; set; } = new();
+    [Parameter] public EventCallback<SpecImagePick> ImagesAdded { get; set; }
+    [Parameter] public EventCallback<SpecVariableImageDto> ImageRemoved { get; set; }
+    private const long MaxImageSize = 5 * 1024 * 1024;
+
+    private readonly List<RowModel> _rows = new();
+    private string _signature = "";
+    private List<string> Missing => _rows.Where(r => string.IsNullOrWhiteSpace(r.Text)).Select(r => r.Name).ToList();
+
+    private List<SpecVariableImageDto> ImagesOf(int questionId)
+        => VariableImages.Where(i => i.QuestionId == questionId).ToList();
+
+    private async Task UploadImages(InputFileChangeEventArgs e, int questionId)
+    {
+        var files = e.GetMultipleFiles(12).ToList();
+        if (files.Count == 0) return;
+        if (ImagesAdded.HasDelegate)
+        {
+            await ImagesAdded.InvokeAsync(new SpecImagePick { QuestionId = questionId, Files = files });
+            return;
+        }
+        var added = new List<SpecVariableImageDto>();
+        foreach (var file in files)
+        {
+            if (file.Size > MaxImageSize) continue;
+            var path = await SaveImage(file);
+            if (path == null) continue;
+            added.Add(new SpecVariableImageDto { QuestionId = questionId, Path = path });
+        }
+        foreach (var image in added)
+            VariableImages.Add(image);
+    }
+
+    private async Task RemoveImage(SpecVariableImageDto image)
+    {
+        if (ImageRemoved.HasDelegate)
+        {
+            await ImageRemoved.InvokeAsync(image);
+            return;
+        }
+        VariableImages.Remove(image);
+    }
+
+    private async Task<string?> SaveImage(IBrowserFile file)
+    {
+        try
+        {
+            var folder = Path.Combine(Env.WebRootPath, "uploads", "variable-images");
+            Directory.CreateDirectory(folder);
+            var fileName = $"{Guid.NewGuid()}{Path.GetExtension(file.Name)}";
+            await using var stream = new FileStream(Path.Combine(folder, fileName), FileMode.Create);
+            await file.OpenReadStream(MaxImageSize).CopyToAsync(stream);
+            return $"/uploads/variable-images/{fileName}";
+        }
+        catch
+        {
+            Snackbar.Add("تعذر رفع الصورة.", Severity.Error);
+            return null;
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var visible = Questions.Where(SpecVariableRules.IsCatalogVariable).OrderBy(q => q.SortOrder).ThenBy(q => q.QuestionId).ToList();
+        var signature = string.Join(",", visible.Select(q => q.QuestionId));
+        if (signature != _signature)
+        {
+            _signature = signature;
+            _rows.Clear();
+            foreach (var question in visible)
+            {
+                var options = question.Options.Count > 0
+                    ? question.Options
+                    : question.ListId.HasValue ? await SpecService.GetOptionsAsync(question.ListId.Value) : new();
+                var names = options.Select(o => o.OptionNameAr).ToList();
+                names.AddRange(await SpecService.GetTextSuggestionsAsync(question.QuestionId));
+                Drafts.TryGetValue(question.QuestionId, out var answer);
+                var text = answer?.TextValue;
+                if (string.IsNullOrWhiteSpace(text) && answer?.OptionId is int optionId)
+                    text = options.FirstOrDefault(o => o.OptionId == optionId)?.OptionNameAr;
+                _rows.Add(new RowModel
+                {
+                    QuestionId = question.QuestionId,
+                    ListId = question.ListId,
+                    Name = string.IsNullOrWhiteSpace(question.QuestionNameAr) ? (question.ListNameAr ?? "متغير") : question.QuestionNameAr,
+                    Text = text ?? "",
+                    OptionId = answer?.OptionId,
+                    Suggestions = names.Where(x => !string.IsNullOrWhiteSpace(x) && !SpecVariableRules.IsNone(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(x => x)
+                        .ToList()
+                });
+            }
+        }
+        SyncFromDrafts();
+    }
+
+    private void SyncFromDrafts()
+    {
+        foreach (var row in _rows)
+        {
+            if (!string.IsNullOrWhiteSpace(row.Text)) continue;
+            if (!Drafts.TryGetValue(row.QuestionId, out var answer)) continue;
+            if (!string.IsNullOrWhiteSpace(answer.TextValue))
+                row.Text = answer.TextValue;
+        }
+    }
+
+    private static string Typed(RowModel row) => (row.Open ? row.Query : row.Text)?.Trim() ?? "";
+
+    private static string Display(RowModel row) => row.Open ? row.Query : row.Text;
+
+    private void Open(RowModel row)
+    {
+        row.Query = row.Text;
+        row.Open = true;
+        row.Picking = false;
+    }
+
+    private void Close(RowModel row)
+    {
+        _ = CloseLater(row);
+    }
+
+    private async Task CloseLater(RowModel row)
+    {
+        await Task.Delay(200);
+        if (row.Picking)
+        {
+            row.Picking = false;
+            row.Open = false;
+            return;
+        }
+        var query = row.Query?.Trim() ?? "";
+        var exact = row.Suggestions.FirstOrDefault(x => string.Equals(x, query, StringComparison.OrdinalIgnoreCase));
+        if (exact != null)
+            await Pick(row, exact);
+        else if (string.IsNullOrWhiteSpace(query))
+        {
+            row.Text = "";
+            row.OptionId = null;
+            row.Open = false;
+            WriteDraft(row);
+        }
+        else
+        {
+            row.Query = row.Text;
+            row.Open = false;
+        }
+    }
+
+    private IEnumerable<string> Matches(RowModel row)
+    {
+        var query = Typed(row);
+        if (string.IsNullOrWhiteSpace(query) || string.Equals(query, row.Text?.Trim(), StringComparison.OrdinalIgnoreCase))
+            return row.Suggestions.Take(8);
+        return row.Suggestions.Where(x => x.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(12);
+    }
+
+    private bool IsNew(RowModel row)
+    {
+        var text = Typed(row);
+        if (string.IsNullOrWhiteSpace(text) || SpecVariableRules.IsNone(text) || text.Length > 100)
+            return false;
+        return !row.Suggestions.Any(x => string.Equals(x, text, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void OnText(RowModel row, string? value)
+    {
+        row.Query = value ?? "";
+        row.Open = true;
+        row.Note = "";
+    }
+
+    private async Task Pick(RowModel row, string value)
+    {
+        row.Picking = true;
+        row.Text = value;
+        row.Query = value;
+        row.Open = false;
+        row.Note = "";
+        row.OptionId = await OptionIdFor(row, value);
+        WriteDraft(row);
+    }
+
+    private void SetNone(RowModel row)
+    {
+        row.Picking = true;
+        row.Text = SpecVariableRules.NoneText;
+        row.Query = SpecVariableRules.NoneText;
+        row.OptionId = null;
+        row.Open = false;
+        row.Note = "";
+        WriteDraft(row);
+    }
+
+    private async Task AddNew(RowModel row)
+    {
+        var text = Typed(row);
+        row.Picking = true;
+        row.Open = false;
+        if (ReadOnly || !row.ListId.HasValue || string.IsNullOrWhiteSpace(text) || SpecVariableRules.IsNone(text) || text.Length > 100)
+            return;
+        var (ok, _, optionId) = await SpecService.AddOptionAsync(row.ListId.Value, text);
+        if (!row.Suggestions.Any(x => string.Equals(x, text, StringComparison.OrdinalIgnoreCase)))
+            row.Suggestions.Add(text);
+        row.Suggestions = row.Suggestions
+            .Where(x => !string.IsNullOrWhiteSpace(x) && !SpecVariableRules.IsNone(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x)
+            .ToList();
+        row.Text = text;
+        row.Query = text;
+        row.OptionId = ok && optionId.HasValue ? optionId : await OptionIdFor(row, text);
+        row.Note = ok ? "تمت إضافة القيمة وحفظها في القائمة." : "";
+        WriteDraft(row);
+    }
+
+    private async Task<int?> OptionIdFor(RowModel row, string value)
+    {
+        if (!row.ListId.HasValue) return null;
+        var options = await SpecService.GetOptionsAsync(row.ListId.Value);
+        return options.FirstOrDefault(o => string.Equals(o.OptionNameAr, value, StringComparison.OrdinalIgnoreCase))?.OptionId;
+    }
+
+    private void WriteDraft(RowModel row)
+    {
+        var text = row.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            Drafts.Remove(row.QuestionId);
+            return;
+        }
+        if (!Drafts.TryGetValue(row.QuestionId, out var answer))
+            Drafts[row.QuestionId] = answer = new SpecAnswerDto { QuestionId = row.QuestionId };
+        answer.OptionId = SpecVariableRules.IsNone(text) ? null : row.OptionId;
+        answer.TextValue = text;
+    }
+
+    private sealed class RowModel
+    {
+        public int QuestionId { get; set; }
+        public int? ListId { get; set; }
+        public string Name { get; set; } = "";
+        public string Text { get; set; } = "";
+        public string Query { get; set; } = "";
+        public int? OptionId { get; set; }
+        public bool Open { get; set; }
+        public bool Picking { get; set; }
+        public string Note { get; set; } = "";
+        public List<string> Suggestions { get; set; } = new();
+    }
+}

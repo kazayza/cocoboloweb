@@ -527,16 +527,12 @@ Title="طباعة" />
         </MudAlert>
 
         <MudAlert Severity="Severity.Warning" Class="mb-3" Icon="@Icons.Material.Filled.Event">
-            <div><strong>تنبيه مهم بخصوص التواريخ:</strong></div>
-            <div>تاريخ صلاحية عرض السعر <strong>@(_convertQuotationValidUntil?.ToString("yyyy/MM/dd") ?? "غير محدد")</strong> لن يتم نسخه إلى الفاتورة.</div>
-            <div>سيتم احتساب تاريخ الفاتورة من التاريخ الذي تختاره أدناه، ثم تحديد تاريخ التسليم/الاستحقاق على أساس <strong>أكبر مدة تصنيع</strong> بين الأصناف.</div>
-            <div>أكبر مدة تصنيع حالية: <strong>@_convertMaxPeriodDays يوم</strong></div>
-            <div>تاريخ التسليم/الاستحقاق المتوقع: <strong>@(_convertCalculatedDueDate?.ToString("yyyy/MM/dd") ?? "-")</strong></div>
+            تاريخ التسليم حسب أطول مدة (@_convertMaxPeriodDays يوم). عدّله لو الاتفاق مختلف. الفاتورة بتاريخ اليوم، وصلاحية العرض لا تُنسخ.
         </MudAlert>
 
-        <MudDatePicker Date="_convertInvoiceDate"
-                       DateChanged="OnConvertInvoiceDateChanged"
-                       Label="تاريخ الفاتورة"
+        <MudDatePicker Date="_convertDeliveryDate"
+                       DateChanged="OnConvertDeliveryDateChanged"
+                       Label="تاريخ التسليم"
                        Variant="Variant.Outlined"
                        Class="mb-3" />
 
@@ -724,13 +720,22 @@ Title="طباعة" />
     font-size: 0.85rem !important;
     padding: 0.4rem 1.05rem !important;
     background: #ffffff !important;
+    color: var(--navy-dark, #14213d) !important;
+    border: 1px solid rgba(20, 33, 61, 0.12) !important;
     box-shadow: 0 5px 16px rgba(20,33,61,0.28) !important;
     white-space: nowrap;
     text-transform: none !important;
     animation: fabIn 0.2s ease backwards;
 }
+    .fab-action .mud-button-label,
+    .fab-action .mud-button-icon-start,
+    .fab-action .mud-icon-root {
+    color: var(--navy-dark, #14213d) !important;
+}
     .fab-action:hover {
     transform: translateY(-1px);
+    background: #ffffff !important;
+    color: var(--navy-dark, #14213d) !important;
     box-shadow: 0 7px 20px rgba(20,33,61,0.34) !important;
 }
     .fab-action:nth-of-type(1) { animation-delay: 0.10s; }
@@ -1043,6 +1048,7 @@ private bool _didInitialLoad = false;
     private bool _showDeleteDialog, _isDeleting;
 
     private DateTime? _convertInvoiceDate = DateTime.Today;
+    private DateTime? _convertDeliveryDate;
     private DateTime? _convertCalculatedDueDate;
     private DateTime? _convertQuotationValidUntil;
     private int _convertMaxPeriodDays;
@@ -1482,10 +1488,9 @@ private void SyncActiveQuickFilter()
         _showConvertDialog = true;
     }
 
-    private Task OnConvertInvoiceDateChanged(DateTime? date)
+    private Task OnConvertDeliveryDateChanged(DateTime? date)
     {
-        _convertInvoiceDate = date ?? DateTime.Today;
-        RecalculateConvertDatesPreview();
+        _convertDeliveryDate = date;
         return Task.CompletedTask;
     }
 
@@ -1493,6 +1498,7 @@ private void SyncActiveQuickFilter()
     {
         var invoiceDate = (_convertInvoiceDate ?? DateTime.Today).Date;
         _convertCalculatedDueDate = invoiceDate.AddDays(_convertMaxPeriodDays);
+        _convertDeliveryDate = _convertCalculatedDueDate;
     }
 
     private void ToggleAdvanceSelection(int chargeId, bool selected)
@@ -1524,8 +1530,13 @@ private void SyncActiveQuickFilter()
         _isConverting = true;
         try
         {
+            if (_convertDeliveryDate == null)
+            {
+                Snackbar.Add("حدد تاريخ التسليم.", Severity.Warning);
+                return;
+            }
             var (ok, msg, invId) = await QuotationService.ConvertToInvoiceAsync(
-                _selected.QuotationId, _selectedAdvanceChargeIds.ToList(), _currentUserName!, _convertInvoiceDate);
+                _selected.QuotationId, _selectedAdvanceChargeIds.ToList(), _currentUserName!, DateTime.Today, _convertDeliveryDate);
 
             Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
 

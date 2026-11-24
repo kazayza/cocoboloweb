@@ -1,0 +1,1768 @@
+@page "/job-spec"
+@page "/customers/{PartyId:int}/job-spec"
+@page "/products/{ProductId:int}/job-spec"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using System.Data
+@using System.Linq
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Hosting
+
+@inject db24804Context Db
+@inject ISpecService SpecService
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@inject NotificationService NotificationService
+@inject JobOrderEngineerService Engineers
+@inject IWebHostEnvironment Env
+
+<PageTitle>جوب أوردر</PageTitle>
+
+@if (_loading)
+{
+    <div class="js-loading"><MudProgressCircular Indeterminate="true" /> <p>جاري تجهيز الجوب أوردر...</p></div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error">ليس لديك صلاحية عرض الجوب أوردر.</MudAlert>
+}
+else if (_missing)
+{
+    <MudAlert Severity="Severity.Warning">@(_partyId > 0 ? "العميل غير موجود." : "المنتج غير موجود.")</MudAlert>
+}
+else if (_searchMode)
+{
+    <div class="js-page" dir="rtl">
+        <header class="js-head">
+            <div class="js-id">
+                <span class="js-mark"><MudIcon Icon="@Icons.Material.Filled.Search" /></span>
+                <div>
+                    <div class="js-title-line">
+                        <h1>الجوب أوردر</h1>
+                        <span class="js-badge">بحث العملاء</span>
+                    </div>
+                    <p>ابحث بالاسم أو الهاتف، ثم افتح ملف المواصفات.</p>
+                </div>
+            </div>
+        </header>
+        <section class="js-card js-search-card">
+            <div class="js-search-wrap">
+                <MudIcon Icon="@Icons.Material.Filled.Search" />
+                <input class="js-search" @bind="_customerSearch" @bind:event="oninput" placeholder="اسم العميل أو رقم الهاتف" />
+            </div>
+            <p class="js-meta">@FilteredCustomers.Count نتيجة</p>
+            @if (FilteredCustomers.Count == 0)
+            {
+                <p class="js-wait">لا توجد نتائج مطابقة.</p>
+            }
+            else
+            {
+                <div class="js-picks">
+                    @foreach (var customer in FilteredCustomers)
+                    {
+                        <button type="button" class="js-pick" @onclick="() => OpenCustomer(customer.PartyId)">
+                            <span class="js-avatar">@Initial(customer.PartyName)</span>
+                            <span class="js-pick-body">
+                                <strong>@customer.PartyName</strong>
+                                <span>@(string.IsNullOrWhiteSpace(customer.Phone) ? "بدون رقم هاتف" : customer.Phone)</span>
+                            </span>
+                            <span class="js-count">@customer.ProductCount منتج</span>
+                        </button>
+                    }
+                </div>
+            }
+        </section>
+    </div>
+}
+else
+{
+    <div class="js-page" dir="rtl">
+        <header class="js-head">
+            <div class="js-id">
+                <span class="js-mark"><MudIcon Icon="@Icons.Material.Filled.Description" /></span>
+                <div>
+                    <div class="js-title-line">
+                        <h1>جوب أوردر</h1>
+                        <span class="js-badge">ملف المواصفات</span>
+                    </div>
+                    <div class="js-contact">
+                        <span><MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" /> @(_partyId > 0 ? _partyName : (VisibleCards.FirstOrDefault()?.Name ?? "منتج غير مرتبط بعميل"))</span>
+                        @if (!string.IsNullOrWhiteSpace(_partyPhone))
+                        {
+                            <span><MudIcon Icon="@Icons.Material.Filled.Phone" Size="Size.Small" /> @_partyPhone</span>
+                            <button type="button" class="js-copy js-no-print" @onclick="CopyPhone">
+                                <MudIcon Icon="@(_phoneCopied ? Icons.Material.Filled.Check : Icons.Material.Filled.ContentCopy)" Size="Size.Small" />
+                                <span>@(_phoneCopied ? "تم النسخ" : "نسخ")</span>
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+            <div class="js-actions js-no-print">
+                @if (_partyId > 0)
+                {
+                    <button type="button" class="js-act gold" @onclick="AddAnother"><MudIcon Icon="@Icons.Material.Filled.AddBox" Size="Size.Small" /> منتج آخر</button>
+                }
+                <button type="button" class="js-act" @onclick="OpenAllInquiries"><MudIcon Icon="@Icons.Material.Filled.QuestionAnswer" Size="Size.Small" /> الاستفسارات @InquiryCount</button>
+                <button type="button" class="js-act" disabled="@_printing" @onclick="Print"><MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Size="Size.Small" /> طباعة</button>
+                <button type="button" class="js-act" @onclick="GoBack"><MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Small" /> رجوع</button>
+            </div>
+        </header>
+        @if (_partyId > 0)
+        {
+            <section class="js-engineers">
+                @if (!_engineersReady)
+                {
+                    <p>شغّل سكربت مهندسي الجوب أوردر مرة واحدة حتى يُحفظ الاستلام والتحويل.</p>
+                }
+                else
+                {
+                    <div>
+                        <span>مهندس التصميم</span>
+                        <strong>@(string.IsNullOrWhiteSpace(_designEngineerName) ? "لم يُستلم" : _designEngineerName)</strong>
+                        @if (_canTransferDesign)
+                        {
+                            <button type="button" class="js-no-print" @onclick='() => OpenTransfer(JobOrderEngineerService.DesignSeat)'>تحويل</button>
+                        }
+                    </div>
+                    <div>
+                        <span>مهندس التنفيذ</span>
+                        <strong>@(string.IsNullOrWhiteSpace(_executionEngineerName) ? "لم يُستلم" : _executionEngineerName)</strong>
+                        @if (_canTransferExecution)
+                        {
+                            <button type="button" class="js-no-print" @onclick='() => OpenTransfer(JobOrderEngineerService.ExecutionSeat)'>تحويل</button>
+                        }
+                    </div>
+                }
+            </section>
+            @if (_transferSeat != null)
+            {
+                <section class="js-engineers js-transfer js-no-print">
+                    <strong>@(_transferSeat == JobOrderEngineerService.DesignSeat ? "تحويل مهندس التصميم" : "تحويل مهندس التنفيذ")</strong>
+                    <MudSelect T="int?" @bind-Value="_transferEmployeeId" Label="المهندس" Variant="Variant.Outlined" Margin="Margin.Dense">
+                        @foreach (var candidate in _transferCandidates)
+                        {
+                            <MudSelectItem T="int?" Value="@((int?)candidate.EmployeeId)">@candidate.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudTextField @bind-Value="_transferReason" Label="سبب التحويل" Variant="Variant.Outlined" Margin="Margin.Dense" MaxLength="300" />
+                    <div class="js-actions">
+                        <button type="button" class="js-act gold" @onclick="ConfirmTransfer" disabled="@_transferring">تأكيد التحويل</button>
+                        <button type="button" class="js-act" @onclick="CloseTransfer">إلغاء</button>
+                    </div>
+                </section>
+            }
+        }
+        <div class="js-toolbar js-no-print">
+            <button type="button" class="js-filter @(_priceFilter == "all" && _invoiceFilter == "all" ? "active" : "")" @onclick="ClearFilters">الكل @_cards.Count</button>
+            <button type="button" class="js-filter @(_priceFilter == "priced" ? "active" : "")" @onclick='() => SetPriceFilter("priced")'>تم التسعير @PricedCount</button>
+            <button type="button" class="js-filter @(_priceFilter == "unpriced" ? "active" : "")" @onclick='() => SetPriceFilter("unpriced")'>لم يتم التسعير @UnpricedCount</button>
+            @if (_canSeeInvoices)
+            {
+                <button type="button" class="js-filter @(_invoiceFilter == "linked" ? "active" : "")" @onclick='() => SetInvoiceFilter("linked")'>مرتبطة بفاتورة @LinkedCount</button>
+                <button type="button" class="js-filter @(_invoiceFilter == "unlinked" ? "active" : "")" @onclick='() => SetInvoiceFilter("unlinked")'>بدون فاتورة @UnlinkedCount</button>
+            }
+        </div>
+
+        @if (!VisibleCards.Any())
+        {
+            <article class="js-card">
+                <p class="js-wait">@(_cards.Count == 0 ? "لا توجد منتجات مرتبطة بهذا العميل." : "لا توجد منتجات مطابقة للفلتر.")</p>
+            </article>
+        }
+        else
+        {
+            @foreach (var card in VisibleCards)
+            {
+                <article id="js-product-@card.ProductId" class="js-card @(card.ProductId == FocusProductId ? "focused" : "")">
+                    <div class="js-card-top">
+                        <div>
+                            <div class="js-title-row">
+                                <h2>@card.Name</h2>
+                                <span class="js-pill @(card.IsPriced ? "priced" : "")">@card.StatusName</span>
+                            </div>
+                            <p class="js-meta">كود @card.ProductId · @card.CreatedText · مدة التصنيع @card.PeriodText</p>
+                            @if (_canSeeInvoices && card.Invoices.Count > 0)
+                            {
+                                <div class="js-invoices">
+                                    @foreach (var inv in card.Invoices)
+                                    {
+                                        <button type="button" class="js-invoice" @onclick="() => OpenInvoice(inv.TransactionId)">
+                                            <MudIcon Icon="@Icons.Material.Filled.ReceiptLong" Size="Size.Small" />
+                                            <span>فاتورة @inv.Number</span>
+                                        </button>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        <button type="button" class="js-reply-btn js-no-print" @onclick="() => OpenProduct(card.ProductId)"><MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" /> عرض المنتج</button>
+                    </div>
+                    <p class="js-desc">@(string.IsNullOrWhiteSpace(card.Description) ? "لا يوجد وصف." : card.Description)</p>
+                    @ImageRow(card.Images, card.Name)
+                    @SpecBlock(card.Specs)
+                    @if (!string.IsNullOrWhiteSpace(card.Manufacturing))
+                    {
+                        <p class="js-desc"><strong>ملاحظات التصنيع: </strong>@card.Manufacturing</p>
+                    }
+                    <div class="js-reply js-no-print">
+                        <button type="button" class="js-reply-btn" @onclick="() => OpenInquiries(card.ProductId)">
+                            استفسارات المنتج
+                            @if (card.Notes.Count > 0)
+                            {
+                                <span class="js-count">@card.Notes.Count</span>
+                            }
+                        </button>
+                        @if (_canAsk || _canAnswer)
+                        {
+                            <button type="button" class="js-reply-btn gold" @onclick='() => OpenReply(card.ProductId, "note")'>استفسار</button>
+                        }
+                        @if (_canAnswer)
+                        {
+                            <button type="button" class="js-reply-btn" @onclick="() => OpenChange(card.ProductId)">طلب تعديل</button>
+                        }
+                        @if (_canReply && (card.NeedsReply || card.HasOpenChangeRequest))
+                        {
+                            <button type="button" class="js-reply-btn" @onclick='() => OpenReply(card.ProductId, "price")'>تسعير</button>
+                            <button type="button" class="js-reply-btn" @onclick='() => OpenReply(card.ProductId, "alt")'>اقتراح بديل</button>
+                        }
+                        @if (_replyProductId == card.ProductId)
+                        {
+                            <div class="js-reply-form">
+                                @if (_replyMode == "price" && (card.NeedsReply || card.HasOpenChangeRequest))
+                                {
+                                    <MudNumericField T="decimal?" @bind-Value="_costC" Label="تكلفة Standard" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    <MudNumericField T="decimal?" @bind-Value="_costP" Label="تكلفة Premium" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    <MudNumericField T="decimal?" @bind-Value="_costE" Label="تكلفة Elite" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    <p class="js-hint">سعر البيع يتحدث تلقائيًا حسب نسب الربح المفعلة.</p>
+                                    <MudNumericField T="int?" @bind-Value="_replyPeriod" Label="مدة التصنيع باليوم" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    <MudTextField T="string" @bind-Value="_replyText" Label="ملاحظة التصنيع" Variant="Variant.Outlined" Lines="2" />
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_savingReply" OnClick="SavePricing">حفظ التسعير</MudButton>
+                                }
+                                else if (_replyMode == "alt" && (card.NeedsReply || card.HasOpenChangeRequest))
+                                {
+                                    <MudTextField T="string" @bind-Value="_altName" Label="اسم البديل" Variant="Variant.Outlined" />
+                                    <MudTextField T="string" @bind-Value="_altSummary" Label="المواصفات" Variant="Variant.Outlined" Lines="2" />
+                                    <MudNumericField T="decimal?" @bind-Value="_costC" Label="تكلفة Standard" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    <MudNumericField T="decimal?" @bind-Value="_costP" Label="تكلفة Premium" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    <MudNumericField T="decimal?" @bind-Value="_costE" Label="تكلفة Elite" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    <p class="js-hint">سعر البيع يتحدث تلقائيًا حسب نسب الربح، ومش بيظهر على الكارت.</p>
+                                    <MudNumericField T="int?" @bind-Value="_replyPeriod" Label="مدة التصنيع باليوم" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                                    <MudTextField T="string" @bind-Value="_replyText" Label="ملاحظة التصنيع" Variant="Variant.Outlined" Lines="2" />
+                                    <SpecValueRows Title="متغيرات البديل" Questions="_questions" Drafts="_altSpecDrafts" VariableImages="_altVariableImages" />
+                                    <SpecFieldsEditor Questions="BasicSizes" Drafts="_altSpecDrafts" UseFormLabel="true" />
+                                    <label class="js-hint">صور البديل</label>
+                                    <InputFile OnChange="OnAltFiles" multiple accept="image/*" class="js-target" />
+                                    @if (_altFiles.Count > 0)
+                                    {
+                                        <p class="js-hint">@_altFiles.Count صورة مختارة. حد أقصى 6 صور، وكل صورة 5MB.</p>
+                                    }
+                                    <p class="js-hint">قيم البديل مستقلة عن المنتج. كل متغير يُكتب أو يُكتب لا يوجد، وتقدر تضيف صورة لكل قيمة.</p>
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_savingReply" OnClick="SaveAlternative">حفظ البديل</MudButton>
+                                }
+                                else if (_replyMode == "note")
+                                {
+                                    <label class="js-hint">الاستفسار عن</label>
+                                    <select class="js-target" @bind="_inquiryTarget">
+                                        <option value="المنتج كله">المنتج كله</option>
+                                        @foreach (var part in card.Components)
+                                        {
+                                            <option value="@($"قطعة: {part.Name}")">قطعة: @part.Name</option>
+                                        }
+                                    </select>
+                                    <textarea class="js-target" rows="4" @bind="_replyText" placeholder="اكتب الاستفسار"></textarea>
+                                    <p class="js-hint">@InquiryHint(card)</p>
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_savingReply" OnClick="SaveNote">إرسال الاستفسار</MudButton>
+                                }
+                                else if (_replyMode == "change")
+                                {
+                                    <textarea class="js-target" rows="4" @bind="_replyText" placeholder="ما المطلوب تعديله؟"></textarea>
+                                    <p class="js-hint">يصل للمصنع ومدير الإنتاج. من غير أسعار، ومن غير بدء تصنيع.</p>
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_savingReply" OnClick="SaveChangeRequest">إرسال طلب التعديل</MudButton>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    @if (card.Components.Count > 0)
+                    {
+                        <h3>المكونات</h3>
+                        @foreach (var part in card.Components)
+                        {
+                            <div class="js-part">
+                                <strong>@part.Name</strong>
+                                <span>كمية @part.Quantity · @part.KindLabel</span>
+                                @if (!string.IsNullOrWhiteSpace(part.LinkedName))
+                                {
+                                    <p class="js-desc">منتج مرتبط: @part.LinkedName</p>
+                                    @SpecBlock(part.LinkedSpecs)
+                                }
+                                else
+                                {
+                                    @SpecBlock(part.OwnSpecs)
+                                }
+                                @ImageRow(part.Images, part.Name)
+                            </div>
+                        }
+                    }
+
+                    <h3>رد المصنع</h3>
+                    @if (card.Alternatives.Count == 0)
+                    {
+                        <p class="js-wait">لا يوجد بديل مقترح.</p>
+                    }
+                    else
+                    {
+                        @foreach (var alt in card.Alternatives)
+                        {
+                            <div class="js-alt @(alt.IsApproved ? "selected" : "")">
+                                <div class="js-card-top">
+                                    <strong>@alt.Name</strong>
+                                    <span class="js-pill">@(alt.IsApproved ? "بديل معتمد" : "مقترح")</span>
+                                    @if (_canAnswer && !alt.IsApproved)
+                                    {
+                                        <button type="button" class="js-reply-btn gold" disabled="@_savingReply" @onclick="() => ApproveAlternative(card.ProductId, alt.AlternativeId)">اعتماد البديل</button>
+                                    }
+                                </div>
+                                <p class="js-desc">@(string.IsNullOrWhiteSpace(alt.Summary) ? "لا يوجد ملخص." : alt.Summary)</p>
+                                @if (alt.Period.HasValue)
+                                {
+                                    <p class="js-desc">مدة التصنيع: @alt.Period يوم</p>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(alt.Manufacturing))
+                                {
+                                    <p class="js-desc">@alt.Manufacturing</p>
+                                }
+                                @ImageRow(alt.Images, alt.Name)
+                                @SpecBlock(alt.Specs)
+                            </div>
+                        }
+                    }
+                </article>
+            }
+        }
+    </div>
+    @if (_inquiryOpen)
+    {
+        <div class="js-modal js-no-print" dir="rtl">
+            <button type="button" class="js-modal-back" @onclick="CloseInquiries" aria-label="إغلاق"></button>
+            <section class="js-modal-card">
+                <div class="js-card-top">
+                    <div>
+                        <span class="js-badge">سجل الاستفسارات</span>
+                        <h2>@(_inquiryProductId == null ? "استفسارات الجوب أوردر" : "استفسارات المنتج")</h2>
+                    </div>
+                    <button type="button" class="js-reply-btn" @onclick="CloseInquiries">إغلاق</button>
+                </div>
+                <div class="js-modal-switch">
+                    <button type="button" class="@AllInquiryClass" @onclick="OpenAllInquiries">الجوب أوردر كله @InquiryCount</button>
+                    @if (_inquiryProductId is int selectedId)
+                    {
+                        <button type="button" class="js-filter active" @onclick="() => OpenInquiries(selectedId)">هذا المنتج @ProductInquiryCount(selectedId)</button>
+                    }
+                </div>
+                <div class="js-modal-body">
+                    @if (!InquiryView.Any())
+                    {
+                        <p class="js-wait">لا توجد استفسارات.</p>
+                    }
+                    else
+                    {
+                        @foreach (var item in InquiryView)
+                        {
+                            <article class="js-inquiry-group">
+                                <div class="js-card-top">
+                                    <strong>@item.Name</strong>
+                                    @if (_inquiryProductId == null)
+                                    {
+                                        <button type="button" class="js-reply-btn" @onclick="() => OpenInquiries(item.ProductId)">هذا المنتج</button>
+                                    }
+                                </div>
+                                @if (item.Notes.Count == 0)
+                                {
+                                    <p class="js-wait">لا توجد استفسارات على هذا المنتج.</p>
+                                }
+                                @foreach (var note in item.Notes)
+                                {
+                                    <div class="js-inquiry @(note.FromFactory ? "" : "sales")">
+                                        <span class="js-pill @(note.FromFactory ? "" : "sales")">@note.Side</span>
+                                        <span class="js-pill">@note.Target</span>
+                                        <p>@note.Text</p>
+                                        <small>@note.By · @note.When</small>
+                                    </div>
+                                }
+                            </article>
+                        }
+                    }
+                </div>
+            </section>
+        </div>
+    }
+}
+
+<style>
+    .js-loading { min-height: 50vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .6rem; }
+    .js-page { max-width: 1180px; margin: 0 auto; padding: .7rem 1rem 2rem; }
+    .js-card-top { display: flex; justify-content: space-between; gap: .6rem; align-items: center; flex-wrap: wrap; }
+    .js-head { display: flex; justify-content: space-between; gap: .7rem; align-items: center; background: linear-gradient(135deg, #1a2842 0%, #2a3f6a 58%, #1a2842 100%); color: #fff; border-radius: 16px; padding: .62rem .8rem; margin-bottom: .55rem; box-shadow: 0 8px 22px rgba(26,40,66,.16); }
+    .js-id { display: flex; align-items: center; gap: .7rem; min-width: 0; }
+    .js-mark { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex: 0 0 auto; color: #1a2842; background: linear-gradient(135deg, #ffe9a3, #d4af37); box-shadow: 0 0 14px rgba(212,175,55,.5); }
+    .js-title-line { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+    .js-head h1 { font-size: 1.12rem; line-height: 1.3; }
+    .js-head p { margin: .12rem 0 0; color: rgba(255,255,255,.72); font-size: .8rem; }
+    .js-contact, .js-copy, .js-toolbar, .js-actions { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+    .js-contact { margin-top: .12rem; color: rgba(255,255,255,.78); font-size: .8rem; }
+    .js-contact span, .js-copy, .js-act { display: inline-flex; align-items: center; gap: .32rem; }
+    .js-copy { background: rgba(255,255,255,.08); color: #fff; border: 1px solid rgba(212,175,55,.4); border-radius: 999px; padding: .12rem .5rem; cursor: pointer; box-shadow: 0 0 10px rgba(212,175,55,.16); }
+    .js-actions { justify-content: flex-end; min-width: 0; }
+    .js-act { border: 1px solid rgba(212,175,55,.5); background: rgba(255,255,255,.07); color: #fff; border-radius: 999px; min-height: 34px; padding: .3rem .72rem; font-weight: 800; font-size: .8rem; cursor: pointer; white-space: nowrap; box-shadow: inset 0 0 10px rgba(212,175,55,.12), 0 0 10px rgba(212,175,55,.16); transition: box-shadow .2s ease, transform .2s ease; }
+    .js-act:hover { background: rgba(212,175,55,.16); box-shadow: 0 0 16px rgba(212,175,55,.42); transform: translateY(-1px); }
+    .js-act.gold { position: relative; overflow: hidden; border: 0; color: #1a2842; background: linear-gradient(180deg, #ffe9a3 0%, #f0d060 40%, #d4af37 100%); box-shadow: 0 0 0 1px rgba(255,244,196,.75), 0 0 16px rgba(212,175,55,.55); }
+    .js-act.gold::after, .js-reply-btn.gold::after { content: ""; position: absolute; top: 0; bottom: 0; width: 38%; left: -55%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.62), transparent); animation: js-shine 2.8s ease-in-out infinite; pointer-events: none; }
+    .js-act:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+    .js-toolbar { margin: -.1rem 0 .65rem; }
+    .js-engineers { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; background: #fff; border: 1px solid rgba(26,40,66,.12); border-radius: 14px; padding: .7rem .85rem; margin: 0 0 .65rem; }
+    .js-engineers div { display: flex; align-items: center; gap: .45rem; min-width: 220px; }
+    .js-engineers span { color: #64748b; font-size: .82rem; }
+    .js-engineers strong { color: #1a2842; }
+    .js-engineers button, .js-transfer .js-act { border: 1px solid rgba(26,40,66,.16); background: #fff; border-radius: 999px; padding: .28rem .7rem; cursor: pointer; font-weight: 700; }
+    .js-transfer { display: grid; gap: .45rem; }
+    .js-filter { background: #fff; color: #1a2842; border: 1px solid #e7e1d1; border-radius: 999px; padding: .28rem .7rem; cursor: pointer; font-size: .78rem; font-weight: 800; }
+    .js-filter.active { background: linear-gradient(180deg, #ffe9a3, #d4af37); color: #1a2842; border-color: #d4af37; box-shadow: 0 0 12px rgba(212,175,55,.4); }
+    .js-head h1, .js-card h2, .js-card h3 { margin: 0; }
+    @@keyframes js-shine { 0% { left: -55%; } 58%, 100% { left: 130%; } }
+    @@media (prefers-reduced-motion: reduce) { .js-act.gold::after, .js-reply-btn.gold::after { animation: none; } }
+    .js-card h3 { margin-top: 1rem; font-size: 1rem; }
+    .js-head p, .js-desc, .js-wait, .js-meta { margin: .35rem 0 0; line-height: 1.7; }
+    .js-meta { color: #64748b; font-size: .82rem; }
+    .js-badge, .js-pill { display: inline-block; border-radius: 999px; padding: .2rem .65rem; font-size: .75rem; font-weight: 800; }
+    .js-badge { background: rgba(212,175,55,.18); color: #f6e7b4; border: 1px solid rgba(212,175,55,.35); margin: 0; }
+    .js-note, .js-card, .js-part, .js-alt { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; }
+    .js-note { padding: .8rem 1rem; margin-bottom: .8rem; color: #7c4a03; background: #fff8e8; }
+    .js-card { padding: .85rem .9rem; margin-bottom: .7rem; box-shadow: 0 8px 20px rgba(26,40,66,.04); border-top: 3px solid #d4af37; }
+    .js-card.focused { border-color: #d4af37; box-shadow: 0 0 0 3px rgba(212,175,55,.25); }
+    .js-title-row, .js-invoices, .js-search-wrap, .js-pick { display: flex; align-items: center; gap: .45rem; }
+    .js-title-row { flex-wrap: wrap; }
+    .js-invoices { margin-top: .45rem; flex-wrap: wrap; }
+    .js-invoice { display: inline-flex; align-items: center; gap: .3rem; border: 1px solid #d4af37; background: #fffdf6; color: #0f172a; border-radius: 999px; padding: .2rem .65rem; font-weight: 800; font-size: .78rem; cursor: pointer; }
+    .js-search-card { padding: 1.1rem; }
+    .js-search-wrap { border: 1px solid #e2e8f0; border-radius: 14px; padding: .35rem .8rem; background: #f8fafc; }
+    .js-search-wrap .js-search { border: 0; background: transparent; padding: .55rem .2rem; }
+    .js-pill { background: #f8fafc; color: #0f172a; border: 1px solid #e2e8f0; }
+    .js-pill.priced { background: #e8f6ee; color: #166534; border-color: #bbf7d0; }
+    .js-specs { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .45rem; }
+    .js-specs span { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 999px; padding: .25rem .6rem; font-size: .78rem; }
+    .js-images { display: flex; gap: .45rem; flex-wrap: wrap; margin-top: .5rem; }
+    .js-images img { width: 92px; height: 72px; object-fit: cover; border-radius: 10px; border: 1px solid #e2e8f0; }
+    .js-part, .js-alt { margin-top: .55rem; padding: .75rem .85rem; }
+    .js-part span { display: block; color: #64748b; font-size: .75rem; }
+    .js-alt.selected { border-color: #d4af37; background: #fffdf6; }
+    .js-wait { color: #64748b; }
+    .js-reply, .js-notes { margin-top: .8rem; padding: .75rem; border: 1px solid #e2e8f0; border-radius: 14px; background: #f8fafc; }
+    .js-reply { display: flex; gap: .35rem; flex-wrap: wrap; align-items: center; }
+    .js-reply-btn { display: inline-flex; align-items: center; gap: .3rem; border: 1px solid #e7e1d1; background: #fff; color: #1a2842; border-radius: 999px; min-height: 32px; padding: .28rem .7rem; cursor: pointer; font-weight: 800; font-size: .8rem; }
+    .js-reply-btn:hover { border-color: #d4af37; box-shadow: 0 0 12px rgba(212,175,55,.28); }
+    .js-reply-btn.gold { position: relative; overflow: hidden; border: 0; color: #1a2842; background: linear-gradient(180deg, #ffe9a3, #d4af37); box-shadow: 0 0 14px rgba(212,175,55,.45); }
+    .js-hint { margin: 0; color: #64748b; font-size: .78rem; }
+    .js-target { width: 100%; direction: rtl; text-align: right; color: #0f172a; background: #fff; color-scheme: light; border: 1px solid #cbd5e1; border-radius: 10px; padding: .6rem .75rem; font: inherit; }
+    .js-target option { color: #0f172a; background: #fff; }
+    .js-inquiry.sales { border-right-color: #1a2842; }
+    .js-pill.sales { background: #eef2ff; color: #1e3a8a; border-color: #c7d2fe; }
+    .js-modal { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; padding: 1rem; }
+    .js-modal-back { position: absolute; inset: 0; border: 0; background: rgba(15,23,42,.55); cursor: pointer; }
+    .js-modal-card { position: relative; z-index: 1; width: min(760px, 100%); max-height: min(82vh, 820px); overflow: auto; background: #fff; color: #0f172a; border-radius: 18px; border-top: 3px solid #d4af37; padding: 1rem 1.1rem 1.2rem; box-shadow: 0 24px 60px rgba(15,23,42,.25); }
+    .js-modal-card h2 { margin: .25rem 0 0; font-size: 1.15rem; color: #0f172a; }
+    .js-modal-card .js-badge { color: #8a6a12; background: #faf6e8; }
+    .js-modal-switch { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .8rem; }
+    .js-modal-switch .js-filter { color: #0f172a; border-color: #e2e8f0; }
+    .js-modal-switch .js-filter.active { background: #1a2842; color: #f6e7b4; border-color: #1a2842; box-shadow: none; }
+    .js-modal-body { margin-top: .8rem; }
+    .js-inquiry-group { border: 1px solid #e2e8f0; border-radius: 14px; padding: .75rem .85rem; margin-bottom: .6rem; }
+    .js-inquiry { margin-top: .55rem; padding: .65rem .75rem; border-radius: 12px; background: #f8fafc; border-right: 3px solid #d4af37; }
+    .js-inquiry p { margin: .35rem 0; line-height: 1.7; white-space: pre-wrap; }
+    .js-inquiry small { color: #64748b; }
+    .js-reply-form { flex: 1 1 100%; display: grid; gap: .35rem; margin-top: .4rem; }
+    .js-input { width: 100%; border: 1px solid #e2e8f0; border-radius: 10px; padding: .55rem .7rem; font: inherit; }
+    .js-notes h3 { margin: 0 0 .35rem; }
+    .js-search { width: 100%; border: 0; font: inherit; outline: none; }
+    .js-picks { display: flex; flex-direction: column; gap: .55rem; margin-top: .8rem; }
+    .js-pick { width: 100%; text-align: right; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: .75rem .85rem; cursor: pointer; }
+    .js-pick:hover { border-color: #d4af37; background: #fffdf8; }
+    .js-avatar { width: 38px; height: 38px; border-radius: 12px; background: #0f172a; color: #f6e7b4; display: grid; place-items: center; font-weight: 800; flex: 0 0 auto; }
+    .js-pick-body { flex: 1; min-width: 0; }
+    .js-pick-body strong, .js-pick-body span { display: block; }
+    .js-pick-body span, .js-count { color: #64748b; font-size: .78rem; }
+    .js-count { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 999px; padding: .2rem .55rem; white-space: nowrap; }
+    @@media (max-width: 860px) {
+        .js-head { flex-wrap: wrap; }
+        .js-actions { width: 100%; justify-content: flex-start; }
+    }
+    @@media print {
+        .js-no-print { display: none !important; }
+        .js-page { max-width: none; }
+        .js-card { break-inside: avoid; }
+    }
+</style>
+
+@code {
+    [Parameter] public int PartyId { get; set; }
+    [Parameter] public int ProductId { get; set; }
+    [SupplyParameterFromQuery(Name = "product")] public int? FocusProductId { get; set; }
+
+    private bool _loading = true;
+    private bool _canView;
+    private bool _canSeeInvoices;
+    private bool _canReply;
+    private bool _canAsk;
+    private bool _canAnswer;
+    private bool _savingReply;
+    private int? _replyProductId;
+    private string _replyMode = "";
+    private decimal? _costC;
+    private decimal? _costP;
+    private decimal? _costE;
+    private int? _replyPeriod;
+    private string _replyText = "";
+    private string _altName = "";
+    private string _altSummary = "";
+    private readonly Dictionary<int, SpecAnswerDto> _altSpecDrafts = new();
+    private List<SpecVariableImageDto> _altVariableImages = new();
+    private List<SpecQuestionDto> BasicSizes => _questions.Where(SpecVariableRules.IsBasicDimension).OrderBy(q => q.SortOrder).ToList();
+    private List<IBrowserFile> _altFiles = new();
+    private string _userName = "System";
+    private ClaimsPrincipal? _user;
+    private bool _authChecked;
+    private bool _missing;
+    private bool _searchMode;
+    private string _customerSearch = "";
+    private string _priceFilter = "all";
+    private string _invoiceFilter = "all";
+    private bool _phoneCopied;
+    private bool _printing;
+    private bool _inquiryOpen;
+    private bool _focusScrolled;
+    private int? _inquiryProductId;
+    private string _inquiryTarget = "المنتج كله";
+    private List<CustomerPick> _customerChoices = new();
+    private int _partyId;
+    private int _seenParty = -1;
+    private int _seenProduct = -1;
+    private string _partyName = "";
+    private string? _partyPhone;
+    private List<SpecQuestionDto> _questions = new();
+    private Dictionary<int, string> _statusNames = new();
+    private List<ProductCard> _cards = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var user = auth.User;
+        _user = user;
+        _userName = user.Identity?.Name ?? "System";
+        _canAsk = user.IsInRole(SystemRoles.Admin) || user.IsInRole("factory")
+            || user.IsInRole(SystemRoles.FactoryManager) || user.IsInRole(SystemRoles.ProductionManager);
+        _canAnswer = user.IsInRole(SystemRoles.Admin) || user.IsInRole(SystemRoles.Sales)
+            || user.IsInRole(SystemRoles.SalesManager) || user.IsInRole(SystemRoles.GeneralManager);
+        _canReply = _canAsk;
+        _canView = user.IsInRole(SystemRoles.Admin) || user.IsInRole(SystemRoles.SalesManager)
+            || user.IsInRole(SystemRoles.Sales) || user.IsInRole(SystemRoles.AccountManager)
+            || user.IsInRole(SystemRoles.GeneralManager)
+            || user.IsInRole(SystemRoles.ProductionManager) || user.IsInRole(SystemRoles.FactoryManager)
+            || user.IsInRole("factory")
+            || await Engineers.UserCanOpenJobAsync(_userName);
+        _canSeeInvoices = user.IsInRole(SystemRoles.Admin) || user.HasClaim("Permission", "frm_PartiesInvoices:View");
+        _authChecked = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusScrolled || _loading || FocusProductId is not int focusId || focusId <= 0) return;
+        _focusScrolled = true;
+        try
+        {
+            await JS.InvokeVoidAsync("eval", $"document.getElementById('js-product-{focusId}')?.scrollIntoView({{behavior:'smooth',block:'center'}})");
+        }
+        catch { }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_authChecked || !_canView)
+        {
+            _loading = false;
+            return;
+        }
+        if (PartyId == _seenParty && ProductId == _seenProduct)
+        {
+            _loading = false;
+            return;
+        }
+        _seenParty = PartyId;
+        _seenProduct = ProductId;
+        _focusScrolled = false;
+        _loading = true;
+        var redirected = await LoadAsync();
+        if (!redirected && _partyId > 0)
+            await LoadEngineersAsync();
+        if (!redirected)
+            _loading = false;
+    }
+
+    private async Task<bool> LoadAsync()
+    {
+        _missing = false;
+        _searchMode = false;
+        _cards.Clear();
+        _partyId = 0;
+        _partyName = "";
+        _partyPhone = null;
+        var path = Navigation.ToBaseRelativePath(Navigation.Uri).Split('?', 2)[0];
+        var customerRoute = path.StartsWith("customers/", StringComparison.OrdinalIgnoreCase);
+
+        if (path.Equals("job-spec", StringComparison.OrdinalIgnoreCase))
+        {
+            _searchMode = true;
+            await LoadCustomerChoicesAsync();
+            return false;
+        }
+
+        if (!customerRoute)
+        {
+            var product = await Db.Products.AsNoTracking().FirstOrDefaultAsync(p => p.ProductId == ProductId);
+            if (product == null)
+            {
+                _missing = true;
+                return false;
+            }
+            if (product.Customer is int customerId && customerId > 0)
+            {
+                Navigation.NavigateTo($"/customers/{customerId}/job-spec?product={product.ProductId}", replace: true);
+                return true;
+            }
+            await LoadSharedAsync();
+            _cards.Add(await BuildCardAsync(product));
+            await AttachInvoicesAsync();
+            await AttachNotesAsync();
+            return false;
+        }
+
+        var party = await Db.Parties.AsNoTracking().FirstOrDefaultAsync(p => p.PartyId == PartyId);
+        if (party == null)
+        {
+            _missing = true;
+            return false;
+        }
+        _partyId = party.PartyId;
+        _partyName = party.PartyName;
+        _partyPhone = party.Phone;
+        await LoadSharedAsync();
+        var products = await Db.Products.AsNoTracking()
+            .Where(p => p.Customer == PartyId)
+            .OrderByDescending(p => p.CreatedAt)
+            .ThenByDescending(p => p.ProductId)
+            .ToListAsync();
+        foreach (var product in products)
+            _cards.Add(await BuildCardAsync(product));
+        await AttachInvoicesAsync();
+        await AttachNotesAsync();
+        return false;
+    }
+
+    private async Task LoadSharedAsync()
+    {
+        if (_questions.Count == 0)
+            _questions = await SpecService.GetStandardQuestionsAsync();
+        if (_statusNames.Count == 0)
+            _statusNames = await Db.ProductPricingStatuses.AsNoTracking()
+                .ToDictionaryAsync(s => s.PricingStatusId, s => s.StatusName);
+    }
+
+    private async Task<ProductCard> BuildCardAsync(Product product)
+    {
+        var images = await Db.ProductImages.AsNoTracking().Where(i => i.ProductId == product.ProductId).ToListAsync();
+        var components = await Db.ProductComponents.AsNoTracking().Where(c => c.ProductId == product.ProductId).ToListAsync();
+        var links = await LoadComponentLinksAsync(components);
+        var partImages = await LoadComponentImagesAsync(components);
+        var linkedIds = links.Values.Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToList();
+        var linkedNames = linkedIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await Db.Products.AsNoTracking().Where(p => linkedIds.Contains(p.ProductId))
+                .ToDictionaryAsync(p => p.ProductId, p => p.ProductName);
+        var parts = new List<ComponentVm>();
+        foreach (var component in components)
+        {
+            links.TryGetValue(component.ComponentId, out var linkedId);
+            var part = new ComponentVm
+            {
+                Name = string.IsNullOrWhiteSpace(component.ComponentName) ? "قطعة" : component.ComponentName,
+                Quantity = component.Quantity,
+                KindLabel = linkedId.HasValue ? "منتج مرتبط" : "قطعة مخصصة",
+                Images = partImages.TryGetValue(component.ComponentId, out var pics) ? pics : new()
+            };
+            if (linkedId.HasValue)
+            {
+                part.LinkedName = linkedNames.TryGetValue(linkedId.Value, out var linkedName) ? linkedName : null;
+                part.LinkedSpecs = await SpecLinesAsync(SpecOwners.Product, linkedId.Value);
+            }
+            else if (component.ComponentId > 0)
+                part.OwnSpecs = await SpecLinesAsync(SpecOwners.Component, component.ComponentId);
+            parts.Add(part);
+        }
+
+        var alternatives = await Db.ProductFactoryAlternatives.AsNoTracking()
+            .Where(a => a.ProductId == product.ProductId && a.Status != ProductFactoryAlternativeStatuses.Rejected)
+            .ToListAsync();
+        var altIds = alternatives.Select(a => a.AlternativeId).ToList();
+        var altImages = altIds.Count == 0
+            ? new List<ProductFactoryAlternativeImage>()
+            : await Db.ProductFactoryAlternativeImages.AsNoTracking().Where(i => altIds.Contains(i.AlternativeId)).ToListAsync();
+        var alts = new List<AltVm>();
+        foreach (var alt in alternatives)
+        {
+            alts.Add(new AltVm
+            {
+                AlternativeId = alt.AlternativeId,
+                Name = alt.AlternativeName,
+                Summary = alt.SpecificationSummary,
+                Manufacturing = alt.ManufacturingDescription,
+                Period = alt.Period,
+                IsApproved = alt.Status == ProductFactoryAlternativeStatuses.Approved,
+                Images = altImages.Where(i => i.AlternativeId == alt.AlternativeId).Select(i => i.ImagePath).Where(x => !string.IsNullOrWhiteSpace(x)).ToList()!,
+                Specs = await SpecLinesAsync(SpecOwners.Alternative, alt.AlternativeId)
+            });
+        }
+
+        return new ProductCard
+        {
+            ProductId = product.ProductId,
+            Name = product.ProductName,
+            Description = product.ProductDescription,
+            Manufacturing = product.ManufacturingDescription,
+            PeriodText = product.Period.HasValue ? $"{product.Period} يوم" : "غير محددة",
+            CreatedText = product.CreatedAt.HasValue ? product.CreatedAt.Value.ToString("dd/MM/yyyy") : "بدون تاريخ",
+            StatusName = TranslateStatus(product.PricingStatusId, _statusNames.TryGetValue(product.PricingStatusId, out var status) ? status : null),
+            IsPriced = product.PricingStatusId is 3 or 5,
+            NeedsReply = product.PricingStatusId is 2 or 4 or 7 or 8,
+            CreatedBy = product.CreatedBy,
+            Images = images.Select(i => i.ProductImagesId > 0 ? $"/api/product-image-by-id/{i.ProductImagesId}" : i.ImagePath)
+                .Where(x => !string.IsNullOrWhiteSpace(x)).ToList()!,
+            Specs = await SpecLinesAsync(SpecOwners.Product, product.ProductId),
+            Components = parts,
+            Alternatives = alts
+        };
+    }
+
+    private async Task<List<string>> SpecLinesAsync(string owner, int ownerId)
+    {
+        if (ownerId <= 0 || _questions.Count == 0) return new();
+        var answers = await SpecService.GetAnswersAsync(owner, ownerId);
+        var lines = new List<string>();
+        foreach (var question in _questions)
+        {
+            var answer = answers.FirstOrDefault(a => a.QuestionId == question.QuestionId);
+            if (answer == null) continue;
+            var value = question.DataType == SpecDataTypes.Number
+                ? answer.NumberValue.HasValue ? $"{answer.NumberValue:0.##} {question.UnitName}".Trim() : null
+                : !string.IsNullOrWhiteSpace(answer.TextValue) ? answer.TextValue : question.Options.FirstOrDefault(o => o.OptionId == answer.OptionId)?.OptionNameAr;
+            if (!string.IsNullOrWhiteSpace(value))
+                lines.Add($"{question.QuestionNameAr}: {value}");
+        }
+        return lines;
+    }
+
+    private async Task<Dictionary<int, int?>> LoadComponentLinksAsync(List<ProductComponent> components)
+    {
+        var result = new Dictionary<int, int?>();
+        var ids = components.Where(c => c.ComponentId > 0).Select(c => c.ComponentId).Distinct().ToList();
+        if (ids.Count == 0) return result;
+        try
+        {
+            var conn = Db.Database.GetDbConnection();
+            var opened = conn.State != ConnectionState.Open;
+            if (opened) await conn.OpenAsync();
+            try
+            {
+                await using var check = conn.CreateCommand();
+                check.CommandText = "SELECT COL_LENGTH('dbo.ProductComponents', 'LinkedProductId')";
+                if (await check.ExecuteScalarAsync() is null or DBNull) return result;
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT ComponentID, LinkedProductId FROM ProductComponents WHERE ComponentID IN (" + string.Join(",", ids) + ")";
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                    result[reader.GetInt32(0)] = reader.IsDBNull(1) ? null : reader.GetInt32(1);
+            }
+            finally { if (opened) await conn.CloseAsync(); }
+        }
+        catch { }
+        return result;
+    }
+
+    private async Task<Dictionary<int, List<string>>> LoadComponentImagesAsync(List<ProductComponent> components)
+    {
+        var result = new Dictionary<int, List<string>>();
+        var ids = components.Where(c => c.ComponentId > 0).Select(c => c.ComponentId).Distinct().ToList();
+        if (ids.Count == 0) return result;
+        try
+        {
+            var conn = Db.Database.GetDbConnection();
+            var opened = conn.State != ConnectionState.Open;
+            if (opened) await conn.OpenAsync();
+            try
+            {
+                await using var check = conn.CreateCommand();
+                check.CommandText = "SELECT OBJECT_ID(N'dbo.ComponentImages', N'U')";
+                if (await check.ExecuteScalarAsync() is null or DBNull) return result;
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT ComponentId, ImagePath FROM ComponentImages WHERE ComponentId IN (" + string.Join(",", ids) + ")";
+                await using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var id = reader.GetInt32(0);
+                    if (!result.TryGetValue(id, out var list))
+                        result[id] = list = new();
+                    if (!reader.IsDBNull(1)) list.Add(reader.GetString(1));
+                }
+            }
+            finally { if (opened) await conn.CloseAsync(); }
+        }
+        catch { }
+        return result;
+    }
+
+    private async Task LoadCustomerChoicesAsync()
+    {
+        _customerChoices = await (from product in Db.Products.AsNoTracking()
+                                  where product.Customer.HasValue
+                                  join party in Db.Parties.AsNoTracking() on product.Customer equals party.PartyId
+                                  group product by new { party.PartyId, party.PartyName, party.Phone } into g
+                                  orderby g.Key.PartyName
+                                  select new CustomerPick
+                                  {
+                                      PartyId = g.Key.PartyId,
+                                      PartyName = g.Key.PartyName,
+                                      Phone = g.Key.Phone,
+                                      ProductCount = g.Count()
+                                  }).ToListAsync();
+    }
+
+    private List<CustomerPick> FilteredCustomers
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_customerSearch)) return _customerChoices.Take(30).ToList();
+            var term = _customerSearch.Trim();
+            return _customerChoices.Where(c =>
+                    (c.PartyName ?? "").ContainsArabic(term)
+                    || (c.Phone ?? "").Contains(term, StringComparison.OrdinalIgnoreCase))
+                .Take(30)
+                .ToList();
+        }
+    }
+
+    private int InquiryCount => _cards.Sum(c => c.Notes.Count);
+    private int ProductInquiryCount(int productId) => _cards.FirstOrDefault(c => c.ProductId == productId)?.Notes.Count ?? 0;
+    private List<ProductCard> InquiryView => _inquiryProductId is int id
+        ? _cards.Where(c => c.ProductId == id).ToList()
+        : _cards.Where(c => c.Notes.Count > 0).ToList();
+    private string AllInquiryClass => _inquiryProductId == null ? "js-filter active" : "js-filter";
+
+    private void OpenReply(int productId, string mode)
+    {
+        _replyProductId = productId;
+        _replyMode = mode;
+        _replyText = "";
+        _altName = "";
+        _altSummary = "";
+        _altSpecDrafts.Clear();
+        _altVariableImages = new();
+        _altFiles = new();
+        _inquiryTarget = "المنتج كله";
+        _replyPeriod = null;
+        _costC = _costP = _costE = null;
+    }
+
+    private void OpenAllInquiries()
+    {
+        _inquiryProductId = null;
+        _inquiryOpen = true;
+    }
+
+    private void OpenInquiries(int productId)
+    {
+        _inquiryProductId = productId;
+        _inquiryOpen = true;
+    }
+
+    private void CloseInquiries() => _inquiryOpen = false;
+
+    private void OpenChange(int productId)
+    {
+        OpenReply(productId, "change");
+        _inquiryTarget = "طلب تعديل";
+    }
+
+    private async Task SavePricing()
+    {
+        if (_replyProductId is not int productId) return;
+        var hasCost = (_costC ?? 0) > 0 || (_costP ?? 0) > 0 || (_costE ?? 0) > 0;
+        if (!hasCost || _replyPeriod is not > 0)
+        {
+            Snackbar.Add("أدخل تكلفة واحدة على الأقل ومدة التصنيع.", Severity.Warning);
+            return;
+        }
+        _savingReply = true;
+        try
+        {
+            var margin = await Db.PricingMargins.AsNoTracking()
+                .Where(m => m.IsActive)
+                .OrderByDescending(m => m.MarginId)
+                .FirstOrDefaultAsync();
+            if (margin == null)
+            {
+                Snackbar.Add("لا توجد نسب ربح مفعلة، فسعر البيع ما اتحدثش.", Severity.Warning);
+                return;
+            }
+
+            var product = await Db.Products.FirstOrDefaultAsync(p => p.ProductId == productId);
+            if (product == null) return;
+            var oldCostC = product.PurchasePriceCClass;
+            var oldSaleC = product.SuggestedSalePriceCClass;
+            var oldCostP = product.PurchasePrice;
+            var oldSaleP = product.SuggestedSalePrice;
+            var oldCostE = product.PurchasePriceElite;
+            var oldSaleE = product.SuggestedSalePriceElite;
+            var saleC = SaleFromMargin(_costC, margin.CClassMargin);
+            var saleP = SaleFromMargin(_costP, margin.PremiumMargin);
+            var saleE = SaleFromMargin(_costE, margin.EliteMargin);
+            product.PurchasePriceCClass = _costC;
+            product.PurchasePrice = _costP;
+            product.PurchasePriceElite = _costE;
+            product.SuggestedSalePriceCClass = saleC;
+            product.SuggestedSalePrice = saleP;
+            product.SuggestedSalePriceElite = saleE;
+            TrackJobPrice(product, "CClass_Cost", oldCostC, _costC);
+            TrackJobPrice(product, "CClass_Sale", oldSaleC, saleC);
+            TrackJobPrice(product, "Premium_Cost", oldCostP, _costP);
+            TrackJobPrice(product, "Premium_Sale", oldSaleP, saleP);
+            TrackJobPrice(product, "Elite_Cost", oldCostE, _costE);
+            TrackJobPrice(product, "Elite_Sale", oldSaleE, saleE);
+            product.Period = _replyPeriod;
+            if (!string.IsNullOrWhiteSpace(_replyText))
+                product.ManufacturingDescription = _replyText.Trim();
+            product.PricingStatusId = 3;
+            await Db.SaveChangesAsync();
+            await NotifyJobSpec("تم تسعير منتج", $"تم تسعير {product.ProductName} وتحديث سعر البيع حسب نسب الربح.", new[] { "Sales", "SalesManager", "Admin", "AccountManager" });
+            await CloseChangeRequestAsync(productId);
+            Snackbar.Add("تم حفظ التسعير وتحديث سعر البيع حسب نسب الربح.", Severity.Success);
+            await ReloadCurrent();
+        }
+        finally { _savingReply = false; }
+    }
+
+    private void TrackJobPrice(Product product, string priceType, decimal? oldValue, decimal? newValue)
+        => TrackJobPrice(product.ProductId, priceType, oldValue, newValue, "تسعير من الجوب أوردر");
+
+    private void TrackJobPrice(int productId, string priceType, decimal? oldValue, decimal? newValue, string reason)
+    {
+        if (oldValue == newValue) return;
+        Db.PriceHistories.Add(new PriceHistory
+        {
+            ProductId = productId,
+            PriceType = priceType,
+            OldPrice = oldValue ?? 0m,
+            NewPrice = newValue ?? 0m,
+            ChangedBy = _userName,
+            ChangedAt = DateTime.Now,
+            ChangeReason = reason
+        });
+    }
+
+    private static decimal? SaleFromMargin(decimal? cost, decimal marginPercent)
+    {
+        if (cost is not > 0) return null;
+        var raw = cost.Value * (1m + marginPercent / 100m);
+        return Math.Ceiling(raw / 100m) * 100m;
+    }
+
+    private async Task SaveAlternative()
+    {
+        if (_replyProductId is not int productId) return;
+        if (string.IsNullOrWhiteSpace(_altName) || _replyPeriod is not > 0)
+        {
+            Snackbar.Add("اسم البديل ومدة التصنيع مطلوبان.", Severity.Warning);
+            return;
+        }
+        var hasCost = (_costC ?? 0) > 0 || (_costP ?? 0) > 0 || (_costE ?? 0) > 0;
+        if (!hasCost)
+        {
+            Snackbar.Add("أدخل تكلفة واحدة على الأقل للبديل.", Severity.Warning);
+            return;
+        }
+        var missingAlt = SpecVariableRules.MissingNames(_questions, _altSpecDrafts);
+        if (missingAlt.Count > 0)
+        {
+            Snackbar.Add(SpecVariableRules.MissingMessage("متغيرات البديل", missingAlt), Severity.Warning);
+            return;
+        }
+        _savingReply = true;
+        try
+        {
+            var margin = await Db.PricingMargins.AsNoTracking()
+                .Where(m => m.IsActive)
+                .OrderByDescending(m => m.MarginId)
+                .FirstOrDefaultAsync();
+            if (margin == null)
+            {
+                Snackbar.Add("لا توجد نسب ربح مفعلة، فسعر بيع البديل ما اتسجلش.", Severity.Warning);
+                return;
+            }
+
+            var name = _altName.Trim();
+            var saleC = SaleFromMargin(_costC, margin.CClassMargin);
+            var saleP = SaleFromMargin(_costP, margin.PremiumMargin);
+            var saleE = SaleFromMargin(_costE, margin.EliteMargin);
+            var alternative = new ProductFactoryAlternative
+            {
+                ProductId = productId,
+                AlternativeName = name,
+                SpecificationSummary = string.IsNullOrWhiteSpace(_altSummary) ? null : _altSummary.Trim(),
+                ManufacturingDescription = string.IsNullOrWhiteSpace(_replyText) ? null : _replyText.Trim(),
+                Period = _replyPeriod,
+                PurchasePriceCClass = _costC is > 0 ? _costC : null,
+                PurchasePricePremium = _costP is > 0 ? _costP : null,
+                PurchasePriceElite = _costE is > 0 ? _costE : null,
+                SuggestedSalePriceCClass = saleC,
+                SuggestedSalePricePremium = saleP,
+                SuggestedSalePriceElite = saleE,
+                Status = ProductFactoryAlternativeStatuses.Proposed,
+                CreatedBy = _userName,
+                CreatedAt = DateTime.Now
+            };
+            Db.ProductFactoryAlternatives.Add(alternative);
+            var reason = $"بديل من الجوب أوردر: {name}";
+            TrackJobPrice(productId, "Alt_CClass_Cost", null, _costC is > 0 ? _costC : null, reason);
+            TrackJobPrice(productId, "Alt_CClass_Sale", null, saleC, reason);
+            TrackJobPrice(productId, "Alt_Premium_Cost", null, _costP is > 0 ? _costP : null, reason);
+            TrackJobPrice(productId, "Alt_Premium_Sale", null, saleP, reason);
+            TrackJobPrice(productId, "Alt_Elite_Cost", null, _costE is > 0 ? _costE : null, reason);
+            TrackJobPrice(productId, "Alt_Elite_Sale", null, saleE, reason);
+            await Db.SaveChangesAsync();
+            await SaveAltSpecsAsync(alternative.AlternativeId);
+            await SaveAltImagesAsync(alternative);
+            var productName = _cards.FirstOrDefault(c => c.ProductId == productId)?.Name ?? "المنتج";
+            await NotifyJobSpec("بديل من المصنع", $"تم اقتراح بديل للمنتج {productName} وتحديث سعر بيعه حسب نسب الربح.", new[] { "Sales", "SalesManager", "Admin", "AccountManager" });
+            await CloseChangeRequestAsync(productId);
+            Snackbar.Add("تم حفظ البديل وتحديث سعر بيعه حسب نسب الربح.", Severity.Success);
+            await ReloadCurrent();
+        }
+        finally { _savingReply = false; }
+    }
+
+
+    private async Task SaveAltSpecsAsync(int alternativeId)
+    {
+        if (alternativeId <= 0) return;
+        var answers = _altSpecDrafts.Values
+            .Where(x => x.OptionId.HasValue || x.NumberValue.HasValue || !string.IsNullOrWhiteSpace(x.TextValue))
+            .ToList();
+        if (answers.Count > 0)
+        {
+            var (ok, msg) = await SpecService.SaveAnswersAsync(SpecOwners.Alternative, alternativeId, answers);
+            if (!ok && !string.IsNullOrWhiteSpace(msg))
+                Snackbar.Add(msg, Severity.Warning);
+        }
+        var listIds = _questions.Where(q => q.ListId.HasValue && q.DataType != SpecDataTypes.Number)
+            .Select(q => q.QuestionId)
+            .ToHashSet();
+        var removed = listIds.Where(id => answers.All(a => a.QuestionId != id)).ToList();
+        if (removed.Count > 0)
+            await SpecService.RemoveAnswersAsync(SpecOwners.Alternative, alternativeId, removed);
+        await SpecService.SaveVariableImagesAsync(SpecOwners.Alternative, alternativeId, _altVariableImages);
+    }
+
+    private void OnAltFiles(InputFileChangeEventArgs e)
+        => _altFiles = e.GetMultipleFiles(6).ToList();
+
+    private async Task SaveAltImagesAsync(ProductFactoryAlternative alternative)
+    {
+        if (_altFiles.Count == 0 || alternative.AlternativeId <= 0) return;
+        var webRoot = Env.WebRootPath ?? "";
+        if (string.IsNullOrWhiteSpace(webRoot))
+        {
+            Snackbar.Add("تعذر حفظ صور البديل.", Severity.Warning);
+            return;
+        }
+
+        var relativeFolder = Path.Combine("uploads", "product-alternative-images", alternative.ProductId.ToString(), alternative.AlternativeId.ToString());
+        Directory.CreateDirectory(Path.Combine(webRoot, relativeFolder));
+        var primary = true;
+        foreach (var file in _altFiles.Take(6))
+        {
+            if (file.Size <= 0) continue;
+            if (file.Size > 5 * 1024 * 1024)
+            {
+                Snackbar.Add($"الصورة {file.Name} تتجاوز 5MB.", Severity.Warning);
+                continue;
+            }
+            var ext = Path.GetExtension(file.Name);
+            var storedName = $"{Guid.NewGuid():N}{(string.IsNullOrWhiteSpace(ext) ? ".img" : ext)}";
+            var absolutePath = Path.Combine(webRoot, relativeFolder, storedName);
+            await using var source = file.OpenReadStream(5 * 1024 * 1024);
+            await using var target = new FileStream(absolutePath, FileMode.Create, FileAccess.Write, FileShare.None);
+            await source.CopyToAsync(target);
+            Db.ProductFactoryAlternativeImages.Add(new ProductFactoryAlternativeImage
+            {
+                AlternativeId = alternative.AlternativeId,
+                ImagePath = "/" + relativeFolder.Replace('\\', '/') + "/" + storedName,
+                IsPrimary = primary,
+                CreatedAt = DateTime.Now
+            });
+            primary = false;
+        }
+        await Db.SaveChangesAsync();
+    }
+
+    private async Task SaveChangeRequest()
+    {
+        if (!_canAnswer) return;
+        _inquiryTarget = "طلب تعديل";
+        await SaveInquiryAsync(fromFactory: false);
+    }
+
+    private async Task ApproveAlternative(int productId, int alternativeId)
+    {
+        if (!_canAnswer || _savingReply) return;
+        _savingReply = true;
+        try
+        {
+            var alternatives = await Db.ProductFactoryAlternatives
+                .Where(a => a.ProductId == productId)
+                .ToListAsync();
+            var chosen = alternatives.FirstOrDefault(a => a.AlternativeId == alternativeId);
+            if (chosen == null || chosen.Status == ProductFactoryAlternativeStatuses.Rejected)
+            {
+                Snackbar.Add("البديل غير موجود.", Severity.Warning);
+                return;
+            }
+            foreach (var item in alternatives)
+            {
+                var isChosen = item.AlternativeId == alternativeId;
+                item.IsPrimary = isChosen;
+                if (isChosen)
+                {
+                    item.Status = ProductFactoryAlternativeStatuses.Approved;
+                    item.ReviewedBy = _userName;
+                    item.ReviewedAt = DateTime.Now;
+                }
+                else if (item.Status == ProductFactoryAlternativeStatuses.Approved)
+                {
+                    item.Status = ProductFactoryAlternativeStatuses.Proposed;
+                }
+            }
+            var product = await Db.Products.FirstOrDefaultAsync(p => p.ProductId == productId);
+            if (product != null)
+            {
+                if (chosen.Period is > 0)
+                    product.Period = chosen.Period;
+                if (!string.IsNullOrWhiteSpace(chosen.ManufacturingDescription))
+                    product.ManufacturingDescription = chosen.ManufacturingDescription;
+            }
+            await Db.SaveChangesAsync();
+            var card = _cards.FirstOrDefault(c => c.ProductId == productId);
+            var name = card?.Name ?? product?.ProductName ?? "المنتج";
+            var form = _partyId > 0
+                ? $"customers/{_partyId}/job-spec?product={productId}"
+                : $"products/{productId}/job-spec";
+            await NotifyPartiesAsync("تم اعتماد البديل", $"{name}: تم اعتماد البديل {chosen.AlternativeName}.", form, null, "factory", SystemRoles.ProductionManager);
+            Snackbar.Add("تم اعتماد البديل.", Severity.Success);
+            await ReloadCurrent();
+        }
+        finally { _savingReply = false; }
+    }
+
+    private async Task CloseChangeRequestAsync(int productId)
+    {
+        var card = _cards.FirstOrDefault(c => c.ProductId == productId);
+        if (card?.HasOpenChangeRequest != true) return;
+        Db.PriceHistories.Add(new PriceHistory
+        {
+            ProductId = productId,
+            PriceType = "FactoryInquiry",
+            OldPrice = 0,
+            NewPrice = 0,
+            ChangedBy = _userName,
+            ChangedAt = DateTime.Now,
+            ChangeReason = FormatInquiry("طلب تعديل", "المصنع", "تم تحديث الرد بعد طلب التعديل."),
+            CustomerId = _partyId > 0 ? _partyId : null
+        });
+        await Db.SaveChangesAsync();
+    }
+
+    private bool SendsAsFactory(ProductCard? card)
+    {
+        if (_canAsk && !_canAnswer) return true;
+        if (_canAnswer && !_canAsk) return false;
+        var last = card?.Notes.LastOrDefault();
+        return last == null || !last.FromFactory;
+    }
+
+    private string InquiryHint(ProductCard card) => SendsAsFactory(card)
+        ? "يصل لصاحب المنتج، ومدير المبيعات، والمدير العام."
+        : "يصل للمصنع ومدير الإنتاج.";
+
+    private Task SaveNote()
+    {
+        var card = _replyProductId is int id ? _cards.FirstOrDefault(c => c.ProductId == id) : null;
+        return SaveInquiryAsync(SendsAsFactory(card));
+    }
+
+    private async Task SaveInquiryAsync(bool fromFactory)
+    {
+        if (fromFactory && !_canAsk) return;
+        if (!fromFactory && !_canAnswer) return;
+        if (_replyProductId is not int productId || string.IsNullOrWhiteSpace(_replyText))
+        {
+            Snackbar.Add("اكتب الاستفسار أولاً.", Severity.Warning);
+            return;
+        }
+        var card = _cards.FirstOrDefault(c => c.ProductId == productId);
+        if (card == null) return;
+        var target = string.IsNullOrWhiteSpace(_inquiryTarget) ? "المنتج كله" : _inquiryTarget.Trim();
+        var textBody = _replyText.Trim();
+        var side = fromFactory ? "المصنع" : "المبيعات";
+        _savingReply = true;
+        try
+        {
+            Db.PriceHistories.Add(new PriceHistory
+            {
+                ProductId = productId,
+                PriceType = "FactoryInquiry",
+                OldPrice = 0,
+                NewPrice = 0,
+                ChangedBy = _userName,
+                ChangedAt = DateTime.Now,
+                ChangeReason = FormatInquiry(target, side, textBody),
+                CustomerId = _partyId > 0 ? _partyId : null
+            });
+            await Db.SaveChangesAsync();
+            try
+            {
+                await NotifyInquiryAsync(card, target, textBody, fromFactory);
+                Snackbar.Add("تم إرسال الاستفسار.", Severity.Success);
+            }
+            catch
+            {
+                Snackbar.Add("تم التسجيل، وتعذر إرسال الإشعار.", Severity.Warning);
+            }
+            await ReloadCurrent();
+        }
+        finally { _savingReply = false; }
+    }
+
+    private async Task AttachNotesAsync()
+    {
+        var ids = _cards.Select(c => c.ProductId).ToList();
+        if (ids.Count == 0) return;
+        var rows = await Db.PriceHistories.AsNoTracking()
+            .Where(h => ids.Contains(h.ProductId) && h.PriceType == "FactoryInquiry")
+            .OrderBy(h => h.ChangedAt)
+            .ToListAsync();
+        var users = await Db.Users.AsNoTracking()
+            .Where(u => u.Username != null)
+            .Select(u => new { u.Username, u.FullName })
+            .ToListAsync();
+        var names = users
+            .GroupBy(u => u.Username!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => string.IsNullOrWhiteSpace(g.First().FullName) ? g.Key : g.First().FullName!, StringComparer.OrdinalIgnoreCase);
+        foreach (var row in rows)
+        {
+            var card = _cards.FirstOrDefault(c => c.ProductId == row.ProductId);
+            if (card == null) continue;
+            var parsed = ParseInquiry(row.ChangeReason);
+            card.Notes.Add(new NoteVm
+            {
+                Target = parsed.Target,
+                Side = parsed.Side,
+                FromFactory = parsed.Side != "المبيعات",
+                Text = parsed.Text,
+                By = names.TryGetValue(row.ChangedBy ?? "", out var full) ? full : (row.ChangedBy ?? ""),
+                When = row.ChangedAt.ToString("dd/MM/yyyy HH:mm")
+            });
+        }
+    }
+
+    private async Task NotifyInquiryAsync(ProductCard card, string target, string text, bool fromFactory)
+    {
+        var preview = text.Length > 160 ? text[..160] + "…" : text;
+        var message = $"{card.Name} — {target}: {preview}";
+        var form = _partyId > 0
+            ? $"customers/{_partyId}/job-spec?product={card.ProductId}"
+            : $"products/{card.ProductId}/job-spec";
+        if (fromFactory)
+        {
+            var owner = await ResolveOwnerUsernameAsync(card.CreatedBy);
+            var roles = new List<string> { SystemRoles.SalesManager, SystemRoles.GeneralManager };
+            if (string.IsNullOrWhiteSpace(owner))
+                roles.Add(SystemRoles.Sales);
+            await NotifyPartiesAsync("استفسار من المصنع", message, form, owner, roles.ToArray());
+            return;
+        }
+        await NotifyPartiesAsync("استفسار من المبيعات", message, form, null, "factory", SystemRoles.ProductionManager);
+    }
+
+    private async Task NotifyPartiesAsync(string title, string message, string form, string? extraUser, params string[] roles)
+    {
+        var users = await Db.Users.AsNoTracking()
+            .Where(u => u.IsActive != false && u.Username != null && u.Role != null)
+            .Select(u => new { u.Username, u.Role })
+            .ToListAsync();
+        var sent = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        async Task SendAsync(string username)
+        {
+            if (string.IsNullOrWhiteSpace(username)) return;
+            if (string.Equals(username, _userName, StringComparison.OrdinalIgnoreCase)) return;
+            if (!sent.Add(username)) return;
+            await NotificationService.AddAsync(title, message, username, _userName, form, "Parties", null);
+        }
+        if (!string.IsNullOrWhiteSpace(extraUser))
+            await SendAsync(extraUser);
+        foreach (var role in roles.Where(r => !string.IsNullOrWhiteSpace(r)))
+        {
+            var norm = role.Replace(" ", "").ToLowerInvariant();
+            var matches = users.Where(u =>
+            {
+                var current = (u.Role ?? "").Replace(" ", "").ToLowerInvariant();
+                return current == norm || string.Equals(u.Role, role, StringComparison.OrdinalIgnoreCase);
+            }).Select(u => u.Username!).ToList();
+            if (matches.Count == 0)
+            {
+                await NotificationService.NotifyRoleAsync(title, message, role, _userName, form, "Parties", null);
+                continue;
+            }
+            foreach (var name in matches)
+                await SendAsync(name);
+        }
+    }
+
+    private async Task<string?> ResolveOwnerUsernameAsync(string? createdBy)
+    {
+        if (string.IsNullOrWhiteSpace(createdBy)) return null;
+        var key = createdBy.Trim();
+        var users = await Db.Users.AsNoTracking()
+            .Where(u => u.IsActive != false && u.Username != null)
+            .Select(u => new { u.Username, u.FullName })
+            .ToListAsync();
+        var byUser = users.FirstOrDefault(u => string.Equals(u.Username, key, StringComparison.OrdinalIgnoreCase));
+        if (byUser != null) return byUser.Username;
+        var byName = users.Where(u => string.Equals(u.FullName, key, StringComparison.OrdinalIgnoreCase)).Take(2).ToList();
+        return byName.Count == 1 ? byName[0].Username : null;
+    }
+
+    private static string FormatInquiry(string target, string side, string text) => $"[على: {target}][جهة: {side}]\n{text}";
+
+    private static (string Target, string Side, string Text) ParseInquiry(string? raw)
+    {
+        const string targetPrefix = "[على: ";
+        const string sidePrefix = "[جهة: ";
+        var text = (raw ?? "").Trim();
+        var target = "المنتج كله";
+        var side = "المصنع";
+        if (text.StartsWith(targetPrefix, StringComparison.Ordinal))
+        {
+            var end = text.IndexOf(']');
+            if (end > targetPrefix.Length)
+            {
+                var parsedTarget = text[targetPrefix.Length..end].Trim();
+                if (!string.IsNullOrWhiteSpace(parsedTarget)) target = parsedTarget;
+                text = text[(end + 1)..].Trim();
+            }
+        }
+        if (text.StartsWith(sidePrefix, StringComparison.Ordinal))
+        {
+            var end = text.IndexOf(']');
+            if (end > sidePrefix.Length)
+            {
+                var parsedSide = text[sidePrefix.Length..end].Trim();
+                if (!string.IsNullOrWhiteSpace(parsedSide)) side = parsedSide;
+                text = text[(end + 1)..].Trim();
+            }
+        }
+        return (target, side, text);
+    }
+
+    private async Task NotifyJobSpec(string title, string message, IEnumerable<string> roles)
+    {
+        var form = _partyId > 0 ? $"customers/{_partyId}/job-spec" : $"products/{_replyProductId}/job-spec";
+        foreach (var role in roles)
+            await NotificationService.NotifyRoleAsync(title, message, role, _userName, form, "Parties", null);
+    }
+
+    private async Task ReloadCurrent()
+    {
+        _replyProductId = null;
+        _replyMode = "";
+        _seenParty = -1;
+        _seenProduct = -1;
+        _loading = true;
+        var redirected = await LoadAsync();
+        if (!redirected && _partyId > 0)
+            await LoadEngineersAsync();
+        if (!redirected)
+            _loading = false;
+    }
+
+    private bool _engineersReady;
+    private string? _designEngineerName;
+    private string? _executionEngineerName;
+    private bool _canTransferDesign;
+    private bool _canTransferExecution;
+    private string? _transferSeat;
+    private int? _transferEmployeeId;
+    private string _transferReason = "";
+    private bool _transferring;
+    private List<JobEngineerCandidate> _transferCandidates = new();
+
+    private async Task LoadEngineersAsync()
+    {
+        var claim = await Engineers.ClaimOnOpenAsync(_partyId, _userName);
+        if (!string.IsNullOrWhiteSpace(claim.Note))
+            Snackbar.Add(claim.Note, Severity.Warning);
+        var view = await Engineers.GetAsync(_partyId, _userName);
+        _engineersReady = view.Ready;
+        _designEngineerName = view.DesignName;
+        _executionEngineerName = view.ExecutionName;
+        _canTransferDesign = view.CanTransferDesign;
+        _canTransferExecution = view.CanTransferExecution;
+    }
+
+    private async Task OpenTransfer(string seat)
+    {
+        _transferSeat = seat;
+        _transferEmployeeId = null;
+        _transferReason = "";
+        _transferCandidates = await Engineers.CandidatesAsync(_partyId, seat);
+        if (_transferCandidates.Count == 0)
+            Snackbar.Add("لا يوجد مهندس آخر بنفس الدور في الفرع.", Severity.Info);
+    }
+
+    private void CloseTransfer()
+    {
+        _transferSeat = null;
+        _transferCandidates = new();
+    }
+
+    private async Task ConfirmTransfer()
+    {
+        if (_transferSeat == null || _transferEmployeeId is not int employeeId)
+        {
+            Snackbar.Add("اختر المهندس.", Severity.Warning);
+            return;
+        }
+        _transferring = true;
+        try
+        {
+            var (ok, message) = await Engineers.TransferAsync(_partyId, _transferSeat, employeeId, _transferReason, _userName);
+            Snackbar.Add(message, ok ? Severity.Success : Severity.Warning);
+            if (!ok) return;
+            CloseTransfer();
+            await LoadEngineersAsync();
+        }
+        finally
+        {
+            _transferring = false;
+        }
+    }
+
+    private void OpenCustomer(int partyId) => Navigation.NavigateTo($"/customers/{partyId}/job-spec");
+    private Task OpenInvoice(int transactionId) => OpenExternal($"/sales/invoices/{transactionId}");
+    private Task OpenProduct(int productId) => OpenExternal($"/products/form/{productId}");
+    private async Task OpenExternal(string url) => await JS.InvokeVoidAsync("open", url, "_blank");
+
+    private async Task CopyPhone()
+    {
+        if (string.IsNullOrWhiteSpace(_partyPhone)) return;
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _partyPhone);
+            _phoneCopied = true;
+        }
+        catch
+        {
+            _phoneCopied = false;
+        }
+    }
+
+    private void ClearFilters()
+    {
+        _priceFilter = "all";
+        _invoiceFilter = "all";
+    }
+
+    private void SetPriceFilter(string value)
+    {
+        _priceFilter = _priceFilter == value ? "all" : value;
+    }
+
+    private void SetInvoiceFilter(string value)
+    {
+        _invoiceFilter = _invoiceFilter == value ? "all" : value;
+    }
+
+    private IEnumerable<ProductCard> VisibleCards => _cards.Where(c =>
+        (_priceFilter == "all" || (_priceFilter == "priced" ? c.IsPriced : !c.IsPriced))
+        && (_invoiceFilter == "all" || (_invoiceFilter == "linked" ? c.Invoices.Count > 0 : c.Invoices.Count == 0)));
+
+    private int PricedCount => _cards.Count(c => c.IsPriced);
+    private int UnpricedCount => _cards.Count(c => !c.IsPriced);
+    private int LinkedCount => _cards.Count(c => c.Invoices.Count > 0);
+    private int UnlinkedCount => _cards.Count(c => c.Invoices.Count == 0);
+
+    private static string TranslateStatus(int statusId, string? name) => statusId switch
+    {
+        1 => "مسودة",
+        2 => "انتظار التسعير",
+        3 => "تم التسعير",
+        4 => "طلب تعديل سعر",
+        5 => "السعر معتمد",
+        6 => "السعر مرفوض",
+        7 => "طلب تعديل سعر البيع",
+        8 => "طلب تعديل التكلفة",
+        _ => string.IsNullOrWhiteSpace(name) ? "غير محدد" : name.Trim() switch
+        {
+            "Priced" => "تم التسعير",
+            "Draft" => "مسودة",
+            "WaitingForPricing" => "انتظار التسعير",
+            "PriceApproved" => "السعر معتمد",
+            "PriceRejected" => "السعر مرفوض",
+            "PriceChangeRequested" => "طلب تعديل سعر",
+            "SalePriceChangeRequested" => "طلب تعديل سعر البيع",
+            "CostChangeRequested" => "طلب تعديل التكلفة",
+            _ => name
+        }
+    };
+
+    private static string Initial(string? name)
+    {
+        var text = (name ?? "").Trim();
+        return text.Length == 0 ? "ع" : text[..1];
+    }
+
+    private async Task AttachInvoicesAsync()
+    {
+        if (!_canSeeInvoices || _cards.Count == 0 || _user == null) return;
+        var ids = _cards.Select(c => c.ProductId).ToList();
+        var protectedCreators = SalesInvoiceAccess.CanViewAccountManagerInvoices(_user)
+            ? new List<string>()
+            : await SalesInvoiceAccess.GetProtectedCreatorUsernamesAsync(Db);
+        var rows = await (
+            from detail in Db.TransactionDetails.AsNoTracking()
+            join invoice in Db.Transactions.AsNoTracking() on detail.TransactionId equals invoice.TransactionId
+            where ids.Contains(detail.ProductId)
+                && invoice.TransactionType == TransactionTypes.Sale
+                && (invoice.InvoiceStatus == null || invoice.InvoiceStatus != InvoiceStatuses.Cancelled)
+            orderby invoice.TransactionDate descending
+            select new { detail.ProductId, invoice.TransactionId, invoice.ReferenceNumber, invoice.CreatedBy }
+        ).ToListAsync();
+        var seen = new HashSet<(int ProductId, int TransactionId)>();
+        foreach (var row in rows)
+        {
+            if (protectedCreators.Contains(row.CreatedBy)) continue;
+            if (!seen.Add((row.ProductId, row.TransactionId))) continue;
+            var card = _cards.FirstOrDefault(c => c.ProductId == row.ProductId);
+            card?.Invoices.Add(new InvoiceLink
+            {
+                TransactionId = row.TransactionId,
+                Number = string.IsNullOrWhiteSpace(row.ReferenceNumber) ? row.TransactionId.ToString() : row.ReferenceNumber
+            });
+        }
+    }
+
+    private string HeaderLine()
+    {
+        if (_partyId > 0)
+            return $"{_partyName} — {(string.IsNullOrWhiteSpace(_partyPhone) ? "بدون رقم هاتف" : _partyPhone)} — {_cards.Count} منتج";
+        return _cards.FirstOrDefault()?.Name ?? "منتج غير مرتبط بعميل";
+    }
+
+    private RenderFragment ImageRow(List<string> images, string title) => @<text>
+        @if (images.Count > 0)
+        {
+            <div class="js-images">
+                @foreach (var src in images.Take(8))
+                {
+                    <img src="@src" alt="@title" />
+                }
+            </div>
+        }
+    </text>;
+
+    private RenderFragment SpecBlock(List<string> lines) => @<text>
+        @if (lines.Count > 0)
+        {
+            <div class="js-specs">
+                @foreach (var line in lines)
+                {
+                    <span>@line</span>
+                }
+            </div>
+        }
+    </text>;
+
+    private void GoBack() => Navigation.NavigateTo(_partyId > 0 ? "/products" : $"/products/form/{ProductId}");
+    private void AddAnother() => Navigation.NavigateTo($"/products/form?customer={_partyId}", forceLoad: true);
+    private async Task Print()
+    {
+        if (_printing || _cards.Count == 0)
+        {
+            if (_cards.Count == 0)
+                Snackbar.Add("لا توجد منتجات في الملف.", Severity.Warning);
+            return;
+        }
+        _printing = true;
+        try
+        {
+            string? city = null;
+            string? address = null;
+            if (_partyId > 0)
+            {
+                var party = await Db.Parties.AsNoTracking()
+                    .Where(p => p.PartyId == _partyId)
+                    .Select(p => new { p.City, p.Area, p.Address })
+                    .FirstOrDefaultAsync();
+                city = string.Join(" - ", new[] { party?.City, party?.Area }.Where(x => !string.IsNullOrWhiteSpace(x)));
+                address = party?.Address;
+            }
+            var ids = _cards.Select(c => c.ProductId).ToList();
+            var creators = await Db.Products.AsNoTracking()
+                .Where(p => ids.Contains(p.ProductId))
+                .Select(p => p.CreatedBy)
+                .ToListAsync();
+            var doc = new JobSpecPdfDocument
+            {
+                CustomerName = _partyId > 0 ? _partyName : (_cards[0].Name),
+                Phone = _partyPhone,
+                City = string.IsNullOrWhiteSpace(city) ? null : city,
+                Address = address,
+                PrintedBy = _userName,
+                PreparedBy = string.Join("، ", creators.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct()),
+                IssuedAt = DateTime.Now,
+                Products = _cards.Select((card, index) => new JobSpecPdfProduct
+                {
+                    Number = index + 1,
+                    ProductId = card.ProductId,
+                    Name = card.Name,
+                    Status = card.StatusName,
+                    Period = card.PeriodText,
+                    Created = card.CreatedText,
+                    Description = card.Description,
+                    Manufacturing = card.Manufacturing,
+                    InvoiceNumbers = card.Invoices.Select(i => i.Number).ToList(),
+                    ImageSources = card.Images,
+                    Specs = card.Specs,
+                    Notes = card.Notes.Select(n => $"{n.Side} — {n.Target} — {n.By} · {n.When}: {n.Text}").ToList(),
+                    Parts = card.Components.Select(part => new JobSpecPdfPart
+                    {
+                        Name = part.Name,
+                        Meta = $"كمية {part.Quantity} · {part.KindLabel}",
+                        LinkedName = part.LinkedName,
+                        Specs = part.LinkedSpecs.Count > 0 ? part.LinkedSpecs : part.OwnSpecs,
+                        ImageSources = part.Images
+                    }).ToList(),
+                    Alternatives = card.Alternatives.Select(alt => new JobSpecPdfAlt
+                    {
+                        Name = alt.Name,
+                        Status = alt.IsApproved ? "بديل معتمد" : "مقترح",
+                        Summary = alt.Summary,
+                        Manufacturing = alt.Manufacturing,
+                        Period = alt.Period,
+                        Specs = alt.Specs,
+                        ImageSources = alt.Images
+                    }).ToList()
+                }).ToList()
+            };
+            var bytes = await JobSpecPdfBuilder.CreateAsync(Db, Env.WebRootPath ?? "", doc);
+            var safe = string.Concat((_partyId > 0 ? _partyName : "بدون-عميل").Where(c => !Path.GetInvalidFileNameChars().Contains(c))).Trim();
+            if (string.IsNullOrWhiteSpace(safe)) safe = _partyId > 0 ? _partyId.ToString() : "product";
+            await JS.InvokeVoidAsync("downloadFile", $"جوب-أوردر-{safe}.pdf", "application/pdf", Convert.ToBase64String(bytes));
+            Snackbar.Add("تم تنزيل ملف الطباعة. افتحه واطبعه من عارض الملفات.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message.Contains("خط") ? ex.Message : "تعذر إنشاء ملف الطباعة.", Severity.Error);
+        }
+        finally
+        {
+            _printing = false;
+        }
+    }
+
+
+    private sealed class CustomerPick
+    {
+        public int PartyId { get; set; }
+        public string PartyName { get; set; } = "";
+        public string? Phone { get; set; }
+        public int ProductCount { get; set; }
+    }
+    private sealed class ProductCard
+    {
+        public int ProductId { get; set; }
+        public string Name { get; set; } = "";
+        public string? Description { get; set; }
+        public string? Manufacturing { get; set; }
+        public string PeriodText { get; set; } = "";
+        public string CreatedText { get; set; } = "";
+        public string StatusName { get; set; } = "";
+        public bool IsPriced { get; set; }
+        public bool NeedsReply { get; set; }
+        public bool HasOpenChangeRequest => Notes.LastOrDefault() is { Target: "طلب تعديل", FromFactory: false };
+        public string? CreatedBy { get; set; }
+        public List<NoteVm> Notes { get; set; } = new();
+        public List<string> Images { get; set; } = new();
+        public List<string> Specs { get; set; } = new();
+        public List<ComponentVm> Components { get; set; } = new();
+        public List<AltVm> Alternatives { get; set; } = new();
+        public List<InvoiceLink> Invoices { get; set; } = new();
+    }
+    private sealed class InvoiceLink
+    {
+        public int TransactionId { get; set; }
+        public string Number { get; set; } = "";
+    }
+    private sealed class NoteVm
+    {
+        public string Target { get; set; } = "المنتج كله";
+        public string Side { get; set; } = "المصنع";
+        public bool FromFactory { get; set; } = true;
+        public string Text { get; set; } = "";
+        public string By { get; set; } = "";
+        public string When { get; set; } = "";
+    }
+    private sealed class ComponentVm
+    {
+        public string Name { get; set; } = "";
+        public int Quantity { get; set; }
+        public string KindLabel { get; set; } = "";
+        public string? LinkedName { get; set; }
+        public List<string> OwnSpecs { get; set; } = new();
+        public List<string> LinkedSpecs { get; set; } = new();
+        public List<string> Images { get; set; } = new();
+    }
+    private sealed class AltVm
+    {
+        public int AlternativeId { get; set; }
+        public string Name { get; set; } = "";
+        public string? Summary { get; set; }
+        public string? Manufacturing { get; set; }
+        public int? Period { get; set; }
+        public bool IsApproved { get; set; }
+        public List<string> Images { get; set; } = new();
+        public List<string> Specs { get; set; } = new();
+    }
+}

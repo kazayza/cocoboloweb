@@ -722,6 +722,11 @@ public class InvoiceService : IInvoiceService
                 query = query.Where(t => t.GrandTotal > t.PaidAmount && t.DueDate.HasValue && t.DueDate.Value < todayDate);
             }
 
+            if (filter.IsDirectFactoryPurchase == true)
+                query = query.Where(t => t.ReferenceType == null || !t.ReferenceType.StartsWith("MirrorOf:"));
+            else if (filter.IsDirectFactoryPurchase == false)
+                query = query.Where(t => t.ReferenceType != null && t.ReferenceType.StartsWith("MirrorOf:"));
+
             return query;
         }
 
@@ -2617,6 +2622,114 @@ public class InvoiceService : IInvoiceService
         }
 
         return final;
+    }
+
+    public async Task<List<ProductLookupDto>> SearchQuotationStockProductsAsync(string? search, int max = 200)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var term = search?.Trim();
+        var hasSearch = !string.IsNullOrWhiteSpace(term);
+        var searchId = 0;
+        var numeric = hasSearch && int.TryParse(term, out searchId);
+
+        var query = db.Products.AsNoTracking()
+            .Where(p => p.Customer == null || p.Customer == 0);
+
+        List<ProductLookupDto> products;
+        if (!hasSearch)
+        {
+            products = await query
+                .Where(p => db.StockLevels.Any(s => s.ProductId == p.ProductId && s.Quantity > 0))
+                .OrderBy(p => p.ProductName)
+                .Take(max)
+                .Select(p => new ProductLookupDto
+                {
+                    ProductId = p.ProductId,
+                    ProductName = p.ProductName,
+                    ProductDescription = p.ProductDescription,
+                    ImagePath = null,
+                    SuggestedSalePriceCClass = p.SuggestedSalePriceCClass,
+                    SuggestedSalePrice = p.SuggestedSalePrice,
+                    SuggestedSalePriceElite = p.SuggestedSalePriceElite,
+                    PurchasePriceCClass = p.PurchasePriceCClass,
+                    PurchasePrice = p.PurchasePrice,
+                    PurchasePriceElite = p.PurchasePriceElite,
+                    AvailableStock = db.StockLevels
+                        .Where(s => s.ProductId == p.ProductId)
+                        .Sum(s => (int?)s.Quantity) ?? 0,
+                    IsShowroomProduct = true,
+                    IsWebsite = p.IsWebsite,
+                    Period = p.Period,
+                    PricingType = p.PricingType
+                })
+                .ToListAsync();
+        }
+        else
+        {
+            var names = await query
+                .Select(p => new { p.ProductId, p.ProductName, p.ProductDescription })
+                .ToListAsync();
+
+            var ids = names
+                .Where(p => (p.ProductName ?? "").ContainsArabic(term!)
+                            || (p.ProductDescription ?? "").ContainsArabic(term!)
+                            || (numeric && p.ProductId == searchId))
+                .OrderBy(p => p.ProductName)
+                .Take(max)
+                .Select(p => p.ProductId)
+                .ToList();
+
+            if (ids.Count == 0)
+                return new List<ProductLookupDto>();
+
+            products = await db.Products.AsNoTracking()
+                .Where(p => ids.Contains(p.ProductId))
+                .Select(p => new ProductLookupDto
+                {
+                    ProductId = p.ProductId,
+                    ProductName = p.ProductName,
+                    ProductDescription = p.ProductDescription,
+                    ImagePath = null,
+                    SuggestedSalePriceCClass = p.SuggestedSalePriceCClass,
+                    SuggestedSalePrice = p.SuggestedSalePrice,
+                    SuggestedSalePriceElite = p.SuggestedSalePriceElite,
+                    PurchasePriceCClass = p.PurchasePriceCClass,
+                    PurchasePrice = p.PurchasePrice,
+                    PurchasePriceElite = p.PurchasePriceElite,
+                    AvailableStock = db.StockLevels
+                        .Where(s => s.ProductId == p.ProductId)
+                        .Sum(s => (int?)s.Quantity) ?? 0,
+                    IsShowroomProduct = true,
+                    IsWebsite = p.IsWebsite,
+                    Period = p.Period,
+                    PricingType = p.PricingType
+                })
+                .ToListAsync();
+
+            var order = ids.Select((id, index) => (id, index)).ToDictionary(x => x.id, x => x.index);
+            products = products.OrderBy(p => order.TryGetValue(p.ProductId, out var i) ? i : int.MaxValue).ToList();
+        }
+
+        if (products.Count > 0)
+        {
+            var ids = products.Select(p => p.ProductId).ToList();
+            var breakdown = await (from sl in db.StockLevels.AsNoTracking()
+                                   join w in db.Warehouses.AsNoTracking() on sl.WarehouseId equals w.WarehouseId
+                                   where ids.Contains(sl.ProductId) && sl.Quantity > 0 && w.IsActive == true
+                                   select new { sl.ProductId, w.WarehouseName, sl.Quantity })
+                                  .ToListAsync();
+
+            foreach (var g in breakdown.GroupBy(b => b.ProductId))
+            {
+                var row = products.FirstOrDefault(p => p.ProductId == g.Key);
+                if (row == null) continue;
+                row.StockDetails = string.Join(" · ",
+                    g.OrderByDescending(x => x.Quantity)
+                     .Select(x => $"{x.WarehouseName}: {x.Quantity:0.##}"));
+            }
+        }
+
+        return products;
     }
 
     public async Task<List<Warehouse>> GetWarehousesAsync()

@@ -1,0 +1,264 @@
+@page "/factory/production-products/{OrderId:int}"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using System.Security.Claims
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>@(_number == "" ? "تفاصيل أمر الإنتاج" : _number)</PageTitle>
+
+@if (_loading)
+{
+    <div class="fd-loading">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4" Style="color: var(--gold);">جارٍ فتح تفاصيل أمر التنفيذ...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error">هذه الشاشة لطاقم المصنع فقط.</MudAlert>
+}
+else if (_missing)
+{
+    <MudAlert Severity="Severity.Warning">أمر التنفيذ غير موجود، أو لم يُعتمد بعد.</MudAlert>
+}
+else
+{
+    <div class="fd-page" dir="rtl">
+        <div class="fd-header">
+            <div class="fd-overlay"></div>
+            <div class="fd-header-top">
+                <div class="fd-header-info">
+                    <div class="fd-badge"><MudIcon Icon="@Icons.Material.Filled.Inventory" /></div>
+                    <div>
+                        <h1>@_number</h1>
+                        <p>@_customer@(string.IsNullOrWhiteSpace(_phone) ? "" : $" — {_phone}")</p>
+                    </div>
+                </div>
+                <div class="fd-actions">
+                    <MudButton Variant="Variant.Filled" Class="fd-gold" OnClick="OpenPlan">خطة الإنتاج</MudButton>
+                    @if (_partyId > 0)
+                    {
+                        <MudButton Variant="Variant.Outlined" Class="fd-ghost" OnClick="@(() => OpenJob(0))">الجوب أوردر</MudButton>
+                    }
+                    @if (_canOpenInvoice)
+                    {
+                        <MudButton Variant="Variant.Outlined" Class="fd-ghost" OnClick="OpenInvoice">فتح الفاتورة</MudButton>
+                    }
+                    <MudButton Variant="Variant.Outlined" Class="fd-ghost" OnClick="GoBack">الأوامر</MudButton>
+                </div>
+            </div>
+            <div class="fd-stats">
+                <div class="fd-stat"><strong>@_customer</strong><em>العميل</em></div>
+                <div class="fd-stat"><strong>@_documentNo</strong><em>@(_canOpenInvoice ? "الفاتورة المرتبطة" : "البيع المرتبط")</em></div>
+                <div class="fd-stat"><strong>@_due.ToString("yyyy/MM/dd")</strong><em>تاريخ التنفيذ</em></div>
+                <div class="fd-stat"><strong>@_lines.Count</strong><em>منتج</em></div>
+            </div>
+        </div>
+
+        <section class="fd-board">
+            <h2>منتجات الأمر</h2>
+            <p>المواصفات المثبتة عند الاعتماد. لا تُعرض أسعار البيع. صورة المنتج للتعرّف على القطعة، والجوب أوردر يفتح ملف المواصفات.</p>
+            @if (_lines.Count == 0)
+            {
+                <p>لا توجد منتجات مثبتة على هذا الأمر.</p>
+            }
+            @foreach (var line in _lines)
+            {
+                <article class="fd-line">
+                    @if (!string.IsNullOrWhiteSpace(line.ImageUrl))
+                    {
+                        <img src="@line.ImageUrl" alt="@line.ProductName" />
+                    }
+                    else
+                    {
+                        <span class="fd-photo">لا توجد صورة</span>
+                    }
+                    <div>
+                        <strong>@line.ProductName</strong>
+                        <span>الكمية @line.Quantity.ToString("0.##") — @(string.IsNullOrWhiteSpace(line.AlternativeName) ? "المنتج الأصلي" : line.AlternativeName)</span>
+                        @if (line.PeriodDays is > 0)
+                        {
+                            <span>مدة التصنيع: @line.PeriodDays يوم</span>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(line.SpecText))
+                        {
+                            <p>@line.SpecText</p>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(line.ComponentText))
+                        {
+                            <p>المكونات: @line.ComponentText</p>
+                        }
+                    </div>
+                    <MudButton Variant="Variant.Filled" Class="fd-gold" OnClick="@(() => OpenJob(line.ProductId))">فتح الجوب أوردر</MudButton>
+                </article>
+            }
+        </section>
+    </div>
+}
+
+<style>
+    .fd-loading { min-height: 420px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .fd-page { padding: 1.5rem; max-width: 1600px; margin: 0 auto; direction: rtl; }
+    .fd-header { position: relative; background: linear-gradient(135deg, #1a2842 0%, #2a3f6a 50%, #1a2842 100%); border-radius: 20px; padding: 1.6rem 1.8rem; margin-bottom: 1rem; overflow: hidden; }
+    .fd-overlay { position: absolute; inset: 0; pointer-events: none; background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23d4af37' fill-opacity='0.06'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E"); }
+    .fd-header-top, .fd-stats { position: relative; }
+    .fd-header-top { display: flex; justify-content: space-between; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: 1.1rem; }
+    .fd-header-info { display: flex; align-items: center; gap: 1rem; }
+    .fd-badge { width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #d4af37, #f0d060); color: #1a2842; }
+    .fd-header h1 { margin: 0; color: #fff; font-size: 1.55rem; font-weight: 800; }
+    .fd-header p { margin: .25rem 0 0; color: rgba(255,255,255,.72); }
+    .fd-actions { display: flex; gap: .45rem; flex-wrap: wrap; }
+    .fd-gold { background: linear-gradient(135deg, #d4af37, #f0d060) !important; color: #1a2842 !important; font-weight: 800 !important; }
+    .fd-ghost { color: #fff !important; border-color: rgba(255,255,255,.35) !important; }
+    .fd-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .7rem; }
+    .fd-stat { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; padding: .8rem 1rem; color: #fff; }
+    .fd-stat strong { display: block; font-size: 1.05rem; }
+    .fd-stat em { display: block; margin-top: .15rem; font-style: normal; font-size: .72rem; color: rgba(255,255,255,.65); }
+    .fd-board { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: 16px; padding: 1.1rem 1.15rem; }
+    .fd-board h2 { margin: 0 0 .35rem; }
+    .fd-board p, .fd-line span { color: var(--mud-palette-text-secondary); }
+    .fd-line { display: flex; align-items: flex-start; gap: .85rem; border: 1px solid var(--mud-palette-divider); border-radius: 16px; padding: .9rem; margin-top: .7rem; background: var(--mud-palette-surface); }
+    .fd-line img, .fd-photo { width: 140px; height: 112px; object-fit: cover; border-radius: 14px; border: 1px solid var(--mud-palette-divider); flex: 0 0 auto; background: var(--mud-palette-background); }
+    .fd-photo { display: grid; place-items: center; color: var(--mud-palette-text-secondary); font-size: .78rem; font-weight: 800; text-align: center; }
+    .fd-line div { flex: 1; display: flex; flex-direction: column; gap: .25rem; align-items: flex-start; }
+    .fd-line p { margin: .15rem 0 0; line-height: 1.7; }
+    .fd-line .fd-gold { align-self: center; }
+    @@media (max-width: 900px) {
+        .fd-page { padding: .75rem; }
+        .fd-stats, .fd-line { display: flex; flex-direction: column; }
+        .fd-line img, .fd-photo { width: 100%; height: 180px; }
+    }
+</style>
+
+@code {
+    [Parameter] public int OrderId { get; set; }
+
+    private bool _loading = true;
+    private bool _authChecked;
+    private bool _canView;
+    private bool _canOpenInvoice;
+    private bool _missing;
+    private int _seen = -1;
+    private string _number = "";
+    private string _customer = "";
+    private string? _phone;
+    private string _documentNo = "";
+    private int _invoiceId;
+    private int _partyId;
+    private DateTime _due;
+    private List<LineRow> _lines = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+        var supply = user.IsInRole("factory") || user.IsInRole(SystemRoles.FactoryManager) || user.IsInRole(SystemRoles.ProductionManager);
+        var admin = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin);
+        _canView = admin || supply;
+        _canOpenInvoice = !supply && (admin || user.HasClaim("Permission", "frm_PartiesInvoices:View"));
+        _authChecked = true;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_authChecked || !_canView)
+        {
+            _loading = false;
+            return;
+        }
+        if (_seen == OrderId)
+        {
+            _loading = false;
+            return;
+        }
+        _seen = OrderId;
+        _loading = true;
+        _missing = false;
+        _lines = new();
+        await LoadAsync();
+        _loading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        var order = await Db.ExecutionOrders.AsNoTracking().FirstOrDefaultAsync(o => o.ExecutionOrderId == OrderId && o.Status == "Approved");
+        if (order == null)
+        {
+            _missing = true;
+            return;
+        }
+        var invoice = await Db.Transactions.AsNoTracking().FirstOrDefaultAsync(t => t.TransactionId == order.TransactionId);
+        if (invoice == null || invoice.TransactionType != TransactionTypes.Sale || invoice.InvoiceStatus == InvoiceStatuses.Cancelled)
+        {
+            _missing = true;
+            return;
+        }
+        var party = await Db.Parties.AsNoTracking().Where(p => p.PartyId == invoice.PartyId)
+            .Select(p => new { p.PartyName, p.Phone }).FirstOrDefaultAsync();
+        _number = $"EXE-{order.ExecutionOrderId:D5}";
+        _customer = party?.PartyName ?? "عميل";
+        _phone = party?.Phone;
+        _partyId = invoice.PartyId;
+        _invoiceId = invoice.TransactionId;
+        _documentNo = string.IsNullOrWhiteSpace(invoice.ReferenceNumber) ? invoice.TransactionId.ToString() : invoice.ReferenceNumber;
+        _due = order.DueDate;
+        var lines = await Db.ExecutionOrderLines.AsNoTracking().Where(l => l.ExecutionOrderId == order.ExecutionOrderId).ToListAsync();
+        var productIds = lines.Select(l => l.ProductId).Distinct().ToList();
+        var altIds = lines.Where(l => l.AlternativeId.HasValue).Select(l => l.AlternativeId!.Value).Distinct().ToList();
+        var photos = productIds.Count == 0 ? new List<ProductImage>() : await Db.ProductImages.AsNoTracking().Where(i => productIds.Contains(i.ProductId)).ToListAsync();
+        var altPhotos = altIds.Count == 0 ? new List<ProductFactoryAlternativeImage>() : await Db.ProductFactoryAlternativeImages.AsNoTracking().Where(i => altIds.Contains(i.AlternativeId) && i.ImagePath != "").ToListAsync();
+        _lines = lines.Select(l => new LineRow
+        {
+            ProductId = l.ProductId,
+            ProductName = l.ProductName,
+            Quantity = l.Quantity,
+            AlternativeName = l.AlternativeName,
+            PeriodDays = l.PeriodDays,
+            SpecText = l.SpecSnapshot,
+            ComponentText = l.ComponentSnapshot,
+            ImageUrl = ImageOf(l.ProductId, l.AlternativeId, photos, altPhotos)
+        }).ToList();
+    }
+
+    private static string? ImageOf(int productId, int? alternativeId, List<ProductImage> photos, List<ProductFactoryAlternativeImage> altPhotos)
+    {
+        if (alternativeId is int altId)
+        {
+            var alt = altPhotos.Where(i => i.AlternativeId == altId).OrderByDescending(i => i.IsPrimary).FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(alt?.ImagePath)) return alt.ImagePath;
+        }
+        var photo = photos.Where(i => i.ProductId == productId).OrderByDescending(i => i.IsPrimary).ThenBy(i => i.ProductImagesId).FirstOrDefault();
+        if (photo == null) return null;
+        return photo.ProductImagesId > 0 ? $"/api/product-image-by-id/{photo.ProductImagesId}" : photo.ImagePath;
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/factory/production-products");
+    private void OpenPlan() => Navigation.NavigateTo($"/factory/production-plans/{OrderId}");
+    private Task OpenInvoice() => JS.InvokeVoidAsync("open", $"/sales/invoices/{_invoiceId}", "_blank").AsTask();
+    private Task OpenJob(int productId)
+    {
+        var url = _partyId > 0
+            ? productId > 0 ? $"/customers/{_partyId}/job-spec?product={productId}" : $"/customers/{_partyId}/job-spec"
+            : $"/products/{productId}/job-spec";
+        return JS.InvokeVoidAsync("open", url, "_blank").AsTask();
+    }
+
+    private sealed class LineRow
+    {
+        public int ProductId { get; set; }
+        public string ProductName { get; set; } = "";
+        public decimal Quantity { get; set; }
+        public string? AlternativeName { get; set; }
+        public int? PeriodDays { get; set; }
+        public string? SpecText { get; set; }
+        public string? ComponentText { get; set; }
+        public string? ImageUrl { get; set; }
+    }
+}

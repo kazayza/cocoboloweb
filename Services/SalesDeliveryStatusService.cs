@@ -2,6 +2,7 @@ using System.Data;
 using COCOBOLOERPNEW.DTOs;
 using COCOBOLOERPNEW.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 
 namespace COCOBOLOERPNEW.Services;
@@ -560,6 +561,18 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
     }
 
     /// <summary>خطأ «الجدول غير موجود» (208) — شبكة الأمان الأخيرة إن نُشر الكود قبل سكربتات SQL.</summary>
+    private static async Task<bool> ExecutionOrdersTableExistsAsync(db24804Context db)
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != ConnectionState.Open)
+            await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.Transaction = db.Database.CurrentTransaction?.GetDbTransaction();
+        cmd.CommandText = "SELECT CASE WHEN OBJECT_ID(N'dbo.ExecutionOrders', N'U') IS NULL THEN 0 ELSE 1 END";
+        var result = await cmd.ExecuteScalarAsync();
+        return Convert.ToInt32(result) == 1;
+    }
+
     private static bool IsMissingTablesError(Exception ex)
     {
         for (Exception? e = ex; e != null; e = e.InnerException)
@@ -3050,7 +3063,15 @@ public class SalesDeliveryStatusService : ISalesDeliveryStatusService
             var lineChanges = new List<(int DetailId, DateTime? BeforeDate, bool BeforeCustom, DateTime? AfterDate, bool AfterCustom)>();
 
             if (finalDueDate.HasValue)
+            {
                 invoice.DueDate = finalDueDate.Value.Date;
+                if (await ExecutionOrdersTableExistsAsync(db))
+                {
+                    var execution = await db.ExecutionOrders.FirstOrDefaultAsync(o => o.TransactionId == invoice.TransactionId);
+                    if (execution != null)
+                        execution.DueDate = finalDueDate.Value.Date;
+                }
+            }
 
             foreach (var f in finals)
             {

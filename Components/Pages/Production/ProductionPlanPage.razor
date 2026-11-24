@@ -1,0 +1,2322 @@
+@page "/factory/production-plans"
+@page "/factory/production-plans/{OrderId:int}"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using System.Security.Claims
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject NotificationService NotificationService
+
+<PageTitle>خطة الإنتاج</PageTitle>
+
+@if (_loading)
+{
+    <div class="fpp-loading">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4" Style="color: var(--gold);">جارٍ فتح خطة الإنتاج...</MudText>
+    </div>
+}
+else if (_denied)
+{
+    <MudAlert Severity="Severity.Warning" Class="ma-4">هذه الخطة ليست ضمن تعيينك.</MudAlert>
+}
+else if (!_canView && !_assignedViewer)
+{
+    <MudAlert Severity="Severity.Error" Class="ma-4">خطة الإنتاج لطاقم المصنع فقط. فروع المعرض لا تفتحها.</MudAlert>
+}
+else if (OrderId <= 0)
+{
+    <div class="fpp-page" dir="rtl">
+        <header class="fpp-head">
+            <div class="fpp-id">
+                <span class="fpp-mark"><MudIcon Icon="@Icons.Material.Filled.AccountTree" /></span>
+                <div>
+                    <div class="fpp-title-line">
+                        <h1>خطط الإنتاج</h1>
+                    </div>
+                    <p>اختر أمر تنفيذ معتمد لترتيب الدعوة والمراحل والخامات المتوقعة.</p>
+                </div>
+            </div>
+            <div class="fpp-count"><strong>@_orders.Count</strong><span>أمر معتمد</span></div>
+        </header>
+        @if (_needsScript)
+        {
+            <MudAlert Severity="Severity.Warning">يلزم تشغيل سكربت ProductionPlanMeeting.sql مرة واحدة بعد ProductionStagePeople.sql.</MudAlert>
+        }
+        <section class="fpp-card fpp-table-card">
+            <MudTable T="OrderRow" Items="_orders" Hover="true" Striped="true" OnRowClick="@((TableRowClickEventArgs<OrderRow> args) => Open(args.Item.OrderId))">
+                <HeaderContent>
+                    <MudTh>أمر التنفيذ</MudTh>
+                    <MudTh>العميل</MudTh>
+                    <MudTh>الخطة</MudTh>
+                    <MudTh>تاريخ التنفيذ</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd><span class="fpp-no">@context.Number</span></MudTd>
+                    <MudTd><strong>@context.CustomerName</strong></MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="@(context.PlanText == "خطة محفوظة" ? Color.Success : context.PlanText == "مسودة" ? Color.Warning : Color.Default)">@context.PlanText</MudChip>
+                    </MudTd>
+                    <MudTd><span class="fpp-when">@context.DueDate.ToString("yyyy/MM/dd")</span></MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="fpp-empty"><p>لا توجد أوامر تنفيذ معتمدة.</p></div>
+                </NoRecordsContent>
+            </MudTable>
+        </section>
+    </div>
+}
+else if (_missing)
+{
+    <MudAlert Severity="Severity.Warning" Class="ma-4">أمر التنفيذ غير موجود، أو لم يُعتمد بعد.</MudAlert>
+}
+else
+{
+    <div class="fpp-page" dir="rtl">
+        <header class="fpp-head">
+            <div class="fpp-id">
+                <span class="fpp-mark"><MudIcon Icon="@Icons.Material.Filled.AccountTree" /></span>
+                <div>
+                    <div class="fpp-title-line">
+                        <h1>خطة @_number</h1>
+                        <span class="fpp-pill">@PlanStateText</span>
+                    </div>
+                    <p>@_customer · تاريخ التنفيذ @_due.ToString("yyyy/MM/dd")</p>
+                </div>
+            </div>
+            <div class="fpp-actions">
+                @if (_canPlan && !_saved && _stages.Count > 0)
+                {
+                    <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="SavePlan">حفظ الخطة</MudButton>
+                }
+                <MudButton Variant="Variant.Outlined" Class="fpp-ghost" OnClick="OpenOrder">تفاصيل الأمر</MudButton>
+                <MudButton Variant="Variant.Outlined" Class="fpp-ghost" OnClick="GoList">كل الخطط</MudButton>
+            </div>
+        </header>
+
+            @if (_needsScript)
+            {
+                <MudAlert Severity="Severity.Warning">يلزم تشغيل سكربت ProductionPlanMeeting.sql مرة واحدة بعد ProductionStagePeople.sql.</MudAlert>
+            }
+            else if (_needsExtraScript)
+            {
+                <MudAlert Severity="Severity.Warning">يلزم تشغيل سكربت ProductionPlanStageExtras.sql مرة واحدة لإضافة الوحدة والتعليمات وعينات العميل. إذا كان قد شُغّل قبل ذلك، يُعاد تشغيله؛ الإضافات لا تتكرر.</MudAlert>
+            }
+            else
+            {
+            @if (_needsMeetingScript)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">يلزم تشغيل سكربت ProductionPlanMeeting.sql مرة واحدة قبل عرض الدعوات وطلبات الخامات.</MudAlert>
+            }
+            @if (OrderIsLate)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">تجاوز الأمر تاريخ التنفيذ @_due.ToString("yyyy/MM/dd")، ولا تزال هناك مرحلة لم تكتمل.</MudAlert>
+            }
+
+            <section class="fpp-guide">
+                <div>
+                    <h2>وظيفة الشاشة</h2>
+                    @if (_canPlan)
+                    {
+                        <p>تُستخدم لترتيب خطة أمر التنفيذ قبل بدء التشغيل: إرسال الدعوة، ثم موافقة المدعوين، ثم تحديد بداية كل مرحلة ونهايتها، ثم حفظ الخطة. لا تُخصم الخامات من المخزون، ولا تُصدر فاتورة بيع.</p>
+                    }
+                    else if (MyInvite != null)
+                    {
+                        <p>دعوة لمراجعة خطة @_number. المطلوب الموافقة أو الرفض. لا يُطلب التخطيط ولا تسجيل الخامات قبل الموافقة.</p>
+                    }
+                    else
+                    {
+                        <p>تعرض مراحل أمر @_number: الموظف المسؤول، وتاريخ البداية والنهاية، وحالة اعتماد الجودة.</p>
+                    }
+                </div>
+                <p class="fpp-now">@NowText</p>
+                @if (!string.IsNullOrEmpty(OpenFormText))
+                {
+                    <p class="fpp-now wait">@OpenFormText</p>
+                }
+            </section>
+
+            @if (MyInvite != null)
+            {
+                <section class="fpp-card fpp-invite">
+                    <div class="fpp-card-title">
+                        <h2>دعوة للمراجعة</h2>
+                        <p>يُرجى الموافقة على خطة @_number أو رفضها.</p>
+                    </div>
+                    @if (MyInvite.Status == "Approved")
+                    {
+                        <MudAlert Severity="Severity.Success" Dense="true">تم تسجيل الموافقة.</MudAlert>
+                    }
+                    else if (MyInvite.Status == "Rejected")
+                    {
+                        <MudAlert Severity="Severity.Error" Dense="true">تم تسجيل الرفض. لن تُطلب مدد العمل إلا بعد الموافقة.</MudAlert>
+                        <div class="fpp-choice">
+                            <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => DecideMeeting(MyInvite.AttendeeId, true))">موافقة</MudButton>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="fpp-choice">
+                            <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => DecideMeeting(MyInvite.AttendeeId, true))">موافقة</MudButton>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="_saving" OnClick="@(() => DecideMeeting(MyInvite.AttendeeId, false))">رفض</MudButton>
+                        </div>
+                    }
+                </section>
+            }
+            else if (_needsMeetingScript && !_canPlan)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">الدعوة موجودة، لكن تعذر قراءتها. يُشغَّل سكربت ProductionPlanMeeting.sql مرة واحدة.</MudAlert>
+            }
+
+            @if (_canPlan)
+            {
+                <ol class="fpp-steps">
+                    <li class="@StepClass(1)"><b>1</b><span>الدعوة</span><small>تحديد المراجعين</small></li>
+                    <li class="@StepClass(2)"><b>2</b><span>الموافقة</span><small>موافقة جميع المدعوين</small></li>
+                    <li class="@StepClass(3)"><b>3</b><span>المواعيد</span><small>بداية كل مرحلة ونهايتها</small></li>
+                    <li class="@StepClass(4)"><b>4</b><span>الحفظ</span><small>ثم بدء التنفيذ</small></li>
+                </ol>
+            }
+
+            <div class="fpp-facts">
+                <article>
+                    <span>تاريخ التنفيذ</span>
+                    <strong>@_due.ToString("yyyy/MM/dd")</strong>
+                    <small>الحد الأقصى. لا تتجاوزه نهاية أي مرحلة.</small>
+                </article>
+                <article>
+                    <span>نهاية أطول مسار</span>
+                    <strong>@(_pathEnd?.ToString("yyyy/MM/dd") ?? "غير محدد")</strong>
+                    <small>عند توازي المراحل يُعتمد أطول مسار، لا مجموع الأيام.</small>
+                </article>
+                <article>
+                    <span>المراحل</span>
+                    <strong>@_stages.Count</strong>
+                    <small>@(MeetingApproved ? "اكتملت الموافقة. يحدد مسؤول المرحلة المواعيد." : "تبقى المواعيد مغلقة حتى موافقة جميع المدعوين.")</small>
+                </article>
+            </div>
+
+            @if (_products.Count > 0)
+            {
+                <div class="fpp-card fpp-products">
+                    <span>بنود الأمر</span>
+                    @foreach (var product in _products)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@product</MudChip>
+                    }
+                </div>
+            }
+
+            <section class="fpp-card">
+                <div class="fpp-card-title">
+                    <h2>المدعوون</h2>
+                    <p>@(MeetingApproved ? "اكتملت الموافقة. يمكن لمسؤول كل مرحلة تحديد تاريخ البداية والنهاية." : "لا تُحدد مواعيد العمل قبل موافقة جميع المدعوين.")</p>
+                </div>
+                @if (_attendees.Count == 0)
+                {
+                    <p class="fpp-quiet">@(_needsMeetingScript ? "لا تظهر الأسماء لأن جدول الاجتماع غير متاح." : _canPlan ? "لم تُرسل دعوة بعد. اختر الموظف ثم أرسل الدعوة." : "لا توجد دعوة ظاهرة على هذا الحساب.")</p>
+                }
+                else
+                {
+                    <div class="fpp-people">
+                        @foreach (var person in _attendees)
+                        {
+                            <div class="fpp-person">
+                                <div>
+                                    <strong>@person.EmployeeName</strong>
+                                    <small>@person.Department @(string.IsNullOrWhiteSpace(person.JobTitle) ? "" : "· " + person.JobTitle)</small>
+                                </div>
+                                <MudChip T="string" Size="Size.Small" Color="@(person.Status == "Approved" ? Color.Success : person.Status == "Rejected" ? Color.Error : Color.Warning)">@(person.Status == "Approved" ? "موافق" : person.Status == "Rejected" ? "رافض" : "بانتظار الرد")</MudChip>
+                                @if (_canPlan && !_saved && person.Status != "Approved" && person.UserId != _userId)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" Disabled="_saving" OnClick="@(() => RemoveAttendee(person.AttendeeId))">حذف</MudButton>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+                @if (_canPlan && !_saved)
+                {
+                    <div class="fpp-form">
+                        <div class="fpp-fields">
+                            <div class="fpp-col-6">
+                                <MudSelect T="int" @bind-Value="_inviteId" Label="الموظف المدعو" Variant="Variant.Outlined">
+                                    @foreach (var person in InviteOptions)
+                                    {
+                                        <MudSelectItem T="int" Value="@person.UserId">@person.Label</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </div>
+                        </div>
+                        <div class="fpp-actions">
+                            <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="Invite">إرسال الدعوة</MudButton>
+                        </div>
+                    </div>
+                }
+            </section>
+
+            @if (_canPlan || MyInvite?.Status == "Approved")
+            {
+                <section class="fpp-card">
+                    <div class="fpp-card-title">
+                        <h2>خامات متوقعة</h2>
+                        <p>تُسجل الخامة المتوقعة بالكمية والوحدة وصاحب الطلب. مثال: قماش كتان، الكمية 12، الوحدة متر.</p>
+                    </div>
+                    <p class="fpp-quiet">هذا السجل للتخطيط فقط. لا يُخصم من المخزون، ولا يوقف البيع، وليس صرف المرحلة. يُسجل الصرف الفعلي لاحقًا من إجراء «صرف خامة» بعد بدء المرحلة.</p>
+                    @if (_materials.Count == 0)
+                    {
+                        <p class="fpp-quiet">لا توجد خامات متوقعة.</p>
+                    }
+                    else
+                    {
+                        <div class="fpp-mat head"><span>الخامة</span><span>الكمية</span><span>الوحدة</span><span>صاحب الطلب</span><span>ملاحظة</span></div>
+                        @foreach (var item in _materials)
+                        {
+                            <div class="fpp-mat">
+                                <strong>@item.MaterialName</strong>
+                                <span>@item.Quantity.ToString("0.###")</span>
+                                <span>@(string.IsNullOrWhiteSpace(item.Unit) ? "—" : item.Unit)</span>
+                                <span>@item.OwnerName</span>
+                                <span>@(string.IsNullOrWhiteSpace(item.Note) ? "—" : item.Note)</span>
+                            </div>
+                        }
+                    }
+                    @if ((_canPlan || IsAttendee) && !_saved && _meeting != null)
+                    {
+                        @if (_attendees.Count == 0)
+                        {
+                            <p class="fpp-quiet">يلزم وجود مدعو واحد على الأقل قبل تسجيل الخامة، لأن كل طلب يُحفظ باسم صاحبه.</p>
+                        }
+                        else
+                        {
+                            <div class="fpp-form">
+                                <div class="fpp-fields">
+                                    <div class="fpp-col-4">
+                                        <MudTextField T="string" @bind-Value="_materialName" Label="اسم الخامة" Placeholder="قماش كتان" Variant="Variant.Outlined" />
+                                    </div>
+                                    <div class="fpp-col-2">
+                                        <MudTextField T="string" @bind-Value="_materialQty" Label="الكمية" Placeholder="12" Variant="Variant.Outlined" />
+                                    </div>
+                                    <div class="fpp-col-2">
+                                        <MudTextField T="string" @bind-Value="_materialUnit" Label="الوحدة" Placeholder="متر" Variant="Variant.Outlined" />
+                                    </div>
+                                    <div class="fpp-col-4">
+                                        <MudSelect T="int" @bind-Value="_materialOwnerId" Label="صاحب الطلب" Variant="Variant.Outlined">
+                                            @foreach (var person in _attendees)
+                                            {
+                                                <MudSelectItem T="int" Value="@person.UserId">@person.EmployeeName</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                    </div>
+                                    <div class="fpp-col-12">
+                                        <MudTextField T="string" @bind-Value="_materialNote" Label="ملاحظة" Placeholder="لون أو مقاس، إن وجد" Variant="Variant.Outlined" />
+                                    </div>
+                                </div>
+                                <div class="fpp-actions">
+                                    <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="AddMaterialRequest">إضافة الخامة</MudButton>
+                                </div>
+                            </div>
+                        }
+                    }
+                </section>
+            }
+
+            @if (_canPlan && !_saved)
+            {
+                <section class="fpp-card">
+                    <div class="fpp-card-title">
+                        <h2>إضافة مرحلة</h2>
+                        <p>يُحدد اسم المرحلة وموظفها ومسؤول الجودة، مع التعليمات والملاحظات. لا تُدخل المواعيد هنا. إذا لم تُربط بمرحلة سابقة فهي متوازية، وإذا رُبطت فلا تبدأ إلا بعد نهاية المرحلة المشروطة.</p>
+                    </div>
+                    @if (_factoryBranchMissing)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">فرع المصنع غير موجود. راجع كود الفرع قبل إضافة مرحلة.</MudAlert>
+                    }
+                    else if (_staff.Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">لا يوجد موظف مصنع مرتبط بحساب نشط. يُربط الحساب قبل إضافة المرحلة.</MudAlert>
+                    }
+                    <div class="fpp-form">
+                        <div class="fpp-fields">
+                            <div class="fpp-col-4">
+                                <MudTextField T="string" @bind-Value="_newName" Label="اسم المرحلة" Placeholder="مثال: نجارة" Variant="Variant.Outlined" />
+                            </div>
+                            <div class="fpp-col-4">
+                                <MudSelect T="int" @bind-Value="_workerId" Label="موظف المرحلة" Variant="Variant.Outlined" Placeholder="اختر الموظف">
+                                    @foreach (var person in _staff)
+                                    {
+                                        <MudSelectItem T="int" Value="@person.UserId">@person.Label</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </div>
+                            <div class="fpp-col-4">
+                                <MudSelect T="int" @bind-Value="_qualityId" Label="مسؤول الجودة" Variant="Variant.Outlined" Placeholder="اختر مسؤول الجودة">
+                                    @foreach (var person in _staff)
+                                    {
+                                        <MudSelectItem T="int" Value="@person.UserId">@person.Label</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </div>
+                            <div class="fpp-col-4">
+                                <MudSelect T="string" @bind-Value="_newSample" Label="عينة العميل" Variant="Variant.Outlined">
+                                    <MudSelectItem T="string" Value="@("None")">لا تستلزم عينة</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("Veneer")">قشرة</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("Paint")">دهان</MudSelectItem>
+                                </MudSelect>
+                            </div>
+                            <div class="fpp-col-6">
+                                <MudTextField T="string" @bind-Value="_newInstructions" Label="تعليمات المرحلة" Placeholder="ما المطلوب تنفيذه" Variant="Variant.Outlined" Lines="2" />
+                            </div>
+                            <div class="fpp-col-6">
+                                <MudTextField T="string" @bind-Value="_newNote" Label="ملاحظات" Placeholder="ملاحظة داخلية على المرحلة" Variant="Variant.Outlined" Lines="2" />
+                            </div>
+                        </div>
+                        <div class="fpp-actions">
+                            <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="AddStage">إضافة المرحلة</MudButton>
+                        </div>
+                    </div>
+                    @if (_stages.Count > 0)
+                    {
+                        <div class="fpp-preds">
+                            <span>شرط التتابع: لا تبدأ إلا بعد انتهاء</span>
+                            @foreach (var stage in _stages)
+                            {
+                                <MudCheckBox T="bool" Value="_selectedPreds.Contains(stage.StageId)" ValueChanged="@((bool _) => TogglePred(stage.StageId))" Label="@stage.StageName" Dense="true" Color="Color.Primary" />
+                            }
+                        </div>
+                    }
+                </section>
+            }
+
+            @if (_assignStageId.HasValue)
+            {
+                <section class="fpp-card fpp-editor">
+                    <div class="fpp-card-title">
+                        <h2>تعيين — @(_stages.FirstOrDefault(s => s.StageId == _assignStageId.Value)?.StageName)</h2>
+                        <p>تغيير موظف المرحلة أو مسؤول الجودة. لا يُغيّر هذا التعيين تاريخ المرحلة.</p>
+                    </div>
+                    <div class="fpp-form">
+                        <div class="fpp-fields">
+                            <div class="fpp-col-6">
+                                <MudSelect T="int" @bind-Value="_workerId" Label="موظف المرحلة" Variant="Variant.Outlined">
+                                    @foreach (var person in _staff)
+                                    {
+                                        <MudSelectItem T="int" Value="@person.UserId">@person.Label</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </div>
+                            <div class="fpp-col-6">
+                                <MudSelect T="int" @bind-Value="_qualityId" Label="مسؤول الجودة" Variant="Variant.Outlined">
+                                    @foreach (var person in _staff)
+                                    {
+                                        <MudSelectItem T="int" Value="@person.UserId">@person.Label</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </div>
+                        </div>
+                        <div class="fpp-actions">
+                            <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => SaveAssignment(_assignStageId.Value))">حفظ التعيين</MudButton>
+                            <MudButton Variant="Variant.Text" OnClick="@(() => { _assignStageId = null; })">إلغاء</MudButton>
+                        </div>
+                    </div>
+                </section>
+            }
+
+            @if (_noteStageId.HasValue)
+            {
+                <section class="fpp-card fpp-editor">
+                    <div class="fpp-card-title">
+                        <h2>تعليمات وملاحظات — @(_stages.FirstOrDefault(s => s.StageId == _noteStageId.Value)?.StageName)</h2>
+                        <p>تظهر لمسؤول المرحلة. لا تغيّر مواعيد المرحلة.</p>
+                    </div>
+                    <div class="fpp-form">
+                        <div class="fpp-fields">
+                            <div class="fpp-col-6">
+                                <MudTextField T="string" @bind-Value="_editInstructions" Label="تعليمات المرحلة" Variant="Variant.Outlined" Lines="3" />
+                            </div>
+                            <div class="fpp-col-6">
+                                <MudTextField T="string" @bind-Value="_editNote" Label="ملاحظات" Variant="Variant.Outlined" Lines="3" />
+                            </div>
+                            <div class="fpp-col-4">
+                                <MudSelect T="string" @bind-Value="_editSample" Label="عينة العميل" Variant="Variant.Outlined" Disabled="@SampleLocked">
+                                    <MudSelectItem T="string" Value="@("None")">لا تستلزم عينة</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("Veneer")">قشرة</MudSelectItem>
+                                    <MudSelectItem T="string" Value="@("Paint")">دهان</MudSelectItem>
+                                </MudSelect>
+                            </div>
+                        </div>
+                        <div class="fpp-actions">
+                            <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => SaveStageNotes(_noteStageId.Value))">حفظ</MudButton>
+                            <MudButton Variant="Variant.Text" OnClick="@(() => { _noteStageId = null; })">إلغاء</MudButton>
+                        </div>
+                    </div>
+                </section>
+            }
+
+            @if (_dateStageId.HasValue)
+            {
+                <section class="fpp-card fpp-editor">
+                    <div class="fpp-card-title">
+                        <h2>@(_saved ? "طلب تغيير التاريخ" : "مواعيد المرحلة") — @(_stages.FirstOrDefault(s => s.StageId == _dateStageId.Value)?.StageName)</h2>
+                        <p>@ScheduleHint(_dateStageId.Value)</p>
+                    </div>
+                    <p class="fpp-quiet">@(_saved ? "بعد حفظ الخطة لا يغيّر مسؤول المرحلة المواعيد مباشرة. يُرسل طلبًا، ويبقى التاريخ الحالي ساريًا حتى موافقة مدير الإنتاج أو الأدمن." : "أدخل تاريخ البداية وعدد الأيام فيُحسب تاريخ النهاية، أو أدخل تاريخ البداية والنهاية فيُحسب عدد الأيام. اليومان شاملان.")</p>
+                    <div class="fpp-form">
+                        <div class="fpp-fields">
+                            <div class="fpp-col-4">
+                                <MudDatePicker Date="_changeStart" DateChanged="OnStartChanged" Label="تاريخ البداية" Variant="Variant.Outlined" DateFormat="yyyy/MM/dd" PickerVariant="PickerVariant.Dialog" MinDate="@EarliestStart(_dateStageId.Value)" MaxDate="@_due" />
+                            </div>
+                            <div class="fpp-col-2">
+                                <MudNumericField T="int?" Value="_changeDays" ValueChanged="OnDaysChanged" Label="عدد الأيام" Variant="Variant.Outlined" Min="1" />
+                            </div>
+                            <div class="fpp-col-4">
+                                <MudDatePicker Date="_changeEnd" DateChanged="OnEndChanged" Label="تاريخ النهاية" Variant="Variant.Outlined" DateFormat="yyyy/MM/dd" PickerVariant="PickerVariant.Dialog" MinDate="@_changeStart" MaxDate="@_due" />
+                            </div>
+                            <div class="fpp-col-2">
+                                <div class="fpp-live">
+                                    <span>النتيجة</span>
+                                    <strong>@ChangeDays</strong>
+                                    <small>ناتج التاريخين</small>
+                                </div>
+                            </div>
+                            @if (_saved)
+                            {
+                                <div class="fpp-col-12">
+                                    <MudTextField T="string" @bind-Value="_changeReason" Label="سبب التغيير" Variant="Variant.Outlined" />
+                                </div>
+                            }
+                        </div>
+                        <div class="fpp-actions">
+                            @if (_saved)
+                            {
+                                <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => RequestDateChange(_dateStageId.Value))">إرسال الطلب</MudButton>
+                            }
+                            else
+                            {
+                                <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="@(_saving || UndatedPreds(_dateStageId.Value).Count > 0)" OnClick="@(() => SetStageDates(_dateStageId.Value))">حفظ المواعيد</MudButton>
+                            }
+                            <MudButton Variant="Variant.Text" OnClick="@(() => { _dateStageId = null; })">إلغاء</MudButton>
+                        </div>
+                    </div>
+                </section>
+            }
+
+            @if (_issueStageId.HasValue)
+            {
+                <section class="fpp-card fpp-editor">
+                    <div class="fpp-card-title">
+                        <h2>صرف خامة — @(_stages.FirstOrDefault(s => s.StageId == _issueStageId.Value)?.StageName)</h2>
+                        <p>يُسجل اسم الخامة والكمية المصروفة على هذه المرحلة أثناء تشغيلها. لا يُخصم من مخزون المعرض، وهو مستقل عن خامات التخطيط.</p>
+                    </div>
+                    <div class="fpp-form">
+                        <div class="fpp-fields">
+                            <div class="fpp-col-4">
+                                <MudTextField T="string" @bind-Value="_issueName" Label="اسم الخامة" Variant="Variant.Outlined" />
+                            </div>
+                            <div class="fpp-col-2">
+                                <MudTextField T="string" @bind-Value="_issueQty" Label="الكمية" Placeholder="رقم فقط" Variant="Variant.Outlined" />
+                            </div>
+                            <div class="fpp-col-2">
+                                <MudTextField T="string" @bind-Value="_issueUnit" Label="الوحدة" Placeholder="متر" Variant="Variant.Outlined" />
+                            </div>
+                            <div class="fpp-col-4">
+                                <MudTextField T="string" @bind-Value="_issueNote" Label="ملاحظة" Variant="Variant.Outlined" />
+                            </div>
+                        </div>
+                        <div class="fpp-actions">
+                            <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => IssueMaterial(_issueStageId.Value))">تسجيل الصرف</MudButton>
+                            <MudButton Variant="Variant.Text" OnClick="@(() => { _issueStageId = null; })">إلغاء</MudButton>
+                        </div>
+                    </div>
+                    @if (Suggestions(_issueStageId.Value).Count > 0)
+                    {
+                        <div class="fpp-preds">
+                            <span>من الخامات المتوقعة</span>
+                            @foreach (var name in Suggestions(_issueStageId.Value))
+                            {
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => PickIssue(name))">@name</MudButton>
+                            }
+                        </div>
+                    }
+                </section>
+            }
+
+            @if (_excuseStageId.HasValue)
+            {
+                <section class="fpp-card fpp-editor">
+                    <div class="fpp-card-title">
+                        <h2>تعذر — @(_stages.FirstOrDefault(s => s.StageId == _excuseStageId.Value)?.StageName)</h2>
+                        <p>يُذكر سبب التوقف أو نقص الخامة. تصل الرسالة إلى مدير الإنتاج، ولا يتغير تاريخ التنفيذ تلقائيًا.</p>
+                    </div>
+                    <div class="fpp-form">
+                        <div class="fpp-fields">
+                            <div class="fpp-col-12">
+                                <MudTextField T="string" @bind-Value="_excuseNote" Label="سبب التعذر أو نقص الخامة" Variant="Variant.Outlined" Lines="3" />
+                            </div>
+                        </div>
+                        <div class="fpp-actions">
+                            <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => SendExcuse(_excuseStageId.Value))">إرسال</MudButton>
+                            <MudButton Variant="Variant.Text" OnClick="@(() => { _excuseStageId = null; })">إلغاء</MudButton>
+                        </div>
+                    </div>
+                </section>
+            }
+
+            @if (SampleStages.Count > 0 || _canPlan)
+            {
+                <section class="fpp-card">
+                    <div class="fpp-card-title">
+                        <h2>عينات العميل</h2>
+                        <p>عينة القشرة وعينة الدهان تُرسلان معًا في إرسال واحد، ومهلة الرد 5 أيام من تاريخ الإرسال. المهلة تُحسب مرة واحدة، لا على كل مرحلة.</p>
+                    </div>
+                    @if (SampleStages.Count == 0)
+                    {
+                        <p class="fpp-quiet">لا توجد مرحلة تستلزم عينة. عند إضافة المرحلة اختر قشرة أو دهان إن كان اعتماد العميل لازمًا.</p>
+                    }
+                    else
+                    {
+                        <p class="fpp-quiet">قشرة: @SampleStageNames("Veneer") · دهان: @SampleStageNames("Paint")</p>
+                        @if (!CanSendSamples && (LatestBatch == null || LatestBatch.Status == "Rejected"))
+                        {
+                            <p class="fpp-quiet">لا يُرسل نوع واحد. عيّن مرحلة للقشرة ومرحلة للدهان، ثم يُرسلان معًا.</p>
+                        }
+                        @if (LatestBatch == null)
+                        {
+                            <p class="fpp-quiet">لم تُرسل العينات بعد. لا تبدأ المرحلة المرتبطة بالعينة قبل اعتماد العميل أو انتهاء المهلة وقرار المتابعة.</p>
+                        }
+                        else
+                        {
+                            <p class="fpp-now">@SampleStatusText</p>
+                        }
+                        @if (_canPlan)
+                        {
+                            <div class="fpp-actions">
+                                @if (LatestBatch == null || LatestBatch.Status == "Rejected")
+                                {
+                                    <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="@(_saving || !CanSendSamples)" OnClick="SendSamples">إرسال العينتين معًا</MudButton>
+                                }
+                                @if (LatestBatch?.Status == "Pending")
+                                {
+                                    <MudButton Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => DecideSample("Approved"))">اعتماد العميل</MudButton>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="_saving" OnClick="@(() => DecideSample("Rejected"))">رفض العميل</MudButton>
+                                    @if (SampleExpired)
+                                    {
+                                        <MudButton Variant="Variant.Outlined" Disabled="_saving" OnClick="@(() => DecideSample("Released"))">متابعة بعد انتهاء المهلة</MudButton>
+                                    }
+                                }
+                            </div>
+                        }
+                    }
+                </section>
+            }
+
+            <section class="fpp-card fpp-table-card">
+                <div class="fpp-card-title">
+                    <h2>مراحل التشغيل</h2>
+                    <p>المرحلة غير المشروطة تعمل بالتوازي ويجوز تداخل مواعيدها، ويُعتمد أطول مسار لا مجموع الأيام. المرحلة المشروطة لا تبدأ إلا بعد نهاية المرحلة السابقة. بعد حفظ الخطة لا يغيّر مسؤول المرحلة المواعيد مباشرة، بل يرسل طلبًا يبقى التاريخ الحالي ساريًا حتى الموافقة.</p>
+                </div>
+                @if (_stages.Count > 0)
+                {
+                    <div class="fpp-flow">
+                        @foreach (var stage in _stages)
+                        {
+                            <span class="fpp-node @stage.Status.ToLowerInvariant()">
+                                <b>@stage.StageName</b>
+                                <small>@WhenText(stage.PlannedStart) → @WhenText(stage.PlannedEnd)</small>
+                            </span>
+                        }
+                    </div>
+                }
+                <MudTable T="ProductionStage" Items="_stages" Hover="true" Striped="true" Dense="false" Class="fpp-stages">
+                    <HeaderContent>
+                        <MudTh>المرحلة</MudTh>
+                        <MudTh>تاريخ البداية</MudTh>
+                        <MudTh>تاريخ النهاية</MudTh>
+                        <MudTh>الأيام</MudTh>
+                        <MudTh>الحالة</MudTh>
+                        <MudTh>إجراءات</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            <div class="fpp-name">
+                                <strong>@context.StageName</strong>
+                                <div class="fpp-track" title="موقع المرحلة بين بداية الأمر وتاريخ التنفيذ"><span class="@BarClass(context)" style="@BarStyle(context)"></span></div>
+                                @{
+                                    var preds = PredecessorNames(context.StageId);
+                                    var gate = GateText(context.StageId);
+                                }
+                                <span>الموظف: @(string.IsNullOrWhiteSpace(context.WorkerName) ? "غير معيّن" : context.WorkerName)</span>
+                                <span>مسؤول الجودة: @(string.IsNullOrWhiteSpace(context.QualityUserName) ? "غير معيّن" : context.QualityUserName)</span>
+                                <span>@RelationText(context.StageId)</span>
+                                @if (NeedsSample(context))
+                                {
+                                    <span>عينة العميل: @SampleLabel(context.SampleType)</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(context.Instructions))
+                                {
+                                    <span>تعليمات: @context.Instructions</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(context.Note))
+                                {
+                                    <span>ملاحظات: @context.Note</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(gate))
+                                {
+                                    <span class="fpp-gate">@gate</span>
+                                }
+                                @if (context.QualityStatus == "Approved")
+                                {
+                                    <span>اعتمدها @(string.IsNullOrWhiteSpace(context.QualityBy) ? "مسؤول الجودة" : context.QualityBy) · @(context.QualityAt?.ToString("yyyy/MM/dd HH:mm"))</span>
+                                }
+                                @{
+                                    var pendingDate = PendingDate(context.StageId);
+                                }
+                                @if (pendingDate != null)
+                                {
+                                    <span class="fpp-gate">طلب تغيير بانتظار الموافقة: @pendingDate.NewStart.ToString("yyyy/MM/dd") → @pendingDate.NewEnd.ToString("yyyy/MM/dd"). التاريخ الحالي ساري.</span>
+                                }
+                                @foreach (var issue in IssuesOf(context.StageId))
+                                {
+                                    <span>صرف @issue.MaterialName · @issue.Quantity.ToString("0.###")@(string.IsNullOrWhiteSpace(issue.Unit) ? "" : " " + issue.Unit) · @issue.IssuedAt.ToString("yyyy/MM/dd HH:mm")</span>
+                                }
+                                @foreach (var excuse in ExcusesOf(context.StageId))
+                                {
+                                    <span class="fpp-gate">
+                                        تعذر: @excuse.Note · @excuse.RequestedBy
+                                        @if (excuse.Status == "Closed")
+                                        {
+                                            <text> — أُغلق @(excuse.ClosedBy ?? "") ولم يتغير تاريخ التنفيذ.</text>
+                                        }
+                                        else if (_canApproveDate)
+                                        {
+                                            <MudButton Size="Size.Small" Variant="Variant.Text" Disabled="_saving" OnClick="@(() => CloseExcuse(excuse.ExcuseId))">إغلاق</MudButton>
+                                        }
+                                    </span>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd>
+                            <div class="fpp-date-cell">
+                                <span class="fpp-when">@WhenText(context.PlannedStart)</span>
+                                @if (context.ActualStart.HasValue)
+                                {
+                                    <span class="fpp-actual">فعلي @context.ActualStart.Value.ToString("yyyy/MM/dd")</span>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd>
+                            <div class="fpp-date-cell">
+                                <span class="fpp-when">@WhenText(context.PlannedEnd)</span>
+                                @if (context.ActualStart.HasValue)
+                                {
+                                    <span class="fpp-actual">@(context.ActualEnd.HasValue ? "فعلي " + context.ActualEnd.Value.ToString("yyyy/MM/dd") : "لم تنته")</span>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd>
+                            <div class="fpp-days-plain">
+                                <strong>@(context.PlannedStart.HasValue && context.PlannedEnd.HasValue ? InclusiveDays(context.PlannedStart.Value, context.PlannedEnd.Value) + " يوم" : "—")</strong>
+                                <small>ناتج التاريخين</small>
+                            </div>
+                            @if (context.ActualEnd.HasValue && context.ActualStart.HasValue)
+                            {
+                                <span class="fpp-actual">فعلي @InclusiveDays(context.ActualStart.Value, context.ActualEnd.Value) يوم</span>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <div class="fpp-chips">
+                                <MudChip T="string" Size="Size.Small" Color="@StageColor(context.Status)">@StageText(context.Status)</MudChip>
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@(context.QualityStatus == "Approved" ? Color.Success : Color.Default)">@QualityText(context.QualityStatus)</MudChip>
+                                @if (StageIsLate(context))
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Error">متأخر عن نهاية المرحلة</MudChip>
+                                }
+                            </div>
+                        </MudTd>
+                        <MudTd>
+                            <div class="fpp-row-actions">
+                                @if (_canMove && _saved && context.Status == "Pending" && CanStart(context.StageId))
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => StartStage(context.StageId))">بدء</MudButton>
+                                }
+                                @if (_canMove && _saved && context.Status == "Started")
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => FinishStage(context.StageId))">إنهاء</MudButton>
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Disabled="_saving" OnClick="@(() => { _issueStageId = context.StageId; })">صرف خامة</MudButton>
+                                }
+                                @if (_saved && context.Status == "Done" && context.QualityStatus != "Approved" && IsAssignedQuality(context))
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(() => ApproveQuality(context.StageId))">اعتماد الانتهاء</MudButton>
+                                }
+                                else if (_saved && context.Status == "Done" && context.QualityStatus != "Approved")
+                                {
+                                    <span class="fpp-gate">الاعتماد لـ @(string.IsNullOrWhiteSpace(context.QualityUserName) ? "مسؤول الجودة غير المعيّن" : context.QualityUserName) فقط</span>
+                                }
+                                @if (!_saved && context.WorkerUserId == _userId)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Class="fpp-gold" Disabled="@(_saving || !MeetingApproved)" OnClick="@(() => OpenDate(context.StageId))">@(context.PlannedStart.HasValue ? "تعديل المواعيد" : "تحديد المواعيد")</MudButton>
+                                }
+                                else if (!_saved && !MeetingApproved)
+                                {
+                                    <span class="fpp-gate">تُحدد المواعيد بعد موافقة الاجتماع</span>
+                                }
+                                @if (_saved)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Disabled="_saving" OnClick="@(() => OpenDate(context.StageId))">طلب تغيير التاريخ</MudButton>
+                                }
+                                @if (_canPlan)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Disabled="_saving" OnClick="@(() => OpenAssign(context.StageId))">التعيين</MudButton>
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Disabled="_saving" OnClick="@(() => OpenNotes(context.StageId))">التعليمات</MudButton>
+                                }
+                                @if (_canMove && _saved)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Disabled="_saving" OnClick="@(() => { _excuseStageId = context.StageId; })">إبلاغ بتعذر</MudButton>
+                                }
+                                @if (_canPlan && !_saved && context.Status == "Pending" && !HasDependents(context.StageId))
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" Disabled="_saving" OnClick="@(() => DeleteStage(context.StageId))">حذف</MudButton>
+                                }
+                            </div>
+                        </MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <div class="fpp-empty"><p>لا توجد مراحل. أضف المرحلة بالاسم والموظف ومسؤول الجودة. تُحدد المواعيد بعد موافقة الاجتماع.</p></div>
+                    </NoRecordsContent>
+                </MudTable>
+            </section>
+
+            @if (_canApproveDate && PendingDates.Count > 0)
+            {
+                <section class="fpp-card">
+                    <div class="fpp-card-title">
+                        <h2>طلبات تغيير التاريخ</h2>
+                        <p>الموافقة لمدير الإنتاج أو الأدمن. يبقى التاريخ الظاهر على المرحلة ساريًا حتى الموافقة.</p>
+                    </div>
+                    @foreach (var req in PendingDates)
+                    {
+                        var requestId = req.RequestId;
+                        var stageName = _stages.FirstOrDefault(s => s.StageId == req.StageId)?.StageName ?? "مرحلة";
+                        <div class="fpp-req">
+                            <strong>@stageName</strong>
+                            <span>الحالي @req.OldStart.ToString("yyyy/MM/dd") → @req.OldEnd.ToString("yyyy/MM/dd")</span>
+                            <span>المطلوب @req.NewStart.ToString("yyyy/MM/dd") → @req.NewEnd.ToString("yyyy/MM/dd") · @InclusiveDays(req.NewStart, req.NewEnd) يوم</span>
+                            <span>@req.Reason · @req.RequestedBy</span>
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Class="fpp-gold" Disabled="_saving" OnClick="@(async () => await DecideDate(requestId, true))">موافقة</MudButton>
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" Disabled="_saving" OnClick="@(async () => await DecideDate(requestId, false))">رفض</MudButton>
+                        </div>
+                    }
+                </section>
+            }
+        }
+    </div>
+}
+
+<style>
+    .fpp-loading { min-height: 420px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .fpp-page { padding: .85rem 1.15rem 1.6rem; max-width: none; width: 100%; margin: 0; direction: rtl; display: flex; flex-direction: column; gap: .75rem; color: var(--mud-palette-text-primary); }
+    .fpp-head { display: flex; justify-content: space-between; gap: .75rem; align-items: center; background: linear-gradient(135deg, #1a2842 0%, #2a3f6a 58%, #1a2842 100%); color: #fff; border-radius: 16px; padding: .7rem .85rem; }
+    .fpp-id { display: flex; align-items: center; gap: .7rem; min-width: 0; }
+    .fpp-mark { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex: 0 0 auto; color: #1a2842; background: linear-gradient(135deg, #ffe9a3, #d4af37); }
+    .fpp-title-line { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+    .fpp-head h1 { margin: 0; font-size: 1.12rem; font-weight: 800; line-height: 1.3; color: #fff; }
+    .fpp-head p { margin: .12rem 0 0; color: rgba(255,255,255,.74); font-size: .8rem; line-height: 1.45; }
+    .fpp-pill { display: inline-flex; background: rgba(212,175,55,.18); color: #f6e7b4; border: 1px solid rgba(212,175,55,.35); border-radius: 999px; padding: .12rem .55rem; font-weight: 800; font-size: .72rem; }
+    .fpp-count { min-width: 72px; text-align: center; background: rgba(255,255,255,.08); border: 1px solid rgba(212,175,55,.28); border-radius: 12px; padding: .35rem .55rem; }
+    .fpp-count strong { display: block; font-size: 1.15rem; color: #f6e7b4; }
+    .fpp-count span { color: #cbd5e1; font-size: .72rem; }
+    .fpp-actions, .fpp-choice { display: flex; flex-direction: row; flex-wrap: wrap; gap: .4rem; align-items: center; }
+    .fpp-choice { margin-top: .75rem; }
+    .fpp-gold { background: linear-gradient(180deg, #ffe9a3 0%, #f0d060 42%, #d4af37 100%) !important; color: #1a2842 !important; font-weight: 800 !important; border-radius: 999px !important; }
+    .fpp-head .fpp-ghost { color: #fff !important; border-color: rgba(255,255,255,.38) !important; border-radius: 999px !important; }
+    .fpp-guide { display: flex; flex-direction: column; gap: .45rem; background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-right: 3px solid var(--gold, #d4af37); border-radius: 16px; padding: .9rem 1rem; }
+    .fpp-guide h2 { margin: 0; font-size: 1rem; font-weight: 800; }
+    .fpp-guide p, .fpp-quiet { margin: .2rem 0 0; color: var(--mud-palette-text-secondary); font-size: .86rem; line-height: 1.7; }
+    .fpp-now { margin: 0 !important; color: var(--mud-palette-text-primary) !important; font-weight: 800; background: rgba(212,175,55,.1); border-radius: 12px; padding: .55rem .75rem; }
+    .fpp-now.wait { background: rgba(245,158,11,.12); }
+    .fpp-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .45rem; }
+    .fpp-steps li { display: flex; align-items: center; gap: .45rem; min-height: 58px; padding: .45rem .6rem; border: 1px solid var(--mud-palette-divider); border-radius: 14px; background: var(--mud-palette-surface); }
+    .fpp-steps b { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 auto; font-size: .78rem; background: rgba(127,127,127,.12); }
+    .fpp-steps span, .fpp-steps small { display: block; }
+    .fpp-steps span { font-weight: 800; font-size: .86rem; }
+    .fpp-steps small { color: var(--mud-palette-text-secondary); font-size: .72rem; }
+    .fpp-steps li.on { border-color: var(--gold, #d4af37); background: rgba(212,175,55,.1); }
+    .fpp-steps li.on b, .fpp-steps li.done b { background: var(--gold, #d4af37); color: #1a2842; }
+    .fpp-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; }
+    .fpp-facts article { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: 14px; padding: .6rem .75rem; }
+    .fpp-facts span, .fpp-facts small { display: block; color: var(--mud-palette-text-secondary); }
+    .fpp-facts span { font-size: .72rem; font-weight: 800; }
+    .fpp-facts strong { display: block; margin: .12rem 0; font-size: 1rem; }
+    .fpp-facts small { font-size: .74rem; line-height: 1.45; }
+    .fpp-card { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: 16px; padding: 1rem 1.05rem; }
+    .fpp-card-title { display: flex; justify-content: space-between; gap: .8rem; align-items: baseline; flex-wrap: wrap; margin-bottom: .55rem; }
+    .fpp-card-title h2 { margin: 0; font-size: 1.02rem; font-weight: 800; }
+    .fpp-card-title p, .fpp-name span, .fpp-actual { color: var(--mud-palette-text-secondary); font-size: .78rem; }
+    .fpp-card-title p { margin: 0; line-height: 1.6; }
+    .fpp-invite { border-right: 3px solid var(--gold, #d4af37); }
+    .fpp-products { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+    .fpp-products > span { font-size: .78rem; font-weight: 800; color: var(--mud-palette-text-secondary); }
+    .fpp-people { display: flex; flex-direction: column; }
+    .fpp-person, .fpp-mat { display: grid; gap: .45rem .7rem; align-items: center; border-top: 1px solid var(--mud-palette-divider); padding: .65rem 0; }
+    .fpp-person { grid-template-columns: 1fr auto auto; }
+    .fpp-person small, .fpp-mat span, .fpp-req span { color: var(--mud-palette-text-secondary); font-size: .82rem; }
+    .fpp-person small { display: block; margin-top: .1rem; }
+    .fpp-mat { grid-template-columns: 1.4fr .45fr .55fr 1fr 1.3fr; }
+    .fpp-mat.head { border-top: 0; padding: .45rem .15rem; font-size: .75rem; font-weight: 800; color: var(--mud-palette-text-secondary); background: var(--mud-palette-background); border-radius: 8px; }
+    .fpp-form { margin-top: .9rem; padding: 1rem 1rem .85rem; border: 1px solid var(--mud-palette-divider); border-radius: 14px; background: var(--mud-palette-background); }
+    .fpp-fields { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: .85rem 1rem; align-items: start; }
+    .fpp-col-2 { grid-column: span 2; }
+    .fpp-col-3 { grid-column: span 3; }
+    .fpp-col-4 { grid-column: span 4; }
+    .fpp-col-5 { grid-column: span 5; }
+    .fpp-col-6 { grid-column: span 6; }
+    .fpp-col-12 { grid-column: span 12; }
+    .fpp-fields .mud-input-control, .fpp-fields .mud-picker { width: 100%; margin-top: 0; }
+    .fpp-form .mud-input-outlined { background: var(--mud-palette-surface); border-radius: 10px; }
+    .fpp-form .mud-input-control { margin-bottom: 0; }
+    .fpp-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: .85rem; padding-top: .75rem; border-top: 1px solid var(--mud-palette-divider); }
+    .fpp-editor { border-right: 3px solid #f59e0b; }
+    .fpp-live { min-height: 56px; height: 100%; border-radius: 12px; padding: .55rem .8rem; border: 1px solid var(--mud-palette-divider); background: var(--mud-palette-surface); display: flex; flex-direction: column; justify-content: center; }
+    .fpp-live span, .fpp-live small, .fpp-days-plain small { display: block; font-size: .68rem; color: var(--mud-palette-text-secondary); font-weight: 700; }
+    .fpp-live strong, .fpp-days-plain strong { display: block; font-size: 1rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
+    .fpp-preds { display: flex; flex-wrap: wrap; gap: .35rem .8rem; align-items: center; margin-top: .8rem; }
+    .fpp-preds > span { font-size: .8rem; font-weight: 800; color: var(--mud-palette-text-secondary); }
+    .fpp-table-card { padding: .35rem .35rem .6rem; overflow: auto; }
+    .fpp-table-card .fpp-card-title { padding: .75rem .8rem 0; }
+    .fpp-stages { width: 100%; min-width: 1080px; }
+    .fpp-name { display: flex; flex-direction: column; gap: .2rem; min-width: 180px; }
+    .fpp-name strong { font-size: .95rem; }
+    .fpp-track { position: relative; height: 6px; border-radius: 99px; background: rgba(127,127,127,.16); overflow: hidden; margin: .2rem 0; }
+    .fpp-track span { position: absolute; top: 0; bottom: 0; border-radius: 99px; background: #94a3b8; }
+    .fpp-track span.live { background: #f59e0b; }
+    .fpp-track span.done { background: #059669; }
+    .fpp-date-cell { display: flex; flex-direction: column; gap: .15rem; }
+    .fpp-when { font-weight: 800; font-size: .95rem; font-variant-numeric: tabular-nums; color: var(--mud-palette-text-primary); }
+    .fpp-days-plain { display: flex; flex-direction: column; min-width: 72px; }
+    .fpp-chips, .fpp-row-actions { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
+    .fpp-flow { display: flex; gap: .4rem; overflow-x: auto; padding: .2rem .8rem .7rem; }
+    .fpp-node { min-width: 140px; display: flex; flex-direction: column; border: 1px solid var(--mud-palette-divider); border-radius: 12px; padding: .4rem .55rem; background: var(--mud-palette-background); }
+    .fpp-node small { color: var(--mud-palette-text-secondary); }
+    .fpp-node.started { border-color: var(--gold, #d4af37); }
+    .fpp-gate { color: var(--mud-palette-warning) !important; font-weight: 700; }
+    .fpp-req { display: flex; flex-wrap: wrap; gap: .45rem .8rem; align-items: center; border-top: 1px solid var(--mud-palette-divider); padding: .7rem 0; }
+    .fpp-no { display: inline-block; background: rgba(212,175,55,.12); color: var(--gold-dark, #b8860b); border: 1px solid rgba(212,175,55,.28); border-radius: 8px; padding: .15rem .55rem; font-weight: 800; }
+    .fpp-empty { min-height: 140px; display: grid; place-items: center; color: var(--mud-palette-text-secondary); }
+    @@media (max-width: 980px) {
+        .fpp-page { padding: .75rem; }
+        .fpp-steps, .fpp-facts, .fpp-mat, .fpp-person { grid-template-columns: 1fr; }
+        .fpp-col-2, .fpp-col-3, .fpp-col-4, .fpp-col-5, .fpp-col-6, .fpp-col-12 { grid-column: span 12; }
+        .fpp-head { align-items: flex-start; flex-direction: column; }
+    }
+</style>
+
+@code {
+    [Parameter] public int OrderId { get; set; }
+
+    private bool _loading = true;
+    private bool _saving;
+    private bool _authChecked;
+    private bool _canView;
+    private bool _canPlan;
+    private bool _canMove;
+    private bool _canApproveDate;
+    private bool _assignedViewer;
+    private bool _denied;
+    private bool _missing;
+    private bool _needsScript;
+    private bool _needsMeetingScript;
+    private bool _needsExtraScript;
+    private bool _saved;
+    private int _seen = -1;
+    private int _userId;
+    private string _userName = "System";
+    private string _number = "";
+    private string _customer = "";
+    private string _newName = "";
+    private string _newSample = "None";
+    private string _editSample = "None";
+    private string _newInstructions = "";
+    private string _newNote = "";
+    private int? _changeDays;
+    private int? _noteStageId;
+    private string _editInstructions = "";
+    private string _editNote = "";
+    private DateTime? _newStart;
+    private DateTime? _newEnd;
+    private string PreviewDays => _newStart.HasValue && _newEnd.HasValue && _newEnd.Value.Date >= _newStart.Value.Date
+        ? InclusiveDays(_newStart.Value, _newEnd.Value).ToString()
+        : "—";
+    private string ChangeDays => _changeStart.HasValue && _changeEnd.HasValue && _changeEnd.Value.Date >= _changeStart.Value.Date
+        ? InclusiveDays(_changeStart.Value, _changeEnd.Value).ToString()
+        : "—";
+    private bool MeetingApproved => _attendees.Count > 0 && _attendees.All(a => a.Status == "Approved");
+    private bool IsAttendee => _attendees.Any(a => a.UserId == _userId);
+    private ProductionPlanAttendee? MyInvite => _attendees.FirstOrDefault(a => a.UserId == _userId);
+    private List<StaffOption> InviteOptions => _staff.Where(s => _attendees.All(a => a.UserId != s.UserId)).ToList();
+    private string PlanStateText => _saved ? "محفوظة" : _plan == null ? "لم تُنشأ" : "مسودة";
+    private int GuideStep
+    {
+        get
+        {
+            if (_attendees.Count == 0) return 1;
+            if (!MeetingApproved) return 2;
+            if (!_saved && (_stages.Count == 0 || _stages.Any(s => !s.PlannedStart.HasValue || !s.PlannedEnd.HasValue))) return 3;
+            if (!_saved) return 4;
+            return 5;
+        }
+    }
+    private string StepClass(int step) => GuideStep == step ? "on" : GuideStep > step ? "done" : "";
+    private string NowText
+    {
+        get
+        {
+            if (MyInvite != null && MyInvite.Status != "Approved" && MyInvite.Status != "Rejected")
+                return _canPlan
+                    ? "توجد دعوة باسمك في أعلى الصفحة. يُرجى الموافقة أو الرفض، ويمكن إرسال دعوة لموظف آخر."
+                    : "المطلوب الآن الموافقة أو الرفض. لا يُطلب التخطيط ولا تحديد المواعيد قبل ذلك.";
+            if (MyInvite?.Status == "Rejected" && !_canPlan)
+                return "تم تسجيل الرفض. يمكن تغيير القرار بالضغط على موافقة. لن تُطلب المدد قبل الموافقة.";
+            if (_needsMeetingScript)
+                return "الدعوة موجودة، لكن تعذر قراءتها حتى يُشغَّل سكربت الاجتماع مرة واحدة.";
+            if (_canPlan && _attendees.Count == 0)
+                return "الخطوة الحالية: اختيار الموظف وإرسال الدعوة. لا تُحدد مواعيد المراحل قبل موافقة جميع المدعوين.";
+            if (!MeetingApproved)
+                return "أُرسلت الدعوات. تبقى المواعيد مغلقة حتى موافقة الجميع، ويمكن لمن رفض أن يوافق لاحقًا.";
+            if (_stages.Count == 0)
+                return "اكتملت الموافقة. أضف مراحل التشغيل: الاسم، والموظف، ومسؤول الجودة.";
+            if (!_saved && _stages.Any(s => !s.PlannedStart.HasValue || !s.PlannedEnd.HasValue))
+                return "يحدد مسؤول كل مرحلة تاريخ البداية والنهاية. تُحسب الأيام تلقائيًا، ولا تتجاوز النهاية تاريخ التنفيذ.";
+            if (!_saved)
+                return "أُدخلت المواعيد. راجعها ثم احفظ الخطة. بعد الحفظ، أي تغيير للتاريخ يتم بطلب وموافقة.";
+            if (OrderIsLate)
+                return "الخطة محفوظة، وتجاوز الأمر تاريخ التنفيذ ولا تزال هناك مرحلة لم تكتمل.";
+            return "الخطة محفوظة. يبدأ التشغيل وينتهي من إجراءات المرحلة، ويعتمد مسؤول الجودة انتهاءها.";
+        }
+    }
+    private string OpenFormText
+    {
+        get
+        {
+            if (_dateStageId.HasValue) return _saved ? "نموذج طلب تغيير التاريخ مفتوح أعلى جدول المراحل." : "نموذج تحديد البداية والنهاية مفتوح أعلى جدول المراحل.";
+            if (_assignStageId.HasValue) return "نموذج التعيين مفتوح أعلى جدول المراحل.";
+            if (_issueStageId.HasValue) return "نموذج صرف الخامة مفتوح أعلى جدول المراحل. سجل للاسم والكمية فقط، دون خصم من المخزون.";
+            if (_excuseStageId.HasValue) return "نموذج التعذر مفتوح أعلى جدول المراحل. يصل إلى مدير الإنتاج ولا يغيّر تاريخ التنفيذ.";
+            return "";
+        }
+    }
+    private static string WhenText(DateTime? value) => value.HasValue ? value.Value.ToString("yyyy/MM/dd") : "بانتظار المسؤول";
+    private bool OrderIsLate => _saved && _stages.Count > 0
+        && !_stages.All(s => s.Status == "Done" && s.QualityStatus == "Approved")
+        && DateTime.Today > _due.Date;
+    private List<ProductionStageDateRequest> PendingDates => _dateRequests.Where(r => r.Status == "Pending").ToList();
+    private string _issueName = "";
+    private string _issueQty = "";
+    private string _issueUnit = "";
+    private string _issueNote = "";
+    private string _excuseNote = "";
+    private int? _issueStageId;
+    private int? _excuseStageId;
+    private int? _assignStageId;
+    private int? _dateStageId;
+    private int _workerId;
+    private int _qualityId;
+    private DateTime? _changeStart;
+    private DateTime? _changeEnd;
+    private string _changeReason = "";
+    private DateTime _anchor;
+    private DateTime _due;
+    private DateTime? _pathEnd;
+    private ProductionPlan? _plan;
+    private ExecutionOrder? _order;
+    private List<ProductionStage> _stages = new();
+    private List<ProductionPlanSampleBatch> _sampleBatches = new();
+    private List<ProductionStageDependency> _deps = new();
+    private List<ProductionMaterialIssue> _issues = new();
+    private List<ProductionExcuse> _excuses = new();
+    private List<ProductionStageDateRequest> _dateRequests = new();
+    private List<StaffOption> _staff = new();
+    private ProductionPlanMeeting? _meeting;
+    private List<ProductionPlanAttendee> _attendees = new();
+    private List<ProductionPlanMaterialRequest> _materials = new();
+    private int _inviteId;
+    private string _materialName = "";
+    private string _materialQty = "";
+    private string _materialUnit = "";
+    private int _materialOwnerId;
+    private string _materialNote = "";
+    private int _factoryBranchId;
+    private bool _factoryBranchMissing;
+    private List<string> _products = new();
+    private List<string> _componentHints = new();
+    private List<OrderRow> _orders = new();
+    private HashSet<int> _selectedPreds = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+        _userName = user.Identity?.Name ?? "System";
+        _userId = int.TryParse(user.FindFirst("UserId")?.Value, out var userId) ? userId : 0;
+        var admin = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin);
+        var factory = user.IsInRole("factory") || user.IsInRole(SystemRoles.FactoryManager);
+        var production = user.IsInRole(SystemRoles.ProductionManager);
+        _canView = admin || factory || production;
+        _canPlan = admin || production;
+        _canMove = admin || factory || production;
+        _canApproveDate = admin || production;
+        _authChecked = true;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_authChecked || (!_canView && OrderId <= 0))
+        {
+            _loading = false;
+            return;
+        }
+        if (_seen == OrderId)
+        {
+            if (OrderId > 0)
+                await LoadMeetingAsync();
+            _loading = false;
+            return;
+        }
+        _seen = OrderId;
+        _loading = true;
+        await LoadAsync();
+        _loading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        _missing = false;
+        _denied = false;
+        _assignedViewer = false;
+        _needsScript = false;
+        _needsExtraScript = false;
+        _needsMeetingScript = false;
+        _orders = new();
+        _stages = new();
+        _sampleBatches = new();
+        _deps = new();
+        _issues = new();
+        _excuses = new();
+        _dateRequests = new();
+        _meeting = null;
+        _attendees = new();
+        _materials = new();
+        _products = new();
+        _componentHints = new();
+        _plan = null;
+        _saved = false;
+        _pathEnd = null;
+        _assignStageId = null;
+        _dateStageId = null;
+        _issueStageId = null;
+        _excuseStageId = null;
+        if (OrderId <= 0)
+        {
+            await LoadListAsync();
+            return;
+        }
+        _order = await Db.ExecutionOrders.AsNoTracking().FirstOrDefaultAsync(o => o.ExecutionOrderId == OrderId && o.Status == "Approved");
+        if (_order == null)
+        {
+            _missing = true;
+            return;
+        }
+        var invoice = await Db.Transactions.AsNoTracking().FirstOrDefaultAsync(t => t.TransactionId == _order.TransactionId);
+        var partyName = invoice == null ? "عميل" : await Db.Parties.AsNoTracking().Where(p => p.PartyId == invoice.PartyId).Select(p => p.PartyName).FirstOrDefaultAsync();
+        _number = $"EXE-{_order.ExecutionOrderId:D5}";
+        _customer = partyName ?? "عميل";
+        _anchor = _order.CreatedAt.Date;
+        _due = _order.DueDate.Date;
+        _newStart = _anchor;
+        _newEnd = _anchor;
+        await LoadStaffAsync();
+        var lines = await Db.ExecutionOrderLines.AsNoTracking().Where(l => l.ExecutionOrderId == OrderId)
+            .Select(l => new { l.ProductName, l.Quantity, l.ComponentSnapshot }).ToListAsync();
+        _products = lines.Select(l => $"{l.ProductName} × {l.Quantity:0.##}").ToList();
+        _componentHints = lines.Where(l => !string.IsNullOrWhiteSpace(l.ComponentSnapshot))
+            .SelectMany(l => l.ComponentSnapshot!.Split('،', ','))
+            .Select(p => p.Split('×', 'x', 'X')[0].Trim())
+            .Where(n => n.Length > 0)
+            .Distinct()
+            .Take(12)
+            .ToList();
+        try
+        {
+            _plan = await Db.ProductionPlans.AsNoTracking().FirstOrDefaultAsync(p => p.ExecutionOrderId == OrderId);
+            _saved = _plan?.Status == "Saved";
+            await LoadMeetingAsync();
+            if (_plan == null)
+            {
+                if (!_canView && !IsAttendee)
+                    _denied = true;
+                else if (!_canView)
+                    _assignedViewer = true;
+                return;
+            }
+            _stages = await Db.ProductionStages.AsNoTracking().Where(s => s.PlanId == _plan.PlanId).OrderBy(s => s.SortOrder).ToListAsync();
+            _sampleBatches = await Db.ProductionPlanSampleBatches.AsNoTracking().Where(b => b.ExecutionOrderId == OrderId).OrderByDescending(b => b.SentAt).ToListAsync();
+            var ids = _stages.Select(s => s.StageId).ToList();
+            _deps = ids.Count == 0 ? new() : await Db.ProductionStageDependencies.AsNoTracking().Where(d => ids.Contains(d.StageId)).ToListAsync();
+            _issues = ids.Count == 0 ? new() : await Db.ProductionMaterialIssues.AsNoTracking().Where(i => ids.Contains(i.StageId)).ToListAsync();
+            _excuses = ids.Count == 0 ? new() : await Db.ProductionExcuses.AsNoTracking().Where(e => ids.Contains(e.StageId)).ToListAsync();
+            _dateRequests = ids.Count == 0 ? new() : await Db.ProductionStageDateRequests.AsNoTracking().Where(r => ids.Contains(r.StageId)).ToListAsync();
+            if (!_canView)
+            {
+                var mine = _stages.Any(s => s.WorkerUserId == _userId || s.QualityUserId == _userId) || IsAttendee;
+                if (!mine)
+                {
+                    _denied = true;
+                    _stages = new();
+                    return;
+                }
+                _assignedViewer = true;
+            }
+            var dated = _stages.Where(s => s.PlannedEnd.HasValue).Select(s => s.PlannedEnd!.Value).ToList();
+            if (dated.Count > 0)
+                _pathEnd = dated.Max();
+        }
+        catch (Exception ex)
+        {
+            if (MissingExtra(ex))
+                _needsExtraScript = true;
+            else
+                _needsScript = true;
+        }
+    }
+
+    private async Task LoadStaffAsync()
+    {
+        _staff = new();
+        _factoryBranchMissing = false;
+        try
+        {
+            var branch = await ResolveFactoryBranchAsync();
+            if (branch == null)
+            {
+                _factoryBranchMissing = true;
+                _factoryBranchId = 0;
+                return;
+            }
+            _factoryBranchId = branch.Value.Id;
+            var users = await Db.Users.AsNoTracking()
+                .Where(u => u.IsActive != false && u.EmployeeId != null)
+                .Select(u => new { u.UserId, u.Username, u.EmployeeId })
+                .ToListAsync();
+            var ids = users.Select(u => u.EmployeeId!.Value).Distinct().ToList();
+            var employees = ids.Count == 0
+                ? new List<(int Id, string Name, string? Department, string? Job)>()
+                : (await Db.Employees.AsNoTracking()
+                    .Where(e => ids.Contains(e.EmployeeId)
+                        && e.BranchId == _factoryBranchId
+                        && (e.Status == EmployeeStatuses.Active || e.Status == EmployeeStatuses.OnLeave))
+                    .Select(e => new { e.EmployeeId, e.FullName, e.Department, e.JobTitle })
+                    .ToListAsync())
+                    .Select(e => (Id: e.EmployeeId, Name: e.FullName, Department: e.Department, Job: e.JobTitle))
+                    .ToList();
+            _staff = users
+                .Select(u => new { u, Emp = employees.FirstOrDefault(e => e.Id == u.EmployeeId) })
+                .Where(x => !string.IsNullOrWhiteSpace(x.Emp.Name))
+                .Select(x => new StaffOption { UserId = x.u.UserId, Username = x.u.Username, FullName = x.Emp.Name, Department = x.Emp.Department ?? "", JobTitle = x.Emp.Job ?? "" })
+                .OrderBy(s => s.FullName)
+                .ToList();
+        }
+        catch
+        {
+            _staff = new();
+            _factoryBranchMissing = true;
+        }
+    }
+
+    private async Task<(int Id, string Name, string Code)?> ResolveFactoryBranchAsync()
+    {
+        var branches = await Db.Branches.AsNoTracking()
+            .Where(b => b.IsActive)
+            .Select(b => new { b.BranchId, b.BranchCode, b.BranchNameAr })
+            .ToListAsync();
+        var byCode = branches.FirstOrDefault(b => string.Equals((b.BranchCode ?? "").Trim(), "3", StringComparison.OrdinalIgnoreCase));
+        if (byCode != null)
+            return (byCode.BranchId, byCode.BranchNameAr, byCode.BranchCode);
+        var byId = branches.FirstOrDefault(b => b.BranchId == 3);
+        if (byId != null)
+            return (byId.BranchId, byId.BranchNameAr, byId.BranchCode);
+        var byName = branches.FirstOrDefault(b => (b.BranchNameAr ?? "").Contains("مصنع"));
+        if (byName != null)
+            return (byName.BranchId, byName.BranchNameAr, byName.BranchCode);
+        return null;
+    }
+
+    private async Task LoadListAsync()
+    {
+        var raw = await (
+            from order in Db.ExecutionOrders.AsNoTracking()
+            join invoice in Db.Transactions.AsNoTracking() on order.TransactionId equals invoice.TransactionId
+            join party in Db.Parties.AsNoTracking() on invoice.PartyId equals party.PartyId
+            where order.Status == "Approved" && invoice.TransactionType == TransactionTypes.Sale && invoice.InvoiceStatus != InvoiceStatuses.Cancelled
+            orderby order.DueDate
+            select new { order.ExecutionOrderId, order.DueDate, party.PartyName }).ToListAsync();
+        var ids = raw.Select(r => r.ExecutionOrderId).ToList();
+        var plans = new Dictionary<int, string>();
+        try
+        {
+            if (ids.Count > 0)
+                plans = await Db.ProductionPlans.AsNoTracking().Where(p => ids.Contains(p.ExecutionOrderId)).ToDictionaryAsync(p => p.ExecutionOrderId, p => p.Status);
+        }
+        catch
+        {
+            _needsScript = true;
+        }
+        _orders = raw.Select(r => new OrderRow
+        {
+            OrderId = r.ExecutionOrderId,
+            Number = $"EXE-{r.ExecutionOrderId:D5}",
+            CustomerName = r.PartyName ?? "عميل",
+            DueDate = r.DueDate,
+            PlanText = plans.TryGetValue(r.ExecutionOrderId, out var status) ? status == "Saved" ? "خطة محفوظة" : "مسودة" : "لا توجد خطة"
+        }).ToList();
+    }
+
+    private async Task AddStage()
+    {
+        if (!_canPlan || _saved || _saving || _order == null) return;
+        if (string.IsNullOrWhiteSpace(_newName))
+        {
+            Snackbar.Add("أدخل اسم المرحلة.", Severity.Warning);
+            return;
+        }
+        if (!TryPeople(out var worker, out var quality, out var peopleError))
+        {
+            Snackbar.Add(peopleError, Severity.Warning);
+            return;
+        }
+        _saving = true;
+        try
+        {
+            var plan = _plan == null
+                ? new ProductionPlan { ExecutionOrderId = OrderId, Status = "Draft", CreatedBy = _userName, CreatedAt = DateTime.Now }
+                : await Db.ProductionPlans.FirstAsync(p => p.PlanId == _plan.PlanId);
+            if (_plan == null)
+                Db.ProductionPlans.Add(plan);
+            if (plan.Status == "Saved") return;
+            var stage = new ProductionStage
+            {
+                PlanId = plan.PlanId,
+                StageName = _newName.Trim(),
+                DurationDays = 0,
+                Status = "Pending",
+                QualityStatus = "Pending",
+                WorkerUserId = worker!.UserId,
+                WorkerName = worker.FullName,
+                QualityUserId = quality!.UserId,
+                QualityUserName = quality.FullName,
+                Instructions = string.IsNullOrWhiteSpace(_newInstructions) ? null : _newInstructions.Trim(),
+                Note = string.IsNullOrWhiteSpace(_newNote) ? null : _newNote.Trim(),
+                SampleType = _newSample == "None" ? null : _newSample,
+                SortOrder = _stages.Count + 1
+            };
+            if (plan.PlanId == 0)
+                await Db.SaveChangesAsync();
+            stage.PlanId = plan.PlanId;
+            Db.ProductionStages.Add(stage);
+            await Db.SaveChangesAsync();
+            foreach (var pred in _selectedPreds.Where(id => _stages.Any(s => s.StageId == id)))
+                Db.ProductionStageDependencies.Add(new ProductionStageDependency { StageId = stage.StageId, DependsOnStageId = pred });
+            await Db.SaveChangesAsync();
+            if (MeetingApproved)
+                await NotifyUserAsync(worker.UserId, "تحديد مدد المرحلة", $"{_number}: مرحلة {stage.StageName}. اكتب تاريخ البداية وتاريخ النهاية. السقف {_due:yyyy/MM/dd}.");
+            _newName = "";
+            _newSample = "None";
+            _newInstructions = "";
+            _newNote = "";
+            _newStart = null;
+            _newEnd = null;
+            _workerId = 0;
+            _qualityId = 0;
+            _selectedPreds.Clear();
+            Snackbar.Add("تمت إضافة المرحلة.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            if (MissingExtra(ex))
+            {
+                _needsExtraScript = true;
+                Snackbar.Add("تعذر الحفظ. شغّل سكربت ProductionPlanStageExtras.sql مرة واحدة.", Severity.Error);
+            }
+            else
+            {
+                _needsScript = true;
+                Snackbar.Add("تعذر الحفظ. شغّل سكربت ProductionPlanMeeting.sql مرة واحدة.", Severity.Error);
+            }
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task SavePlan()
+    {
+        if (!_canPlan || _plan == null || _saved || _saving) return;
+        if (!MeetingApproved)
+        {
+            Snackbar.Add("موافقة كل مدعوي الاجتماع لازمة قبل حفظ الخطة.", Severity.Warning);
+            return;
+        }
+        var missingDates = _stages.FirstOrDefault(s => !s.PlannedStart.HasValue || !s.PlannedEnd.HasValue);
+        if (missingDates != null)
+        {
+            Snackbar.Add($"مرحلة {missingDates.StageName} بلا بداية أو نهاية. المسئول يكتب المدد.", Severity.Warning);
+            return;
+        }
+        foreach (var stage in _stages)
+        {
+            if (!DatesFit(stage.StageId, stage.PlannedStart!.Value, stage.PlannedEnd!.Value, out var fitError))
+            {
+                Snackbar.Add($"{stage.StageName}: {fitError}", Severity.Warning);
+                return;
+            }
+        }
+        var lateStage = _stages.FirstOrDefault(s => s.PlannedEnd!.Value.Date > _due.Date);
+        if (lateStage != null)
+        {
+            Snackbar.Add($"مرحلة {lateStage.StageName} تنتهي بعد تاريخ التنفيذ.", Severity.Warning);
+            return;
+        }
+        var missingPeople = _stages.FirstOrDefault(s => s.WorkerUserId is not > 0 || s.QualityUserId is not > 0
+            || _staff.All(p => p.UserId != s.WorkerUserId) || _staff.All(p => p.UserId != s.QualityUserId));
+        if (missingPeople != null)
+        {
+            Snackbar.Add($"مرحلة {missingPeople.StageName} لازم لها موظف ومسؤول جودة.", Severity.Warning);
+            return;
+        }
+        _saving = true;
+        try
+        {
+            var plan = await Db.ProductionPlans.FirstAsync(p => p.PlanId == _plan.PlanId);
+            plan.Status = "Saved";
+            plan.SavedBy = _userName;
+            plan.SavedAt = DateTime.Now;
+            await Db.SaveChangesAsync();
+            await NotificationService.NotifyRoleAsync("خطة الإنتاج", $"{_number}: تم حفظ خطة الإنتاج والتصنيع. التواريخ مقفلة.", "factory", _userName, "factory/production-plans", "ExecutionOrders", OrderId);
+            await NotificationService.NotifyRoleAsync("خطة الإنتاج", $"{_number}: تم حفظ خطة الإنتاج والتصنيع. التواريخ مقفلة.", SystemRoles.FactoryManager, _userName, "factory/production-plans", "ExecutionOrders", OrderId);
+            foreach (var personId in _stages.SelectMany(s => new int?[] { s.WorkerUserId, s.QualityUserId }).Where(id => id is > 0).Distinct())
+                await NotifyUserAsync(personId, "خطة الإنتاج", $"{_number}: تم حفظ الخطة وعيّنتك على مرحلة. تغيير التاريخ بعد الحفظ يحتاج سببًا وموافقة.");
+            Snackbar.Add("تم حفظ الخطة. التواريخ مقفلة، ويمكن بدء المراحل المتاحة.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task StartStage(int stageId)
+    {
+        if (!_canMove || !_saved || !CanStart(stageId) || _saving) return;
+        _saving = true;
+        try
+        {
+            var stage = await Db.ProductionStages.FirstOrDefaultAsync(s => s.StageId == stageId);
+            if (stage == null || stage.Status != "Pending") return;
+            if (!stage.PlannedStart.HasValue || !stage.PlannedEnd.HasValue)
+            {
+                Snackbar.Add("المرحلة بلا مدد. مسئولها يكتب البداية والنهاية قبل البدء.", Severity.Warning);
+                return;
+            }
+            if (stage.WorkerUserId is not > 0 || stage.QualityUserId is not > 0
+                || _staff.All(p => p.UserId != stage.WorkerUserId) || _staff.All(p => p.UserId != stage.QualityUserId))
+            {
+                Snackbar.Add("حدد موظف المرحلة ومسؤول الجودة قبل البدء.", Severity.Warning);
+                return;
+            }
+            if (!SampleClear(stage))
+            {
+                Snackbar.Add("لا تبدأ المرحلة قبل اعتماد عينة العميل. العينتان تُرسلان معًا، ومهلة الرد 5 أيام.", Severity.Warning);
+                return;
+            }
+            stage.Status = "Started";
+            stage.ActualStart = DateTime.Now;
+            await Db.SaveChangesAsync();
+            Snackbar.Add($"بدأت مرحلة {stage.StageName}.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task FinishStage(int stageId)
+    {
+        if (!_canMove || _saving) return;
+        _saving = true;
+        try
+        {
+            var stage = await Db.ProductionStages.FirstOrDefaultAsync(s => s.StageId == stageId && s.Status == "Started");
+            if (stage == null) return;
+            if (stage.QualityUserId is not > 0)
+            {
+                Snackbar.Add("حدد مسؤول الجودة قبل إنهاء المرحلة.", Severity.Warning);
+                return;
+            }
+            stage.Status = "Done";
+            stage.ActualEnd = DateTime.Now;
+            await Db.SaveChangesAsync();
+            await NotifyUserAsync(stage.QualityUserId, "اعتماد جودة", $"{_number}: مرحلة {stage.StageName} انتهت وتنتظر اعتمادك. لا يبدأ ما بعدها قبل اعتمادك.");
+            Snackbar.Add($"انتهت مرحلة {stage.StageName}. اعتمادها لمسؤول الجودة المعيّن فقط.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task ApproveQuality(int stageId)
+    {
+        if (_saving || _userId <= 0) return;
+        _saving = true;
+        try
+        {
+            var stage = await Db.ProductionStages.FirstOrDefaultAsync(s => s.StageId == stageId && s.Status == "Done");
+            if (stage == null || stage.QualityUserId != _userId)
+            {
+                Snackbar.Add("اعتماد الانتهاء لمسؤول الجودة المعيّن على هذه المرحلة فقط.", Severity.Warning);
+                return;
+            }
+            stage.QualityStatus = "Approved";
+            stage.QualityBy = _userName;
+            stage.QualityAt = DateTime.Now;
+            await Db.SaveChangesAsync();
+            Snackbar.Add($"تم اعتماد جودة {stage.StageName}.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task IssueMaterial(int stageId)
+    {
+        if (!_canMove || _saving) return;
+        if (string.IsNullOrWhiteSpace(_issueName) || !decimal.TryParse(_issueQty.Trim(), out var qty) || qty <= 0 || string.IsNullOrWhiteSpace(_issueUnit))
+        {
+            Snackbar.Add("أدخل اسم الخامة وكمية أكبر من صفر والوحدة.", Severity.Warning);
+            return;
+        }
+        _saving = true;
+        try
+        {
+            var stage = await Db.ProductionStages.AsNoTracking().FirstOrDefaultAsync(s => s.StageId == stageId && s.Status == "Started");
+            if (stage == null) return;
+            Db.ProductionMaterialIssues.Add(new ProductionMaterialIssue
+            {
+                StageId = stageId,
+                MaterialName = _issueName.Trim(),
+                Quantity = qty,
+                Unit = string.IsNullOrWhiteSpace(_issueUnit) ? null : _issueUnit.Trim(),
+                Note = string.IsNullOrWhiteSpace(_issueNote) ? null : _issueNote.Trim(),
+                IssuedBy = _userName,
+                IssuedAt = DateTime.Now
+            });
+            await Db.SaveChangesAsync();
+            _issueName = "";
+            _issueQty = "";
+            _issueUnit = "";
+            _issueNote = "";
+            _issueStageId = null;
+            Snackbar.Add("تم تسجيل صرف الخامة. لم يُخصم من مخزون المعرض.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task SendExcuse(int stageId)
+    {
+        if (!_canMove || _saving || string.IsNullOrWhiteSpace(_excuseNote)) return;
+        _saving = true;
+        try
+        {
+            var stage = _stages.FirstOrDefault(s => s.StageId == stageId);
+            Db.ProductionExcuses.Add(new ProductionExcuse
+            {
+                StageId = stageId,
+                Note = _excuseNote.Trim(),
+                RequestedBy = _userName,
+                RequestedAt = DateTime.Now,
+                Status = "Pending"
+            });
+            await Db.SaveChangesAsync();
+            await NotificationService.NotifyRoleAsync("طلب تعذر", $"{_number}: {stage?.StageName} — {_excuseNote.Trim()} لا يغيّر تاريخ التنفيذ.", SystemRoles.ProductionManager, _userName, "factory/production-plans", "ExecutionOrders", OrderId);
+            _excuseNote = "";
+            _excuseStageId = null;
+            Snackbar.Add("أُرسل طلب التعذر إلى مدير الإنتاج، ولم يتغير تاريخ التنفيذ.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task DeleteStage(int stageId)
+    {
+        if (!_canPlan || _saved || _saving || HasDependents(stageId)) return;
+        _saving = true;
+        try
+        {
+            var deps = await Db.ProductionStageDependencies.Where(d => d.StageId == stageId || d.DependsOnStageId == stageId).ToListAsync();
+            Db.ProductionStageDependencies.RemoveRange(deps);
+            var stage = await Db.ProductionStages.FirstOrDefaultAsync(s => s.StageId == stageId && s.Status == "Pending");
+            if (stage == null) return;
+            Db.ProductionStages.Remove(stage);
+            await Db.SaveChangesAsync();
+            Snackbar.Add("تم حذف المرحلة.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        catch
+        {
+            Snackbar.Add("تعذر حذف المرحلة.", Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private static int InclusiveDays(DateTime start, DateTime end) => Math.Max(1, (end.Date - start.Date).Days + 1);
+
+    private void OpenAssign(int stageId)
+    {
+        var stage = _stages.FirstOrDefault(s => s.StageId == stageId);
+        if (stage == null) return;
+        _assignStageId = stageId;
+        _dateStageId = null;
+        _workerId = stage.WorkerUserId ?? 0;
+        _qualityId = stage.QualityUserId ?? 0;
+    }
+
+    private async Task SaveAssignment(int stageId)
+    {
+        if (!_canPlan || _saving) return;
+        if (!TryPeople(out var worker, out var quality, out var error))
+        {
+            Snackbar.Add(error, Severity.Warning);
+            return;
+        }
+        _saving = true;
+        try
+        {
+            var stage = await Db.ProductionStages.FirstOrDefaultAsync(s => s.StageId == stageId);
+            if (stage == null) return;
+            stage.WorkerUserId = worker!.UserId;
+            stage.WorkerName = worker.FullName;
+            stage.QualityUserId = quality!.UserId;
+            stage.QualityUserName = quality.FullName;
+            await Db.SaveChangesAsync();
+            await NotifyUserAsync(worker.UserId, "تعيين مرحلة", $"{_number}: عُيّنت موظفًا على مرحلة {stage.StageName}.");
+            await NotifyUserAsync(quality.UserId, "تعيين جودة", $"{_number}: أنت مسؤول جودة مرحلة {stage.StageName}. الاعتماد لك وحدك.");
+            _assignStageId = null;
+            Snackbar.Add("تم التعيين. تاريخ المرحلة لم يتغير.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        catch
+        {
+            Snackbar.Add("تعذر التعيين. شغّل سكربت ProductionStagePeople.sql مرة واحدة.", Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private void OpenDate(int stageId)
+    {
+        var stage = _stages.FirstOrDefault(s => s.StageId == stageId);
+        if (stage == null) return;
+        if (!_saved && (stage.WorkerUserId != _userId || !MeetingApproved))
+        {
+            Snackbar.Add(MeetingApproved ? "تحديد المدد لمسئول المرحلة فقط." : "موافقة الاجتماع لازمة قبل تحديد المدد.", Severity.Warning);
+            return;
+        }
+        _dateStageId = stageId;
+        _assignStageId = null;
+        _noteStageId = null;
+        _changeStart = stage.PlannedStart ?? EarliestStart(stageId) ?? _anchor;
+        _changeEnd = stage.PlannedEnd;
+        _changeDays = stage.PlannedStart.HasValue && stage.PlannedEnd.HasValue
+            ? InclusiveDays(stage.PlannedStart.Value, stage.PlannedEnd.Value)
+            : null;
+        _changeReason = "";
+    }
+
+    private void OnStartChanged(DateTime? value)
+    {
+        _changeStart = value;
+        RecalcEndFromDays();
+    }
+
+    private void OnDaysChanged(int? value)
+    {
+        _changeDays = value;
+        RecalcEndFromDays();
+    }
+
+    private void OnEndChanged(DateTime? value)
+    {
+        _changeEnd = value;
+        if (_changeStart.HasValue && value.HasValue && value.Value.Date >= _changeStart.Value.Date)
+            _changeDays = InclusiveDays(_changeStart.Value, value.Value);
+    }
+
+    private void RecalcEndFromDays()
+    {
+        if (_changeStart.HasValue && _changeDays is > 0)
+            _changeEnd = _changeStart.Value.Date.AddDays(_changeDays.Value - 1);
+    }
+
+    private async Task SetStageDates(int stageId)
+    {
+        if (_saving || _saved || !MeetingApproved) return;
+        var current = _stages.FirstOrDefault(s => s.StageId == stageId);
+        if (current == null || current.WorkerUserId != _userId) return;
+        RecalcEndFromDays();
+        if (!_changeStart.HasValue || !_changeEnd.HasValue)
+        {
+            Snackbar.Add("أدخل تاريخ البداية مع عدد الأيام، أو تاريخ البداية وتاريخ النهاية.", Severity.Warning);
+            return;
+        }
+        if (!DatesFit(stageId, _changeStart.Value, _changeEnd.Value, out var error))
+        {
+            Snackbar.Add(error, Severity.Warning);
+            return;
+        }
+        _saving = true;
+        try
+        {
+            var stage = await Db.ProductionStages.FirstOrDefaultAsync(s => s.StageId == stageId);
+            if (stage == null) return;
+            stage.PlannedStart = _changeStart.Value.Date;
+            stage.PlannedEnd = _changeEnd.Value.Date;
+            stage.DurationDays = InclusiveDays(stage.PlannedStart.Value, stage.PlannedEnd.Value);
+            await Db.SaveChangesAsync();
+            _dateStageId = null;
+            Snackbar.Add("تم حفظ المواعيد.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task LoadMeetingAsync()
+    {
+        try
+        {
+            _needsMeetingScript = false;
+            _meeting = await Db.ProductionPlanMeetings.AsNoTracking().FirstOrDefaultAsync(m => m.ExecutionOrderId == OrderId);
+            _attendees = _meeting == null ? new() : await Db.ProductionPlanAttendees.AsNoTracking().Where(a => a.MeetingId == _meeting.MeetingId).ToListAsync();
+            _materials = _meeting == null ? new() : await Db.ProductionPlanMaterialRequests.AsNoTracking().Where(m => m.MeetingId == _meeting.MeetingId).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            if (MissingExtra(ex))
+                _needsExtraScript = true;
+            else
+                _needsMeetingScript = true;
+            _meeting = null;
+            _attendees = new();
+            _materials = new();
+        }
+    }
+
+    private async Task Invite()
+    {
+        if (!_canPlan || _saved || _saving) return;
+        var person = _staff.FirstOrDefault(s => s.UserId == _inviteId);
+        if (person == null)
+        {
+            Snackbar.Add("اختر مدعوًا من فرع المصنع.", Severity.Warning);
+            return;
+        }
+        _saving = true;
+        try
+        {
+            var meeting = _meeting == null
+                ? new ProductionPlanMeeting { ExecutionOrderId = OrderId, CreatedBy = _userName, CreatedAt = DateTime.Now }
+                : await Db.ProductionPlanMeetings.FirstAsync(m => m.MeetingId == _meeting.MeetingId);
+            if (_meeting == null)
+                Db.ProductionPlanMeetings.Add(meeting);
+            if (meeting.MeetingId == 0)
+                await Db.SaveChangesAsync();
+            if (await Db.ProductionPlanAttendees.AnyAsync(a => a.MeetingId == meeting.MeetingId && a.UserId == person.UserId))
+            {
+                Snackbar.Add("هذا الموظف مدعو بالفعل.", Severity.Info);
+                return;
+            }
+            Db.ProductionPlanAttendees.Add(new ProductionPlanAttendee
+            {
+                MeetingId = meeting.MeetingId,
+                UserId = person.UserId,
+                EmployeeName = person.FullName,
+                Department = person.Department,
+                JobTitle = person.JobTitle,
+                Status = "Invited"
+            });
+            await Db.SaveChangesAsync();
+            await NotifyUserAsync(person.UserId, "اجتماع خطة الإنتاج", $"{_number}: مدعو لاجتماع الخطة. موافقتك لازمة قبل تحديد مدد المراحل.");
+            _inviteId = 0;
+            Snackbar.Add("تم إرسال الدعوة.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        catch
+        {
+            Snackbar.Add("تعذر إرسال الدعوة. شغّل سكربت ProductionPlanMeeting.sql مرة واحدة.", Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task DecideMeeting(int attendeeId, bool approve)
+    {
+        if (_saving || _userId <= 0) return;
+        _saving = true;
+        try
+        {
+            var attendee = await Db.ProductionPlanAttendees.FirstOrDefaultAsync(a => a.AttendeeId == attendeeId && a.UserId == _userId);
+            if (attendee == null) return;
+            var wasApproved = MeetingApproved;
+            attendee.Status = approve ? "Approved" : "Rejected";
+            attendee.DecidedAt = DateTime.Now;
+            await Db.SaveChangesAsync();
+            await LoadMeetingAsync();
+            if (!wasApproved && MeetingApproved)
+            {
+                foreach (var stage in _stages.Where(s => s.WorkerUserId is > 0))
+                    await NotifyUserAsync(stage.WorkerUserId, "تحديد مدد المرحلة", $"{_number}: الاجتماع وافق. اكتب بداية ونهاية مرحلة {stage.StageName}. السقف {_due:yyyy/MM/dd}.");
+            }
+            Snackbar.Add(approve ? "تم تسجيل موافقتك." : "تم تسجيل الرفض. المدد لن تُطلب قبل الموافقة.", approve ? Severity.Success : Severity.Info);
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task RemoveAttendee(int attendeeId)
+    {
+        if (!_canPlan || _saved || _saving) return;
+        _saving = true;
+        try
+        {
+            var attendee = await Db.ProductionPlanAttendees.FirstOrDefaultAsync(a => a.AttendeeId == attendeeId && a.Status != "Approved");
+            if (attendee == null) return;
+            Db.ProductionPlanAttendees.Remove(attendee);
+            await Db.SaveChangesAsync();
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task AddMaterialRequest()
+    {
+        if (_saving || _saved || _meeting == null || (!_canPlan && !IsAttendee)) return;
+        if (string.IsNullOrWhiteSpace(_materialName) || !decimal.TryParse(_materialQty, out var qty) || qty <= 0 || string.IsNullOrWhiteSpace(_materialUnit))
+        {
+            Snackbar.Add("أدخل اسم الخامة وكمية أكبر من صفر والوحدة.", Severity.Warning);
+            return;
+        }
+        var owner = _attendees.FirstOrDefault(a => a.UserId == _materialOwnerId);
+        if (owner == null)
+        {
+            Snackbar.Add("اختر صاحب الطلب من المدعوين.", Severity.Warning);
+            return;
+        }
+        _saving = true;
+        try
+        {
+            Db.ProductionPlanMaterialRequests.Add(new ProductionPlanMaterialRequest
+            {
+                MeetingId = _meeting.MeetingId,
+                MaterialName = _materialName.Trim(),
+                Quantity = qty,
+                Unit = _materialUnit.Trim(),
+                OwnerUserId = owner.UserId,
+                OwnerName = owner.EmployeeName,
+                Note = string.IsNullOrWhiteSpace(_materialNote) ? null : _materialNote.Trim(),
+                CreatedBy = _userName,
+                CreatedAt = DateTime.Now
+            });
+            await Db.SaveChangesAsync();
+            _materialName = "";
+            _materialQty = "";
+            _materialUnit = "";
+            _materialNote = "";
+            Snackbar.Add("تم تسجيل طلب الخامة. لم يُخصم مخزون.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        catch
+        {
+            Snackbar.Add("تعذر تسجيل الطلب. شغّل سكربت ProductionPlanStageExtras.sql مرة واحدة.", Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task RequestDateChange(int stageId)
+    {
+        if (_saving || !_saved) return;
+        RecalcEndFromDays();
+        if (!_changeStart.HasValue || !_changeEnd.HasValue || string.IsNullOrWhiteSpace(_changeReason))
+        {
+            Snackbar.Add("أدخل البداية الجديدة والنهاية الجديدة وسبب التغيير.", Severity.Warning);
+            return;
+        }
+        var start = _changeStart.Value.Date;
+        var end = _changeEnd.Value.Date;
+        if (!DatesFit(stageId, start, end, out var error))
+        {
+            Snackbar.Add(error, Severity.Warning);
+            return;
+        }
+        if (_dateRequests.Any(r => r.StageId == stageId && r.Status == "Pending"))
+        {
+            Snackbar.Add("يوجد طلب تغيير معلّق على هذه المرحلة.", Severity.Warning);
+            return;
+        }
+        var stage = _stages.FirstOrDefault(s => s.StageId == stageId);
+        if (stage == null) return;
+        _saving = true;
+        try
+        {
+            Db.ProductionStageDateRequests.Add(new ProductionStageDateRequest
+            {
+                StageId = stageId,
+                OldStart = stage.PlannedStart ?? _anchor,
+                OldEnd = stage.PlannedEnd ?? _due,
+                NewStart = start,
+                NewEnd = end,
+                Reason = _changeReason.Trim(),
+                RequestedBy = _userName,
+                RequestedAt = DateTime.Now,
+                Status = "Pending"
+            });
+            await Db.SaveChangesAsync();
+            var message = $"{_number}: طلب تغيير {stage.StageName} من {stage.PlannedStart:yyyy/MM/dd}–{stage.PlannedEnd:yyyy/MM/dd} إلى {start:yyyy/MM/dd}–{end:yyyy/MM/dd}. السبب: {_changeReason.Trim()}. التاريخ الحالي ساري حتى الموافقة.";
+            await NotificationService.NotifyRoleAsync("طلب تغيير تاريخ", message, SystemRoles.ProductionManager, _userName, "factory/production-plans", "ExecutionOrders", OrderId);
+            await NotificationService.NotifyRoleAsync("طلب تغيير تاريخ", message, SystemRoles.Admin, _userName, "factory/production-plans", "ExecutionOrders", OrderId);
+            _dateStageId = null;
+            _changeReason = "";
+            Snackbar.Add("أُرسل الطلب. التاريخ الحالي لم يتغير.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        catch
+        {
+            Snackbar.Add("تعذر إرسال الطلب. شغّل سكربت ProductionStagePeople.sql مرة واحدة.", Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task DecideDate(int requestId, bool approve)
+    {
+        if (!_canApproveDate || _saving) return;
+        _saving = true;
+        try
+        {
+            var request = await Db.ProductionStageDateRequests.FirstOrDefaultAsync(r => r.RequestId == requestId && r.Status == "Pending");
+            var stage = request == null ? null : await Db.ProductionStages.FirstOrDefaultAsync(s => s.StageId == request.StageId);
+            if (request == null || stage == null) return;
+            if (approve && !DatesFit(stage.StageId, request.NewStart, request.NewEnd, out var error))
+            {
+                Snackbar.Add(error, Severity.Warning);
+                return;
+            }
+            request.Status = approve ? "Approved" : "Rejected";
+            request.DecidedBy = _userName;
+            request.DecidedAt = DateTime.Now;
+            if (approve)
+            {
+                stage.PlannedStart = request.NewStart.Date;
+                stage.PlannedEnd = request.NewEnd.Date;
+                stage.DurationDays = InclusiveDays(stage.PlannedStart.Value, stage.PlannedEnd.Value);
+            }
+            await Db.SaveChangesAsync();
+            var decision = approve ? "تمت الموافقة وتحدّث تاريخ المرحلة." : "رُفض الطلب. التاريخ القديم ما زال ساريًا.";
+            await NotificationService.AddAsync("تغيير تاريخ المرحلة", $"{_number}: {stage.StageName} — {decision}", request.RequestedBy, _userName, "factory/production-plans", "ExecutionOrders", OrderId);
+            if (approve)
+                await NotificationService.NotifyRoleAsync("تغيير تاريخ المرحلة", $"{_number}: {stage.StageName} — {decision}", "factory", _userName, "factory/production-plans", "ExecutionOrders", OrderId);
+            Snackbar.Add(decision, approve ? Severity.Success : Severity.Info);
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task CloseExcuse(int excuseId)
+    {
+        if (!_canApproveDate || _saving) return;
+        _saving = true;
+        try
+        {
+            var excuse = await Db.ProductionExcuses.FirstOrDefaultAsync(e => e.ExcuseId == excuseId && e.Status == "Pending");
+            if (excuse == null) return;
+            excuse.Status = "Closed";
+            excuse.ClosedBy = _userName;
+            excuse.ClosedAt = DateTime.Now;
+            await Db.SaveChangesAsync();
+            await NotificationService.AddAsync("إغلاق تعذر", $"{_number}: أُغلق طلب التعذر ولم يتغير تاريخ التنفيذ.", excuse.RequestedBy, _userName, "factory/production-plans", "ExecutionOrders", OrderId);
+            Snackbar.Add("أُغلق التعذر. تاريخ التنفيذ لم يتغير.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        catch
+        {
+            Snackbar.Add("تعذر الإغلاق. شغّل سكربت ProductionStagePeople.sql مرة واحدة.", Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task NotifyUserAsync(int? userId, string title, string message)
+    {
+        if (userId is not > 0) return;
+        var username = _staff.FirstOrDefault(s => s.UserId == userId)?.Username
+            ?? await Db.Users.AsNoTracking().Where(u => u.UserId == userId).Select(u => u.Username).FirstOrDefaultAsync();
+        if (string.IsNullOrWhiteSpace(username)) return;
+        await NotificationService.AddAsync(title, message, username, _userName, "factory/production-plans", "ExecutionOrders", OrderId);
+    }
+
+    private bool TryPeople(out StaffOption? worker, out StaffOption? quality, out string error)
+    {
+        worker = _staff.FirstOrDefault(s => s.UserId == _workerId);
+        quality = _staff.FirstOrDefault(s => s.UserId == _qualityId);
+        if (worker == null || quality == null)
+        {
+            error = "اختر موظف المرحلة ومسؤول الجودة.";
+            return false;
+        }
+        if (worker.UserId == quality.UserId)
+        {
+            error = "موظف المرحلة ومسؤول الجودة لا يكونان نفس الشخص.";
+            return false;
+        }
+        error = "";
+        return true;
+    }
+
+    private bool DatesFit(int stageId, DateTime start, DateTime end, out string error)
+    {
+        error = "";
+        if (end.Date < start.Date)
+        {
+            error = "تاريخ النهاية لا يسبق تاريخ البداية.";
+            return false;
+        }
+        if (end.Date > _due.Date)
+        {
+            error = $"تاريخ النهاية يتجاوز تاريخ التنفيذ {_due:yyyy/MM/dd}.";
+            return false;
+        }
+        var undated = UndatedPreds(stageId);
+        if (undated.Count > 0)
+        {
+            error = "لا يمكن تحديد الموعد قبل تحديد نهاية المرحلة المشروطة: " + string.Join("، ", undated);
+            return false;
+        }
+        var earliest = EarliestStart(stageId);
+        if (earliest.HasValue && start.Date < earliest.Value.Date)
+        {
+            error = $"تاريخ البداية يجب أن يكون بعد نهاية المرحلة السابقة. أقرب بداية مسموحة {earliest:yyyy/MM/dd}.";
+            return false;
+        }
+        var blocks = _deps.Where(d => d.DependsOnStageId == stageId)
+            .Select(d => _stages.FirstOrDefault(s => s.StageId == d.StageId))
+            .Where(s => s != null && s!.PlannedStart.HasValue && s.PlannedStart.Value.Date <= end.Date)
+            .Select(s => s!.StageName)
+            .ToList();
+        if (blocks.Count > 0)
+        {
+            error = "تاريخ النهاية يتداخل مع بداية المرحلة التالية المشروطة: " + string.Join("، ", blocks);
+            return false;
+        }
+        return true;
+    }
+
+    private static bool MissingExtra(Exception ex) =>
+        ex.ToString().Contains("Instructions", StringComparison.OrdinalIgnoreCase)
+        || ex.ToString().Contains("Invalid column name 'Note'", StringComparison.OrdinalIgnoreCase)
+        || ex.ToString().Contains("Invalid column name 'Unit'", StringComparison.OrdinalIgnoreCase)
+        || ex.ToString().Contains("SampleType", StringComparison.OrdinalIgnoreCase)
+        || ex.ToString().Contains("ProductionPlanSampleBatches", StringComparison.OrdinalIgnoreCase);
+
+    private DateTime? EarliestStart(int stageId)
+    {
+        var ends = _deps.Where(d => d.StageId == stageId)
+            .Select(d => _stages.FirstOrDefault(s => s.StageId == d.DependsOnStageId))
+            .Where(s => s?.PlannedEnd != null)
+            .Select(s => s!.PlannedEnd!.Value.Date)
+            .ToList();
+        return ends.Count == 0 ? null : ends.Max().AddDays(1);
+    }
+
+    private List<string> UndatedPreds(int stageId) => _deps.Where(d => d.StageId == stageId)
+        .Select(d => _stages.FirstOrDefault(s => s.StageId == d.DependsOnStageId))
+        .Where(s => s != null && !s!.PlannedEnd.HasValue)
+        .Select(s => s!.StageName)
+        .ToList();
+
+    private string RelationText(int stageId)
+    {
+        var preds = PredecessorNames(stageId);
+        if (preds.Count == 0)
+            return "بالتوازي: لا تنتظر مرحلة سابقة، ويجوز تداخل المواعيد.";
+        var earliest = EarliestStart(stageId);
+        return earliest.HasValue
+            ? "مشروطة: تبدأ بعد نهاية " + string.Join("، ", preds) + $"، وأقرب بداية {earliest:yyyy/MM/dd}."
+            : "مشروطة: تبدأ بعد نهاية " + string.Join("، ", preds) + "، بعد تحديد نهايتها.";
+    }
+
+    private string ScheduleHint(int stageId)
+    {
+        var preds = PredecessorNames(stageId);
+        if (preds.Count == 0)
+            return "هذه المرحلة غير مشروطة، ويمكن أن تعمل بالتوازي مع غيرها. يجوز تداخل المواعيد، ويُعتمد أطول مسار لا مجموع الأيام.";
+        var earliest = EarliestStart(stageId);
+        return earliest.HasValue
+            ? $"هذه المرحلة مشروطة. تاريخ البداية يجب أن يكون بعد نهاية: {string.Join("، ", preds)}. أقرب بداية مسموحة {earliest:yyyy/MM/dd}."
+            : $"هذه المرحلة مشروطة بـ {string.Join("، ", preds)}. لا يُحدد موعدها قبل تسجيل نهاية المرحلة السابقة.";
+    }
+
+    private void OpenNotes(int stageId)
+    {
+        var stage = _stages.FirstOrDefault(s => s.StageId == stageId);
+        if (stage == null || !_canPlan) return;
+        _noteStageId = stageId;
+        _dateStageId = null;
+        _assignStageId = null;
+        _editInstructions = stage.Instructions ?? "";
+        _editNote = stage.Note ?? "";
+        _editSample = string.IsNullOrWhiteSpace(stage.SampleType) ? "None" : stage.SampleType;
+    }
+
+    private async Task SaveStageNotes(int stageId)
+    {
+        if (!_canPlan || _saving) return;
+        _saving = true;
+        try
+        {
+            var stage = await Db.ProductionStages.FirstOrDefaultAsync(s => s.StageId == stageId);
+            if (stage == null) return;
+            stage.Instructions = string.IsNullOrWhiteSpace(_editInstructions) ? null : _editInstructions.Trim();
+            stage.Note = string.IsNullOrWhiteSpace(_editNote) ? null : _editNote.Trim();
+            if (!SampleLocked)
+                stage.SampleType = _editSample == "None" ? null : _editSample;
+            await Db.SaveChangesAsync();
+            _noteStageId = null;
+            Snackbar.Add("تم حفظ التعليمات والملاحظات.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            if (MissingExtra(ex))
+            {
+                _needsExtraScript = true;
+                Snackbar.Add("تعذر الحفظ. شغّل سكربت ProductionPlanStageExtras.sql مرة واحدة.", Severity.Error);
+            }
+            else
+                Snackbar.Add("تعذر حفظ التعليمات.", Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private void PickIssue(string name)
+    {
+        _issueName = name;
+        var match = _materials.FirstOrDefault(m => m.MaterialName == name);
+        if (match != null && !string.IsNullOrWhiteSpace(match.Unit))
+            _issueUnit = match.Unit;
+    }
+
+    private string? GateText(int stageId)
+    {
+        var stage = _stages.FirstOrDefault(s => s.StageId == stageId);
+        if (stage == null || stage.Status != "Pending" || CanStart(stageId))
+            return null;
+        if (!SampleClear(stage))
+            return "لا تبدأ هذه المرحلة قبل اعتماد عينة " + SampleLabel(stage.SampleType) + ". العينتان تُرسلان معًا، ومهلة الرد 5 أيام.";
+        var blocked = _deps.Where(d => d.StageId == stageId)
+            .Select(d => _stages.FirstOrDefault(s => s.StageId == d.DependsOnStageId))
+            .Where(s => s != null && !(s!.Status == "Done" && s.QualityStatus == "Approved"))
+            .Select(s => s!.QualityUserId is > 0 ? s!.StageName : s!.StageName + " (بلا مسؤول جودة)")
+            .ToList();
+        return blocked.Count == 0
+            ? null
+            : "لا تبدأ هذه المرحلة قبل أن يعتمد مسؤول الجودة المعيّن انتهاء: " + string.Join("، ", blocked);
+    }
+
+    private bool CanStart(int stageId)
+    {
+        var preds = _deps.Where(d => d.StageId == stageId).Select(d => d.DependsOnStageId).ToList();
+        var stage = _stages.FirstOrDefault(s => s.StageId == stageId);
+        if (stage != null && !SampleClear(stage))
+            return false;
+        return preds.All(id =>
+        {
+            var pred = _stages.FirstOrDefault(s => s.StageId == id);
+            return pred != null && pred.Status == "Done" && pred.QualityStatus == "Approved";
+        });
+    }
+
+    private const int SampleReplyDays = 5;
+    private ProductionPlanSampleBatch? LatestBatch => _sampleBatches.FirstOrDefault();
+    private List<ProductionStage> SampleStages => _stages.Where(NeedsSample).ToList();
+    private bool SampleLocked => LatestBatch?.Status is "Pending" or "Approved";
+    private bool SampleExpired => LatestBatch?.Status == "Pending" && DateTime.Today > LatestBatch.DueAt.Date;
+    private bool CanSendSamples => SampleStages.Any(s => s.SampleType == "Veneer") && SampleStages.Any(s => s.SampleType == "Paint");
+    private bool NeedsSample(ProductionStage stage) => stage.SampleType is "Veneer" or "Paint";
+    private static string SampleLabel(string? type) => type == "Veneer" ? "القشرة" : type == "Paint" ? "الدهان" : "لا تستلزم";
+    private string SampleStageNames(string type)
+    {
+        var names = _stages.Where(s => s.SampleType == type).Select(s => s.StageName).ToList();
+        return names.Count == 0 ? "لا توجد" : string.Join("، ", names);
+    }
+    private string SampleStatusText
+    {
+        get
+        {
+            var batch = LatestBatch;
+            if (batch == null) return "لم تُرسل العينات.";
+            return batch.Status switch
+            {
+                "Approved" => $"اعتمد العميل العينتين في {batch.DecidedAt:yyyy/MM/dd}. يمكن بدء المراحل المرتبطة.",
+                "Rejected" => $"رفض العميل العينتين في {batch.DecidedAt:yyyy/MM/dd}. يلزم إرسال جديد للعينتين معًا.",
+                "Released" => $"انتهت مهلة الرد، وتقررت المتابعة في {batch.DecidedAt:yyyy/MM/dd}.",
+                _ => SampleExpired
+                    ? $"أُرسلت العينتان في {batch.SentAt:yyyy/MM/dd}، وانتهت مهلة الرد في {batch.DueAt:yyyy/MM/dd}."
+                    : $"أُرسلت العينتان معًا في {batch.SentAt:yyyy/MM/dd}. آخر موعد للرد {batch.DueAt:yyyy/MM/dd}."
+            };
+        }
+    }
+    private bool SampleClear(ProductionStage stage)
+    {
+        if (!NeedsSample(stage)) return true;
+        return LatestBatch?.Status is "Approved" or "Released";
+    }
+
+    private async Task SendSamples()
+    {
+        if (!_canPlan || _saving || !CanSendSamples || SampleLocked) return;
+        _saving = true;
+        try
+        {
+            var sent = DateTime.Now;
+            Db.ProductionPlanSampleBatches.Add(new ProductionPlanSampleBatch
+            {
+                ExecutionOrderId = OrderId,
+                SentAt = sent,
+                DueAt = sent.Date.AddDays(SampleReplyDays),
+                Status = "Pending",
+                SentBy = _userName,
+                Note = "قشرة ودهان"
+            });
+            await Db.SaveChangesAsync();
+            Snackbar.Add("أُرسلت عينتا القشرة والدهان معًا. مهلة الرد 5 أيام.", Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            if (MissingExtra(ex))
+            {
+                _needsExtraScript = true;
+                Snackbar.Add("تعذر الإرسال. شغّل سكربت ProductionPlanStageExtras.sql مرة واحدة.", Severity.Error);
+            }
+            else
+                Snackbar.Add("تعذر إرسال العينات.", Severity.Error);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task DecideSample(string status)
+    {
+        if (!_canPlan || _saving || LatestBatch == null || LatestBatch.Status != "Pending") return;
+        if (status == "Released" && !SampleExpired) return;
+        _saving = true;
+        try
+        {
+            var batch = await Db.ProductionPlanSampleBatches.FirstOrDefaultAsync(b => b.BatchId == LatestBatch.BatchId && b.Status == "Pending");
+            if (batch == null) return;
+            batch.Status = status;
+            batch.DecidedAt = DateTime.Now;
+            batch.DecidedBy = _userName;
+            await Db.SaveChangesAsync();
+            Snackbar.Add(status == "Approved" ? "تم تسجيل اعتماد العميل." : status == "Rejected" ? "تم تسجيل رفض العميل." : "تمت المتابعة بعد انتهاء المهلة.", status == "Rejected" ? Severity.Warning : Severity.Success);
+            _seen = -1;
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    private bool HasDependents(int stageId) => _deps.Any(d => d.DependsOnStageId == stageId);
+    private List<string> PredecessorNames(int stageId) => _deps.Where(d => d.StageId == stageId)
+        .Select(d => _stages.FirstOrDefault(s => s.StageId == d.DependsOnStageId)?.StageName ?? "")
+        .Where(n => n != "").ToList();
+    private List<ProductionMaterialIssue> IssuesOf(int stageId) => _issues.Where(i => i.StageId == stageId).ToList();
+    private List<ProductionExcuse> ExcusesOf(int stageId) => _excuses.Where(e => e.StageId == stageId).ToList();
+    private List<string> Suggestions(int stageId)
+    {
+        _ = stageId;
+        var names = _materials.Select(m => m.MaterialName).Where(n => !string.IsNullOrWhiteSpace(n));
+        return names.Concat(_componentHints).Distinct().Take(12).ToList();
+    }
+
+    private void TogglePred(int id)
+    {
+        if (!_selectedPreds.Add(id))
+            _selectedPreds.Remove(id);
+    }
+
+    private string BarStyle(ProductionStage stage)
+    {
+        if (!stage.PlannedStart.HasValue || !stage.PlannedEnd.HasValue)
+            return "inset-inline-start:0%;width:0%;";
+        var span = Math.Max(1, (_due.Date - _anchor.Date).Days);
+        var startOff = (stage.PlannedStart.Value.Date - _anchor.Date).Days;
+        if (startOff < 0) startOff = 0;
+        if (startOff > span) startOff = span;
+        var left = startOff * 100.0 / span;
+        var width = InclusiveDays(stage.PlannedStart.Value, stage.PlannedEnd.Value) * 100.0 / span;
+        if (left > 98) left = 98;
+        if (left + width > 100) width = 100 - left;
+        if (width < 2) width = 2;
+        return $"inset-inline-start:{left:0.##}%;width:{width:0.##}%;";
+    }
+
+    private static string BarClass(ProductionStage stage) => stage.Status switch { "Started" => "live", "Done" => "done", _ => "" };
+    private static Color StageColor(string status) => status switch { "Started" => Color.Warning, "Done" => Color.Success, _ => Color.Default };
+    private static string StageText(string status) => status switch { "Started" => "بدأت", "Done" => "انتهت", _ => "لم تبدأ" };
+    private static string QualityText(string status) => status == "Approved" ? "معتمدة" : "بانتظار الاعتماد";
+    private void Open(int id) => Navigation.NavigateTo($"/factory/production-plans/{id}");
+    private void OpenOrder() => Navigation.NavigateTo($"/factory/production-products/{OrderId}");
+    private void GoList() => Navigation.NavigateTo("/factory/production-plans");
+
+    private bool IsAssignedQuality(ProductionStage stage) => _userId > 0 && stage.QualityUserId == _userId;
+    private bool StageIsLate(ProductionStage stage) => stage.Status == "Started" && stage.PlannedEnd.HasValue && DateTime.Today > stage.PlannedEnd.Value.Date;
+    private ProductionStageDateRequest? PendingDate(int stageId) => _dateRequests.FirstOrDefault(r => r.StageId == stageId && r.Status == "Pending");
+
+    private sealed class OrderRow
+    {
+        public int OrderId { get; set; }
+        public string Number { get; set; } = "";
+        public string CustomerName { get; set; } = "";
+        public DateTime DueDate { get; set; }
+        public string PlanText { get; set; } = "";
+    }
+
+    private sealed class StaffOption
+    {
+        public int UserId { get; set; }
+        public string Username { get; set; } = "";
+        public string FullName { get; set; } = "";
+        public string Department { get; set; } = "";
+        public string JobTitle { get; set; } = "";
+        public string Label => FullName + (string.IsNullOrWhiteSpace(Department) ? "" : " — " + Department);
+    }
+}

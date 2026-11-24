@@ -34,6 +34,17 @@
                 </div>
             </div>
             <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                @if (_canOpenJobSpec)
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Inherit"
+                               StartIcon="@Icons.Material.Filled.Assignment"
+                               Class="add-btn"
+                               Style="background: rgba(255,255,255,0.15); color: white; border-color: rgba(255,255,255,0.4);"
+                               OnClick="OpenJobSpecSearchDialogAsync">
+                        الجوب أوردر
+                    </MudButton>
+                }
                 @if (_canJobOrderAccess)
                 {
                     <MudButton Variant="Variant.Outlined"
@@ -262,11 +273,13 @@
     @if (_viewMode == "table")
     {
         <!-- ============ Table View ============ -->
-        <MudTable Items="@_pagedProducts"
+        <MudTable T="ProductListDto" Items="@_pagedProducts"
                   Hover="true"
                   Breakpoint="Breakpoint.Sm"
                   Elevation="0"
-                  Class="products-table">
+                  Class="products-table"
+                  OnRowClick="OnProductRowClick"
+                  RowClass="product-row-link">
 
             <HeaderContent>
                 <MudTh Class="table-header" Style="width: 70px;">
@@ -345,7 +358,7 @@
 
             <RowTemplate>
                 <MudTd DataLabel="الصورة">
-                    <div class="product-thumb-wrapper" @onclick="@(() => OpenViewDialogAsync(context))">
+                    <div class="product-thumb-wrapper" @onclick="@(() => OpenViewDialogAsync(context))" @onclick:stopPropagation="true">
                         <img src="/api/product-images/@context.ProductId"
                              alt="@context.ProductName"
                              class="product-thumb"
@@ -497,7 +510,7 @@
                 </MudTd>
 
                 <MudTd DataLabel="الإجراءات">
-                    <div class="action-buttons">
+                    <div class="action-buttons" @onclick:stopPropagation="true">
                         <MudTooltip Text="عرض سريع">
                             <MudIconButton Icon="@Icons.Material.Filled.Visibility"
                                            Color="Color.Info"
@@ -767,6 +780,62 @@
                    Disabled="@(_jobOrderSelectedCustomer == null)"
                    OnClick="OpenSelectedCustomerJobOrder">
             فتح امر التشغيل
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<MudDialog @bind-Visible="_jobSpecDialogOpen" Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true })">
+    <TitleContent>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <MudIcon Icon="@Icons.Material.Filled.Assignment" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">الجوب أوردر</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3" Style="color:var(--mud-palette-text-secondary);">
+            اختار العميل. الملف يعرض كل منتجاته بكل تفاصيلها.
+        </MudText>
+
+        <MudAutocomplete T="JobOrderCustomerOptionVm"
+                         Value="_jobSpecSelectedCustomer"
+                         ValueChanged="OnJobSpecCustomerChanged"
+                         SearchFunc="SearchJobSpecCustomersAsync"
+                         ToStringFunc="@(c => c == null ? string.Empty : $"{c.PartyName} - {c.Phone}")"
+                         Placeholder="ابحث باسم العميل أو الهاتف"
+                         Variant="Variant.Outlined"
+                         Margin="Margin.Dense"
+                         Clearable="true"
+                         ResetValueOnEmptyText="true"
+                         Class="job-order-search-input">
+            <ItemTemplate Context="customer">
+                <div class="job-order-customer-item">
+                    <div>
+                        <strong>@customer.PartyName</strong>
+                        <div class="job-order-customer-sub">@(string.IsNullOrWhiteSpace(customer.Phone) ? "بدون هاتف" : customer.Phone)</div>
+                    </div>
+                    <div class="job-order-customer-stats">
+                        <span>@customer.ProductCount منتج</span>
+                    </div>
+                </div>
+            </ItemTemplate>
+        </MudAutocomplete>
+
+        @if (_jobSpecSelectedCustomer != null)
+        {
+            <div class="job-order-selected-box mt-3">
+                <div><strong>العميل:</strong> @_jobSpecSelectedCustomer.PartyName</div>
+                <div><strong>الهاتف:</strong> @(_jobSpecSelectedCustomer.Phone ?? "—")</div>
+                <div><strong>عدد المنتجات:</strong> @_jobSpecSelectedCustomer.ProductCount</div>
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Outlined" OnClick="@(() => _jobSpecDialogOpen = false)">إلغاء</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.OpenInNew"
+                   Disabled="@(_jobSpecSelectedCustomer == null)"
+                   OnClick="OpenSelectedCustomerJobSpec">
+            فتح الجوب أوردر
         </MudButton>
     </DialogActions>
 </MudDialog>
@@ -1189,6 +1258,7 @@
 
 <style>
     .products-page { padding: 2rem; max-width: 1600px; margin: 0 auto; }
+    .product-row-link { cursor: pointer; }
 
     /* Header */
     .page-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 20px; padding: 2rem; margin-bottom: 2rem; box-shadow: 0 10px 40px rgba(102, 126, 234, 0.3); }
@@ -2149,6 +2219,7 @@
     private bool _isLoading = true;
     private bool _isDeleting = false;
     private bool _canJobOrderAccess = false;
+    private bool _canOpenJobSpec = false;
     private bool _jobOrderDialogOpen = false;
 
     // ═══════════════ 🌐 استيراد منتجات الموقع (2026-09-17) ═══════════════
@@ -2231,6 +2302,9 @@
     private static string FormatImportPrice(decimal? v) => v > 0 ? v.Value.ToString("N0") : "—";
     private JobOrderCustomerOptionVm? _jobOrderSelectedCustomer;
     private List<JobOrderCustomerOptionVm> _jobOrderCustomers = new();
+    private bool _jobSpecDialogOpen;
+    private JobOrderCustomerOptionVm? _jobSpecSelectedCustomer;
+    private List<JobOrderCustomerOptionVm> _jobSpecCustomers = new();
     private List<BranchListDto> _branches = new();
     private List<WarehouseListDto> _warehouseLookups = new();
 
@@ -2296,6 +2370,13 @@ private bool _isLoadingHistory = false;
             || user.IsInRole(SystemRoles.Sales)
             || user.IsInRole(SystemRoles.AccountManager)
             || user.IsInRole(SystemRoles.HrManager)
+            || user.IsInRole("factory");
+        _canOpenJobSpec = user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole(SystemRoles.SalesManager)
+            || user.IsInRole(SystemRoles.Sales)
+            || user.IsInRole(SystemRoles.AccountManager)
+            || user.IsInRole(SystemRoles.ProductionManager)
+            || user.IsInRole(SystemRoles.FactoryManager)
             || user.IsInRole("factory");
 
         await ResolvePreferredBranchAsync();
@@ -2742,6 +2823,55 @@ private void SetViewMode(string mode)
         Navigation.NavigateTo($"/products/job-order/{_jobOrderSelectedCustomer.PartyId}");
     }
 
+    private async Task LoadJobSpecCustomersAsync()
+    {
+        _jobSpecCustomers = await (from p in Db.Products.AsNoTracking()
+                                   where p.Customer.HasValue
+                                   join c in Db.Parties.AsNoTracking() on p.Customer equals c.PartyId
+                                   group p by new { c.PartyId, c.PartyName, c.Phone } into g
+                                   orderby g.Key.PartyName
+                                   select new JobOrderCustomerOptionVm
+                                   {
+                                       PartyId = g.Key.PartyId,
+                                       PartyName = g.Key.PartyName,
+                                       Phone = g.Key.Phone,
+                                       ProductCount = g.Count()
+                                   }).ToListAsync();
+    }
+
+    private Task<IEnumerable<JobOrderCustomerOptionVm>> SearchJobSpecCustomersAsync(string value, CancellationToken token)
+    {
+        IEnumerable<JobOrderCustomerOptionVm> query = _jobSpecCustomers;
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            var term = value.Trim();
+            query = query.Where(c =>
+                (c.PartyName?.ContainsArabic(term) ?? false)
+                || (c.Phone?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+        return Task.FromResult(query.Take(20));
+    }
+
+    private Task OnJobSpecCustomerChanged(JobOrderCustomerOptionVm? customer)
+    {
+        _jobSpecSelectedCustomer = customer;
+        return Task.CompletedTask;
+    }
+
+    private async Task OpenJobSpecSearchDialogAsync()
+    {
+        await LoadJobSpecCustomersAsync();
+        _jobSpecSelectedCustomer = null;
+        _jobSpecDialogOpen = true;
+    }
+
+    private void OpenSelectedCustomerJobSpec()
+    {
+        if (_jobSpecSelectedCustomer == null) return;
+        _jobSpecDialogOpen = false;
+        Navigation.NavigateTo($"/customers/{_jobSpecSelectedCustomer.PartyId}/job-spec");
+    }
+
     // ==================== PERSIST FILTER STATE ====================
     private async Task SaveFilterState()
     {
@@ -2811,6 +2941,11 @@ private void SetViewMode(string mode)
     private void AddProduct() => Navigation.NavigateTo("/products/form");
     private void OpenStockEntry() => Navigation.NavigateTo("/inventory/stock-entry");
     private void Edit(int id) => Navigation.NavigateTo($"/products/form/{id}");
+    private void OnProductRowClick(TableRowClickEventArgs<ProductListDto> args)
+    {
+        if (args.Item != null)
+            Edit(args.Item.ProductId);
+    }
 
     // ==================== DIALOGS ====================
     private async Task OpenViewDialogAsync(ProductListDto product)

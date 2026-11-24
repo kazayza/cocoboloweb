@@ -178,6 +178,7 @@ builder.Services.AddHttpClient<ZakiVoiceService>();
 
 // ── Services ────────────────────────────────────────────────
 builder.Services.AddScoped<IProductService,           ProductService>();
+builder.Services.AddScoped<ISpecService,             SpecService>();
 builder.Services.AddScoped<NotificationService>();
 builder.Services.AddScoped<RecoveryService>(); // 🔁 استرداد الفرص الخاسرة (خدمة العملاء)
 builder.Services.AddScoped<IAuditService,             AuditService>();
@@ -199,6 +200,7 @@ builder.Services.AddScoped<IAttendanceService, AttendanceService>();
 builder.Services.AddScoped<IPayrollService, PayrollService>();
 builder.Services.AddScoped<IEmployeePenaltyService, EmployeePenaltyService>();
 builder.Services.AddScoped<IQuotationService, QuotationService>();
+builder.Services.AddScoped<JobOrderEngineerService>();
 builder.Services.AddSingleton<ShareTokenService>();
 builder.Services.AddScoped<IQuotationExportService, QuotationExportService>();
 builder.Services.AddScoped<ISalesDeliveryStatusService, SalesDeliveryStatusService>();

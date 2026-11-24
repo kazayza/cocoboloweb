@@ -32,6 +32,7 @@ public class QuotationService : IQuotationService
     private readonly IInvoiceService _invoiceService;
     private readonly IHttpContextAccessor _httpContext;
     private readonly ILogger<QuotationService> _logger;
+    private readonly JobOrderEngineerService _engineers;
 
     private static readonly Dictionary<string, string[]> AllowedTransitions = new()
     {
@@ -48,7 +49,7 @@ public class QuotationService : IQuotationService
     public QuotationService(
         db24804Context db, IDbContextFactory<db24804Context> dbFactory, IAuditService audit, NotificationService notify,
         IInvoiceService invoiceService, IHttpContextAccessor httpContext,
-        ILogger<QuotationService> logger)
+        ILogger<QuotationService> logger, JobOrderEngineerService engineers)
     {
         _db = db;
         _dbFactory = dbFactory;
@@ -57,6 +58,7 @@ public class QuotationService : IQuotationService
         _invoiceService = invoiceService;
         _httpContext = httpContext;
         _logger = logger;
+        _engineers = engineers;
     }
 
     private ClaimsPrincipal? CurrentUser => _httpContext.HttpContext?.User;
@@ -964,6 +966,9 @@ if (canViewCost && quoteIds.Any())
     // ⭐ (دفعة 2 — 2-5) أسعار القاعدة من قاعدة البيانات قبل حساب سقف الخصم
     await RefreshBasePricesFromDbAsync(dto);
 
+    var alternativePriceValidation = ValidateSelectedAlternativeSalePrices(dto.Items);
+    if (!alternativePriceValidation.IsValid) return (false, alternativePriceValidation.Message, null);
+
     var discountValidation = ValidateDiscountPermission(dto);
     if (!discountValidation.IsValid) return (false, discountValidation.Message, null);
 
@@ -1106,6 +1111,9 @@ if (canViewCost && quoteIds.Any())
         var oldOpportunityId = quotation.OpportunityId;
         // ⭐ (دفعة 2 — 2-5) أسعار القاعدة من قاعدة البيانات قبل حساب سقف الخصم
         await RefreshBasePricesFromDbAsync(dto);
+
+        var alternativePriceValidation = ValidateSelectedAlternativeSalePrices(dto.Items);
+        if (!alternativePriceValidation.IsValid) return (false, alternativePriceValidation.Message);
 
         var discountValidation = ValidateDiscountPermission(dto, existingDiscountAmount, oldTotalAmount);
         if (!discountValidation.IsValid) return (false, discountValidation.Message);
@@ -1438,6 +1446,19 @@ if (canViewCost && quoteIds.Any())
                     Source = responseSource,
                     RejectionReason = newStatus == QuotationStatuses.Rejected ? quotation.RejectionReason : null
                 }, currentUserName);
+            if (newStatus == QuotationStatuses.Accepted && oldStatus != QuotationStatuses.Accepted)
+            {
+                try
+                {
+                    await _engineers.NotifyAcceptedAsync(
+                        quotation.QuotationId, quotation.PartyId, quotation.ReferenceNumber,
+                        quotation.EmpId, quotation.CreatedBy, quotation.WarehouseId, currentUserName);
+                }
+                catch (Exception notifyEx)
+                {
+                    _logger.LogWarning(notifyEx, "Job engineer notify failed for quotation {Id}", quotationId);
+                }
+            }
             return (true, $"تم تغيير الحالة إلى: {QuotationStatuses.All[newStatus]}");
         }
         catch (Exception ex)
@@ -1513,7 +1534,7 @@ if (canViewCost && quoteIds.Any())
 // ============================================================
 public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
     int quotationId, List<int>? selectedAdvanceChargeIds,
-    string currentUserName, DateTime? invoiceDate = null)
+    string currentUserName, DateTime? invoiceDate = null, DateTime? deliveryDate = null)
 {
     if (!HasPermission("Edit") || IsRestrictedCostViewer())
         return (false, "ليس لديك صلاحية تحويل عرض السعر لفاتورة.", null);
@@ -1610,7 +1631,10 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
             })
             .DefaultIfEmpty(0)
             .Max();
-        var calculatedDueDate = invoiceDateValue.AddDays(maxProductionDays);
+        var calculatedDueDate = invoiceDateValue.AddDays(Math.Max(0, maxProductionDays));
+        var dueDate = deliveryDate?.Date ?? calculatedDueDate;
+        if (dueDate < invoiceDateValue)
+            return (false, "تاريخ التسليم لا يسبق تاريخ الفاتورة.", null);
 
         // جهّز بيانات الفاتورة
         var invoiceForm = new InvoiceFormDto
@@ -1619,7 +1643,7 @@ public async Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoi
             PartyId = quotation.PartyId,
             WarehouseId = warehouseId,
             EmpId = quotation.EmpId,
-            DueDate = calculatedDueDate,
+            DueDate = dueDate,
             Notes = $"تحويل من عرض السعر QT-{quotation.QuotationDate.Year}-{quotation.QuotationId:D5}" +
                     (string.IsNullOrEmpty(quotation.Notes) ? "" : $"\n{quotation.Notes}"),
 
@@ -2135,12 +2159,45 @@ public async Task<QuotationFormDto?> GetQuotationPublicAsync(int quotationId)
     private static decimal GetBaseSalePrice(QuotationItemDto item)
     {
         var tier = NormalizePricingTier(item.PricingTier, item.Notes);
+        if (item.SelectedAlternativeId.HasValue)
+        {
+            return tier switch
+            {
+                var t when t == PricingTiers.CClass => item.AlternativeSalePriceCClass ?? 0m,
+                var t when t == PricingTiers.Elite => item.AlternativeSalePriceElite ?? item.AlternativeSalePricePremium ?? 0m,
+                _ => item.AlternativeSalePricePremium ?? 0m
+            };
+        }
+
         return tier switch
         {
             var t when t == PricingTiers.CClass => item.SalePriceCClass ?? 0m,
             var t when t == PricingTiers.Elite => item.SalePriceElite ?? item.SalePricePremium ?? 0m,
             _ => item.SalePricePremium ?? 0m
         };
+    }
+
+    /// <summary>
+    /// بعد جلب أسعار البيع من قاعدة البيانات: البديل المختار لازم يكون له سعر بيع على الباقة، وإلا العرض يتباع بصفر.
+    /// </summary>
+    private static (bool IsValid, string Message) ValidateSelectedAlternativeSalePrices(IEnumerable<QuotationItemDto> items)
+    {
+        foreach (var item in items.Where(i => i.SelectedAlternativeId.HasValue))
+        {
+            if (GetBaseSalePrice(item) > 0m)
+                continue;
+
+            var product = string.IsNullOrWhiteSpace(item.ProductName) ? "المنتج" : item.ProductName.Trim();
+            var alt = string.IsNullOrWhiteSpace(item.SelectedAlternativeName) ? "المختار" : item.SelectedAlternativeName.Trim();
+            var hasAnotherTier = (item.AlternativeSalePriceCClass ?? 0m) > 0m
+                || (item.AlternativeSalePricePremium ?? 0m) > 0m
+                || (item.AlternativeSalePriceElite ?? 0m) > 0m;
+            return hasAnotherTier
+                ? (false, $"الباقة المختارة للبديل «{alt}» على «{product}» من غير سعر بيع. غيّر الباقة، أو سجّل سعرها من شاشة المنتج.")
+                : (false, $"البديل «{alt}» للمنتج «{product}» من غير سعر بيع. سجّل سعر البيع من شاشة المنتج قبل استخدامه في عرض السعر.");
+        }
+
+        return (true, "");
     }
 
     private static decimal GetBaseTotal(QuotationFormDto dto)

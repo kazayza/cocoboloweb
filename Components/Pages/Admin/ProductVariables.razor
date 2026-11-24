@@ -1,0 +1,495 @@
+@page "/admin/product-variables"
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@rendermode InteractiveServer
+@inject ISpecService SpecService
+@inject AuthenticationStateProvider AuthProvider
+@inject ISnackbar Snackbar
+
+<PageTitle>متغيرات المنتجات</PageTitle>
+
+@if (!_authorized)
+{
+    <div class="pv-denied">
+        <MudIcon Icon="@Icons.Material.Outlined.Lock" />
+        <h3>غير مصرح بالوصول</h3>
+        <p>هذه الصفحة لإدارة أنواع المتغيرات وقيمها، ومتاحة للإدارة أو مدير الحسابات فقط.</p>
+    </div>
+}
+else
+{
+    <div class="pv-page" dir="rtl">
+        <header class="page-header">
+            <div class="header-left">
+                <div class="page-icon"><MudIcon Icon="@Icons.Material.Outlined.Tune" /></div>
+                <div>
+                    <h1>متغيرات المنتجات</h1>
+                    <p>اختر النوع من القائمة، ثم أضف قيمه أو عدّلها. «لا يوجد» تُكتب على المنتج نفسه، وليست قيمة هنا.</p>
+                </div>
+            </div>
+            <div class="header-stats">
+                <div><span>الأنواع</span><strong>@_lists.Count(x => x.ListCode != "BEDSIZE")</strong></div>
+                <div><span>القيم</span><strong>@_options.Values.Sum(x => x.Count)</strong></div>
+                <div><span>فاضية</span><strong>@EmptyCount</strong></div>
+            </div>
+        </header>
+
+        @if (!_ready)
+        {
+            <div class="pv-warning">الجداول غير موجودة. شغّل Database/ProductVariables.sql ثم حدّث الصفحة.</div>
+        }
+        else
+        {
+            <section class="filter-panel">
+                <div class="filter-grid">
+                    <div class="field field-search">
+                        <span class="field-label">بحث</span>
+                        <div class="field-box">
+                            <MudIcon Icon="@Icons.Material.Outlined.Search" Class="field-icon" />
+                            <MudTextField T="string" Value="_search" ValueChanged="OnSearchChanged" Immediate="true" DebounceInterval="200"
+                                          Placeholder="اسم النوع أو القيمة" Variant="Variant.Text" Margin="Margin.Dense" Class="bare-field" />
+                        </div>
+                    </div>
+                    <div class="field">
+                        <span class="field-label">نوع جديد</span>
+                        <div class="field-box">
+                            <MudIcon Icon="@Icons.Material.Outlined.Category" Class="field-icon" />
+                            <MudTextField T="string" @bind-Value="_newTypeName" Placeholder="مثال: زجاج" Variant="Variant.Text" Margin="Margin.Dense" Class="bare-field" OnKeyDown="OnNewTypeKey" />
+                        </div>
+                    </div>
+                    <button type="button" class="gold-btn" @onclick="AddType">إضافة النوع</button>
+                    <div class="field field-status">
+                        <span class="field-label">العرض</span>
+                        <div class="status-chips">
+                            <button type="button" class="@AllClass" @onclick="ShowAll">الكل</button>
+                            <button type="button" class="@FilledClass" @onclick="ShowFilled">فيها قيم</button>
+                            <button type="button" class="@EmptyClass" @onclick="ShowEmpty">فاضية</button>
+                        </div>
+                    </div>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_search))
+                {
+                    <div class="active-filters">
+                        <button type="button" class="tag" @onclick="ClearSearch">بحث: @_search <MudIcon Icon="@Icons.Material.Filled.Close" Size="Size.Small" /></button>
+                    </div>
+                }
+            </section>
+
+            @if (!Visible.Any())
+            {
+                <div class="pv-card state-box">
+                    <h3>لا توجد نتائج</h3>
+                    <p>@(string.IsNullOrWhiteSpace(_search) ? "لا يوجد نوع في هذا العرض. أضف نوعًا من الحقل أعلاه." : "لا يوجد نوع أو قيمة مطابقة للبحث.")</p>
+                </div>
+            }
+            else
+            {
+                <div class="workspace">
+                    <aside class="type-rail">
+                        @foreach (var list in Visible)
+                        {
+                            var count = Count(list.ListId);
+                            <button type="button" class="@TypeClass(list.ListId)" @onclick="() => Select(list.ListId)">
+                                <span class="type-name">
+                                    @list.ListNameAr
+                                    @if (TypeHit(list))
+                                    {
+                                        <i class="hit-dot"></i>
+                                    }
+                                </span>
+                                <em class="@CountClass(count)">@count</em>
+                            </button>
+                        }
+                    </aside>
+
+                    <section class="pv-card values-pane">
+                        @if (Selected is null)
+                        {
+                            <div class="state-box">
+                                <h3>اختر نوعًا</h3>
+                                <p>القيم تظهر هنا بعد الاختيار من القائمة.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            var list = Selected;
+                            var options = OptionsOf(list.ListId);
+                            <div class="card-head">
+                                @if (_editingListId == list.ListId)
+                                {
+                                    <div class="field grow">
+                                        <span class="field-label">اسم النوع</span>
+                                        <div class="field-box">
+                                            <MudIcon Icon="@Icons.Material.Outlined.Edit" Class="field-icon" />
+                                            <MudTextField T="string" @bind-Value="_editingListName" Variant="Variant.Text" Margin="Margin.Dense" Class="bare-field" OnKeyDown="OnEditListKey" />
+                                        </div>
+                                    </div>
+                                    <div class="pv-actions">
+                                        <button type="button" class="gold-btn" @onclick="() => SaveList(list.ListId)">حفظ الاسم</button>
+                                        <button type="button" class="text-btn" @onclick="CancelEdit">إلغاء</button>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div>
+                                        <h2>@list.ListNameAr</h2>
+                                        <small>@options.Count قيمة ظاهرة في المنتج</small>
+                                    </div>
+                                    <div class="pv-actions">
+                                        <button type="button" class="text-btn" @onclick="() => BeginEditList(list)">تعديل الاسم</button>
+                                        @if (_confirmListId == list.ListId)
+                                        {
+                                            <button type="button" class="danger-btn" @onclick="() => DeleteList(list.ListId)">تأكيد المسح</button>
+                                            <button type="button" class="text-btn" @onclick="CancelEdit">إلغاء</button>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="text-btn danger" @onclick="() => ConfirmList(list.ListId)">مسح النوع</button>
+                                        }
+                                    </div>
+                                }
+                            </div>
+
+                            @if (_confirmListId == list.ListId)
+                            {
+                                <p class="confirm-note">المسح يقف لو النوع مستخدم في منتج بقيمة حقيقية. «لا يوجد» لا تمنع المسح.</p>
+                            }
+
+                            <div class="add-row">
+                                <div class="field grow">
+                                    <span class="field-label">قيمة جديدة</span>
+                                    <div class="field-box">
+                                        <MudIcon Icon="@Icons.Material.Outlined.Add" Class="field-icon" />
+                                        <MudTextField T="string" Value="@Draft(list.ListId)" ValueChanged="@(v => _drafts[list.ListId] = v)"
+                                                      Placeholder="اكتب القيمة ثم Enter" Variant="Variant.Text" Margin="Margin.Dense" Class="bare-field"
+                                                      OnKeyDown="@(e => OnDraftKey(e, list.ListId))" />
+                                    </div>
+                                </div>
+                                <button type="button" class="gold-btn" @onclick="() => AddOption(list.ListId)">إضافة القيمة</button>
+                            </div>
+
+                            @if (options.Count == 0)
+                            {
+                                <div class="state-box compact">
+                                    <h3>لا توجد قيم بعد</h3>
+                                    <p>أضف أول قيمة حتى يظهر هذا النوع مكتملًا في المنتج.</p>
+                                </div>
+                            }
+                            else
+                            {
+                                @if (options.Any(ValueHit))
+                                {
+                                    <p class="hint">القيمة المطابقة للبحث مميزة بالذهبي.</p>
+                                }
+                                <div class="value-list">
+                                    @foreach (var opt in options)
+                                    {
+                                        <div class="@ValueRowClass(opt)">
+                                            @if (_editingOptionId == opt.OptionId)
+                                            {
+                                                <div class="field-box grow">
+                                                    <MudTextField T="string" @bind-Value="_editingOptionName" Variant="Variant.Text" Margin="Margin.Dense" Class="bare-field" OnKeyDown="OnEditOptionKey" />
+                                                </div>
+                                                <div class="pv-actions">
+                                                    <button type="button" class="gold-btn small" @onclick="() => SaveOption(opt.OptionId)">حفظ</button>
+                                                    <button type="button" class="text-btn" @onclick="CancelEdit">إلغاء</button>
+                                                </div>
+                                            }
+                                            else if (_confirmOptionId == opt.OptionId)
+                                            {
+                                                <strong>مسح «@opt.OptionNameAr»؟</strong>
+                                                <div class="pv-actions">
+                                                    <button type="button" class="danger-btn small" @onclick="() => DeleteOption(list.ListId, opt.OptionId)">تأكيد المسح</button>
+                                                    <button type="button" class="text-btn" @onclick="CancelEdit">إلغاء</button>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <strong>@opt.OptionNameAr</strong>
+                                                <div class="pv-actions">
+                                                    <button type="button" class="text-btn" @onclick="() => BeginEditOption(opt)">تعديل</button>
+                                                    <button type="button" class="text-btn danger" @onclick="() => ConfirmOption(opt.OptionId)">مسح</button>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                    </section>
+                </div>
+            }
+        }
+    </div>
+}
+
+<style>
+    .pv-page { padding: 1.5rem 1.75rem 2.5rem; color: #1E293B; }
+    .page-header { background: linear-gradient(135deg, #0A1628 0%, #1E293B 100%); border-bottom: 3px solid #D4AF37; border-radius: 18px; padding: 1.3rem 1.5rem; margin-bottom: 1.1rem; box-shadow: 0 12px 30px rgba(10, 22, 40, 0.18); display: flex; justify-content: space-between; gap: 1rem; align-items: center; flex-wrap: wrap; }
+    .header-left { display: flex; align-items: center; gap: 1rem; }
+    .page-icon { width: 58px; height: 58px; border-radius: 16px; display: grid; place-items: center; color: #D4AF37; background: rgba(212, 175, 55, 0.14); border: 1px solid rgba(212, 175, 55, 0.45); }
+    .page-icon .mud-icon-root { font-size: 1.8rem; }
+    .page-header h1 { margin: 0; color: #fff; font-size: 1.5rem; font-weight: 800; }
+    .page-header p { margin: 0.3rem 0 0; color: #CBD5E1; line-height: 1.7; max-width: 46rem; }
+    .header-stats { display: flex; gap: 0.55rem; }
+    .header-stats div { min-width: 76px; height: 58px; border-radius: 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(212,175,55,0.35); display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .header-stats span { color: #CBD5E1; font-size: 0.68rem; font-weight: 700; }
+    .header-stats strong { color: #D4AF37; font-size: 1.15rem; line-height: 1.15; }
+    .filter-panel, .pv-card, .type-rail { background: #fff; border: 1px solid #E2E8F0; border-radius: 16px; }
+    .filter-panel { padding: 1rem; margin-bottom: 1rem; box-shadow: 0 8px 24px rgba(10, 22, 40, 0.05); }
+    .filter-grid, .add-row, .card-head, .pv-actions { display: flex; align-items: end; gap: 0.75rem; flex-wrap: wrap; }
+    .field { min-width: 220px; }
+    .field-search, .grow { flex: 1; min-width: 220px; }
+    .field-label { display: block; margin: 0 0.15rem 0.4rem; color: #64748B; font-size: 0.75rem; font-weight: 800; }
+    .field-box { height: 48px; display: flex; align-items: center; gap: 0.35rem; padding: 0 0.75rem; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; }
+    .field-box.grow { flex: 1; }
+    .field-box:focus-within { background: #fff; border-color: #D4AF37; box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.18); }
+    .field-icon { color: #D4AF37; font-size: 1.15rem; }
+    .status-chips { height: 48px; display: flex; padding: 4px; gap: 4px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; }
+    .status-chips button { border: 0; background: transparent; color: #64748B; border-radius: 9px; padding: 0 0.85rem; font-weight: 800; cursor: pointer; }
+    .status-chips button.on { background: #0A1628; color: #fff; }
+    .status-chips button.on.good { background: #047857; }
+    .status-chips button.on.bad { background: #B91C1C; }
+    .gold-btn, .text-btn, .danger-btn { height: 48px; border-radius: 12px; padding: 0 1rem; font-weight: 800; cursor: pointer; }
+    .gold-btn { border: 0; background: #D4AF37; color: #0A1628; }
+    .gold-btn.small, .danger-btn.small, .text-btn { height: 36px; }
+    .text-btn { border: 1px solid #E2E8F0; background: #fff; color: #0A1628; }
+    .text-btn.danger { color: #B91C1C; }
+    .danger-btn { border: 0; background: #B91C1C; color: #fff; }
+    .active-filters { margin-top: 0.75rem; }
+    .tag { border: 0; background: rgba(212, 175, 55, 0.16); color: #0A1628; border-radius: 999px; padding: 0.3rem 0.7rem; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem; }
+    .workspace { display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); gap: 1rem; align-items: start; }
+    .type-rail { padding: 0.45rem; position: sticky; top: 0.75rem; max-height: calc(100vh - 1.5rem); overflow: auto; }
+    .type-item { width: 100%; border: 0; background: transparent; border-radius: 12px; min-height: 52px; padding: 0.65rem 0.75rem; display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; cursor: pointer; color: #1E293B; text-align: right; }
+    .type-item:hover { background: #F8FAFC; }
+    .type-item.on { background: #0A1628; color: #fff; }
+    .type-name { display: inline-flex; align-items: center; gap: 0.4rem; font-weight: 800; }
+    .hit-dot { width: 8px; height: 8px; border-radius: 50%; background: #D4AF37; display: inline-block; }
+    .count { min-width: 30px; height: 28px; padding: 0 0.4rem; border-radius: 999px; display: grid; place-items: center; background: #F1F5F9; color: #0A1628; font-style: normal; font-weight: 800; font-size: 0.78rem; }
+    .count.empty { background: #FEF2F2; color: #B91C1C; }
+    .type-item.on .count { background: #D4AF37; color: #0A1628; }
+    .type-item.on .count.empty { background: #B91C1C; color: #fff; }
+    .values-pane { padding: 1rem 1.1rem 1.1rem; min-height: 420px; }
+    .card-head { justify-content: space-between; margin-bottom: 0.85rem; }
+    .card-head h2 { margin: 0; color: #0A1628; font-size: 1.15rem; }
+    .card-head small, .hint, .confirm-note, .state-box p { color: #64748B; }
+    .confirm-note, .hint { margin: 0 0 0.75rem; }
+    .add-row { margin-bottom: 0.85rem; }
+    .value-list { display: flex; flex-direction: column; gap: 0.45rem; }
+    .value-row { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.4rem 0.7rem; border: 1px solid #E2E8F0; border-radius: 12px; background: #fff; }
+    .value-row.hit { border-color: #D4AF37; background: rgba(212, 175, 55, 0.1); }
+    .value-row strong { color: #0A1628; }
+    .pv-warning { background: #FFF7ED; color: #9A3412; border-radius: 12px; padding: 0.9rem 1rem; }
+    .state-box, .pv-denied { min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #64748B; }
+    .state-box.compact { min-height: 140px; }
+    .state-box h3, .pv-denied h3 { margin: 0 0 0.35rem; color: #0A1628; }
+    .pv-denied { min-height: 50vh; }
+    .pv-denied .mud-icon-root { font-size: 2.4rem; color: #D4AF37; }
+    ::deep .bare-field { flex: 1; }
+    ::deep .bare-field .mud-input-control { margin: 0; }
+    ::deep .bare-field .mud-input-slot { padding: 0; min-height: 46px; }
+    ::deep .bare-field .mud-input { color: #1E293B; font-weight: 600; }
+    ::deep .bare-field .mud-input-underline:before, ::deep .bare-field .mud-input-underline:after { display: none; }
+    @@media (max-width: 900px) {
+        .pv-page { padding: 1rem; }
+        .workspace { grid-template-columns: 1fr; }
+        .type-rail { position: static; max-height: 280px; }
+        .field, .gold-btn, .field-status { width: 100%; }
+    }
+</style>
+
+@code {
+    private bool _authorized;
+    private bool _ready;
+    private List<SpecListDto> _lists = new();
+    private readonly Dictionary<int, List<SpecOptionDto>> _options = new();
+    private readonly Dictionary<int, string> _drafts = new();
+    private string _newTypeName = "";
+    private string _search = "";
+    private string _fill = "all";
+    private int? _selectedListId;
+    private int? _editingListId;
+    private string _editingListName = "";
+    private int? _editingOptionId;
+    private string _editingOptionName = "";
+    private int? _confirmListId;
+    private int? _confirmOptionId;
+
+    private string AllClass => _fill == "all" ? "on" : "";
+    private string FilledClass => _fill == "filled" ? "on good" : "";
+    private string EmptyClass => _fill == "empty" ? "on bad" : "";
+    private int EmptyCount => _lists.Count(x => x.ListCode != "BEDSIZE" && Count(x.ListId) == 0);
+    private IEnumerable<SpecListDto> Visible => _lists.Where(x => x.ListCode != "BEDSIZE").Where(MatchesList).Where(PassFill);
+    private SpecListDto? Selected => _lists.FirstOrDefault(x => x.ListId == _selectedListId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        var role = auth.User.FindFirst(ClaimTypes.Role)?.Value;
+        _authorized = role is "Admin" or "AccountManager";
+        if (!_authorized) return;
+        _ready = await SpecService.IsReadyAsync();
+        if (!_ready) return;
+        await Reload();
+    }
+
+    private int Count(int listId) => _options.TryGetValue(listId, out var opts) ? opts.Count : 0;
+    private List<SpecOptionDto> OptionsOf(int listId) => _options.TryGetValue(listId, out var opts) ? opts : new();
+    private string TypeClass(int listId) => _selectedListId == listId ? "type-item on" : "type-item";
+    private static string CountClass(int count) => count == 0 ? "count empty" : "count";
+    private string ValueRowClass(SpecOptionDto option) => ValueHit(option) ? "value-row hit" : "value-row";
+
+    private bool PassFill(SpecListDto list) => _fill switch
+    {
+        "filled" => Count(list.ListId) > 0,
+        "empty" => Count(list.ListId) == 0,
+        _ => true
+    };
+
+    private bool MatchesList(SpecListDto list)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        var term = _search.Trim();
+        if ((list.ListNameAr ?? "").ContainsArabic(term) || (list.ListCode ?? "").ContainsArabic(term)) return true;
+        return _options.TryGetValue(list.ListId, out var opts) && opts.Any(o => (o.OptionNameAr ?? "").ContainsArabic(term));
+    }
+
+    private bool TypeHit(SpecListDto list)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return false;
+        return _options.TryGetValue(list.ListId, out var opts) && opts.Any(o => (o.OptionNameAr ?? "").ContainsArabic(_search.Trim()));
+    }
+
+    private bool ValueHit(SpecOptionDto option)
+        => !string.IsNullOrWhiteSpace(_search) && (option.OptionNameAr ?? "").ContainsArabic(_search.Trim());
+
+    private void EnsureSelection()
+    {
+        var visible = Visible.ToList();
+        if (visible.Count == 0)
+        {
+            _selectedListId = null;
+            return;
+        }
+        if (_selectedListId == null || visible.All(x => x.ListId != _selectedListId))
+            _selectedListId = visible[0].ListId;
+    }
+
+    private Task OnSearchChanged(string value)
+    {
+        _search = value ?? "";
+        EnsureSelection();
+        return Task.CompletedTask;
+    }
+
+    private void ClearSearch() { _search = ""; EnsureSelection(); }
+    private void ShowAll() { _fill = "all"; EnsureSelection(); }
+    private void ShowFilled() { _fill = "filled"; EnsureSelection(); }
+    private void ShowEmpty() { _fill = "empty"; EnsureSelection(); }
+    private void Select(int listId) { if (_selectedListId == listId) return; CancelEdit(); _selectedListId = listId; }
+    private void ConfirmList(int listId) { CancelEdit(); _confirmListId = listId; }
+    private void ConfirmOption(int optionId) { CancelEdit(); _confirmOptionId = optionId; }
+
+    private async Task OnNewTypeKey(KeyboardEventArgs e) { if (e.Key == "Enter") await AddType(); }
+    private async Task OnDraftKey(KeyboardEventArgs e, int listId) { if (e.Key == "Enter") await AddOption(listId); }
+    private async Task OnEditListKey(KeyboardEventArgs e) { if (e.Key == "Enter" && _editingListId is int id) await SaveList(id); }
+    private async Task OnEditOptionKey(KeyboardEventArgs e) { if (e.Key == "Enter" && _editingOptionId is int id) await SaveOption(id); }
+
+    private async Task Reload()
+    {
+        await SpecService.GetStandardQuestionsAsync();
+        _lists = await SpecService.GetListsAsync();
+        foreach (var list in _lists)
+        {
+            if (!_drafts.ContainsKey(list.ListId))
+                _drafts[list.ListId] = "";
+            await LoadOptions(list.ListId);
+        }
+        EnsureSelection();
+    }
+
+    private async Task LoadOptions(int listId) => _options[listId] = await SpecService.GetOptionsAsync(listId);
+    private string Draft(int listId) => _drafts.TryGetValue(listId, out var value) ? value : "";
+
+    private void CancelEdit()
+    {
+        _editingListId = null;
+        _editingOptionId = null;
+        _confirmListId = null;
+        _confirmOptionId = null;
+    }
+
+    private void BeginEditList(SpecListDto list)
+    {
+        CancelEdit();
+        _editingListId = list.ListId;
+        _editingListName = list.ListNameAr;
+    }
+
+    private void BeginEditOption(SpecOptionDto option)
+    {
+        CancelEdit();
+        _editingOptionId = option.OptionId;
+        _editingOptionName = option.OptionNameAr;
+    }
+
+    private async Task AddType()
+    {
+        var (ok, msg, id) = await SpecService.AddListAsync(_newTypeName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+        if (!ok) return;
+        _newTypeName = "";
+        _selectedListId = id;
+        await Reload();
+        if (id is int listId) _selectedListId = listId;
+    }
+
+    private async Task SaveList(int listId)
+    {
+        var (ok, msg) = await SpecService.RenameListAsync(listId, _editingListName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+        if (!ok) return;
+        CancelEdit();
+        await Reload();
+    }
+
+    private async Task DeleteList(int listId)
+    {
+        var (ok, msg) = await SpecService.RemoveListAsync(listId);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+        CancelEdit();
+        if (!ok) return;
+        if (_selectedListId == listId) _selectedListId = null;
+        await Reload();
+    }
+
+    private async Task AddOption(int listId)
+    {
+        var name = Draft(listId);
+        var (ok, msg, _) = await SpecService.AddOptionAsync(listId, name);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+        if (!ok) return;
+        _drafts[listId] = "";
+        await LoadOptions(listId);
+    }
+
+    private async Task SaveOption(int optionId)
+    {
+        var (ok, msg) = await SpecService.RenameOptionAsync(optionId, _editingOptionName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+        if (!ok) return;
+        var listId = _options.FirstOrDefault(x => x.Value.Any(o => o.OptionId == optionId)).Key;
+        CancelEdit();
+        if (listId > 0) await LoadOptions(listId);
+    }
+
+    private async Task DeleteOption(int listId, int optionId)
+    {
+        var (ok, msg) = await SpecService.RemoveOptionAsync(optionId);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+        CancelEdit();
+        if (ok) await LoadOptions(listId);
+    }
+}

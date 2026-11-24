@@ -1,0 +1,700 @@
+@page "/factory/production-dashboard"
+@attribute [Authorize]
+
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Models
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+
+@inject db24804Context Db
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+
+<PageTitle>متابعة التصنيع</PageTitle>
+
+@if (_loading)
+{
+    <div class="fpd-loading">
+        <MudProgressCircular Color="Color.Primary" Size="Size.Large" Indeterminate="true" />
+        <MudText Typo="Typo.h6" Class="mt-4" Style="color: var(--gold);">جارٍ تحميل متابعة التصنيع...</MudText>
+    </div>
+}
+else if (!_canView)
+{
+    <MudAlert Severity="Severity.Error" Class="ma-4">متابعة التصنيع لطاقم المصنع فقط.</MudAlert>
+}
+else
+{
+    <div class="fpd-page" dir="rtl">
+        <header class="fpd-header">
+            <div class="fpd-overlay"></div>
+            <div class="fpd-header-top">
+                <div class="fpd-header-info">
+                    <div class="fpd-badge"><MudIcon Icon="@Icons.Material.Filled.Schedule" /></div>
+                    <div>
+                        <h1>متابعة التصنيع</h1>
+                        <p>كل أمر: مرحلته الآن، اللي عدّى، الباقي، والتأخير. مرّر على المرحلة للتفاصيل.</p>
+                    </div>
+                </div>
+                <div class="fpd-today-plate">
+                    <span>اليوم</span>
+                    <strong>@DateTime.Today.ToString("yyyy/MM/dd")</strong>
+                </div>
+            </div>
+            <div class="fpd-stats">
+                <MudTooltip Text="أوامر فيها مرحلة بدأت ولم تنته بعد." Placement="Placement.Bottom" Arrow="true">
+                    <button type="button" class="fpd-stat @On("running")" @onclick='() => Set("running")'>
+                        <strong>@Count("قيد التشغيل")</strong><em>شغال الآن</em>
+                    </button>
+                </MudTooltip>
+                <MudTooltip Text="مرحلة انتهت، ومسؤول الجودة المعيّن لسه ما اعتمدهاش. اللي بعدها ما يبدأش." Placement="Placement.Bottom" Arrow="true">
+                    <button type="button" class="fpd-stat @On("quality")" @onclick='() => Set("quality")'>
+                        <strong>@Count("بانتظار الجودة")</strong><em>بانتظار الجودة</em>
+                    </button>
+                </MudTooltip>
+                <MudTooltip Text="متأخر عن نهاية مرحلة لسه شغالة، أو عن تاريخ التنفيذ والأمر لم يكتمل." Placement="Placement.Bottom" Arrow="true">
+                    <button type="button" class="fpd-stat late @On("late")" @onclick='() => Set("late")'>
+                        <strong>@_rows.Count(r => r.Late)</strong><em>متأخر</em>
+                    </button>
+                </MudTooltip>
+                <MudTooltip Text="كل أوامر التنفيذ المعتمدة غير الملغاة." Placement="Placement.Bottom" Arrow="true">
+                    <button type="button" class="fpd-stat @On("all")" @onclick='() => Set("all")'>
+                        <strong>@_rows.Count</strong><em>كل الأوامر</em>
+                    </button>
+                </MudTooltip>
+            </div>
+        </header>
+
+        <div class="fpd-toolbar">
+            <div class="fpd-search">
+                <MudTextField T="string"
+                              @bind-Value="_search"
+                              Placeholder="بحث باسم العميل أو رقم الأمر أو المرحلة أو الموظف"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Immediate="true"
+                              Clearable="true" />
+            </div>
+            <div class="fpd-quality">
+                <MudSelect T="string" @bind-Value="_quality" Label="مسؤول الجودة" Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true" Placeholder="كل المسؤولين">
+                    @foreach (var person in QualityOptions)
+                    {
+                        <MudSelectItem T="string" Value="@person">@person</MudSelectItem>
+                    }
+                </MudSelect>
+            </div>
+            <MudTooltip Text="مسح البحث والفلتر" Placement="Placement.Bottom">
+                <button type="button" class="fpd-reset" @onclick="Reset"><MudIcon Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" /></button>
+            </MudTooltip>
+            <div class="fpd-legend">
+                <span><i class="done"></i>عدّى</span>
+                <span><i class="live"></i>الآن</span>
+                <span><i class="wait"></i>جودة</span>
+                <span><i class="pending"></i>لم تبدأ</span>
+                <span><i class="late"></i>متأخر</span>
+                <em>@Visible.Count من @_rows.Count</em>
+            </div>
+        </div>
+
+        @if (OpsVisible)
+        {
+            <section class="fpd-ops">
+                @if (!string.IsNullOrWhiteSpace(Bottleneck))
+                {
+                    <MudTooltip Text="اسم المرحلة اللي متأخرة في أكبر عدد من الأوامر الشغالة." Placement="Placement.Top" Arrow="true">
+                        <div class="fpd-op warn"><span>عنق الزجاجة</span><strong>@Bottleneck</strong></div>
+                    </MudTooltip>
+                }
+                <MudTooltip Text="طلبات تعذر لسه مفتوحة. التاريخ ما بيتغيرش بسببها." Placement="Placement.Top" Arrow="true">
+                    <div class="fpd-op"><span>تعذر مفتوح</span><strong>@_rows.Sum(r => r.ExcuseCount)</strong></div>
+                </MudTooltip>
+                @foreach (var load in Loads)
+                {
+                    <MudTooltip Text="@($"{load.Name} عليه {load.Count} مرحلة شغالة الآن. الضغط يبحث باسمه.")" Placement="Placement.Top" Arrow="true">
+                        <button type="button" class="fpd-op" @onclick="() => _search = load.Name"><span>حمل الموظف</span><strong>@load.Name</strong><em>@load.Count</em></button>
+                    </MudTooltip>
+                }
+            </section>
+        }
+
+        @if (_needsScript)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-3">يلزم تشغيل سكربت ProductionStagePeople.sql مرة واحدة بعد ProductionPlan.sql حتى تظهر مراحل الأوامر.</MudAlert>
+        }
+
+        @if (Visible.Count == 0)
+        {
+            <div class="fpd-empty">لا توجد أوامر في هذا العرض.</div>
+        }
+        else
+        {
+            <div class="fpd-board">
+                @foreach (var row in Visible)
+                {
+                    <article class="fpd-card @(row.Late ? "late" : "")" @onclick="() => Open(row.OrderId)">
+                        <div class="fpd-top">
+                            <MudTooltip Text="@row.RingTip" Placement="Placement.Top" Arrow="true">
+                                <div class="fpd-ring" style="@RingStyle(row)">
+                                    <span><b>@row.Passed</b><small>/@row.StageCount</small></span>
+                                </div>
+                            </MudTooltip>
+                            <div class="fpd-who">
+                                <div class="fpd-name-row">
+                                    <strong>@row.CustomerName</strong>
+                                    <span class="fpd-no">@row.Number</span>
+                                    @if (row.ExcuseCount > 0)
+                                    {
+                                        <MudTooltip Text="@row.ExcuseText" Placement="Placement.Top" Arrow="true">
+                                            <span class="fpd-excuse">تعذر @row.ExcuseCount</span>
+                                        </MudTooltip>
+                                    }
+                                </div>
+                                <p>@row.Sentence</p>
+                                @if (!string.IsNullOrWhiteSpace(row.WorkerLine))
+                                {
+                                    <small>@row.WorkerLine</small>
+                                }
+                            </div>
+                            <MudTooltip Text="@row.RemainTip" Placement="Placement.Top" Arrow="true">
+                                <div class="fpd-verdict @(row.Late ? "bad" : row.State == "مكتمل" ? "done" : "ok")">
+                                    <b>@(row.Late ? "متأخر" : row.State == "مكتمل" ? "مكتمل" : "في الموعد")</b>
+                                    <span>@row.RemainText</span>
+                                </div>
+                            </MudTooltip>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(row.Alert))
+                        {
+                            <div class="fpd-alert">@row.Alert</div>
+                        }
+
+                        <div class="fpd-metrics">
+                            <div>
+                                <span>المرحلة الآن</span>
+                                <strong>@row.CurrentStage</strong>
+                            </div>
+                            <div>
+                                <span>عدّى</span>
+                                <strong>@row.Passed <small>من @row.StageCount</small></strong>
+                            </div>
+                            <div>
+                                <span>@(row.Late ? "التأخير" : "الباقي")</span>
+                                <strong>@row.RemainText</strong>
+                            </div>
+                            <div>
+                                <span>تاريخ التنفيذ</span>
+                                <strong>@row.DueDate.ToString("yyyy/MM/dd")</strong>
+                            </div>
+                        </div>
+
+                        @if (row.Bars.Count == 0)
+                        {
+                            <div class="fpd-track empty">لا توجد مراحل على الخطة. اضغط لفتحها.</div>
+                        }
+                        else
+                        {
+                            <div class="fpd-flow">
+                                @foreach (var bar in row.Bars)
+                                {
+                                    <MudTooltip Placement="Placement.Top" Arrow="true" Delay="120" RootClass="fpd-node-host">
+                                        <ChildContent>
+                                            <span class="fpd-node @bar.Css">
+                                                <i>@bar.Index</i>
+                                                <b>@bar.Name</b>
+                                                <small>@bar.StateText</small>
+                                            </span>
+                                        </ChildContent>
+                                        <TooltipContent>
+                                            <div class="fpd-tip" dir="rtl">
+                                                <strong>@bar.Name</strong>
+                                                <span>@bar.StartText → @bar.EndText</span>
+                                                <span>@bar.Days يوم · @bar.StateText</span>
+                                                <span>الموظف: @bar.Worker</span>
+                                                <span>مسؤول الجودة: @bar.Quality</span>
+                                                @if (!string.IsNullOrWhiteSpace(bar.LateText))
+                                                {
+                                                    <span class="warn">@bar.LateText</span>
+                                                }
+                                            </div>
+                                        </TooltipContent>
+                                    </MudTooltip>
+                                }
+                                @if (row.Parallel)
+                                {
+                                    <MudTooltip Text="أكتر من مرحلة شغالة في نفس الوقت. مدة المسار هي الأطول، مش مجموع الأيام." Placement="Placement.Top" Arrow="true">
+                                        <span class="fpd-node parallel"><i>∥</i><b>متوازي</b><small>بالأطول</small></span>
+                                    </MudTooltip>
+                                }
+                            </div>
+
+                            <div class="fpd-scale">
+                                <div class="fpd-track" style="@row.TrackStyle">
+                                    @if (row.ShowToday)
+                                    {
+                                        <span class="fpd-flag today @(row.TodayFlip ? "flip" : "")" style="@row.TodayStyle"><em>اليوم</em></span>
+                                    }
+                                    <span class="fpd-flag due @(row.DueFlip ? "flip" : "")" style="@row.DueStyle"><em>تنفيذ</em></span>
+                                    @foreach (var bar in row.Bars)
+                                    {
+                                        <MudTooltip Placement="Placement.Top" Arrow="true" Delay="160" Inline="false" RootStyle="@bar.Style">
+                                            <ChildContent>
+                                                <span class="fpd-bar @bar.Css">
+                                                    <i style="width:@(bar.Fill)%"></i>
+                                                    <b>@(bar.ShowLabel ? bar.Name : "")</b>
+                                                </span>
+                                            </ChildContent>
+                                            <TooltipContent>
+                                                <div class="fpd-tip" dir="rtl">
+                                                    <strong>@bar.Name</strong>
+                                                    <span>@bar.StartText → @bar.EndText · @bar.Days يوم</span>
+                                                    <span>@bar.StateText · التعبئة = الأيام اللي عدّت من المرحلة</span>
+                                                    <span>الموظف: @bar.Worker · الجودة: @bar.Quality</span>
+                                                    @if (!string.IsNullOrWhiteSpace(bar.LateText))
+                                                    {
+                                                        <span class="warn">@bar.LateText</span>
+                                                    }
+                                                </div>
+                                            </TooltipContent>
+                                        </MudTooltip>
+                                    }
+                                </div>
+                                <div class="fpd-axis">
+                                    @foreach (var tick in row.Ticks)
+                                    {
+                                        <span>@tick</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </article>
+                }
+            </div>
+        }
+    </div>
+}
+
+<style>
+    .fpd-loading { min-height: 420px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .fpd-page { padding: 1.25rem; max-width: 1680px; margin: 0 auto; direction: rtl; }
+    .fpd-header {
+        position: relative; overflow: hidden; border-radius: 22px; margin-bottom: .9rem; padding: 1.35rem 1.5rem 1.15rem;
+        background: linear-gradient(135deg, #121c31 0%, #1a2842 48%, #243656 100%);
+        box-shadow: 0 16px 40px rgba(15, 23, 42, .16);
+    }
+    .fpd-header::after { content: ""; position: absolute; inset-inline: 0; bottom: 0; height: 3px; background: linear-gradient(90deg, transparent, #d4af37, transparent); }
+    .fpd-overlay { position: absolute; inset: 0; pointer-events: none; opacity: .7; background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23d4af37' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E"); }
+    .fpd-header-top, .fpd-stats { position: relative; }
+    .fpd-header-top { display: flex; justify-content: space-between; gap: 1rem; align-items: center; margin-bottom: 1.1rem; }
+    .fpd-header-info { display: flex; align-items: center; gap: .9rem; }
+    .fpd-badge { width: 48px; height: 48px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: linear-gradient(145deg, #f3d56a, #d4af37); color: #1a2842; box-shadow: 0 8px 20px rgba(212,175,55,.28); flex: 0 0 48px; }
+    .fpd-header h1 { margin: 0; color: #fff; font-size: 1.45rem; font-weight: 800; }
+    .fpd-header p { margin: .25rem 0 0; color: rgba(255,255,255,.72); font-size: .9rem; }
+    .fpd-today-plate { min-width: 148px; text-align: center; border: 1px solid rgba(212,175,55,.4); background: rgba(212,175,55,.12); border-radius: 14px; padding: .55rem .8rem; color: #fff; }
+    .fpd-today-plate span { display: block; color: #f6e7b4; font-size: .72rem; font-weight: 800; }
+    .fpd-today-plate strong { font-variant-numeric: tabular-nums; font-size: 1.05rem; }
+    .fpd-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .55rem; }
+    .fpd-stat { width: 100%; text-align: right; cursor: pointer; font: inherit; color: #fff; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: 14px; padding: .7rem .9rem; }
+    .fpd-stat strong { display: block; font-size: 1.35rem; line-height: 1; }
+    .fpd-stat em { display: block; margin-top: .28rem; font-style: normal; font-size: .74rem; color: rgba(255,255,255,.62); }
+    .fpd-stat.active { background: rgba(212,175,55,.2); border-color: rgba(212,175,55,.75); }
+    .fpd-stat.late strong { color: #fecaca; }
+    .fpd-toolbar { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: 16px; padding: .75rem .9rem; margin-bottom: .9rem; }
+    .fpd-search { flex: 1 1 260px; min-width: 220px; }
+    .fpd-reset { width: 40px; height: 40px; border-radius: 10px; cursor: pointer; border: 1px solid var(--mud-palette-divider); background: var(--mud-palette-surface); color: var(--mud-palette-text-secondary); }
+    .fpd-quality { width: 220px; }
+    .fpd-ops { display: flex; gap: .5rem; overflow-x: auto; margin-bottom: .8rem; padding-bottom: .15rem; }
+    .fpd-op { min-width: 140px; text-align: right; border: 1px solid var(--mud-palette-divider); background: var(--mud-palette-surface); border-radius: 14px; padding: .55rem .7rem; color: inherit; font: inherit; cursor: default; }
+    button.fpd-op { cursor: pointer; }
+    .fpd-op span, .fpd-op em { display: block; font-style: normal; color: var(--mud-palette-text-secondary); font-size: .7rem; font-weight: 800; }
+    .fpd-op strong { display: block; margin-top: .12rem; font-size: .92rem; }
+    .fpd-op.warn { border-color: rgba(220,38,38,.35); background: rgba(220,38,38,.06); }
+    .fpd-excuse { background: rgba(220,38,38,.12); color: #9f1239; border-radius: 999px; padding: .12rem .5rem; font-size: .72rem; font-weight: 800; }
+    .fpd-legend { display: flex; flex-wrap: wrap; gap: .7rem; align-items: center; color: var(--mud-palette-text-secondary); font-size: .75rem; font-weight: 800; }
+    .fpd-legend em { font-style: normal; margin-inline-start: .4rem; }
+    .fpd-legend span { display: inline-flex; align-items: center; gap: .3rem; }
+    .fpd-legend i, .fpd-node i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+    .fpd-board { display: flex; flex-direction: column; gap: .8rem; }
+    .fpd-card { background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: 18px; padding: 1rem 1.05rem .9rem; cursor: pointer; box-shadow: 0 8px 24px rgba(15, 23, 42, .04); }
+    .fpd-card:hover { border-color: rgba(212,175,55,.75); transform: translateY(-1px); }
+    .fpd-card.late { background: linear-gradient(180deg, rgba(220,38,38,.07), var(--mud-palette-surface) 72px); }
+    .fpd-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .9rem; align-items: center; }
+    .fpd-ring { width: 74px; height: 74px; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(#059669 var(--p), #e7edf3 0); }
+    .fpd-card.late .fpd-ring { box-shadow: 0 0 0 4px rgba(220,38,38,.16); }
+    .fpd-ring span { width: 54px; height: 54px; border-radius: 50%; background: var(--mud-palette-surface); display: flex; align-items: baseline; justify-content: center; gap: .05rem; }
+    .fpd-ring b { font-size: 1.15rem; color: var(--mud-palette-text-primary); }
+    .fpd-ring small, .fpd-who small, .fpd-metrics span, .fpd-node small { color: var(--mud-palette-text-secondary); }
+    .fpd-name-row { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+    .fpd-who strong { font-size: 1.12rem; }
+    .fpd-who p { margin: .2rem 0 0; line-height: 1.7; font-weight: 700; }
+    .fpd-who small { display: block; margin-top: .15rem; }
+    .fpd-no { background: rgba(212,175,55,.12); color: var(--gold-dark, #b8860b); border: 1px solid rgba(212,175,55,.3); border-radius: 8px; padding: .08rem .45rem; font-size: .74rem; font-weight: 800; }
+    .fpd-verdict { min-width: 132px; border-radius: 14px; padding: .55rem .75rem; text-align: center; }
+    .fpd-verdict b, .fpd-verdict span { display: block; }
+    .fpd-verdict.ok { background: rgba(212,175,55,.14); color: #8a6a12; }
+    .fpd-verdict.done { background: rgba(5,150,105,.12); color: #047857; }
+    .fpd-verdict.bad { background: rgba(220,38,38,.12); color: #b91c1c; }
+    .fpd-verdict span { margin-top: .15rem; font-size: .75rem; font-weight: 800; }
+    .fpd-alert { margin-top: .75rem; border-radius: 12px; background: rgba(220,38,38,.1); color: #9f1239; font-weight: 800; padding: .55rem .75rem; }
+    .fpd-metrics { display: grid; grid-template-columns: 1.4fr .7fr 1fr .9fr; gap: .55rem; margin-top: .85rem; }
+    .fpd-metrics div { background: var(--mud-palette-background); border-radius: 12px; padding: .55rem .7rem; min-height: 64px; }
+    .fpd-metrics span { display: block; font-size: .72rem; font-weight: 800; }
+    .fpd-metrics strong { display: block; margin-top: .15rem; font-size: 1rem; }
+    .fpd-metrics small { font-size: .75rem; font-weight: 700; color: var(--mud-palette-text-secondary); }
+    .fpd-flow { display: flex; gap: .4rem; overflow-x: auto; margin-top: .8rem; padding-bottom: .15rem; }
+    .fpd-node-host { flex: 0 0 auto; }
+    .fpd-node { min-width: 112px; display: flex; flex-direction: column; gap: .05rem; border-radius: 12px; border: 1px solid var(--mud-palette-divider); padding: .4rem .55rem .45rem; background: var(--mud-palette-surface); }
+    .fpd-node i { width: auto; height: auto; border-radius: 0; font-style: normal; font-size: .68rem; font-weight: 800; }
+    .fpd-node b { font-size: .82rem; white-space: nowrap; }
+    .fpd-node.done { border-color: rgba(5,150,105,.4); }
+    .fpd-node.done i, .fpd-legend i.done { background: #059669; color: #fff; }
+    .fpd-node.done i { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; }
+    .fpd-node.live { border-color: #d4af37; background: rgba(212,175,55,.14); }
+    .fpd-node.live i, .fpd-legend i.live { background: #d4af37; }
+    .fpd-node.live i { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; color: #1a2842; }
+    .fpd-node.wait { border-color: rgba(37,99,235,.4); }
+    .fpd-node.wait i, .fpd-legend i.wait { background: #2563eb; }
+    .fpd-node.wait i { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; color: #fff; }
+    .fpd-node.pending i, .fpd-legend i.pending { background: #94a3b8; }
+    .fpd-node.pending i { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; color: #fff; }
+    .fpd-node.late { border-color: rgba(220,38,38,.5); background: rgba(220,38,38,.08); }
+    .fpd-node.late i, .fpd-legend i.late { background: #dc2626; }
+    .fpd-node.late i { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; color: #fff; }
+    .fpd-node.parallel { border-style: dashed; border-color: #2563eb; color: #1d4ed8; }
+    .fpd-scale { margin-top: .75rem; }
+    .fpd-track { position: relative; border-radius: 14px; overflow: hidden; background-color: var(--mud-palette-background); background-image: linear-gradient(to left, rgba(148,163,184,.28) 1px, transparent 1px); background-size: calc(100% / var(--span)) 100%; border: 1px solid var(--mud-palette-divider); }
+    .fpd-track.empty { min-height: 54px; display: grid; place-items: center; color: var(--mud-palette-text-secondary); margin-top: .8rem; }
+    .fpd-flag { position: absolute; top: 0; bottom: 0; width: 0; z-index: 5; border-inline-start: 2px solid #1a2842; pointer-events: none; }
+    .fpd-flag em { position: absolute; top: 5px; inset-inline-start: 4px; font-style: normal; font-size: .64rem; font-weight: 800; color: #fff; background: #1a2842; border-radius: 6px; padding: .05rem .32rem; white-space: nowrap; }
+    .fpd-flag.today { border-color: #ef4444; }
+    .fpd-flag.today em { background: #ef4444; }
+    .fpd-flag.flip em { inset-inline-start: auto; inset-inline-end: 4px; }
+    .fpd-bar { width: 100%; height: 30px; border-radius: 9px; display: flex; align-items: center; padding: 0 .45rem; overflow: hidden; position: relative; color: #fff; font-size: .72rem; font-weight: 800; }
+    .fpd-bar i { position: absolute; inset-inline-start: 0; top: 0; bottom: 0; background: rgba(255,255,255,.28); }
+    .fpd-bar b { position: relative; z-index: 1; white-space: nowrap; }
+    .fpd-bar.done { background: #059669; }
+    .fpd-bar.live { background: #f4e4a6; color: #1a2842; }
+    .fpd-bar.live i { background: #d4af37; }
+    .fpd-bar.wait { background: #2563eb; }
+    .fpd-bar.pending { background: transparent; color: #64748b; box-shadow: inset 0 0 0 1.5px #94a3b8; }
+    .fpd-bar.late { background: #fecaca; color: #7f1d1d; }
+    .fpd-bar.late i { background: #dc2626; }
+    .fpd-axis { display: flex; justify-content: space-between; margin-top: .28rem; color: #94a3b8; font-size: .7rem; font-variant-numeric: tabular-nums; }
+    .fpd-tip { display: flex; flex-direction: column; gap: .12rem; min-width: 190px; text-align: right; line-height: 1.55; }
+    .fpd-tip .warn { color: #fecaca; font-weight: 800; }
+    .fpd-empty { min-height: 180px; display: grid; place-items: center; color: var(--mud-palette-text-secondary); background: var(--mud-palette-surface); border: 1px solid var(--mud-palette-divider); border-radius: 16px; }
+    @@media (max-width: 980px) {
+        .fpd-page { padding: .7rem; }
+        .fpd-stats, .fpd-top, .fpd-metrics { grid-template-columns: 1fr 1fr; }
+        .fpd-top { grid-template-columns: auto 1fr; }
+        .fpd-verdict { grid-column: 1 / -1; }
+        .fpd-header-top { flex-direction: column; align-items: stretch; }
+    }
+</style>
+
+@code {
+    private bool _loading = true;
+    private bool _canView;
+    private bool _needsScript;
+    private string _search = "";
+    private string? _quality;
+    private string _filter = "all";
+    private List<DashRow> _rows = new();
+
+    private static string RingStyle(DashRow row) => "--p:" + row.Ring.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "%";
+    private int Count(string state) => _rows.Count(r => r.State == state);
+    private string On(string key) => _filter == key ? "active" : "";
+    private void Set(string key) => _filter = key;
+    private void Reset() { _search = ""; _quality = ""; _filter = "all"; }
+    private bool OpsVisible => !string.IsNullOrWhiteSpace(Bottleneck) || _rows.Any(r => r.ExcuseCount > 0) || Loads.Count > 0;
+    private List<string> QualityOptions => _rows.SelectMany(r => r.QualityNames).Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n).ToList();
+    private List<LoadItem> Loads => _rows.SelectMany(r => r.RunningWorkers)
+        .Where(n => !string.IsNullOrWhiteSpace(n))
+        .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
+        .Select(g => new LoadItem { Name = g.Key, Count = g.Count() })
+        .OrderByDescending(x => x.Count)
+        .Take(8)
+        .ToList();
+    private string Bottleneck
+    {
+        get
+        {
+            var top = _rows.SelectMany(r => r.LateStageNames)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(g => g.Count())
+                .FirstOrDefault();
+            return top == null ? "" : $"{top.Key} متأخرة في {top.Count()} أمر";
+        }
+    }
+
+    private List<DashRow> Visible
+    {
+        get
+        {
+            IEnumerable<DashRow> rows = _filter switch
+            {
+                "running" => _rows.Where(r => r.State == "قيد التشغيل"),
+                "quality" => _rows.Where(r => r.State == "بانتظار الجودة"),
+                "late" => _rows.Where(r => r.Late),
+                _ => _rows
+            };
+            if (!string.IsNullOrWhiteSpace(_quality))
+                rows = rows.Where(r => r.QualityNames.Contains(_quality, StringComparer.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                var term = _search.Trim();
+                rows = rows.Where(r => r.CustomerName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || r.Number.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || r.CurrentStage.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || r.People.Contains(term, StringComparison.OrdinalIgnoreCase));
+            }
+            return rows.OrderByDescending(r => r.Late).ThenBy(r => r.DueDate).ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+        _canView = user.IsInRole("Admin") || user.IsInRole(SystemRoles.Admin)
+            || user.IsInRole("factory") || user.IsInRole(SystemRoles.FactoryManager)
+            || user.IsInRole(SystemRoles.ProductionManager);
+        if (_canView)
+            await LoadAsync();
+        _loading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        var orders = await (
+            from order in Db.ExecutionOrders.AsNoTracking()
+            join invoice in Db.Transactions.AsNoTracking() on order.TransactionId equals invoice.TransactionId
+            join party in Db.Parties.AsNoTracking() on invoice.PartyId equals party.PartyId
+            where order.Status == "Approved" && invoice.TransactionType == TransactionTypes.Sale && invoice.InvoiceStatus != InvoiceStatuses.Cancelled
+            select new { order.ExecutionOrderId, order.DueDate, party.PartyName }).ToListAsync();
+        var ids = orders.Select(o => o.ExecutionOrderId).ToList();
+        var plans = ids.Count == 0 ? new List<ProductionPlan>() : await Db.ProductionPlans.AsNoTracking().Where(p => ids.Contains(p.ExecutionOrderId)).ToListAsync();
+        var planIds = plans.Select(p => p.PlanId).ToList();
+        var stages = new List<ProductionStage>();
+        try
+        {
+            if (planIds.Count > 0)
+                stages = await Db.ProductionStages.AsNoTracking().Where(s => planIds.Contains(s.PlanId)).ToListAsync();
+        }
+        catch
+        {
+            _needsScript = true;
+        }
+        var excuses = new List<ProductionExcuse>();
+        try
+        {
+            var stageIds = stages.Select(s => s.StageId).ToList();
+            if (stageIds.Count > 0)
+                excuses = await Db.ProductionExcuses.AsNoTracking().Where(e => stageIds.Contains(e.StageId) && e.Status != "Closed").ToListAsync();
+        }
+        catch
+        {
+            excuses = new();
+        }
+        var today = DateTime.Today;
+        _rows = orders.Select(order => BuildRow(order.ExecutionOrderId, order.PartyName, order.DueDate, plans, stages, today)).ToList();
+        foreach (var row in _rows)
+        {
+            var plan = plans.FirstOrDefault(p => p.ExecutionOrderId == row.OrderId);
+            var mineIds = plan == null ? new HashSet<int>() : stages.Where(s => s.PlanId == plan.PlanId).Select(s => s.StageId).ToHashSet();
+            var open = excuses.Where(e => mineIds.Contains(e.StageId)).ToList();
+            row.ExcuseCount = open.Count;
+            row.ExcuseText = open.Count == 0 ? "" : string.Join(" · ", open.Select(e => $"{e.Note} — {e.RequestedBy}"));
+        }
+    }
+
+    private static DashRow BuildRow(int orderId, string? partyName, DateTime due, List<ProductionPlan> plans, List<ProductionStage> stages, DateTime today)
+    {
+        var name = string.IsNullOrWhiteSpace(partyName) ? "عميل" : partyName;
+        var plan = plans.FirstOrDefault(p => p.ExecutionOrderId == orderId);
+        var mine = plan == null ? new List<ProductionStage>() : stages.Where(s => s.PlanId == plan.PlanId).OrderBy(s => s.SortOrder).ThenBy(s => s.PlannedStart ?? DateTime.MaxValue).ToList();
+        var running = mine.Where(s => s.Status == "Started").ToList();
+        var waiting = mine.Where(s => s.Status == "Done" && s.QualityStatus != "Approved").ToList();
+        var passed = mine.Count(s => s.Status == "Done" && s.QualityStatus == "Approved");
+        var complete = mine.Count > 0 && passed == mine.Count;
+        var shown = running.Count > 0 ? running : waiting.Count > 0 ? waiting : mine.Where(s => s.Status == "Pending").Take(1).ToList();
+        var overdue = running.Where(s => s.PlannedEnd.HasValue && today > s.PlannedEnd.Value.Date).ToList();
+        var state = running.Count > 0 ? "قيد التشغيل" : waiting.Count > 0 ? "بانتظار الجودة" : complete ? "مكتمل" : plan?.Status == "Saved" ? "لم تبدأ" : "بدون خطة";
+        var current = shown.Count > 0 ? string.Join("، ", shown.Select(s => s.StageName)) : "لا توجد مرحلة";
+        var dueLate = !complete && today > due.Date ? (today - due.Date).Days : 0;
+        var stageLate = overdue.Count == 0 ? 0 : overdue.Max(s => (today - s.PlannedEnd!.Value.Date).Days);
+        var focus = overdue.OrderBy(s => s.PlannedEnd).FirstOrDefault() ?? shown.OrderBy(s => s.PlannedEnd ?? DateTime.MaxValue).FirstOrDefault();
+        int? stageLeft = focus == null || focus.Status != "Started" || !focus.PlannedEnd.HasValue || today > focus.PlannedEnd.Value.Date ? null : (focus.PlannedEnd.Value.Date - today).Days;
+        var where = state switch
+        {
+            "قيد التشغيل" => $"الآن في مرحلة {current}",
+            "بانتظار الجودة" => $"بانتظار اعتماد جودة {current}",
+            "مكتمل" => "اكتملت كل مراحله",
+            "لم تبدأ" => "خطته محفوظة ولم تبدأ مرحلة",
+            _ => mine.Count == 0 ? "من غير خطة إنتاج" : "خطته لم تُحفظ"
+        };
+        var time = complete ? "والمراحل كلها معتمدة"
+            : due.Date == today ? "والتنفيذ اليوم"
+            : dueLate > 0 ? $"متأخر {dueLate} يوم عن التنفيذ"
+            : $"باقي {(due.Date - today).Days} يوم على التنفيذ";
+        var stageBit = stageLate > 0 ? $" المرحلة متأخرة {stageLate} يوم عن نهايتها."
+            : stageLeft is int daysLeft ? $" باقي {daysLeft} يوم في المرحلة الحالية."
+            : "";
+        var remain = dueLate > 0 ? $"متأخر {dueLate} يوم"
+            : stageLate > 0 ? $"المرحلة متأخرة {stageLate} يوم"
+            : due.Date == today ? "التنفيذ اليوم"
+            : complete ? "مكتمل"
+            : $"باقي {(due.Date - today).Days} يوم";
+        var alerts = new List<string>();
+        if (stageLate > 0) alerts.Add($"مرحلة شغالة عدّت نهايتها بـ {stageLate} يوم");
+        if (dueLate > 0) alerts.Add($"تاريخ التنفيذ عدّى من {dueLate} يوم");
+        var row = new DashRow
+        {
+            OrderId = orderId,
+            Number = $"EXE-{orderId:D5}",
+            CustomerName = name,
+            DueDate = due,
+            CurrentStage = current,
+            State = state,
+            StageCount = mine.Count,
+            Passed = passed,
+            Ring = mine.Count == 0 ? 0 : passed * 100.0 / mine.Count,
+            Parallel = running.Count > 1,
+            Late = alerts.Count > 0,
+            RemainText = remain,
+            Alert = string.Join(" · ", alerts),
+            Sentence = mine.Count == 0
+                ? $"أمر {name} من غير خطة. تاريخ التنفيذ {due:yyyy/MM/dd}."
+                : $"أمر {name} {where}، عدّى {passed} من {mine.Count}، {time}.{stageBit}",
+            RingTip = mine.Count == 0 ? "لا توجد مراحل." : $"اعتمد {passed} من {mine.Count} مرحلة.",
+            RemainTip = dueLate > 0 ? $"تاريخ التنفيذ {due:yyyy/MM/dd} عدّى من {dueLate} يوم." : stageLate > 0 ? "مرحلة شغالة عدّت نهايتها." : "المتبقي حتى تاريخ التنفيذ، أو حتى نهاية المرحلة الحالية.",
+            WorkerLine = focus == null ? "" : $"الموظف: {(string.IsNullOrWhiteSpace(focus.WorkerName) ? "غير معيّن" : focus.WorkerName)} · الجودة: {(string.IsNullOrWhiteSpace(focus.QualityUserName) ? "غير معيّن" : focus.QualityUserName)}",
+            People = string.Join(" ", mine.Select(s => $"{s.WorkerName} {s.QualityUserName}")),
+            RunningWorkers = running.Select(s => s.WorkerName).Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n!).ToList(),
+            LateStageNames = overdue.Select(s => s.StageName).ToList(),
+            QualityNames = mine.Select(s => s.QualityUserName).Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n!).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+        };
+        var dated = mine.Where(s => s.PlannedStart.HasValue && s.PlannedEnd.HasValue).ToList();
+        if (dated.Count == 0)
+            return row;
+
+        var axisStart = dated.Min(s => s.PlannedStart!.Value.Date);
+        var axisEnd = new[] { due.Date, dated.Max(s => s.PlannedEnd!.Value.Date), today }.Max();
+        if (axisEnd < axisStart) axisEnd = axisStart;
+        var span = Math.Max(1, (axisEnd - axisStart).Days + 1);
+        var laneEnds = new List<DateTime>();
+        var index = 1;
+        foreach (var stage in dated)
+        {
+            var lane = laneEnds.FindIndex(end => stage.PlannedStart!.Value.Date > end);
+            if (lane < 0)
+            {
+                lane = laneEnds.Count;
+                laneEnds.Add(stage.PlannedEnd!.Value.Date);
+            }
+            else laneEnds[lane] = stage.PlannedEnd!.Value.Date;
+            var barLeft = Math.Clamp((stage.PlannedStart!.Value.Date - axisStart).Days * 100.0 / span, 0, 99);
+            var width = Math.Max(1, (stage.PlannedEnd.Value.Date - stage.PlannedStart.Value.Date).Days + 1) * 100.0 / span;
+            if (barLeft + width > 100) width = 100 - barLeft;
+            if (width < 1.8) width = 1.8;
+            var late = stage.Status == "Started" && today > stage.PlannedEnd!.Value.Date;
+            var css = late ? "late" : stage.Status == "Started" ? "live" : stage.Status == "Done" && stage.QualityStatus == "Approved" ? "done" : stage.Status == "Done" ? "wait" : "pending";
+            var duration = Math.Max(1, (stage.PlannedEnd.Value.Date - stage.PlannedStart!.Value.Date).Days + 1);
+            var fill = stage.Status == "Pending" ? 0
+                : late || stage.Status == "Done" ? 100
+                : Math.Clamp((int)Math.Round((today - stage.PlannedStart.Value.Date).Days * 100.0 / duration), 8, 100);
+            row.Bars.Add(new GanttBar
+            {
+                Index = index++,
+                Name = stage.StageName,
+                Css = css,
+                Fill = fill,
+                Style = $"position:absolute;z-index:2;height:30px;inset-inline-start:{barLeft.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%;width:{width.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%;top:{22 + lane * 40}px;",
+                ShowLabel = width >= 8,
+                StartText = stage.PlannedStart!.Value.ToString("yyyy/MM/dd"),
+                EndText = stage.PlannedEnd!.Value.ToString("yyyy/MM/dd"),
+                Days = duration,
+                StateText = late ? "متأخرة وهي لسه شغالة" : stage.Status == "Started" ? "المرحلة الحالية" : stage.Status == "Done" && stage.QualityStatus == "Approved" ? "عدّت واعتمدت" : stage.Status == "Done" ? "بانتظار الجودة" : "لم تبدأ",
+                Worker = string.IsNullOrWhiteSpace(stage.WorkerName) ? "غير معيّن" : stage.WorkerName,
+                Quality = string.IsNullOrWhiteSpace(stage.QualityUserName) ? "غير معيّن" : stage.QualityUserName,
+                LateText = late ? $"متأخرة {(today - stage.PlannedEnd!.Value.Date).Days} يوم عن نهايتها" : ""
+            });
+        }
+        var todayLeft = Math.Clamp((today - axisStart).Days * 100.0 / span, 0, 100);
+        var dueLeft = Math.Clamp((due.Date - axisStart).Days * 100.0 / span, 0, 100);
+        row.AxisStart = axisStart;
+        row.AxisEnd = axisEnd;
+        row.ShowToday = today >= axisStart && today <= axisEnd;
+        row.TodayFlip = todayLeft > 82;
+        row.DueFlip = dueLeft > 82;
+        row.TrackStyle = $"--span:{span};height:{22 + Math.Max(1, laneEnds.Count) * 40 + 10}px;";
+        row.TodayStyle = $"inset-inline-start:{todayLeft.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%;";
+        row.DueStyle = $"inset-inline-start:{dueLeft.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%;";
+        for (var step = 0; step < 5; step++)
+            row.Ticks.Add(axisStart.AddDays((int)Math.Round((span - 1) * step / 4.0)).ToString("dd/MM"));
+        return row;
+    }
+
+    private void Open(int id) => Navigation.NavigateTo($"/factory/production-plans/{id}");
+
+    private sealed class DashRow
+    {
+        public int OrderId { get; set; }
+        public string Number { get; set; } = "";
+        public string CustomerName { get; set; } = "";
+        public DateTime DueDate { get; set; }
+        public string CurrentStage { get; set; } = "";
+        public string State { get; set; } = "";
+        public int StageCount { get; set; }
+        public int Passed { get; set; }
+        public double Ring { get; set; }
+        public bool Parallel { get; set; }
+        public bool Late { get; set; }
+        public string RemainText { get; set; } = "";
+        public string Alert { get; set; } = "";
+        public string Sentence { get; set; } = "";
+        public string RingTip { get; set; } = "";
+        public string RemainTip { get; set; } = "";
+        public string WorkerLine { get; set; } = "";
+        public string People { get; set; } = "";
+        public int ExcuseCount { get; set; }
+        public string ExcuseText { get; set; } = "";
+        public List<string> RunningWorkers { get; set; } = new();
+        public List<string> LateStageNames { get; set; } = new();
+        public List<string> QualityNames { get; set; } = new();
+        public DateTime AxisStart { get; set; }
+        public DateTime AxisEnd { get; set; }
+        public bool ShowToday { get; set; }
+        public bool TodayFlip { get; set; }
+        public bool DueFlip { get; set; }
+        public string TrackStyle { get; set; } = "height:72px;";
+        public string TodayStyle { get; set; } = "";
+        public string DueStyle { get; set; } = "";
+        public List<string> Ticks { get; set; } = new();
+        public List<GanttBar> Bars { get; set; } = new();
+    }
+
+    private sealed class LoadItem
+    {
+        public string Name { get; set; } = "";
+        public int Count { get; set; }
+    }
+
+    private sealed class GanttBar
+    {
+        public int Index { get; set; }
+        public string Name { get; set; } = "";
+        public string Css { get; set; } = "";
+        public int Fill { get; set; }
+        public string Style { get; set; } = "";
+        public bool ShowLabel { get; set; }
+        public string StartText { get; set; } = "";
+        public string EndText { get; set; } = "";
+        public int Days { get; set; }
+        public string StateText { get; set; } = "";
+        public string Worker { get; set; } = "";
+        public string Quality { get; set; } = "";
+        public string LateText { get; set; } = "";
+    }
+}

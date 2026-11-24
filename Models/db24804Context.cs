@@ -1552,6 +1552,9 @@ modelBuilder.Entity<PartyContact>(entity =>
                 .HasColumnType("datetime");
             entity.Property(e => e.CreatedBy).HasMaxLength(100);
             entity.Property(e => e.ProductId).HasColumnName("ProductID");
+            entity.Ignore(e => e.LinkedProductId);
+            entity.Ignore(e => e.ComponentKind);
+            entity.Ignore(e => e.SpecNote);
 
             entity.HasOne(d => d.Product).WithMany(p => p.ProductComponents)
                 .HasForeignKey(d => d.ProductId)

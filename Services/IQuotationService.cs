@@ -32,7 +32,7 @@ public interface IQuotationService
     // التحويل لفاتورة (مع المرآة)
     Task<(bool Success, string Message, int? InvoiceId)> ConvertToInvoiceAsync(
         int quotationId, List<int>? selectedAdvanceChargeIds,
-        string currentUserName, DateTime? invoiceDate = null);
+        string currentUserName, DateTime? invoiceDate = null, DateTime? deliveryDate = null);
     
     Task<(string? Reason, DateTime? RejectedAt, string? RejectedBy)> 
     GetRejectionDetailsAsync(int quotationId);

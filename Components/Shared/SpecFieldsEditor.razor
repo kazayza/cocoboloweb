@@ -1,0 +1,298 @@
+@using COCOBOLOERPNEW.DTOs
+@using COCOBOLOERPNEW.Services
+@inject ISpecService SpecService
+@inject ISnackbar Snackbar
+
+@foreach (var group in _groups.Where(g => g.Title is "الاختيارات" or "المقاس الأساسي"))
+{
+    var items = Questions.Where(q => GroupOf(q) == group.Title).ToList();
+    if (items.Count == 0) continue;
+    <section class="spec-group @(group.Title == "المقاس الأساسي" ? "is-basic" : "")">
+        <div class="spec-group-head">
+            <div class="spec-group-icon">
+                <MudIcon Icon="@group.Icon" />
+            </div>
+            <div>
+                <h3>@group.Title</h3>
+                <p>@group.Hint</p>
+            </div>
+        </div>
+        <div class="@(group.Title == "المقاس الأساسي" ? "spec-basic-grid" : "spec-choice-grid")">
+            @foreach (var spec in items)
+            {
+                @Field(spec)
+            }
+        </div>
+    </section>
+}
+@if (Questions.Any(q => GroupOf(q) is "مقاسات إضافية" or "المقاس الداخلي" or "المقاس الخارجي"))
+{
+    <details class="spec-more">
+        <summary>
+            <span>مقاسات إضافية وداخلية وخارجية</span>
+            <small>مقفولة. افتحها لو القطعة محتاجاها.</small>
+        </summary>
+        @foreach (var group in _groups.Where(g => g.Title is "مقاسات إضافية" or "المقاس الداخلي" or "المقاس الخارجي"))
+        {
+            var items = Questions.Where(q => GroupOf(q) == group.Title).ToList();
+            if (items.Count == 0) continue;
+            <section class="spec-group">
+                <div class="spec-group-head">
+                    <div class="spec-group-icon"><MudIcon Icon="@group.Icon" /></div>
+                    <div>
+                        <h3>@group.Title</h3>
+                        <p>@group.Hint</p>
+                    </div>
+                </div>
+                <div class="spec-choice-grid">
+                    @foreach (var spec in items)
+                    {
+                        @Field(spec)
+                    }
+                </div>
+            </section>
+        }
+    </details>
+}
+
+<style>
+    .spec-group {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-right: 4px solid var(--gold, #d4af37);
+        border-radius: 16px;
+        padding: .95rem 1rem .15rem;
+        margin-bottom: .85rem;
+    }
+    .spec-group-head {
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+        margin-bottom: .85rem;
+        padding-bottom: .7rem;
+        border-bottom: 1px solid var(--mud-palette-divider);
+    }
+    .spec-group-icon {
+        width: 38px;
+        height: 38px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(212,175,55,.14);
+        color: var(--gold-dark, #b8860b);
+        flex-shrink: 0;
+    }
+    .spec-group-head h3 { margin: 0; font-size: 1rem; font-weight: 800; color: var(--mud-palette-text-primary); }
+    .spec-group-head p { margin: .15rem 0 0; font-size: .8rem; color: var(--mud-palette-text-secondary); }
+    .spec-basic-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .65rem; }
+    .spec-choice-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
+    .spec-more { margin-bottom: .85rem; border: 1px solid var(--mud-palette-divider); border-radius: 16px; background: var(--mud-palette-surface); }
+    .spec-more summary { cursor: pointer; padding: .85rem 1rem; font-weight: 800; list-style: none; display: flex; justify-content: space-between; gap: .6rem; align-items: center; }
+    .spec-more summary small { font-weight: 600; color: var(--mud-palette-text-secondary); }
+    .spec-more[open] summary { border-bottom: 1px solid var(--mud-palette-divider); }
+    .spec-more .spec-group { margin: .75rem; }
+    .spec-choice-row { display: flex; gap: 6px; align-items: center; }
+    .spec-choice-row .mud-input-control { flex: 1; }
+    .spec-mini-label { display: block; font-weight: 600; margin-bottom: .35rem; }
+    .spec-add-row { display: flex; gap: 6px; align-items: flex-end; margin-top: 6px; }
+    .spec-add-row .mud-input-control { flex: 1; }
+    @@media (max-width: 1100px) { .spec-basic-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @@media (max-width: 700px) {
+        .spec-basic-grid, .spec-choice-grid { grid-template-columns: 1fr; }
+        .spec-more summary { flex-direction: column; align-items: flex-start; }
+    }
+</style>
+
+@code {
+    [Parameter] public List<SpecQuestionDto> Questions { get; set; } = new();
+    [Parameter] public Dictionary<int, SpecAnswerDto> Drafts { get; set; } = new();
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public bool UseFormLabel { get; set; }
+
+    private int? _addingQuestionId;
+    private string _newOptionName = "";
+
+    private readonly (string Title, string Hint, string Icon)[] _groups =
+    {
+        ("الاختيارات", "اكتب جزء من الكلمة فيظهر الترشيح. الخشب وتسمية المقاس من القائمة.", Icons.Material.Filled.Palette),
+        ("المقاس الأساسي", "اختيارية. اكتبها لو القطعة محتاجاها.", Icons.Material.Filled.Straighten),
+        ("مقاسات إضافية", "للكرسي والكنبة وقرصة الترابيزة. اختيارية.", Icons.Material.Filled.Tune),
+        ("المقاس الداخلي", "من داخل الدولاب أو الوحدة. اختيارية.", Icons.Material.Filled.CropFree),
+        ("المقاس الخارجي", "الإطار الخارجي للقطعة. اختيارية.", Icons.Material.Filled.OpenInFull)
+    };
+
+    private bool _suggestionsLoaded;
+    private readonly Dictionary<int, List<string>> _suggestions = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_suggestionsLoaded || Questions.Count == 0) return;
+        _suggestionsLoaded = true;
+        foreach (var spec in Questions.Where(q => q.DataType == SpecDataTypes.Text))
+        {
+            var values = spec.Options.Select(o => o.OptionNameAr).ToList();
+            values.AddRange(await SpecService.GetTextSuggestionsAsync(spec.QuestionId));
+            _suggestions[spec.QuestionId] = values.Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(x => x)
+                .ToList();
+        }
+    }
+
+    private RenderFragment Field(SpecQuestionDto spec) => @<text>
+        @{
+            var specId = spec.QuestionId;
+        }
+        @if (UseFormLabel)
+        {
+            <div class="form-field">
+                <label>@Label(spec)</label>
+                @if (spec.DataType == SpecDataTypes.Number)
+                {
+                    <MudNumericField T="decimal?" Value="@GetNumber(specId)" ValueChanged="v => SetNumber(specId, v)"
+                                     Variant="Variant.Outlined" Placeholder="0" Disabled="ReadOnly" HideSpinButtons="true" Adornment="Adornment.End" AdornmentText="سم" />
+                }
+                else if (spec.DataType == SpecDataTypes.Text)
+                {
+                    @TextField(spec, specId)
+                }
+                else
+                {
+                    @ChoiceField(spec, specId)
+                }
+            </div>
+        }
+        else if (spec.DataType == SpecDataTypes.Number)
+        {
+            <MudNumericField T="decimal?" Label="@Label(spec)" Value="@GetNumber(specId)" ValueChanged="v => SetNumber(specId, v)"
+                             Variant="Variant.Outlined" Placeholder="0" Disabled="ReadOnly" HideSpinButtons="true" Adornment="Adornment.End" AdornmentText="سم" />
+        }
+        else if (spec.DataType == SpecDataTypes.Text)
+        {
+            <MudText Typo="Typo.caption" Class="spec-mini-label">@spec.QuestionNameAr</MudText>
+            @TextField(spec, specId)
+        }
+        else
+        {
+            <MudText Typo="Typo.caption" Class="spec-mini-label">@spec.QuestionNameAr</MudText>
+            @ChoiceField(spec, specId)
+        }
+    </text>;
+
+    private RenderFragment TextField(SpecQuestionDto spec, int specId) => @<text>
+        <MudAutocomplete T="string" Text="@GetText(specId)" TextChanged="@(value => SetText(specId, value))"
+                         SearchFunc="@((string value, CancellationToken _) => Task.FromResult(FilterSuggestions(specId, value)))"
+                         CoerceText="false" CoerceValue="false" ResetValueOnEmptyText="true" Clearable="true"
+                         Variant="Variant.Outlined" Placeholder="اكتب جزء من الكلمة" Disabled="ReadOnly" MaxLength="300"
+                         OnBlur="@(() => RememberSuggestion(spec))" />
+    </text>;
+
+    private RenderFragment ChoiceField(SpecQuestionDto spec, int specId) => @<text>
+        <div class="spec-choice-row">
+            <MudSelect T="int?" Value="@GetOption(specId)" ValueChanged="v => SetOption(specId, v)"
+                       Variant="Variant.Outlined" Placeholder="اختر" Disabled="ReadOnly"
+                       Clearable="true" AnchorOrigin="Origin.BottomCenter">
+                @foreach (var opt in spec.Options)
+                {
+                    <MudSelectItem T="int?" Value="@opt.OptionId">@opt.OptionNameAr</MudSelectItem>
+                }
+            </MudSelect>
+            @if (!ReadOnly && spec.ListId.HasValue)
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.Add" Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                               Title="إضافة اختيار" OnClick="@(() => StartAdd(specId))" />
+            }
+        </div>
+        @if (_addingQuestionId == specId)
+        {
+            <div class="spec-add-row">
+                <MudTextField @bind-Value="_newOptionName" Placeholder="اختيار جديد" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="@(() => SaveOption(spec))">حفظ</MudButton>
+            </div>
+        }
+    </text>;
+
+    private static string GroupOf(SpecQuestionDto spec)
+    {
+        var name = spec.QuestionNameAr;
+        if (name.Contains("داخلي")) return "المقاس الداخلي";
+        if (name.Contains("خارجي")) return "المقاس الخارجي";
+        if (spec.DataType == SpecDataTypes.Number && name is "السمك" or "ارتفاع الجلسة" or "ارتفاع الظهر")
+            return "مقاسات إضافية";
+        if (spec.DataType == SpecDataTypes.Number) return "المقاس الأساسي";
+        return "الاختيارات";
+    }
+
+    private static string Label(SpecQuestionDto spec)
+        => string.IsNullOrWhiteSpace(spec.UnitName) ? spec.QuestionNameAr : $"{spec.QuestionNameAr} ({spec.UnitName})";
+
+    private int? GetOption(int id) => Drafts.TryGetValue(id, out var answer) ? answer.OptionId : null;
+    private decimal? GetNumber(int id) => Drafts.TryGetValue(id, out var answer) ? answer.NumberValue : null;
+    private void SetOption(int id, int? value)
+    {
+        if (!Drafts.TryGetValue(id, out var answer))
+            Drafts[id] = answer = new SpecAnswerDto { QuestionId = id };
+        answer.OptionId = value;
+    }
+    private void SetNumber(int id, decimal? value)
+    {
+        if (!Drafts.TryGetValue(id, out var answer))
+            Drafts[id] = answer = new SpecAnswerDto { QuestionId = id };
+        answer.NumberValue = value;
+    }
+
+    private string? GetText(int id)
+    {
+        if (!Drafts.TryGetValue(id, out var answer)) return null;
+        if (!string.IsNullOrWhiteSpace(answer.TextValue)) return answer.TextValue;
+        var spec = Questions.FirstOrDefault(q => q.QuestionId == id);
+        return spec?.Options.FirstOrDefault(o => o.OptionId == answer.OptionId)?.OptionNameAr;
+    }
+
+    private void SetText(int id, string? value)
+    {
+        if (!Drafts.TryGetValue(id, out var answer))
+            Drafts[id] = answer = new SpecAnswerDto { QuestionId = id };
+        answer.TextValue = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        if (!string.IsNullOrWhiteSpace(answer.TextValue))
+            answer.OptionId = null;
+    }
+
+    private IEnumerable<string> FilterSuggestions(int id, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !_suggestions.TryGetValue(id, out var items))
+            return Array.Empty<string>();
+        return items.Where(x => x.Contains(value.Trim(), StringComparison.OrdinalIgnoreCase)).Take(12);
+    }
+
+    private async Task RememberSuggestion(SpecQuestionDto spec)
+    {
+        var text = GetText(spec.QuestionId);
+        if (string.IsNullOrWhiteSpace(text)) return;
+        if (!_suggestions.TryGetValue(spec.QuestionId, out var items))
+            _suggestions[spec.QuestionId] = items = new();
+        if (!items.Contains(text, StringComparer.OrdinalIgnoreCase))
+            items.Add(text);
+        if (spec.ListId.HasValue && text.Length <= 100)
+            await SpecService.AddOptionAsync(spec.ListId.Value, text);
+    }
+
+    private void StartAdd(int questionId)
+    {
+        _addingQuestionId = _addingQuestionId == questionId ? null : questionId;
+        _newOptionName = "";
+    }
+
+    private async Task SaveOption(SpecQuestionDto spec)
+    {
+        if (!spec.ListId.HasValue) return;
+        var (ok, msg, optionId) = await SpecService.AddOptionAsync(spec.ListId.Value, _newOptionName);
+        Snackbar.Add(msg, ok ? Severity.Success : Severity.Warning);
+        if (!ok || !optionId.HasValue) return;
+        spec.Options.Add(new SpecOptionDto { OptionId = optionId.Value, ListId = spec.ListId.Value, OptionNameAr = _newOptionName.Trim(), IsActive = true });
+        SetOption(spec.QuestionId, optionId);
+        _addingQuestionId = null;
+        _newOptionName = "";
+    }
+}

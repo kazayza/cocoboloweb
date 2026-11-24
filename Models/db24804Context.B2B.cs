@@ -273,5 +273,83 @@ public partial class db24804Context
                 .OnDelete(DeleteBehavior.Restrict)
                 .HasConstraintName("FK_Branches_Employees_Manager");
         });
+
+        modelBuilder.Entity<ExecutionOrder>(entity =>
+        {
+            entity.HasKey(e => e.ExecutionOrderId);
+            entity.ToTable("ExecutionOrders");
+        });
+
+        modelBuilder.Entity<ExecutionOrderLine>(entity =>
+        {
+            entity.HasKey(e => e.LineId);
+            entity.ToTable("ExecutionOrderLines");
+        });
+
+        modelBuilder.Entity<ExecutionStage>(entity =>
+        {
+            entity.HasKey(e => e.StageId);
+            entity.ToTable("ExecutionStages");
+        });
+
+        modelBuilder.Entity<ProductionPlan>(entity =>
+        {
+            entity.HasKey(e => e.PlanId);
+            entity.ToTable("ProductionPlans");
+        });
+
+        modelBuilder.Entity<ProductionStage>(entity =>
+        {
+            entity.HasKey(e => e.StageId);
+            entity.ToTable("ProductionStages");
+        });
+
+        modelBuilder.Entity<ProductionStageDependency>(entity =>
+        {
+            entity.HasKey(e => e.DependencyId);
+            entity.ToTable("ProductionStageDependencies");
+        });
+
+        modelBuilder.Entity<ProductionMaterialIssue>(entity =>
+        {
+            entity.HasKey(e => e.IssueId);
+            entity.ToTable("ProductionMaterialIssues");
+        });
+
+        modelBuilder.Entity<ProductionExcuse>(entity =>
+        {
+            entity.HasKey(e => e.ExcuseId);
+            entity.ToTable("ProductionExcuses");
+        });
+
+        modelBuilder.Entity<ProductionStageDateRequest>(entity =>
+        {
+            entity.HasKey(e => e.RequestId);
+            entity.ToTable("ProductionStageDateRequests");
+        });
+
+        modelBuilder.Entity<ProductionPlanMeeting>(entity =>
+        {
+            entity.HasKey(e => e.MeetingId);
+            entity.ToTable("ProductionPlanMeetings");
+        });
+
+        modelBuilder.Entity<ProductionPlanAttendee>(entity =>
+        {
+            entity.HasKey(e => e.AttendeeId);
+            entity.ToTable("ProductionPlanAttendees");
+        });
+
+        modelBuilder.Entity<ProductionPlanMaterialRequest>(entity =>
+        {
+            entity.HasKey(e => e.RequestId);
+            entity.ToTable("ProductionPlanMaterialRequests");
+        });
+
+        modelBuilder.Entity<ProductionPlanSampleBatch>(entity =>
+        {
+            entity.HasKey(e => e.BatchId);
+            entity.ToTable("ProductionPlanSampleBatches");
+        });
     }
 }

@@ -15,6 +15,7 @@
 @inject IProductService ProductService
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
+@inject JobOrderEngineerService Engineers
 @inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthProvider
 @inject IDialogService DialogService
@@ -89,6 +90,11 @@ else
                             @if (!string.IsNullOrEmpty(_form.EmpName))
                             {
                                 <span> • الموظف: @_form.EmpName</span>
+                            }
+                            @if (_jobEngineersReady && _form.Status == QuotationStatuses.Accepted)
+                            {
+                                <span> • مهندس التصميم: @(string.IsNullOrWhiteSpace(_designEngineerName) ? "لم يُستلم" : _designEngineerName)</span>
+                                <span> • مهندس التنفيذ: @(string.IsNullOrWhiteSpace(_executionEngineerName) ? "لم يُستلم" : _executionEngineerName)</span>
                             }
                         </p>
                     </div>
@@ -593,10 +599,10 @@ else
                                     الكل
                                 </button>
                             </div>
-                            <MudTextField @bind-Value="_productSearchText"
-                                          @bind-Value:after="ApplyProductFilters"
+                            <MudTextField T="string" Value="_productSearchText"
+                                          ValueChanged="OnProductSearchChanged"
                                           Immediate="true"
-                                          Placeholder="بحث بالاسم أو الوصف..."
+                                          Placeholder="بحث بالاسم أو الوصف أو رقم المنتج"
                                           Variant="Variant.Outlined"
                                           Margin="Margin.Dense"
                                           Dense="true"
@@ -647,6 +653,10 @@ else
                                         @if (prod.IsShowroomProduct)
                                         {
                                             <span class="prod-source-chip showroom">📦 من المخزون — الرصيد: @prod.AvailableStock</span>
+                                            @if (!string.IsNullOrWhiteSpace(prod.StockDetails))
+                                            {
+                                                <span class="product-card-desc">@prod.StockDetails</span>
+                                            }
                                         }
                                         @if (!string.IsNullOrEmpty(prod.ProductDescription))
                                         {
@@ -670,7 +680,7 @@ else
                                             {
                                                 <div class="price-line price-cclass">
                                                     <span class="price-tag">
-                                                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Dense="true">C Class</MudChip>
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Dense="true">Standard</MudChip>
                                                     </span>
                                                     <span class="price-value">@($"{(prod.SuggestedSalePriceCClass ?? 0):N2}") ج</span>
                                                 </div>
@@ -712,7 +722,7 @@ else
                                                                    OnClick="@(() => AddProductWithTier(prod, PricingTiers.CClass))"
                                                                    Disabled="@addedCClass"
                                                                    Class="tier-btn">
-                                                            @(addedCClass ? "مضاف" : "C Class")
+                                                            @(addedCClass ? "مضاف" : "Standard")
                                                         </MudButton>
                                                     }
 
@@ -776,7 +786,7 @@ else
                                 <HeaderContent>
                                     <MudTh>المنتج</MudTh>
                                     <MudTh>الوصف</MudTh>
-                                    <MudTh>سي كلاس</MudTh>
+                                    <MudTh>ستاندرد</MudTh>
                                     <MudTh>بريميوم</MudTh>
                                     <MudTh>إيليت</MudTh>
                                     <MudTh>الإضافة</MudTh>
@@ -787,6 +797,10 @@ else
                                         @if (context.IsShowroomProduct)
                                         {
                                             <div class="prod-source-chip showroom">📦 من المخزون — الرصيد: @context.AvailableStock</div>
+                                            @if (!string.IsNullOrWhiteSpace(context.StockDetails))
+                                            {
+                                                <div class="product-table-desc">@context.StockDetails</div>
+                                            }
                                         }
                                     </MudTd>
                                     <MudTd>
@@ -965,6 +979,7 @@ else
                                             @if (!_isReadOnly && HasSelectableAlternatives(item.ProductId))
                                             {
                                                 <MudSelect T="int?"
+                                                           @key="@($"alt-{index}-{_altSelectNonce}")"
                                                            Value="item.SelectedAlternativeId"
                                                            ValueChanged="@(async (int? v) => await OnAlternativeChanged(index, v))"
                                                            Variant="Variant.Outlined"
@@ -975,7 +990,7 @@ else
                                                     @foreach (var altOption in GetSelectableAlternatives(item.ProductId))
                                                     {
                                                         <MudSelectItem T="int?" Value="@((int?)altOption.AlternativeId)">
-                                                            @(altOption.IsPrimary ? $"{altOption.AlternativeName} — المعتمد الحالي" : altOption.AlternativeName)
+                                                            @AlternativeOptionLabel(altOption)
                                                         </MudSelectItem>
                                                     }
                                                 </MudSelect>
@@ -985,10 +1000,19 @@ else
                                                 <span class="item-alt-badge base">الأصلي الحالي</span>
                                             }
 
+                                            @if (item.SelectedAlternativeId.HasValue && GetPriceByTier(item, item.PricingTier) <= 0)
+                                            {
+                                                <div class="item-alt-price-warning">البديل ده من غير سعر بيع. سجّل السعر من شاشة المنتج قبل الحفظ.</div>
+                                            }
+
                                             @if (!string.IsNullOrWhiteSpace(item.SelectedAlternativeSummary))
                                             {
                                                 <div class="item-alt-summary">@item.SelectedAlternativeSummary</div>
                                             }
+                                            <SpecAnswerSummary OwnerType="@(item.SelectedAlternativeId.HasValue ? SpecOwners.Alternative : SpecOwners.Product)"
+                                                               OwnerId="@(item.SelectedAlternativeId ?? item.ProductId)"
+                                                               CssClass="item-alt-summary"
+                                                               Style="" />
                                         </div>
                                     </div>
                                     <div class="col-tier">
@@ -1423,17 +1447,12 @@ else
         </MudText>
 
         <MudAlert Severity="Severity.Warning" Class="mb-3" Icon="@Icons.Material.Filled.Event">
-            <div><strong>تنبيه مهم بخصوص التواريخ:</strong></div>
-            <div>تاريخ صلاحية عرض السعر <strong>@(_form.ValidUntil?.ToString("yyyy/MM/dd") ?? "غير محدد")</strong> لن يتم نسخه إلى الفاتورة.</div>
-            <div>سيتم حساب تاريخ الفاتورة من التاريخ الذي تختاره أدناه، ثم حساب تاريخ التسليم/الاستحقاق على أساس <strong>أكبر مدة تصنيع</strong> بين الأصناف.</div>
-            <div>أكبر مدة تصنيع حالية: <strong>@_convertMaxPeriodDays يوم</strong></div>
-            <div>تاريخ التسليم/الاستحقاق المتوقع: <strong>@(_convertCalculatedDueDate?.ToString("yyyy/MM/dd") ?? "-")</strong></div>
-            <div style="margin-top:6px;">إذا أردت تعديل التاريخ، غيّر <strong>تاريخ الفاتورة</strong> قبل الضغط على تحويل.</div>
+            تاريخ التسليم حسب أطول مدة (@_convertMaxPeriodDays يوم). عدّله لو الاتفاق مختلف. الفاتورة بتاريخ اليوم، وصلاحية العرض لا تُنسخ.
         </MudAlert>
 
-        <MudDatePicker Date="_convertInvoiceDate"
-                       DateChanged="OnConvertInvoiceDateChanged"
-                       Label="تاريخ الفاتورة"
+        <MudDatePicker Date="_convertDeliveryDate"
+                       DateChanged="OnConvertDeliveryDateChanged"
+                       Label="تاريخ التسليم"
                        Variant="Variant.Outlined"
                        Class="mb-3" />
 
@@ -2200,6 +2219,14 @@ else
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+}
+
+.item-alt-price-warning {
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: #9a3412;
+    line-height: 1.45;
 }
 
 /* الصورة */
@@ -3063,6 +3090,9 @@ else
     private string? _rejectedBy;
     private DateTime? _acceptedAt;
     private string? _acceptedBy;
+    private bool _jobEngineersReady;
+    private string? _designEngineerName;
+    private string? _executionEngineerName;
 
     private QuotationFormDto _form = new()
     {
@@ -3083,6 +3113,7 @@ else
     // Convert dialog
     private bool _showConvertDialog, _isConverting;
     private DateTime? _convertInvoiceDate = DateTime.Today;
+    private DateTime? _convertDeliveryDate;
     private DateTime? _convertCalculatedDueDate;
     private int _convertMaxPeriodDays;
     private bool _convertGoToPayments;
@@ -3119,6 +3150,7 @@ else
     private bool _canViewCost;
     private bool _isRestrictedViewer;
     private bool _canOverrideBasePrice;
+    private int _altSelectNonce;
     private bool _isAdmin;
     private bool _isAccountManager;
     private bool _isSalesManager;
@@ -3245,6 +3277,7 @@ else
                     await LoadProducts(_form.PartyId.Value);
                     await EnsureAlternativesLoadedAsync(_form.Items.Select(i => i.ProductId));
                     await LoadOpportunitiesForParty(_form.PartyId.Value);
+                    await LoadJobEngineersAsync(_form.PartyId.Value);
                 }
             }
             else
@@ -3343,6 +3376,8 @@ else
 
         if (party != null)
         {
+            _productSearchToken++;
+            _productSearchText = null;
             await LoadProducts(party.PartyId);
         }
         else
@@ -3355,16 +3390,61 @@ else
         RecalculateTotals();
     }
 
-    private async Task LoadProducts(int partyId)
+    private int _productSearchToken;
+    private int _productSearchRunning;
+
+    private async Task OnProductSearchChanged(string? value)
+    {
+        _productSearchText = value;
+        ApplyProductFilters();
+        if (!_form.PartyId.HasValue)
+            return;
+
+        var myToken = ++_productSearchToken;
+        if (System.Threading.Interlocked.CompareExchange(ref _productSearchRunning, 1, 0) == 1)
+            return;
+
+        try
+        {
+            while (true)
+            {
+                var startToken = _productSearchToken;
+                await Task.Delay(300);
+                if (_productSearchToken != startToken)
+                    continue;
+
+                await LoadProducts(_form.PartyId.Value, startToken);
+                if (_productSearchToken == startToken)
+                    break;
+            }
+        }
+        finally
+        {
+            System.Threading.Interlocked.Exchange(ref _productSearchRunning, 0);
+        }
+    }
+
+    private async Task LoadJobEngineersAsync(int partyId)
+    {
+        var view = await Engineers.GetAsync(partyId, _currentUserName);
+        _jobEngineersReady = view.Ready;
+        _designEngineerName = view.DesignName;
+        _executionEngineerName = view.ExecutionName;
+    }
+
+    private async Task LoadProducts(int partyId, int? token = null)
     {
         try
         {
+            var search = string.IsNullOrWhiteSpace(_productSearchText) ? null : _productSearchText.Trim();
             // ⭐ منتجات العميل المخصصة (غير المباعة بعد)
-            var partyProducts = await InvoiceService.SearchProductsForPartyAsync(partyId, null, 200) ?? new();
+            var partyProducts = await InvoiceService.SearchProductsForPartyAsync(partyId, search, search == null ? 200 : 100) ?? new();
 
-            // ⭐ أصناف صالة العرض / المخزون (غير المرتبطة بعميل) برصيد متاح > 0
-            var showroomProducts = await InvoiceService.SearchShowroomProductsAsync(null, 300) ?? new();
-            showroomProducts = showroomProducts.Where(p => p.AvailableStock > 0).ToList();
+            // ⭐ غير مربوط بعميل، من أي مخزن. البحث يرجع للقاعدة مش لأول 300 اسم.
+            var showroomProducts = await InvoiceService.SearchQuotationStockProductsAsync(search, search == null ? 300 : 80) ?? new();
+
+            if (_form.PartyId != partyId || (token.HasValue && token.Value != _productSearchToken))
+                return;
 
             _availableProducts = partyProducts
                 .Concat(showroomProducts)
@@ -3377,7 +3457,7 @@ else
             await EnsureAlternativesLoadedAsync(_availableProducts.Select(p => p.ProductId));
             ApplyProductFilters();
 
-            if (_availableProducts.Count == 0)
+            if (search == null && _availableProducts.Count == 0)
             {
                 Snackbar.Add(
                     "لا توجد منتجات متاحة (لا منتجات مرتبطة بهذا العميل ولا أصناف رصيد في المخزون).",
@@ -3417,9 +3497,11 @@ else
         var s = _productSearchText?.Trim();
         if (!string.IsNullOrWhiteSpace(s))
         {
+            var numeric = int.TryParse(s, out var searchId);
             q = q.Where(p =>
-                (p.ProductName?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false)
-                || (p.ProductDescription?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false));
+                (p.ProductName ?? "").ContainsArabic(s)
+                || (p.ProductDescription ?? "").ContainsArabic(s)
+                || (numeric && p.ProductId == searchId));
         }
 
         _displayProducts = q.ToList();
@@ -3450,16 +3532,41 @@ else
     private bool HasSelectableAlternatives(int productId)
         => GetSelectableAlternatives(productId).Any();
 
+    private static bool HasAlternativeSalePrice(ProductFactoryAlternativeDto alt)
+        => (alt.SuggestedSalePriceCClass ?? 0m) > 0m
+            || (alt.SuggestedSalePricePremium ?? 0m) > 0m
+            || (alt.SuggestedSalePriceElite ?? 0m) > 0m;
+
+    private static string AlternativeOptionLabel(ProductFactoryAlternativeDto alt)
+    {
+        var name = string.IsNullOrWhiteSpace(alt.AlternativeName) ? "بديل" : alt.AlternativeName.Trim();
+        if (alt.IsPrimary)
+            name = $"{name} — المعتمد الحالي";
+        return HasAlternativeSalePrice(alt) ? name : $"{name} — من غير سعر بيع";
+    }
+
     private async Task OnAlternativeChanged(int index, int? alternativeId)
     {
         if (index < 0 || index >= _form.Items.Count)
             return;
 
         var item = _form.Items[index];
+        if (item.SelectedAlternativeId == alternativeId)
+            return;
+
         await EnsureAlternativesLoadedAsync(new[] { item.ProductId });
 
-        var selected = GetSelectableAlternatives(item.ProductId)
-            .FirstOrDefault(a => a.AlternativeId == alternativeId);
+        var selected = alternativeId.HasValue
+            ? GetSelectableAlternatives(item.ProductId).FirstOrDefault(a => a.AlternativeId == alternativeId)
+            : null;
+
+        if (alternativeId.HasValue && (selected == null || !HasAlternativeSalePrice(selected)))
+        {
+            var name = string.IsNullOrWhiteSpace(selected?.AlternativeName) ? "البديل" : selected!.AlternativeName.Trim();
+            Snackbar.Add($"البديل «{name}» من غير سعر بيع. سجّل سعر البيع من شاشة المنتج الأول، والسطر فضل على المواصفة الحالية.", Severity.Warning);
+            _altSelectNonce++;
+            return;
+        }
 
         item.SelectedAlternativeId = selected?.AlternativeId;
         item.SelectedAlternativeName = selected?.AlternativeName;
@@ -4482,6 +4589,16 @@ private void UpdateGrandTotal()
             Snackbar.Add("السعر لا يمكن أن يكون سالباً", Severity.Warning);
             return;
         }
+        var unpricedAlternative = _form.Items.FirstOrDefault(i =>
+            i.SelectedAlternativeId.HasValue && GetPriceByTier(i, i.PricingTier) <= 0);
+        if (unpricedAlternative != null)
+        {
+            var altName = string.IsNullOrWhiteSpace(unpricedAlternative.SelectedAlternativeName)
+                ? "المختار"
+                : unpricedAlternative.SelectedAlternativeName;
+            Snackbar.Add($"البديل «{altName}» من غير سعر بيع. سجّل سعر البيع من شاشة المنتج قبل حفظ العرض.", Severity.Warning);
+            return;
+        }
         if (_form.ValidUntil.HasValue && _form.ValidUntil.Value.Date < _form.QuotationDate.Date)
         {
             Snackbar.Add("تاريخ انتهاء الصلاحية يجب أن يكون بعد تاريخ العرض", Severity.Warning);
@@ -4549,6 +4666,7 @@ private void UpdateGrandTotal()
         }
 
         _convertInvoiceDate = DateTime.Today;
+        _convertDeliveryDate = DateTime.Today;
         _convertMaxPeriodDays = _form.Items
             .Select(GetItemManufacturingDays)
             .Where(d => d.HasValue && d.Value > 0)
@@ -4564,10 +4682,9 @@ private void UpdateGrandTotal()
         _showConvertDialog = true;
     }
 
-    private Task OnConvertInvoiceDateChanged(DateTime? date)
+    private Task OnConvertDeliveryDateChanged(DateTime? date)
     {
-        _convertInvoiceDate = date ?? DateTime.Today;
-        RecalculateConvertDatesPreview();
+        _convertDeliveryDate = date;
         return Task.CompletedTask;
     }
 
@@ -4575,6 +4692,7 @@ private void UpdateGrandTotal()
     {
         var invoiceDate = (_convertInvoiceDate ?? DateTime.Today).Date;
         _convertCalculatedDueDate = invoiceDate.AddDays(_convertMaxPeriodDays);
+        _convertDeliveryDate = _convertCalculatedDueDate;
     }
 
     private void ToggleAdvanceSelection(int chargeId, bool selected)
@@ -4606,8 +4724,13 @@ private void UpdateGrandTotal()
         _isConverting = true;
         try
         {
+            if (_convertDeliveryDate == null)
+            {
+                Snackbar.Add("حدد تاريخ التسليم.", Severity.Warning);
+                return;
+            }
             var (ok, msg, invId) = await QuotationService.ConvertToInvoiceAsync(
-                _form.QuotationId, _selectedAdvanceChargeIds.ToList(), _currentUserName!, _convertInvoiceDate);
+                _form.QuotationId, _selectedAdvanceChargeIds.ToList(), _currentUserName!, DateTime.Today, _convertDeliveryDate);
 
             Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
 

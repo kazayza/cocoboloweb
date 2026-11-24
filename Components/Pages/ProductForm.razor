@@ -11,6 +11,7 @@
 @inject NotificationService NotificationService
 @inject IAuditService AuditService
 @inject IProductService ProductService
+@inject ISpecService SpecService
 @inject db24804Context Db
 @inject NavigationManager Navigation
 @inject IWebHostEnvironment Env
@@ -87,6 +88,10 @@ else
                         }
                     </div>
                 </div>
+                @if (CanOpenJobSpec)
+                {
+                    <button type="button" class="back-btn" @onclick="OpenJobSpec">الجوب أوردر</button>
+                }
                 <div class="status-badge @GetStatusClass(_model.PricingStatusId)">
                     <span class="status-dot"></span>
                     <span>@GetStatusText(_model.PricingStatusId)</span>
@@ -258,6 +263,7 @@ else
                                     </div>
                                 </MudItem>
                             </MudGrid>
+
                         </div>
                     }
 
@@ -589,6 +595,17 @@ else
                                         </MudItem>
                                     }
                                     <MudItem xs="12">
+                                        <MudText Typo="Typo.subtitle2">متغيرات البديل</MudText>
+                                        <SpecValueRows Title="متغيرات البديل" Questions="_specQuestions" Drafts="_altSpecDrafts"
+                                                       VariableImages="_altVariableImages" ImagesAdded="OnAltVariableImages" ImageRemoved="OnAltVariableImageRemoved" />
+                                        <SpecFieldsEditor Questions="BasicSizes" Drafts="_altSpecDrafts" UseFormLabel="true" />
+                                        <div class="form-field" style="margin-top:.6rem">
+                                            <label>ملاحظات</label>
+                                            <MudTextField T="string" @bind-Value="_alternativeForm.SpecificationSummary" Variant="Variant.Outlined"
+                                                          Lines="2" MaxLength="1000" Placeholder="اكتب أي ملاحظة على البديل كما تشاء" />
+                                        </div>
+                                    </MudItem>
+                                    <MudItem xs="12">
                                         <label class="alt-upload-label">صور البديل</label>
                                         <InputFile OnChange="OnAlternativeFilesChanged" multiple class="attachment-input" accept="image/*" />
                                         @if (_alternativeFiles.Any())
@@ -672,6 +689,7 @@ else
                                                         <p>@(string.IsNullOrWhiteSpace(alt.ManufacturingDescription) ? "لا توجد ملاحظات تصنيع مكتوبة." : alt.ManufacturingDescription)</p>
                                                     </div>
                                                 </div>
+                                                <SpecAnswerSummary OwnerType="@SpecOwners.Alternative" OwnerId="alt.AlternativeId" />
 
                                                 <div class="factory-alt-metrics">
                                                     <div class="factory-alt-metric duration"><span>المدة</span><strong>@(alt.Period.HasValue ? $"{alt.Period} يوم" : "—")</strong></div>
@@ -723,8 +741,8 @@ else
                             <div class="tab-header">
                                 <MudIcon Icon="@Icons.Material.Filled.Category" Class="tab-icon" />
                                 <div class="tab-header-text">
-                                    <h2>مكونات المنتج</h2>
-                                    <p>إضافة وإدارة المكونات المستخدمة في تصنيع المنتج</p>
+                                    <h2>المكونات</h2>
+                                    <p>الحفظ لا يتم إلا بعد اختيار كل متغير على كل قطعة. «لا يوجد» إجابة مقبولة. المقاسات الخمسة والملاحظات اختيارية.</p>
                                 </div>
                                 <MudButton Variant="Variant.Filled"
                                            Color="Color.Success"
@@ -735,37 +753,108 @@ else
                                 </MudButton>
                             </div>
 
+                            @if (!_componentLinksReady)
+                            {
+                                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">شغّل سكربت ربط المكونات مرة واحدة. من غيره الشاشة تفضل شغالة، لكن نوع المكون مش هيتحفظ.</MudAlert>
+                            }
                             @if (_model.ProductComponents.Any())
                             {
                                 <div class="components-list">
                                     @foreach (var (component, index) in _model.ProductComponents.Select((c, i) => (c, i)))
                                     {
+                                        var kind = KindOf(component);
                                         <div class="component-card">
-                                            <div class="component-number">@(index + 1)</div>
+                                            <div class="component-top">
+                                                <div class="component-number">@(index + 1)</div>
+                                                <div class="kind-switch">
+                                                    <button type="button" class="kind-btn @(kind == ComponentKinds.Piece ? "active" : "")" @onclick="() => SetComponentKind(component, ComponentKinds.Piece)">
+                                                        <strong>قطعة في الغرفة</strong>
+                                                        <span>سرير أو دولاب بيتكتب هنا، بمتغيراته ومقاساته.</span>
+                                                    </button>
+                                                    <button type="button" class="kind-btn @(kind == ComponentKinds.Product ? "active" : "")" @onclick="() => SetComponentKind(component, ComponentKinds.Product)">
+                                                        <strong>منتج موجود</strong>
+                                                        <span>القطعة مسجّلة كمنتج، وبياناتها من شاشته.</span>
+                                                    </button>
+                                                </div>
+                                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Medium" OnClick="@(() => RemoveComponent(component))" />
+                                            </div>
                                             <div class="component-fields">
                                                 <div class="form-field">
-                                                    <label>اسم المكون</label>
-                                                    <MudTextField @bind-Value="component.ComponentName"
-                                                                  Variant="Variant.Outlined"
-                                                                  Placeholder="أدخل اسم المكون"
-                                                                  Adornment="Adornment.Start"
-                                                                  AdornmentIcon="@Icons.Material.Filled.Inventory" />
+                                                    <label>@(kind == ComponentKinds.Product ? "المنتج" : "اسم المكون")</label>
+                                                    @if (kind == ComponentKinds.Product)
+                                                    {
+                                                        <MudAutocomplete T="ProductLinkOption" Value="@LinkOption(component)" ValueChanged="@(opt => OnLinkSelected(component, opt))"
+                                                                         SearchFunc="SearchLinkableProducts" ToStringFunc="@(item => item?.ProductName ?? string.Empty)"
+                                                                         Variant="Variant.Outlined" Placeholder="ابحث عن السرير أو الدولاب" Clearable="true" ResetValueOnEmptyText="true" />
+                                                    }
+                                                    else
+                                                    {
+                                                        <MudTextField @bind-Value="component.ComponentName" Variant="Variant.Outlined" Placeholder="اسم المكون" />
+                                                    }
                                                 </div>
                                                 <div class="form-field quantity-field">
                                                     <label>الكمية</label>
-                                                    <MudNumericField T="int"
-                                                                     @bind-Value="component.Quantity"
-                                                                     Variant="Variant.Outlined"
-                                                                     Placeholder="0"
-                                                                     Adornment="Adornment.Start"
-                                                                     AdornmentIcon="@Icons.Material.Filled.Numbers" />
+                                                    <MudNumericField T="int" @bind-Value="component.Quantity" Variant="Variant.Outlined" Placeholder="1" />
                                                 </div>
                                             </div>
-                                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
-                                                           Color="Color.Error"
-                                                           Size="Size.Large"
-                                                           Class="delete-component-btn"
-                                                           OnClick="@(() => RemoveComponent(component))" />
+                                            <button type="button" class="component-toggle" @onclick="() => ToggleComponent(component)">
+                                                @(IsComponentOpen(component) ? "إخفاء التفاصيل" : "تفاصيل القطعة")
+                                            </button>
+                                            @if (IsComponentOpen(component))
+                                            {
+                                            <div class="component-details">
+                                            @if (kind == ComponentKinds.Piece)
+                                            {
+                                                <SpecValueRows Title="متغيرات القطعة" Questions="_specQuestions" Drafts="ComponentDrafts(component)"
+                                                               VariableImages="ComponentVariableImages(component)"
+                                                               ImagesAdded="@(e => OnComponentVariableImages(component, e))"
+                                                               ImageRemoved="@(img => OnComponentVariableImageRemoved(component, img))" />
+                                                <SpecFieldsEditor Questions="BasicSizes" Drafts="ComponentDrafts(component)" UseFormLabel="true" />
+                                                <div class="form-field" style="margin-top:.6rem">
+                                                    <label>ملاحظات</label>
+                                                    <MudTextField T="string" @bind-Value="component.SpecNote" Variant="Variant.Outlined"
+                                                                  Lines="2" MaxLength="1000" Placeholder="اكتب أي ملاحظة على القطعة كما تشاء" />
+                                                </div>
+                                            }
+                                            else if (kind == ComponentKinds.Product && component.LinkedProductId.HasValue)
+                                            {
+                                                <div class="linked-spec-box">
+                                                    <strong>متغيرات ومقاسات المنتج المختار</strong>
+                                                    <SpecAnswerSummary OwnerType="@SpecOwners.Product" OwnerId="component.LinkedProductId.Value" CssClass="linked-spec" />
+                                                </div>
+                                            }
+                                            <div class="component-photos">
+                                                <div class="component-photos-head">
+                                                    <strong>صور المكون</strong>
+                                                    <span>رسم 2D، تصميم تصنيع، أو صورة نهائية. تقدر ترفع أكتر من صورة.</span>
+                                                </div>
+                                                @if (!_componentImagesReady)
+                                                {
+                                                    <p class="component-note">شغّل سكربت صور المكونات مرة واحدة عشان الصور تتحفظ.</p>
+                                                }
+                                                <div class="photo-actions">
+                                                    <label class="kind-upload"><MudIcon Icon="@Icons.Material.Filled.Architecture" Size="Size.Small" /> رسم 2D <InputFile OnChange="@(e => UploadComponentImages(component, "Drawing", e))" accept="image/*" multiple class="file-input" /></label>
+                                                    <label class="kind-upload"><MudIcon Icon="@Icons.Material.Filled.PrecisionManufacturing" Size="Size.Small" /> تصميم تصنيع <InputFile OnChange="@(e => UploadComponentImages(component, "Manufacturing", e))" accept="image/*" multiple class="file-input" /></label>
+                                                    <label class="kind-upload"><MudIcon Icon="@Icons.Material.Filled.PhotoCamera" Size="Size.Small" /> صورة نهائية <InputFile OnChange="@(e => UploadComponentImages(component, "Final", e))" accept="image/*" multiple class="file-input" /></label>
+                                                </div>
+                                                @if (ComponentImages(component).Count > 0)
+                                                {
+                                                    <div class="component-photo-grid">
+                                                        @foreach (var image in ComponentImages(component))
+                                                        {
+                                                            <div class="component-photo">
+                                                                <img src="@image.Path" alt="@ImageKindLabel(image.Kind)" />
+                                                                <div class="component-photo-meta">
+                                                                    <em>@ImageKindLabel(image.Kind)</em>
+                                                                    <button type="button" @onclick="() => RemoveComponentImage(component, image)">حذف</button>
+                                                                </div>
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+                                            </div>
+                                            }
                                         </div>
                                     }
                                 </div>
@@ -775,7 +864,7 @@ else
                                 <div class="empty-state">
                                     <MudIcon Icon="@Icons.Material.Filled.Inventory" Size="Size.Large" />
                                     <h3>لا توجد مكونات مضافة</h3>
-                                    <p>ابدأ بإضافة المكونات المستخدمة في تصنيع هذا المنتج</p>
+                                    <p>أضف قطع الغرفة أو الطقم، زي السرير والدولاب</p>
                                     <MudButton Variant="Variant.Filled"
                                                Color="Color.Primary"
                                                StartIcon="@Icons.Material.Filled.Add"
@@ -1166,6 +1255,10 @@ else
                                 <MudIcon Icon="@Icons.Material.Filled.Schedule" Size="Size.Small" />
                                 <span>@FormatDate(history.ChangedAt)</span>
                             </div>
+                            @if (!string.IsNullOrWhiteSpace(history.ChangeReason))
+                            {
+                                <div class="timeline-date">@history.ChangeReason</div>
+                            }
                         </div>
                     </div>
                 }
@@ -1238,6 +1331,27 @@ else
         <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="ConfirmLeave">
             مغادرة بدون حفظ
         </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<MudDialog @bind-Visible="_showJobSpecChoices" Options="@(new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true })">
+    <TitleContent>
+        <MudText Typo="Typo.h6">اتبعت للتسعير</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText>
+            @(_model.Customer is > 0
+                ? "المنتج اتبعت للمصنع. تقدر تضيف منتج تاني لنفس العميل، أو تفتح الجوب أوردر."
+                : "المنتج اتبعت للمصنع. تقدر تفتح الجوب أوردر، أو تكمل هنا.")
+        </MudText>
+    </DialogContent>
+    <DialogActions>
+        @if (_model.Customer is > 0)
+        {
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="AddAnotherForCustomer">منتج تاني لنفس العميل</MudButton>
+        }
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OpenJobSpec">فتح الجوب أوردر</MudButton>
+        <MudButton Variant="Variant.Text" OnClick="CloseJobSpecChoices">البقاء هنا</MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -1750,13 +1864,20 @@ else
     }
     .custom-tab-btn:hover .tab-label { color: inherit; opacity: 1; }
 
-    .custom-tab-btn.active {
-        background: linear-gradient(135deg, var(--navy-dark), var(--navy-mid));
-        color: #fff;
-        border-color: transparent;
-        box-shadow: 0 6px 18px rgba(15, 23, 42, .30), inset 0 -3px 0 var(--gold);
+    .custom-tab-btn.active,
+    .custom-tab-btn.active:hover {
+        background: rgba(212, 175, 55, .22);
+        color: var(--navy-dark, #0f172a) !important;
+        border-color: var(--gold, #d4af37);
+        box-shadow: inset 0 -3px 0 var(--gold, #d4af37);
     }
-    .custom-tab-btn.active .mud-icon-root { color: var(--gold-light); }
+    .custom-tab-btn.active .tab-label,
+    .custom-tab-btn.active:hover .tab-label {
+        color: var(--navy-dark, #0f172a) !important;
+        opacity: 1;
+    }
+    .custom-tab-btn.active .mud-icon-root,
+    .custom-tab-btn.active:hover .mud-icon-root { color: var(--navy-dark, #0f172a) !important; }
     .tab-count {
         display: inline-flex;
         align-items: center;
@@ -2009,8 +2130,9 @@ else
         border-radius: 14px;
         padding: 1.1rem 1.3rem;
         display: flex;
-        align-items: center;
-        gap: 1.1rem;
+        flex-direction: column;
+        align-items: stretch;
+        gap: .9rem;
         transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
         animation: pfFadeIn .3s ease backwards;
     }
@@ -2039,8 +2161,40 @@ else
         flex-shrink: 0;
     }
 
+    .component-top { display: flex; align-items: flex-start; gap: .75rem; width: 100%; }
+    .kind-switch { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: .45rem; }
+    .kind-btn {
+        text-align: right; border: 1px solid var(--mud-palette-divider); background: transparent;
+        border-radius: 12px; padding: .55rem .7rem; cursor: pointer; color: var(--mud-palette-text-primary);
+    }
+    .kind-btn strong { display: block; font-size: .86rem; }
+    .kind-btn span { display: block; margin-top: .15rem; font-size: .72rem; line-height: 1.45; color: var(--mud-palette-text-secondary); }
+    .kind-btn.active { border-color: var(--gold, #d4af37); background: rgba(212,175,55,.12); }
+    .component-toggle {
+        align-self: flex-start; border: 1px solid var(--mud-palette-divider); background: transparent;
+        color: var(--navy-dark, #0f172a); border-radius: 999px; padding: .35rem .8rem; font-weight: 800; cursor: pointer;
+    }
+    .component-details { display: flex; flex-direction: column; gap: .85rem; }
+    .component-note { margin: 0; font-size: .82rem; color: var(--mud-palette-text-secondary); }
+    .linked-spec-box {
+        border: 1px dashed var(--mud-palette-divider); border-radius: 12px; padding: .75rem .9rem;
+        background: rgba(212,175,55,.06);
+    }
+    .linked-spec-box strong { display: block; margin-bottom: .25rem; }
+    .component-photos { border-top: 1px solid var(--mud-palette-divider); padding-top: .8rem; }
+    .component-photos-head { display: flex; flex-wrap: wrap; gap: .35rem .8rem; align-items: baseline; margin-bottom: .55rem; }
+    .component-photos-head span, .component-photo-meta em { font-size: .75rem; color: var(--mud-palette-text-secondary); font-style: normal; }
+    .photo-actions { display: flex; flex-wrap: wrap; gap: .45rem; margin-bottom: .7rem; }
+    .kind-upload {
+        display: inline-flex; align-items: center; gap: .35rem; border: 1px solid var(--gold-border, var(--mud-palette-divider));
+        border-radius: 999px; padding: .35rem .75rem; cursor: pointer; font-size: .8rem; font-weight: 700;
+    }
+    .component-photo-grid { display: flex; flex-wrap: wrap; gap: .6rem; }
+    .component-photo { width: 124px; border: 1px solid var(--mud-palette-divider); border-radius: 12px; overflow: hidden; background: var(--mud-palette-surface); }
+    .component-photo img { width: 100%; height: 88px; object-fit: cover; display: block; }
+    .component-photo-meta { display: flex; justify-content: space-between; align-items: center; padding: .25rem .4rem .35rem; }
+    .component-photo-meta button { border: 0; background: transparent; color: #b91c1c; cursor: pointer; font-size: .72rem; }
     .component-fields {
-        flex: 1;
         display: grid;
         grid-template-columns: 2fr 1fr;
         gap: 1rem;
@@ -2816,7 +2970,7 @@ else
         .header-info h1 { font-size: 1.5rem; }
         .tab-content { padding: 1.5rem; }
         .tab-header { flex-direction: column; align-items: flex-start; }
-        .component-fields { grid-template-columns: 1fr; }
+        .component-fields, .kind-switch { grid-template-columns: 1fr; }
         .form-actions {
             flex-direction: column-reverse;
             width: 100%;
@@ -3056,6 +3210,8 @@ else
     // Parameters
     // ============================
     [Parameter] public int? Id { get; set; }
+    [SupplyParameterFromQuery(Name = "customer")] public int? CustomerFromQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "sent")] public int? SentFromQuery { get; set; }
 
     // ============================
     // State
@@ -3175,6 +3331,7 @@ else
     private int? _initialPeriod;
     private bool _showHistoryDialog = false;
     private bool _showUnsavedDialog = false;
+    private bool _showJobSpecChoices = false;
     private bool _showDecisionDialog = false;
     private decimal _requestedPrice = 0;
     private string _decisionNotes = "";
@@ -3228,6 +3385,21 @@ private string? _previewAlternativeImageUrl = null;
 private string _previewAlternativeImageTitle = "";
 private List<ProductFactoryAlternativeDto> _factoryAlternatives = new();
 private ProductFactoryAlternativeDto _alternativeForm = new();
+    private readonly Dictionary<int, SpecAnswerDto> _productSpecDrafts = new();
+    private readonly Dictionary<ProductComponent, Dictionary<int, SpecAnswerDto>> _componentDrafts = new();
+    private readonly Dictionary<ProductComponent, List<ComponentImageDraft>> _componentImages = new();
+    private readonly List<int> _removedComponentImageIds = new();
+    private bool _componentImagesReady = true;
+    private readonly Dictionary<ProductComponent, ProductLinkOption?> _linkOptions = new();
+    private readonly Dictionary<int, string> _linkedProductNames = new();
+    private readonly List<int> _removedComponentIds = new();
+    private bool _componentLinksReady = true;
+    private readonly Dictionary<int, SpecAnswerDto> _altSpecDrafts = new();
+    private List<SpecVariableImageDto> _altVariableImages = new();
+    private readonly Dictionary<ProductComponent, List<SpecVariableImageDto>> _componentVariableImages = new();
+    private List<SpecQuestionDto> _specQuestions = new();
+    private List<SpecQuestionDto> BasicSizes => _specQuestions.Where(SpecVariableRules.IsBasicDimension).OrderBy(q => q.SortOrder).ToList();
+    private bool _specFieldsLoaded;
 private List<IBrowserFile> _alternativeFiles = new();
 private bool _showAlternativeEditor = false;
 private bool _isAlternativeSaving = false;
@@ -3313,7 +3485,14 @@ private List<AuditParsedField> _auditNewFields = new();
             await LoadUserContext();
             await LoadLookups();
             if (Id.HasValue) await LoadProduct(Id.Value);
-            else UpdateMarginDisplay(); // new product – set initial margin from PricingMargin
+            else
+            {
+                UpdateMarginDisplay(); // new product – set initial margin from PricingMargin
+                if (CustomerFromQuery is int customerId)
+                    _selectedCustomer = _customers.FirstOrDefault(c => c.PartyId == customerId);
+            }
+            if (SentFromQuery == 1 && _model.ProductId > 0)
+                _showJobSpecChoices = true;
         }
         catch (Exception ex)
         {
@@ -3324,6 +3503,13 @@ private List<AuditParsedField> _auditNewFields = new();
         {
             _isLoading = false;
         }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _specFieldsLoaded) return;
+        _specFieldsLoaded = true;
+        await LoadSpecFieldsAsync();
     }
 
     // ============================
@@ -3347,6 +3533,8 @@ private List<AuditParsedField> _auditNewFields = new();
 
     private async Task LoadProduct(int productId)
     {
+        if (_model.ProductId != productId)
+            _productSpecDrafts.Clear();
         _model = await Db.Products
             .Include(p => p.ProductComponents)
             .Include(p => p.ProductImages)
@@ -3359,6 +3547,7 @@ private List<AuditParsedField> _auditNewFields = new();
         _pdfChangedBySales = false;
         UpdateMarginDisplay();
         await LoadFactoryAlternatives();
+        await LoadComponentLinksAsync();
 
         _priceHistories = await Db.PriceHistories
             .Where(ph => ph.ProductId == productId)
@@ -3392,8 +3581,71 @@ if (IsAdmin)
             : new List<ProductFactoryAlternativeDto>();
     }
 
+    private async Task LoadSpecFieldsAsync()
+    {
+        try
+        {
+            _specQuestions = await SpecService.GetStandardQuestionsAsync();
+            if (_model.ProductId > 0)
+                await LoadSpecDraftsAsync(SpecOwners.Product, _model.ProductId, _productSpecDrafts);
+            await LoadComponentSpecDraftsAsync();
+            StateHasChanged();
+        }
+        catch
+        {
+            _specQuestions = new();
+        }
+    }
+
+    private async Task LoadSpecDraftsAsync(string ownerType, int ownerId, Dictionary<int, SpecAnswerDto> target)
+    {
+        target.Clear();
+        if (ownerId <= 0) return;
+        foreach (var answer in await SpecService.GetAnswersAsync(ownerType, ownerId))
+            target[answer.QuestionId] = answer;
+    }
+
+    private async Task SaveSpecDraftsAsync(string ownerType, int ownerId, Dictionary<int, SpecAnswerDto> source)
+    {
+        var answers = source.Values.Where(x => x.OptionId.HasValue || x.NumberValue.HasValue || !string.IsNullOrWhiteSpace(x.TextValue)).ToList();
+        if (ownerId <= 0) return;
+        if (answers.Count > 0)
+        {
+            var (ok, msg) = await SpecService.SaveAnswersAsync(ownerType, ownerId, answers);
+            if (!ok && !string.IsNullOrWhiteSpace(msg))
+                Snackbar.Add(msg, Severity.Warning);
+        }
+        var listIds = _specQuestions.Where(q => q.ListId.HasValue && q.DataType != SpecDataTypes.Number).Select(q => q.QuestionId).ToHashSet();
+        var removed = listIds.Where(id => answers.All(a => a.QuestionId != id)).ToList();
+        await SpecService.RemoveAnswersAsync(ownerType, ownerId, removed);
+    }
+
+    private static int? GetSpecOption(Dictionary<int, SpecAnswerDto> source, int questionId)
+        => source.TryGetValue(questionId, out var answer) ? answer.OptionId : null;
+
+    private static void SetSpecOption(Dictionary<int, SpecAnswerDto> source, int questionId, int? optionId)
+    {
+        if (!source.TryGetValue(questionId, out var answer))
+            source[questionId] = answer = new SpecAnswerDto { QuestionId = questionId };
+        answer.OptionId = optionId;
+    }
+
+    private static decimal? GetSpecNumber(Dictionary<int, SpecAnswerDto> source, int questionId)
+        => source.TryGetValue(questionId, out var answer) ? answer.NumberValue : null;
+
+    private static void SetSpecNumber(Dictionary<int, SpecAnswerDto> source, int questionId, decimal? value)
+    {
+        if (!source.TryGetValue(questionId, out var answer))
+            source[questionId] = answer = new SpecAnswerDto { QuestionId = questionId };
+        answer.NumberValue = value;
+    }
+
+    private static string SpecLabel(SpecQuestionDto spec)
+        => string.IsNullOrWhiteSpace(spec.UnitName) ? spec.QuestionNameAr : $"{spec.QuestionNameAr} ({spec.UnitName})";
+
     private void OpenNewAlternative()
     {
+        _altSpecDrafts.Clear();
         _alternativeForm = new ProductFactoryAlternativeDto
         {
             ProductId = _model.ProductId,
@@ -3405,10 +3657,12 @@ if (IsAdmin)
         _showAlternativeEditor = true;
     }
 
-    private void EditAlternative(ProductFactoryAlternativeDto alternative)
+    private async Task EditAlternative(ProductFactoryAlternativeDto alternative)
     {
         _alternativeForm = CloneAlternative(alternative);
         _alternativeFiles = new();
+        await LoadSpecDraftsAsync(SpecOwners.Alternative, alternative.AlternativeId, _altSpecDrafts);
+        _altVariableImages = await SpecService.GetVariableImagesAsync(SpecOwners.Alternative, alternative.AlternativeId);
         _showAlternativeEditor = true;
     }
 
@@ -3417,6 +3671,52 @@ if (IsAdmin)
         _showAlternativeEditor = false;
         _alternativeForm = new ProductFactoryAlternativeDto();
         _alternativeFiles = new();
+        _altSpecDrafts.Clear();
+        _altVariableImages = new();
+    }
+
+    private async Task OnAltVariableImages(SpecImagePick pick)
+    {
+        foreach (var file in pick.Files)
+        {
+            var path = await SaveFile(file, "variable-images", MaxImageSize);
+            _altVariableImages.Add(new SpecVariableImageDto { QuestionId = pick.QuestionId, Path = path });
+        }
+        _isDirty = true;
+    }
+
+    private Task OnAltVariableImageRemoved(SpecVariableImageDto image)
+    {
+        _altVariableImages.Remove(image);
+        _isDirty = true;
+        return Task.CompletedTask;
+    }
+
+    private List<SpecVariableImageDto> ComponentVariableImages(ProductComponent component)
+    {
+        if (!_componentVariableImages.TryGetValue(component, out var images))
+        {
+            images = new();
+            _componentVariableImages[component] = images;
+        }
+        return images;
+    }
+
+    private async Task OnComponentVariableImages(ProductComponent component, SpecImagePick pick)
+    {
+        foreach (var file in pick.Files)
+        {
+            var path = await SaveFile(file, "variable-images", MaxImageSize);
+            ComponentVariableImages(component).Add(new SpecVariableImageDto { QuestionId = pick.QuestionId, Path = path });
+        }
+        _isDirty = true;
+    }
+
+    private Task OnComponentVariableImageRemoved(ProductComponent component, SpecVariableImageDto image)
+    {
+        ComponentVariableImages(component).Remove(image);
+        _isDirty = true;
+        return Task.CompletedTask;
     }
 
     private Task OnAlternativeFilesChanged(InputFileChangeEventArgs e)
@@ -3432,14 +3732,26 @@ if (IsAdmin)
             Snackbar.Add("احفظ المنتج أولاً قبل إضافة البدائل.", Severity.Warning);
             return;
         }
+        var missingAlt = SpecVariableRules.MissingNames(_specQuestions, _altSpecDrafts);
+        if (missingAlt.Count > 0)
+        {
+            Snackbar.Add(SpecVariableRules.MissingMessage("متغيرات البديل", missingAlt), Severity.Warning);
+            return;
+        }
 
         _isAlternativeSaving = true;
         try
         {
             _alternativeForm.ProductId = _model.ProductId;
-            var (ok, msg, _) = await ProductService.SaveFactoryAlternativeAsync(_alternativeForm, _alternativeFiles, _currentUserName ?? "System");
+            var (ok, msg, altId) = await ProductService.SaveFactoryAlternativeAsync(_alternativeForm, _alternativeFiles, _currentUserName ?? "System");
             Snackbar.Add(msg, ok ? Severity.Success : Severity.Error);
             if (!ok) return;
+
+            if (altId.HasValue)
+            {
+                await SaveSpecDraftsAsync(SpecOwners.Alternative, altId.Value, _altSpecDrafts);
+                await SpecService.SaveVariableImagesAsync(SpecOwners.Alternative, altId.Value, _altVariableImages);
+            }
 
             CancelAlternativeEditor();
             await LoadFactoryAlternatives();
@@ -3694,6 +4006,12 @@ if (IsAdmin)
         HistoryTypes.EliteCost     => "تكلفة Elite",
         HistoryTypes.EliteSale     => "بيع Elite",
         HistoryTypes.RequestChange => "طلب تعديل",
+        "Alt_CClass_Cost"          => "تكلفة بديل Standard",
+        "Alt_CClass_Sale"          => "بيع بديل Standard",
+        "Alt_Premium_Cost"         => "تكلفة بديل Premium",
+        "Alt_Premium_Sale"         => "بيع بديل Premium",
+        "Alt_Elite_Cost"           => "تكلفة بديل Elite",
+        "Alt_Elite_Sale"           => "بيع بديل Elite",
         _ => type ?? "غير محدد"
     };
 
@@ -3996,6 +4314,22 @@ if (IsAdmin)
     // Navigation & Dialogs
     // ============================
     private void GoBack() => Navigation.NavigateTo("/products");
+    private bool CanOpenJobSpec => _model.ProductId > 0 && _model.PricingStatusId is StatusIds.WaitingForPricing or StatusIds.PriceChangeRequested or StatusIds.CostChangeRequested or StatusIds.SalePriceChangeRequested;
+    private string JobSpecUrl() => _model.Customer is int customerId && customerId > 0
+        ? $"/customers/{customerId}/job-spec?product={_model.ProductId}"
+        : $"/products/{_model.ProductId}/job-spec";
+    private void OpenJobSpec() => Navigation.NavigateTo(JobSpecUrl());
+    private void AddAnotherForCustomer()
+    {
+        if (_model.Customer is not int customerId || customerId <= 0) return;
+        Navigation.NavigateTo($"/products/form?customer={customerId}", forceLoad: true);
+    }
+    private void CloseJobSpecChoices()
+    {
+        _showJobSpecChoices = false;
+        if (SentFromQuery == 1 && _model.ProductId > 0)
+            Navigation.NavigateTo($"/products/form/{_model.ProductId}", replace: true);
+    }
 
     private void HandleCancel()
     {
@@ -4029,18 +4363,410 @@ if (IsAdmin)
         }
     }
 
+    private sealed class ProductLinkOption
+    {
+        public int ProductId { get; set; }
+        public string ProductName { get; set; } = "";
+    }
+
+    private static string KindOf(ProductComponent component)
+        => component.ComponentKind == ComponentKinds.Product ? ComponentKinds.Product : ComponentKinds.Piece;
+
+    private void SetComponentKind(ProductComponent component, string kind)
+    {
+        component.ComponentKind = kind;
+        if (kind != ComponentKinds.Product)
+            component.LinkedProductId = null;
+        _isDirty = true;
+    }
+
+    private Dictionary<int, SpecAnswerDto> ComponentDrafts(ProductComponent component)
+    {
+        if (!_componentDrafts.TryGetValue(component, out var drafts))
+            _componentDrafts[component] = drafts = new();
+        return drafts;
+    }
+
+    private ProductLinkOption? LinkOption(ProductComponent component)
+    {
+        if (_linkOptions.TryGetValue(component, out var option)) return option;
+        if (!component.LinkedProductId.HasValue) return null;
+        _linkedProductNames.TryGetValue(component.LinkedProductId.Value, out var name);
+        option = new ProductLinkOption { ProductId = component.LinkedProductId.Value, ProductName = name ?? "" };
+        _linkOptions[component] = option;
+        return option;
+    }
+
+    private void OnLinkSelected(ProductComponent component, ProductLinkOption? option)
+    {
+        component.ComponentKind = ComponentKinds.Product;
+        component.LinkedProductId = option?.ProductId;
+        _linkOptions[component] = option;
+        _isDirty = true;
+        if (option == null) return;
+        _linkedProductNames[option.ProductId] = option.ProductName;
+        component.ComponentName = option.ProductName.Length > 100 ? option.ProductName[..100] : option.ProductName;
+    }
+
+    private async Task<IEnumerable<ProductLinkOption>> SearchLinkableProducts(string text, CancellationToken token)
+    {
+        var query = Db.Products.AsNoTracking().Where(p => p.ProductId != _model.ProductId);
+        if (!string.IsNullOrWhiteSpace(text))
+            query = query.Where(p => p.ProductName.Contains(text));
+        return await query.OrderBy(p => p.ProductName).Take(15)
+            .Select(p => new ProductLinkOption { ProductId = p.ProductId, ProductName = p.ProductName })
+            .ToListAsync(token);
+    }
+
+    private async Task LoadComponentLinksAsync()
+    {
+        _componentDrafts.Clear();
+        _componentImages.Clear();
+        _componentVariableImages.Clear();
+        _linkOptions.Clear();
+        _linkedProductNames.Clear();
+        _componentLinksReady = await ComponentLinkColumnsExistAsync();
+        if (!_componentLinksReady) return;
+        var ids = _model.ProductComponents.Where(c => c.ComponentId > 0).Select(c => c.ComponentId).ToList();
+        if (ids.Count == 0) return;
+        var conn = Db.Database.GetDbConnection();
+        var opened = conn.State != System.Data.ConnectionState.Open;
+        if (opened) await conn.OpenAsync();
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT ComponentID, LinkedProductId, ComponentKind, SpecNote FROM ProductComponents WHERE ComponentID IN (" + string.Join(",", ids) + ")";
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var id = reader.GetInt32(0);
+                var component = _model.ProductComponents.FirstOrDefault(c => c.ComponentId == id);
+                if (component == null) continue;
+                component.LinkedProductId = reader.IsDBNull(1) ? null : reader.GetInt32(1);
+                component.ComponentKind = reader.IsDBNull(2) || reader.GetString(2) != ComponentKinds.Product ? ComponentKinds.Piece : ComponentKinds.Product;
+                component.SpecNote = reader.FieldCount > 3 && !reader.IsDBNull(3) ? reader.GetString(3) : null;
+            }
+        }
+        finally
+        {
+            if (opened) await conn.CloseAsync();
+        }
+        var linkedIds = _model.ProductComponents.Where(c => c.LinkedProductId.HasValue).Select(c => c.LinkedProductId!.Value).Distinct().ToList();
+        if (linkedIds.Count > 0)
+        {
+            var names = await Db.Products.AsNoTracking().Where(p => linkedIds.Contains(p.ProductId))
+                .Select(p => new { p.ProductId, p.ProductName }).ToListAsync();
+            foreach (var row in names)
+                _linkedProductNames[row.ProductId] = row.ProductName;
+        }
+        await LoadComponentSpecDraftsAsync();
+        await LoadComponentImagesAsync();
+    }
+
+    private async Task<bool> ComponentLinkColumnsExistAsync()
+    {
+        try
+        {
+            var conn = Db.Database.GetDbConnection();
+            var opened = conn.State != System.Data.ConnectionState.Open;
+            if (opened) await conn.OpenAsync();
+            try
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT CASE WHEN COL_LENGTH('dbo.ProductComponents', 'LinkedProductId') IS NULL OR COL_LENGTH('dbo.ProductComponents', 'ComponentKind') IS NULL OR COL_LENGTH('dbo.ProductComponents', 'SpecNote') IS NULL THEN NULL ELSE 1 END";
+                var result = await cmd.ExecuteScalarAsync();
+                return result != null && result != DBNull.Value;
+            }
+            finally
+            {
+                if (opened) await conn.CloseAsync();
+            }
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task LoadComponentSpecDraftsAsync()
+    {
+        foreach (var component in _model.ProductComponents.Where(c => c.ComponentId > 0 && KindOf(c) == ComponentKinds.Piece))
+        {
+            await LoadSpecDraftsAsync(SpecOwners.Component, component.ComponentId, ComponentDrafts(component));
+            _componentVariableImages[component] = await SpecService.GetVariableImagesAsync(SpecOwners.Component, component.ComponentId);
+        }
+    }
+
+    private async Task SaveComponentExtrasAsync()
+    {
+        if (!await SaveComponentLinksAsync())
+            Snackbar.Add("نوع المكون مش اتحفظ. شغّل سكربت ربط المكونات.", Severity.Warning);
+        foreach (var id in _removedComponentIds)
+        {
+            await SpecService.ClearAnswersAsync(SpecOwners.Component, id);
+            await DeleteComponentImagesAsync(id);
+        }
+        _removedComponentIds.Clear();
+        await SaveComponentImagesAsync();
+        foreach (var component in _model.ProductComponents.Where(c => c.ComponentId > 0))
+        {
+            await SpecService.ClearAnswersAsync(SpecOwners.Component, component.ComponentId);
+            if (KindOf(component) == ComponentKinds.Piece)
+            {
+                await SaveSpecDraftsAsync(SpecOwners.Component, component.ComponentId, ComponentDrafts(component));
+                await SpecService.SaveVariableImagesAsync(SpecOwners.Component, component.ComponentId, ComponentVariableImages(component));
+            }
+        }
+    }
+
+    private async Task<bool> SaveComponentLinksAsync()
+    {
+        if (!await ComponentLinkColumnsExistAsync()) return false;
+        var conn = Db.Database.GetDbConnection();
+        var opened = conn.State != System.Data.ConnectionState.Open;
+        if (opened) await conn.OpenAsync();
+        try
+        {
+            foreach (var component in _model.ProductComponents.Where(c => c.ComponentId > 0))
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE ProductComponents SET LinkedProductId = @link, ComponentKind = @kind, SpecNote = @note WHERE ComponentID = @id";
+                var link = cmd.CreateParameter();
+                link.ParameterName = "@link";
+                link.Value = (object?)component.LinkedProductId ?? DBNull.Value;
+                cmd.Parameters.Add(link);
+                var kind = cmd.CreateParameter();
+                kind.ParameterName = "@kind";
+                kind.Value = (object?)component.ComponentKind ?? DBNull.Value;
+                cmd.Parameters.Add(kind);
+                var note = cmd.CreateParameter();
+                note.ParameterName = "@note";
+                note.Value = (object?)component.SpecNote ?? DBNull.Value;
+                cmd.Parameters.Add(note);
+                var id = cmd.CreateParameter();
+                id.ParameterName = "@id";
+                id.Value = component.ComponentId;
+                cmd.Parameters.Add(id);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (opened) await conn.CloseAsync();
+        }
+    }
+
+    private sealed class ComponentImageDraft
+    {
+        public int ImageId { get; set; }
+        public string Path { get; set; } = "";
+        public string Kind { get; set; } = "Final";
+    }
+
+    private List<ComponentImageDraft> ComponentImages(ProductComponent component)
+    {
+        if (!_componentImages.TryGetValue(component, out var images))
+            _componentImages[component] = images = new();
+        return images;
+    }
+
+    private static string ImageKindLabel(string kind) => kind switch
+    {
+        "Drawing" => "رسم 2D",
+        "Manufacturing" => "تصميم تصنيع",
+        _ => "صورة نهائية"
+    };
+
+    private async Task UploadComponentImages(ProductComponent component, string kind, InputFileChangeEventArgs e)
+    {
+        try
+        {
+            foreach (var file in e.GetMultipleFiles(6))
+            {
+                var path = await SaveFile(file, "component-images", MaxImageSize);
+                ComponentImages(component).Add(new ComponentImageDraft { Path = path, Kind = kind });
+            }
+            _isDirty = true;
+        }
+        catch (Exception ex)
+        {
+            ShowError("خطأ في رفع صورة المكون. تأكد أن حجمها لا يتجاوز 5 ميجا.");
+            Console.WriteLine($"[ProductForm] Component image error: {ex}");
+        }
+    }
+
+    private void RemoveComponentImage(ProductComponent component, ComponentImageDraft image)
+    {
+        if (image.ImageId > 0)
+            _removedComponentImageIds.Add(image.ImageId);
+        ComponentImages(component).Remove(image);
+        _isDirty = true;
+    }
+
+    private async Task<bool> ComponentImagesTableExistsAsync()
+    {
+        try
+        {
+            var conn = Db.Database.GetDbConnection();
+            var opened = conn.State != System.Data.ConnectionState.Open;
+            if (opened) await conn.OpenAsync();
+            try
+            {
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT OBJECT_ID(N'dbo.ComponentImages', N'U')";
+                var result = await cmd.ExecuteScalarAsync();
+                return result != null && result != DBNull.Value;
+            }
+            finally
+            {
+                if (opened) await conn.CloseAsync();
+            }
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task LoadComponentImagesAsync()
+    {
+        _componentImagesReady = await ComponentImagesTableExistsAsync();
+        if (!_componentImagesReady) return;
+        var ids = _model.ProductComponents.Where(c => c.ComponentId > 0).Select(c => c.ComponentId).ToList();
+        if (ids.Count == 0) return;
+        var conn = Db.Database.GetDbConnection();
+        var opened = conn.State != System.Data.ConnectionState.Open;
+        if (opened) await conn.OpenAsync();
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT ComponentImageId, ComponentId, ImagePath, ImageKind FROM ComponentImages WHERE ComponentId IN (" + string.Join(",", ids) + ")";
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var componentId = reader.GetInt32(1);
+                var component = _model.ProductComponents.FirstOrDefault(c => c.ComponentId == componentId);
+                if (component == null) continue;
+                ComponentImages(component).Add(new ComponentImageDraft
+                {
+                    ImageId = reader.GetInt32(0),
+                    Path = reader.GetString(2),
+                    Kind = reader.IsDBNull(3) ? "Final" : reader.GetString(3)
+                });
+            }
+        }
+        finally
+        {
+            if (opened) await conn.CloseAsync();
+        }
+    }
+
+    private async Task SaveComponentImagesAsync()
+    {
+        if (!await ComponentImagesTableExistsAsync())
+        {
+            if (_componentImages.Values.Any(x => x.Count > 0))
+                Snackbar.Add("صور المكون مش اتحفظت. شغّل سكربت صور المكونات.", Severity.Warning);
+            return;
+        }
+        await DeleteRemovedComponentImagesAsync();
+        var conn = Db.Database.GetDbConnection();
+        var opened = conn.State != System.Data.ConnectionState.Open;
+        if (opened) await conn.OpenAsync();
+        try
+        {
+            foreach (var pair in _componentImages)
+            {
+                if (pair.Key.ComponentId <= 0) continue;
+                foreach (var image in pair.Value.Where(x => x.ImageId <= 0 && !string.IsNullOrWhiteSpace(x.Path)))
+                {
+                    await using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "INSERT INTO ComponentImages (ComponentId, ImagePath, ImageKind, CreatedAt) VALUES (@id, @path, @kind, GETDATE())";
+                    var id = cmd.CreateParameter(); id.ParameterName = "@id"; id.Value = pair.Key.ComponentId; cmd.Parameters.Add(id);
+                    var path = cmd.CreateParameter(); path.ParameterName = "@path"; path.Value = image.Path; cmd.Parameters.Add(path);
+                    var kind = cmd.CreateParameter(); kind.ParameterName = "@kind"; kind.Value = image.Kind; cmd.Parameters.Add(kind);
+                    await cmd.ExecuteNonQueryAsync();
+                    image.ImageId = -1;
+                }
+            }
+        }
+        finally
+        {
+            if (opened) await conn.CloseAsync();
+        }
+    }
+
+    private async Task DeleteRemovedComponentImagesAsync()
+    {
+        if (_removedComponentImageIds.Count == 0) return;
+        var conn = Db.Database.GetDbConnection();
+        var opened = conn.State != System.Data.ConnectionState.Open;
+        if (opened) await conn.OpenAsync();
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM ComponentImages WHERE ComponentImageId IN (" + string.Join(",", _removedComponentImageIds) + ")";
+            await cmd.ExecuteNonQueryAsync();
+            _removedComponentImageIds.Clear();
+        }
+        finally
+        {
+            if (opened) await conn.CloseAsync();
+        }
+    }
+
+    private async Task DeleteComponentImagesAsync(int componentId)
+    {
+        if (!await ComponentImagesTableExistsAsync()) return;
+        var conn = Db.Database.GetDbConnection();
+        var opened = conn.State != System.Data.ConnectionState.Open;
+        if (opened) await conn.OpenAsync();
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM ComponentImages WHERE ComponentId = @id";
+            var id = cmd.CreateParameter();
+            id.ParameterName = "@id";
+            id.Value = componentId;
+            cmd.Parameters.Add(id);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally
+        {
+            if (opened) await conn.CloseAsync();
+        }
+    }
+
     // ============================
     // Components Management
     // ============================
+    private readonly HashSet<ProductComponent> _openComponents = new();
+    private bool IsComponentOpen(ProductComponent component) => _openComponents.Contains(component);
+    private void ToggleComponent(ProductComponent component)
+    {
+        if (!_openComponents.Add(component))
+            _openComponents.Remove(component);
+    }
+
     private void AddComponent()
     {
-        _model.ProductComponents.Add(new ProductComponent { ComponentName = "", Quantity = 1 });
+        _model.ProductComponents.Add(new ProductComponent { ComponentName = "", Quantity = 1, ComponentKind = ComponentKinds.Piece });
         _isDirty = true;
     }
 
     private void RemoveComponent(ProductComponent comp)
     {
+        if (comp.ComponentId > 0)
+            _removedComponentIds.Add(comp.ComponentId);
         _model.ProductComponents.Remove(comp);
+        _componentDrafts.Remove(comp);
+        _openComponents.Remove(comp);
+        _linkOptions.Remove(comp);
         _isDirty = true;
     }
 
@@ -4167,9 +4893,20 @@ private void CloseAlternativeImagePreview()
                 Console.WriteLine($"[ProductForm] Notification Warning: {notifyEx.Message}");
             }
 
+            if (!IsFactory && _model.ProductId > 0)
+                await SaveSpecDraftsAsync(SpecOwners.Product, _model.ProductId, _productSpecDrafts);
+            if (_model.ProductId > 0)
+                await SaveComponentExtrasAsync();
+
             _isDirty = false;
             Snackbar.Add(isDraft ? "تم حفظ المسودة بنجاح" : "تم الحفظ بنجاح", Severity.Success);
-            GoBack();
+            var sentNow = !isDraft && !_saveDirect && _model.ProductId > 0
+                && _model.PricingStatusId == StatusIds.WaitingForPricing
+                && (ctx.IsNew || ctx.SentForPricing);
+            if (sentNow)
+                Navigation.NavigateTo($"/products/form/{_model.ProductId}?sent=1", forceLoad: true);
+            else
+                GoBack();
         }
         catch (Exception ex)
         {
@@ -4254,6 +4991,32 @@ private void CloseAlternativeImagePreview()
     if (_model.ProductGroupId <= 0)
     {
         errors.Add("مجموعة المنتج مطلوبة");
+    }
+
+        if (_model.ProductComponents.Any(c => KindOf(c) == ComponentKinds.Product && !c.LinkedProductId.HasValue))
+        errors.Add("اختَر المنتج المرتبط، أو غيّر نوع المكون");
+
+    if (_specQuestions.Any(SpecVariableRules.IsCatalogVariable))
+    {
+        var pieces = _model.ProductComponents.Where(c => KindOf(c) == ComponentKinds.Piece).ToList();
+        var hasLinkedProduct = _model.ProductComponents.Any(c => KindOf(c) == ComponentKinds.Product && c.LinkedProductId.HasValue);
+        var forgotVariable = false;
+        if (pieces.Count == 0 && !hasLinkedProduct)
+        {
+            forgotVariable = true;
+            errors.Add("أضف القطعة وأكمل كل متغيراتها قبل الحفظ. لو المنتج قطعة واحدة، سجّلها كمكون. «لا يوجد» إجابة مقبولة.");
+        }
+        foreach (var component in pieces)
+        {
+            var missingPiece = SpecVariableRules.MissingNames(_specQuestions, ComponentDrafts(component));
+            if (missingPiece.Count == 0) continue;
+            forgotVariable = true;
+            _openComponents.Add(component);
+            var name = string.IsNullOrWhiteSpace(component.ComponentName) ? "بدون اسم" : component.ComponentName.Trim();
+            errors.Add(SpecVariableRules.MissingMessage($"القطعة {name}", missingPiece));
+        }
+        if (forgotVariable)
+            _activeTab = 2;
     }
 
     // PricingStatusID int NOT NULL
@@ -4474,9 +5237,14 @@ private void CloseAlternativeImagePreview()
 }
 
         if (ctx.IsNew || ctx.SentForPricing)
-            await NotifyRole(Roles.Factory,
-                "منتج جديد يحتاج تسعير",
-                $"تم اضافة منتج جديد: {productInfo} للعميل: {customerInfo} برجاء تسعير المنتج طبقا للباقة C Class وكذلك Premium وكذلك Elite");
+        {
+            if (_model.Customer is int customerId && customerId > 0)
+                await NotifyFactoryJobSpecAsync(customerId, customerInfo);
+            else
+                await NotifyRole(Roles.Factory,
+                    "منتج جديد يحتاج تسعير",
+                    $"تم إضافة منتج جديد: {productInfo} للعميل: {customerInfo}. برجاء التسعير.");
+        }
 
         if (ctx.FactoryPriced)
         {
@@ -4500,6 +5268,22 @@ private void CloseAlternativeImagePreview()
         await NotificationService.NotifyRoleAsync(
             title, message, role, _currentUserName,
             "products/form", "Products", _model.ProductId);
+    }
+
+    private async Task NotifyFactoryJobSpecAsync(int customerId, string customerName)
+    {
+        var form = $"customers/{customerId}/job-spec";
+        var already = await Db.Notifications.AsNoTracking().AnyAsync(n =>
+            n.FormName == form && n.Title == "جوب أوردر يحتاج تسعير" && n.CreatedAt >= DateTime.Today);
+        if (already) return;
+        await NotificationService.NotifyRoleAsync(
+            "جوب أوردر يحتاج تسعير",
+            $"العميل {customerName} لديه منتجات بانتظار رد المصنع.",
+            Roles.Factory,
+            _currentUserName ?? "System",
+            form,
+            "Parties",
+            null);
     }
 
     private string BuildPricingInfoText()
